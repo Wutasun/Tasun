@@ -135,6 +135,11 @@
       background: rgba(246, 211, 122, 0.15);
     }
 
+    .btn-eye {
+      padding: 0.15rem 0.4rem;
+      min-width: 2.3rem;
+    }
+
     .panel-footer {
       margin-top: 1rem;
       display: flex;
@@ -172,7 +177,7 @@
       color: #ffb3b3;
     }
 
-    /* 表頭中「按鈕名稱」選單區塊 */
+    /* 表頭中按鈕名稱選單 */
     .btn-header {
       display: flex;
       flex-direction: column;
@@ -187,6 +192,17 @@
 
     .btn-header select {
       font-size: 0.75rem;
+    }
+
+    /* 密碼欄：input + 眼睛按鈕 */
+    .pwd-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+
+    .pwd-input {
+      flex: 1 1 auto;
     }
 
     @media (max-width: 900px) {
@@ -211,52 +227,19 @@
   <div class="panel">
     <p>
       只有 <strong>admin</strong> 登入者可以編輯此表。<br>
-      欄位說明：用戶名、密碼、權限級別（admin / write / read），以及首頁按鈕 1～5 是否顯示。<br>
-      ※ 第 6 顆按鈕「系統 / 權限」固定只有 admin 顯示。<br>
-      ※ 下方按鈕 1～5 的名稱，可由表頭選單選取（來源為首頁 index.html 的案件名稱）。
+      欄位說明：用戶名、密碼、權限級別（admin / write / read），以及首頁按鈕是否顯示。<br>
+      首頁按鈕的「數量」與「名稱」皆自動讀取 <strong>index.html</strong> 的按鈕設定；<br>
+      表頭的下拉選單可調整顯示名稱；系統 / 權限（連到本頁）固定只有 admin 顯示，不列入本表。
     </p>
 
     <table>
       <thead>
-        <tr>
-          <th>用戶名</th>
-          <th>密碼</th>
-          <th>權限級別</th>
-          <th>
-            <div class="btn-header">
-              <div class="btn-header-title">按鈕1</div>
-              <select class="btn-label-select" data-key="btn1"></select>
-            </div>
-          </th>
-          <th>
-            <div class="btn-header">
-              <div class="btn-header-title>按鈕2</div>
-              <select class="btn-label-select" data-key="btn2"></select>
-            </div>
-          </th>
-          <th>
-            <div class="btn-header">
-              <div class="btn-header-title">按鈕3</div>
-              <select class="btn-label-select" data-key="btn3"></select>
-            </div>
-          </th>
-          <th>
-            <div class="btn-header">
-              <div class="btn-header-title">按鈕4</div>
-              <select class="btn-label-select" data-key="btn4"></select>
-            </div>
-          </th>
-          <th>
-            <div class="btn-header">
-              <div class="btn-header-title">按鈕5</div>
-              <select class="btn-label-select" data-key="btn5"></select>
-            </div>
-          </th>
-          <th>刪除</th>
+        <tr id="headerRow">
+          <!-- JS 產生 -->
         </tr>
       </thead>
       <tbody id="authBody">
-        <!-- 由 JS 產生列 -->
+        <!-- JS 產生列 -->
       </tbody>
     </table>
 
@@ -276,109 +259,200 @@
     (function () {
       const AUTH_KEY = "tasunAuthTable_v1";
       const CURRENT_KEY = "tasunCurrentUser_v1";
-
-      // 新增：按鈕名稱設定儲存鍵
       const BTN_LABEL_KEY = "tasunButtonLabels_v1";
 
-      // 首頁 index.html 的案件名稱（前五顆按鈕）
-      const BUTTON_OPTIONS = [
-        "臻鼎時代大廈管理表", // 左上
-        "缺失 / 品質",       // 左中
-        "雲端檔案",           // 左下
-        "材料管控表",         // 右上
-        "資料庫"              // 右中
-        // 第六顆「系統 / 權限」固定只有 admin 顯示
-      ];
+      // 舊版相容用 key（btn1～btn5）
+      const LEGACY_BUTTON_KEYS = ["btn1", "btn2", "btn3", "btn4", "btn5"];
 
-      const BUTTON_KEYS = ["btn1", "btn2", "btn3", "btn4", "btn5"];
+      const bodyEl    = document.getElementById("authBody");
+      const headerRow = document.getElementById("headerRow");
+      const addRowBtn = document.getElementById("addRowBtn");
+      const saveBtn   = document.getElementById("saveBtn");
+      const statusMsg = document.getElementById("statusMsg");
 
-      // 預設按鈕名稱：依照首頁順序
-      function getDefaultButtonLabels() {
-        return {
-          btn1: "臻鼎時代大廈管理表",
-          btn2: "缺失 / 品質",
-          btn3: "雲端檔案",
-          btn4: "材料管控表",
-          btn5: "資料庫"
-        };
+      /* ---------------------------
+         從 index.html 抓按鈕名稱
+         --------------------------- */
+
+      function getFallbackButtonNames() {
+        // 抓不到 index.html 時的備用：目前首頁五顆
+        return [
+          "臻鼎時代大廈管理表",
+          "缺失 / 品質",
+          "雲端檔案",
+          "材料管控表",
+          "資料庫"
+        ];
       }
 
-      function loadButtonLabels() {
-        const raw = localStorage.getItem(BTN_LABEL_KEY);
-        if (!raw) {
-          const defaults = getDefaultButtonLabels();
-          localStorage.setItem(BTN_LABEL_KEY, JSON.stringify(defaults));
-          return defaults;
-        }
+      function extractButtonsFromIndex(htmlText) {
         try {
-          const obj = JSON.parse(raw);
-          if (obj && typeof obj === "object") {
-            const defaults = getDefaultButtonLabels();
-            BUTTON_KEYS.forEach(k => {
-              if (typeof obj[k] !== "string" || !obj[k]) {
-                obj[k] = defaults[k];
-              }
-            });
-            return obj;
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(htmlText, "text/html");
+
+          const allBtns = Array.from(doc.querySelectorAll("a.nav-btn[data-roles]"));
+          const names = [];
+          const nameSet = new Set();
+
+          allBtns.forEach(a => {
+            const href = (a.getAttribute("href") || "").trim();
+            // 排除「權限表」那顆
+            if (href && href.indexOf("權限表") !== -1) return;
+
+            let text = a.textContent || "";
+            text = text.replace(/\s+/g, " ").trim();
+            if (!text) return;
+
+            if (!nameSet.has(text)) {
+              nameSet.add(text);
+              names.push(text);
+            }
+          });
+
+          if (!names.length) {
+            return getFallbackButtonNames();
           }
-        } catch (e) {}
-        const defaults = getDefaultButtonLabels();
-        localStorage.setItem(BTN_LABEL_KEY, JSON.stringify(defaults));
-        return defaults;
+          return names;
+        } catch (e) {
+          return getFallbackButtonNames();
+        }
+      }
+
+      function loadButtonNamesFromIndex() {
+        return fetch("index.html", { cache: "no-store" })
+          .then(resp => {
+            if (!resp.ok) throw new Error("fetch index failed");
+            return resp.text();
+          })
+          .then(html => extractButtonsFromIndex(html))
+          .catch(() => getFallbackButtonNames());
+      }
+
+      /* ---------------------------
+         按鈕名稱設定（表頭下拉選單）
+         --------------------------- */
+
+      function loadButtonLabels(buttonNames) {
+        const raw = localStorage.getItem(BTN_LABEL_KEY);
+        const n = buttonNames.length;
+        let stored = [];
+
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              stored = parsed;
+            } else if (parsed && typeof parsed === "object") {
+              // 舊版物件格式：{ btn1: "...", btn2: "..." }
+              stored = LEGACY_BUTTON_KEYS.map(k => parsed[k]);
+            }
+          } catch (e) {}
+        }
+
+        const result = [];
+        for (let i = 0; i < n; i++) {
+          const val = stored[i];
+          if (typeof val === "string" && val && buttonNames.includes(val)) {
+            result[i] = val;
+          } else {
+            result[i] = buttonNames[i];
+          }
+        }
+        return result;
       }
 
       function saveButtonLabels(labels) {
         localStorage.setItem(BTN_LABEL_KEY, JSON.stringify(labels));
       }
 
-      // 預設權限表（第一次沒有資料時會建立）
-      function getDefaultAuthTable() {
+      function getButtonLabelsFromUI() {
+        const selects = headerRow.querySelectorAll(".btn-label-select");
+        const labels = [];
+        selects.forEach((sel, idx) => {
+          labels[idx] = sel.value;
+        });
+        return labels;
+      }
+
+      /* ---------------------------
+         權限資料（使用者列）
+         --------------------------- */
+
+      function makeButtonsAll(count) {
+        return Array(count).fill(true);
+      }
+
+      function makeButtonsOnlyLast(count) {
+        const arr = Array(count).fill(false);
+        if (count > 0) arr[count - 1] = true;
+        return arr;
+      }
+
+      function getDefaultAuthTable(btnCount) {
         return [
           {
             username: "alex",
             password: "Tasun08040224",
             level: "admin",
-            btn1: true,
-            btn2: true,
-            btn3: true,
-            btn4: true,
-            btn5: true
+            buttons: makeButtonsAll(btnCount)
           },
           {
             username: "tasun",
             password: "tasun08040224",
             level: "write",
-            btn1: true,
-            btn2: true,
-            btn3: true,
-            btn4: true,
-            btn5: true
+            buttons: makeButtonsAll(btnCount)
           },
           {
             username: "wu",
             password: "123456",
             level: "read",
-            btn1: false,
-            btn2: false,
-            btn3: false,
-            btn4: false,
-            btn5: true
+            buttons: makeButtonsOnlyLast(btnCount)
           }
         ];
       }
 
-      function loadAuthTable() {
+      function normalizeRowFromStorage(row, btnCount) {
+        const username = row.username || "";
+        const password = row.password || "";
+        const level = row.level || "read";
+
+        let buttons = [];
+
+        if (Array.isArray(row.buttons)) {
+          buttons = row.buttons.slice();
+        } else {
+          // 舊版：btn1～btn5
+          const legacy = [];
+          LEGACY_BUTTON_KEYS.forEach(k => {
+            if (Object.prototype.hasOwnProperty.call(row, k)) {
+              legacy.push(!!row[k]);
+            }
+          });
+          buttons = legacy;
+        }
+
+        const resultButtons = [];
+        for (let i = 0; i < btnCount; i++) {
+          resultButtons[i] = !!buttons[i];
+        }
+
+        return { username, password, level, buttons: resultButtons };
+      }
+
+      function loadAuthTable(btnCount) {
         const raw = localStorage.getItem(AUTH_KEY);
         if (!raw) {
-          const defaults = getDefaultAuthTable();
+          const defaults = getDefaultAuthTable(btnCount);
           localStorage.setItem(AUTH_KEY, JSON.stringify(defaults));
           return defaults;
         }
         try {
           const arr = JSON.parse(raw);
-          if (Array.isArray(arr)) return arr;
+          if (Array.isArray(arr)) {
+            return arr.map(r => normalizeRowFromStorage(r, btnCount));
+          }
         } catch (e) {}
-        const defaults = getDefaultAuthTable();
+        const defaults = getDefaultAuthTable(btnCount);
         localStorage.setItem(AUTH_KEY, JSON.stringify(defaults));
         return defaults;
       }
@@ -386,6 +460,10 @@
       function saveAuthTable(arr) {
         localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
       }
+
+      /* ---------------------------
+         權限檢查：只有 admin 可進
+         --------------------------- */
 
       function ensureAdmin() {
         const saved = localStorage.getItem(CURRENT_KEY);
@@ -409,134 +487,240 @@
         }
       }
 
-      const bodyEl        = document.getElementById("authBody");
-      const addRowBtn     = document.getElementById("addRowBtn");
-      const saveBtn       = document.getElementById("saveBtn");
-      const statusMsg     = document.getElementById("statusMsg");
-      const labelSelects  = document.querySelectorAll(".btn-label-select");
+      /* ---------------------------
+         畫面：表頭與使用者列
+         --------------------------- */
 
-      function renderTable(data) {
-        bodyEl.innerHTML = "";
-        data.forEach((row) => {
-          const tr = document.createElement("tr");
-          tr.innerHTML = `
-            <td><input type="text" value="${row.username || ""}" placeholder="帳號" /></td>
-            <td><input type="text" value="${row.password || ""}" placeholder="密碼" /></td>
-            <td>
-              <select>
-                <option value="admin" ${row.level === "admin" ? "selected" : ""}>admin</option>
-                <option value="write" ${row.level === "write" ? "selected" : ""}>write</option>
-                <option value="read"  ${row.level === "read"  ? "selected" : ""}>read</option>
-              </select>
-            </td>
-            <td><input type="checkbox" ${row.btn1 ? "checked" : ""}></td>
-            <td><input type="checkbox" ${row.btn2 ? "checked" : ""}></td>
-            <td><input type="checkbox" ${row.btn3 ? "checked" : ""}></td>
-            <td><input type="checkbox" ${row.btn4 ? "checked" : ""}></td>
-            <td><input type="checkbox" ${row.btn5 ? "checked" : ""}></td>
-            <td><button type="button" class="btn-small btn-del">刪除</button></td>
-          `;
-          bodyEl.appendChild(tr);
-        });
-      }
+      function renderHeader(buttonNames, labelConfig) {
+        headerRow.innerHTML = "";
 
-      function collectTable() {
-        const rows = Array.from(bodyEl.querySelectorAll("tr"));
-        const result = [];
-        rows.forEach(tr => {
-          const tds = tr.querySelectorAll("td");
-          const username = tds[0].querySelector("input").value.trim();
-          const password = tds[1].querySelector("input").value.trim();
-          const level    = tds[2].querySelector("select").value;
-          if (!username || !password) {
-            // 空列就跳過
-            return;
-          }
-          const btn1 = tds[3].querySelector("input").checked;
-          const btn2 = tds[4].querySelector("input").checked;
-          const btn3 = tds[5].querySelector("input").checked;
-          const btn4 = tds[6].querySelector("input").checked;
-          const btn5 = tds[7].querySelector("input").checked;
+        // 用戶名
+        const thUser = document.createElement("th");
+        thUser.textContent = "用戶名";
+        headerRow.appendChild(thUser);
 
-          result.push({ username, password, level, btn1, btn2, btn3, btn4, btn5 });
-        });
-        return result;
-      }
+        // 密碼
+        const thPwd = document.createElement("th");
+        thPwd.textContent = "密碼";
+        headerRow.appendChild(thPwd);
 
-      // 初始化表頭「按鈕名稱」選單
-      function initButtonLabelSelects(labels) {
-        labelSelects.forEach(select => {
-          const key = select.dataset.key;
-          select.innerHTML = "";
-          BUTTON_OPTIONS.forEach(name => {
+        // 權限級別
+        const thLevel = document.createElement("th");
+        thLevel.textContent = "權限級別";
+        headerRow.appendChild(thLevel);
+
+        // 動態按鈕欄位
+        buttonNames.forEach((btnName, idx) => {
+          const th = document.createElement("th");
+          const wrapper = document.createElement("div");
+          wrapper.className = "btn-header";
+
+          const title = document.createElement("div");
+          title.className = "btn-header-title";
+          title.textContent = "按鈕" + (idx + 1);
+
+          const select = document.createElement("select");
+          select.className = "btn-label-select";
+          select.dataset.index = String(idx);
+
+          buttonNames.forEach(name => {
             const opt = document.createElement("option");
             opt.value = name;
             opt.textContent = name;
             select.appendChild(opt);
           });
-          const current = labels[key];
-          if (current && BUTTON_OPTIONS.includes(current)) {
-            select.value = current;
+
+          const labelName = labelConfig[idx] || btnName;
+          if (buttonNames.includes(labelName)) {
+            select.value = labelName;
           } else {
-            // 如果儲存的名稱已經不在選項中，就退回第一個
-            select.value = BUTTON_OPTIONS[0];
+            select.value = btnName;
           }
+
+          wrapper.appendChild(title);
+          wrapper.appendChild(select);
+          th.appendChild(wrapper);
+          headerRow.appendChild(th);
+        });
+
+        // 刪除欄
+        const thDel = document.createElement("th");
+        thDel.textContent = "刪除";
+        headerRow.appendChild(thDel);
+      }
+
+      function renderTable(data, btnCount) {
+        bodyEl.innerHTML = "";
+
+        data.forEach(row => {
+          const tr = document.createElement("tr");
+
+          // 用戶名
+          const tdUser = document.createElement("td");
+          const inUser = document.createElement("input");
+          inUser.type = "text";
+          inUser.value = row.username || "";
+          inUser.placeholder = "帳號";
+          tdUser.appendChild(inUser);
+          tr.appendChild(tdUser);
+
+          // 密碼（含顯示按鈕）
+          const tdPwd = document.createElement("td");
+          const pwdWrapper = document.createElement("div");
+          pwdWrapper.className = "pwd-wrapper";
+
+          const inPwd = document.createElement("input");
+          inPwd.type = "password";
+          inPwd.value = row.password || "";
+          inPwd.placeholder = "密碼";
+          inPwd.className = "pwd-input";
+
+          const eyeBtn = document.createElement("button");
+          eyeBtn.type = "button";
+          eyeBtn.className = "btn-small btn-eye";
+          eyeBtn.textContent = "👁";
+
+          pwdWrapper.appendChild(inPwd);
+          pwdWrapper.appendChild(eyeBtn);
+          tdPwd.appendChild(pwdWrapper);
+          tr.appendChild(tdPwd);
+
+          // 權限級別
+          const tdLevel = document.createElement("td");
+          const sel = document.createElement("select");
+          ["admin", "write", "read"].forEach(lv => {
+            const opt = document.createElement("option");
+            opt.value = lv;
+            opt.textContent = lv;
+            if (row.level === lv) opt.selected = true;
+            sel.appendChild(opt);
+          });
+          tdLevel.appendChild(sel);
+          tr.appendChild(tdLevel);
+
+          // 按鈕勾選
+          for (let i = 0; i < btnCount; i++) {
+            const td = document.createElement("td");
+            const chk = document.createElement("input");
+            chk.type = "checkbox";
+            chk.checked = !!row.buttons[i];
+            td.appendChild(chk);
+            tr.appendChild(td);
+          }
+
+          // 刪除按鈕
+          const tdDel = document.createElement("td");
+          const delBtn = document.createElement("button");
+          delBtn.type = "button";
+          delBtn.className = "btn-small btn-del";
+          delBtn.textContent = "刪除";
+          tdDel.appendChild(delBtn);
+          tr.appendChild(tdDel);
+
+          bodyEl.appendChild(tr);
         });
       }
 
-      // 從 UI 收集目前按鈕名稱設定
-      function collectButtonLabelsFromUI() {
-        const labels = {};
-        labelSelects.forEach(select => {
-          const key = select.dataset.key;
-          labels[key] = select.value;
+      function collectTable(btnCount) {
+        const rows = Array.from(bodyEl.querySelectorAll("tr"));
+        const result = [];
+
+        rows.forEach(tr => {
+          const tds = tr.querySelectorAll("td");
+
+          const usernameInput = tds[0].querySelector("input");
+          const pwdInput = tds[1].querySelector(".pwd-input");
+          const levelSelect = tds[2].querySelector("select");
+
+          const username = usernameInput ? usernameInput.value.trim() : "";
+          const password = pwdInput ? pwdInput.value.trim() : "";
+          const level = levelSelect ? levelSelect.value : "read";
+
+          if (!username || !password) {
+            // 空列就跳過
+            return;
+          }
+
+          const buttons = [];
+          for (let i = 0; i < btnCount; i++) {
+            const tdIndex = 3 + i;
+            const chk = tds[tdIndex].querySelector("input[type='checkbox']");
+            buttons.push(chk ? chk.checked : false);
+          }
+
+          result.push({ username, password, level, buttons });
         });
-        return labels;
+
+        return result;
       }
 
-      document.addEventListener("DOMContentLoaded", function () {
-        const user = ensureAdmin();
-        if (!user) return;
+      /* ---------------------------
+         初始化
+         --------------------------- */
 
-        const table = loadAuthTable();
-        renderTable(table);
+      function initWithButtonNames(buttonNames) {
+        const btnCount = buttonNames.length;
 
-        const labels = loadButtonLabels();
-        initButtonLabelSelects(labels);
+        const labelConfig = loadButtonLabels(buttonNames);
+        renderHeader(buttonNames, labelConfig);
+
+        const tableData = loadAuthTable(btnCount);
+        renderTable(tableData, btnCount);
 
         addRowBtn.addEventListener("click", function () {
           const newRow = {
             username: "",
             password: "",
             level: "read",
-            btn1: false,
-            btn2: false,
-            btn3: false,
-            btn4: false,
-            btn5: false
+            buttons: Array(btnCount).fill(false)
           };
-          const data = collectTable();
+          const data = collectTable(btnCount);
           data.push(newRow);
-          renderTable(data);
+          renderTable(data, btnCount);
         });
 
         bodyEl.addEventListener("click", function (e) {
-          if (e.target.classList.contains("btn-del")) {
-            const tr = e.target.closest("tr");
-            tr.remove();
+          const target = e.target;
+
+          // 刪除列
+          if (target.classList.contains("btn-del")) {
+            const tr = target.closest("tr");
+            if (tr) tr.remove();
+            return;
+          }
+
+          // 顯示 / 隱藏密碼
+          if (target.classList.contains("btn-eye")) {
+            const td = target.closest("td");
+            if (!td) return;
+            const input = td.querySelector(".pwd-input");
+            if (!input) return;
+            input.type = input.type === "password" ? "text" : "password";
           }
         });
 
         saveBtn.addEventListener("click", function () {
-          const data = collectTable();
+          const data = collectTable(btnCount);
           if (!data.length) {
             statusMsg.textContent = "至少需要一筆帳號資料。";
             return;
           }
-          const labelData = collectButtonLabelsFromUI();
+
+          const labels = getButtonLabelsFromUI();
           saveAuthTable(data);
-          saveButtonLabels(labelData);
+          saveButtonLabels(labels);
+
           statusMsg.textContent = "已儲存權限表與按鈕名稱。回到首頁重新登入即可套用。";
+        });
+      }
+
+      document.addEventListener("DOMContentLoaded", function () {
+        const user = ensureAdmin();
+        if (!user) return;
+
+        // 從 index.html 抓按鈕名稱再初始化
+        loadButtonNamesFromIndex().then(buttonNames => {
+          initWithButtonNames(buttonNames);
         });
       });
     })();
