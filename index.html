@@ -283,7 +283,7 @@
     }
 
     /* ==========================
-       上方 Tasun 標題（獨立於背景之上）
+       上方 Tasun 標題
        ========================== */
     .site-title-wrapper {
       position: absolute;
@@ -317,7 +317,7 @@
       z-index: 0;
     }
 
-    /* 中央：空 無 明（圍繞蓮花） */
+    /* 中央：空 無 明 */
     .hero-title {
       top: 36%;
       left: 50%;
@@ -329,7 +329,7 @@
       gap: 2.2em;
     }
 
-    /* 左右直排文字：貼近蓮花兩側 */
+    /* 左右直排文字 */
     .hero-left,
     .hero-right {
       top: 63%;
@@ -354,7 +354,7 @@
       margin-bottom: 0.3em;
     }
 
-    /* 下方橫排：空 無 明 靜（蓮花下緣） */
+    /* 下方橫排：空 無 明 靜 */
     .hero-bottom {
       bottom: 10%;
       left: 50%;
@@ -371,7 +371,7 @@
     }
 
     /* ==========================
-       浮動按鈕（左右三顆）
+       浮動按鈕
        ========================== */
     .nav-btn {
       position: absolute;
@@ -614,12 +614,10 @@
   </main>
 
   <script>
-    // 簡易權限表
-    const USERS = [
-      { username: "alex",  password: "Tasun08040224",  role: "admin" },
-      { username: "tasun", password: "tasun08040224", role: "write" },
-      { username: "wu",    password: "123456",        role: "read"  }
-    ];
+    // 與「權限表.html」共用的 localStorage key
+    const AUTH_KEY = "tasunAuthTable_v1";
+    const CURRENT_KEY = "tasunCurrentUser_v1";
+    const BTN_LABEL_KEY = "tasunButtonLabels_v1";
 
     const loginOverlay = document.getElementById("loginOverlay");
     const loginForm    = document.getElementById("loginForm");
@@ -627,28 +625,226 @@
     const userInfo     = document.getElementById("userInfo");
     const btnSwitch    = document.getElementById("btnSwitchUser");
 
-    function findUser(name) {
-      return USERS.find(u => u.username === name.trim());
+    // 取得所有首頁按鈕：前幾顆是一般功能按鈕，最後那顆是系統 / 權限
+    const allNavBtns = Array.from(document.querySelectorAll(".nav-btn[data-roles]"));
+
+    // 一般按鈕：排除 href 指向「權限表」的那顆
+    const mainNavBtns = allNavBtns.filter(btn => {
+      const href = (btn.getAttribute("href") || "").trim();
+      return !(href && href.indexOf("權限表") !== -1);
+    });
+
+    // 系統 / 權限那顆按鈕（固定只給 admin）
+    const systemBtn = allNavBtns.find(btn => {
+      const href = (btn.getAttribute("href") || "").trim();
+      return href && href.indexOf("權限表") !== -1;
+    });
+
+    const BUTTON_COUNT = mainNavBtns.length;
+
+    /* ============================
+       按鈕名稱：讀取 / 套用顯示文字
+       ============================ */
+
+    function normalizeButtonText(text) {
+      return (text || "").replace(/\s+/g, " ").trim();
     }
 
-    function applyUser(user) {
+    function loadButtonLabels() {
+      const originalNames = mainNavBtns.map(btn => {
+        const span = btn.querySelector("span");
+        return normalizeButtonText(span ? span.textContent : btn.textContent);
+      });
+
+      const raw = localStorage.getItem(BTN_LABEL_KEY);
+      let stored = [];
+
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            stored = parsed;
+          } else if (parsed && typeof parsed === "object") {
+            // 舊版物件格式 { btn1: "...", btn2: "..." } 相容
+            const LEGACY_BUTTON_KEYS = ["btn1", "btn2", "btn3", "btn4", "btn5"];
+            stored = LEGACY_BUTTON_KEYS.map(k => parsed[k]);
+          }
+        } catch (e) {}
+      }
+
+      const labels = originalNames.map((name, index) => {
+        const val = stored[index];
+        if (typeof val === "string" && val.trim()) {
+          return val.trim();
+        }
+        return name;
+      });
+
+      return { originalNames, labels };
+    }
+
+    function applyButtonLabels(labels) {
+      mainNavBtns.forEach((btn, index) => {
+        const label = labels[index];
+        if (!label) return;
+        const span = btn.querySelector("span");
+        if (span) {
+          span.textContent = label;
+        } else {
+          btn.textContent = label;
+        }
+      });
+    }
+
+    /* ============================
+       權限表：讀取 tasunAuthTable_v1
+       ============================ */
+
+    function makeButtonsAll(count) {
+      return Array(count).fill(true);
+    }
+
+    function makeButtonsOnlyLast(count) {
+      const arr = Array(count).fill(false);
+      if (count > 0) arr[count - 1] = true;
+      return arr;
+    }
+
+    function getDefaultAuthTable(btnCount) {
+      return [
+        {
+          username: "alex",
+          password: "Tasun08040224",
+          level: "admin",
+          buttons: makeButtonsAll(btnCount)
+        },
+        {
+          username: "tasun",
+          password: "tasun08040224",
+          level: "write",
+          buttons: makeButtonsAll(btnCount)
+        },
+        {
+          username: "wu",
+          password: "123456",
+          level: "read",
+          buttons: makeButtonsOnlyLast(btnCount)
+        }
+      ];
+    }
+
+    const LEGACY_BUTTON_KEYS = ["btn1", "btn2", "btn3", "btn4", "btn5"];
+
+    function normalizeRowFromStorage(row, btnCount) {
+      const username = row.username || "";
+      const password = row.password || "";
+      const level = row.level || "read";
+
+      let buttons = [];
+
+      if (Array.isArray(row.buttons)) {
+        buttons = row.buttons.slice();
+      } else {
+        const legacy = [];
+        LEGACY_BUTTON_KEYS.forEach(k => {
+          if (Object.prototype.hasOwnProperty.call(row, k)) {
+            legacy.push(!!row[k]);
+          }
+        });
+        buttons = legacy;
+      }
+
+      const resultButtons = [];
+      for (let i = 0; i < btnCount; i++) {
+        resultButtons[i] = !!buttons[i];
+      }
+
+      return { username, password, level, buttons: resultButtons };
+    }
+
+    function loadAuthTable(btnCount) {
+      const raw = localStorage.getItem(AUTH_KEY);
+      if (!raw) {
+        const defaults = getDefaultAuthTable(btnCount);
+        localStorage.setItem(AUTH_KEY, JSON.stringify(defaults));
+        return defaults;
+      }
+      try {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          return arr.map(r => normalizeRowFromStorage(r, btnCount));
+        }
+      } catch (e) {}
+      const defaults = getDefaultAuthTable(btnCount);
+      localStorage.setItem(AUTH_KEY, JSON.stringify(defaults));
+      return defaults;
+    }
+
+    function findUser(username, password) {
+      const trimmedName = username.trim();
+      const table = loadAuthTable(BUTTON_COUNT);
+      return table.find(row => row.username === trimmedName && row.password === password);
+    }
+
+    /* ============================
+       按鈕顯示控制：角色 + 權限表
+       ============================ */
+
+    function isRoleAllowedForButton(btn, level) {
+      const rolesAttr = btn.dataset.roles;
+      if (!rolesAttr) return true;
+      const roles = rolesAttr.split(",").map(r => r.trim());
+      return roles.includes(level);
+    }
+
+    function applyUser(user, buttonLabels) {
+      // 關閉登入遮罩
       document.body.classList.remove("locked");
       loginOverlay.style.display = "none";
 
-      userInfo.textContent = `目前使用者：${user.username} (${user.role})`;
+      // 記錄目前登入者給權限表頁面使用
+      localStorage.setItem(
+        CURRENT_KEY,
+        JSON.stringify({ username: user.username, level: user.level })
+      );
 
-      // 依角色顯示按鈕
-      document.querySelectorAll(".nav-btn[data-roles]").forEach(btn => {
-        const roles = btn.dataset.roles.split(",").map(r => r.trim());
-        btn.style.display = roles.includes(user.role) ? "flex" : "none";
+      userInfo.textContent = `目前使用者：${user.username} (${user.level})`;
+
+      // 套用按鈕顯示文字
+      if (Array.isArray(buttonLabels)) {
+        applyButtonLabels(buttonLabels);
+      }
+
+      // 前幾顆按鈕：要同時符合 data-roles + 權限表 buttons[]
+      mainNavBtns.forEach((btn, index) => {
+        const allowedByRole = isRoleAllowedForButton(btn, user.level);
+        const allowedByAuth =
+          Array.isArray(user.buttons) && index < user.buttons.length
+            ? !!user.buttons[index]
+            : true;
+        btn.style.display = allowedByRole && allowedByAuth ? "flex" : "none";
       });
+
+      // 系統 / 權限按鈕：固定只有 admin 顯示
+      if (systemBtn) {
+        const allowedByRole = isRoleAllowedForButton(systemBtn, user.level);
+        systemBtn.style.display =
+          allowedByRole && user.level === "admin" ? "flex" : "none";
+      }
     }
 
     function resetButtonsForLogout() {
-      document.querySelectorAll(".nav-btn[data-roles]").forEach(btn => {
+      allNavBtns.forEach(btn => {
         btn.style.display = "none";
       });
     }
+
+    // 一次讀出目前的按鈕名稱設定（由權限表.html 儲存）
+    const { labels: buttonLabels } = loadButtonLabels();
+
+    /* ============================
+       登入 / 登出流程
+       ============================ */
 
     loginForm.addEventListener("submit", function (e) {
       e.preventDefault();
@@ -656,19 +852,21 @@
       const username = document.getElementById("username").value;
       const password = document.getElementById("password").value;
 
-      const user = findUser(username);
+      const user = findUser(username, password);
 
-      if (!user || user.password !== password) {
+      if (!user) {
         loginError.textContent = "帳號或密碼錯誤，請再試一次。";
         return;
       }
 
       loginError.textContent = "";
-      applyUser(user);
+      applyUser(user, buttonLabels);
     });
 
     btnSwitch.addEventListener("click", function () {
-      // 切換帳號：重新顯示登入畫面
+      // 切換帳號：清除目前登入者資訊
+      localStorage.removeItem(CURRENT_KEY);
+
       document.body.classList.add("locked");
       loginOverlay.style.display = "flex";
       loginError.textContent = "";
