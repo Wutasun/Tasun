@@ -127,7 +127,7 @@
       grid-area: nav-right;
     }
 
-    /* 中央蓮花面板 */
+    /* 中央蓮花面板（圖2 那種寬版） */
     .hero-card {
       grid-area: hero;
       position: relative;
@@ -191,7 +191,7 @@
       aspect-ratio: 4 / 3;
       background-image:
         radial-gradient(circle at 50% 10%, rgba(255, 230, 190, 0.2), transparent 55%),
-        url('首頁圖片.png');  /* 目前的蓮花圖片 */
+        url('首頁圖片.png');  /* 目前的蓮花圖片檔名 */
       background-size: contain;
       background-repeat: no-repeat;
       background-position: center 60%;
@@ -229,7 +229,7 @@
       text-shadow: 0 0 14px rgba(255, 220, 170, 0.85);
     }
 
-    /* 按鈕樣式 */
+    /* 按鈕樣式（左右各三顆） */
     .nav-btn {
       position: relative;
       display: inline-flex;
@@ -476,7 +476,7 @@
     .login-actions button:hover {
       transform: translateY(-2px);
       box-shadow:
-        0 0 30px rgba(0, 0, 0, 0.9),
+        0 0 30pxrgba(0, 0, 0, 0.9),
         0 0 30px rgba(255, 220, 160, 0.85);
     }
 
@@ -609,13 +609,15 @@
         },
       ];
 
+      // 同時支援：權限表把資料存成「陣列」或「{ users: [] }」兩種格式
       function loadAuth() {
         try {
           const raw = localStorage.getItem(AUTH_KEY);
           if (!raw) return DEFAULT_AUTH;
           const data = JSON.parse(raw);
-          if (!Array.isArray(data) || data.length === 0) return DEFAULT_AUTH;
-          return data;
+          if (Array.isArray(data)) return data;
+          if (data && Array.isArray(data.users)) return data.users;
+          return DEFAULT_AUTH;
         } catch (err) {
           console.error("解析權限表失敗，改用預設帳號", err);
           return DEFAULT_AUTH;
@@ -633,17 +635,28 @@
         );
       }
 
-      function getCurrentUser(auth) {
+      // CURRENT_KEY 可能存成字串或 { username, level }，都支援
+      function getCurrentUserFromStorage(auth) {
+        const raw = localStorage.getItem(CURRENT_KEY);
+        if (!raw) return null;
+
+        let username = null;
         try {
-          const raw = localStorage.getItem(CURRENT_KEY);
-          if (!raw) return null;
-          const saved = JSON.parse(raw);
-          if (!saved || !saved.username) return null;
-          return auth.find((u) => u.username === saved.username) || null;
+          const parsed = JSON.parse(raw);
+          if (typeof parsed === "string") {
+            username = parsed;
+          } else if (parsed && typeof parsed.username === "string") {
+            username = parsed.username;
+          }
         } catch (err) {
-          console.error("解析目前使用者失敗", err);
-          return null;
+          // 不是 JSON，就當成純文字帳號
+          username = raw;
         }
+        if (!username) return null;
+
+        return (
+          auth.find((u) => String(u.username) === String(username)) || null
+        );
       }
 
       function saveCurrentUser(user) {
@@ -652,7 +665,7 @@
       }
 
       const authTable = loadAuth();
-      let currentUser = null;
+      let currentUser = getCurrentUserFromStorage(authTable) || null;
 
       const currentUserText = document.getElementById("current-user-text");
       const switchAccountBtn = document.getElementById("switch-account-btn");
@@ -663,8 +676,10 @@
       const loginMessage = document.getElementById("login-message");
       const togglePasswordBtn = document.getElementById("toggle-password");
 
-      // 建立帳號下拉選單（來源：權限表）
+      // 先清空再建立帳號下拉選單（來源：權限表）
+      loginUserSelect.innerHTML = "";
       authTable.forEach((user) => {
+        if (!user || !user.username) return;
         const opt = document.createElement("option");
         opt.value = user.username;
         const levelText = user.level ? ` (${user.level})` : "";
@@ -685,12 +700,13 @@
         loginOverlay.classList.remove("hidden");
         loginPasswordInput.value = "";
         loginMessage.textContent = "";
+
         if (currentUser) {
           loginUserSelect.value = currentUser.username;
-        } else {
-          // 沒有目前使用者就預設選第一個
+        } else if (authTable.length > 0) {
           loginUserSelect.selectedIndex = 0;
         }
+
         setTimeout(() => {
           loginPasswordInput.focus();
         }, 30);
@@ -700,6 +716,7 @@
         loginOverlay.classList.add("hidden");
       }
 
+      // 依照使用者權限建構左右按鈕（圖2 那樣分布）
       function buildNavForUser(user) {
         const leftCol = document.getElementById("nav-left");
         const rightCol = document.getElementById("nav-right");
@@ -764,7 +781,7 @@
           a.textContent = cfg.label;
           a.dataset.btnId = cfg.id;
 
-          // 交錯分配到左右欄，讓按鈕數量自動平均
+          // 交錯分配到左右欄：index 0,2,4.. 左邊；1,3,5.. 右邊
           const target = index % 2 === 0 ? leftCol : rightCol;
           target.appendChild(a);
         });
@@ -799,7 +816,9 @@
         const username = loginUserSelect.value;
         const pwd = loginPasswordInput.value || "";
 
-        const user = authTable.find((u) => u.username === username);
+        const user =
+          authTable.find((u) => String(u.username) === String(username)) ||
+          null;
         if (!user) {
           loginMessage.textContent = "找不到帳號";
           return;
@@ -826,17 +845,21 @@
         }
       });
 
-      // ------- 首次載入：一定打開登入表 -------
-      const rememberedUser = getCurrentUser(authTable);
-      if (rememberedUser) {
-        currentUser = rememberedUser;
-        setUserLabel(rememberedUser);
-        buildNavForUser(rememberedUser);
+      // ------- 首次載入畫面 -------
+      if (currentUser) {
+        // 若 localStorage 有之前登入紀錄，就先用那一組把背景按鈕排好
+        setUserLabel(currentUser);
+        buildNavForUser(currentUser);
+      } else if (authTable.length > 0) {
+        // 沒有登入紀錄就先用第一個帳號做背景（只是背景，真正權限以登入為準）
+        setUserLabel(null);
+        buildNavForUser(authTable[0]);
       } else {
         setUserLabel(null);
-        buildNavForUser(authTable[0]); // 背景先顯示一組按鈕
       }
-      showLogin(); // 進入網頁就顯示登入表
+
+      // 進入網頁一定先打開登入表
+      showLogin();
     })();
   </script>
 </body>
