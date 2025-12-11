@@ -177,22 +177,6 @@
       color: #ffb3b3;
     }
 
-    .btn-header {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 0.15rem;
-    }
-
-    .btn-header-title {
-      font-size: 0.72rem;
-      letter-spacing: 0.1em;
-    }
-
-    .btn-header select {
-      font-size: 0.75rem;
-    }
-
     .pwd-wrapper {
       display: flex;
       align-items: center;
@@ -201,6 +185,30 @@
 
     .pwd-input {
       flex: 1 1 auto;
+    }
+
+    .nav-config-title {
+      margin-top: 0.3rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+      letter-spacing: 0.16em;
+      text-indent: 0.16em;
+      color: var(--gold-soft);
+    }
+
+    .nav-table {
+      margin-top: 0.4rem;
+      margin-bottom: 0.8rem;
+      font-size: 0.8rem;
+    }
+
+    .nav-table th {
+      letter-spacing: 0.12em;
+      text-indent: 0.12em;
+    }
+
+    .nav-table input[type="text"] {
+      font-size: 0.8rem;
     }
 
     @media (max-width: 900px) {
@@ -225,11 +233,25 @@
   <div class="panel">
     <p>
       只有 <strong>admin</strong> 登入者可以編輯此表。<br>
-      欄位說明：用戶名、密碼、權限級別（admin / write / read），以及首頁按鈕是否顯示。<br>
-      首頁按鈕的「數量」與「名稱」皆自動讀取 <strong>index.html</strong> 的按鈕設定；<br>
-      表頭的下拉選單可調整顯示名稱；系統 / 權限（連到本頁）固定只有 admin 顯示，不列入本表。
+      本頁集中管理：<strong>帳號密碼＋權限級別＋首頁按鈕名稱與連結</strong>。<br>
+      首頁 <code>index.html</code> 只會讀取 localStorage，不再寫死按鈕名稱與網址。<br>
+      系統 / 權限（連到本頁）固定只有 admin 顯示，不列入下列表格。
     </p>
 
+    <!-- 首頁按鈕設定：名稱 + 連結 -->
+    <div class="nav-config-title">首頁按鈕設定（固定 5 顆，左上 → 右上 → 左中 → 右中 → 左下）</div>
+    <table class="nav-table">
+      <thead>
+        <tr>
+          <th style="width: 8%;">序號</th>
+          <th style="width: 30%;">按鈕名稱</th>
+          <th>連結網址（href）</th>
+        </tr>
+      </thead>
+      <tbody id="navConfigBody"></tbody>
+    </table>
+
+    <!-- 使用者權限設定 -->
     <table>
       <thead>
         <tr id="headerRow"></tr>
@@ -239,10 +261,10 @@
 
     <div class="panel-footer">
       <div>
-        <button type="button" class="btn-small" id="addRowBtn">＋ 新增一列</button>
+        <button type="button" class="btn-small" id="addRowBtn">＋ 新增一列帳號</button>
       </div>
       <div>
-        <button type="button" class="btn-main" id="saveBtn">儲存權限表</button>
+        <button type="button" class="btn-main" id="saveBtn">儲存設定</button>
       </div>
     </div>
 
@@ -251,124 +273,176 @@
 
   <script>
     (function () {
-      const AUTH_KEY = "tasunAuthTable_v1";
+      const AUTH_KEY    = "tasunAuthTable_v1";
       const CURRENT_KEY = "tasunCurrentUser_v1";
-      const BTN_LABEL_KEY = "tasunButtonLabels_v1";
+      const NAV_KEY     = "tasunNavButtons_v1";
 
       const LEGACY_BUTTON_KEYS = ["btn1", "btn2", "btn3", "btn4", "btn5"];
 
-      const bodyEl    = document.getElementById("authBody");
-      const headerRow = document.getElementById("headerRow");
-      const addRowBtn = document.getElementById("addRowBtn");
-      const saveBtn   = document.getElementById("saveBtn");
-      const statusMsg = document.getElementById("statusMsg");
+      // 預設 5 顆首頁按鈕（與 index.html 的 DEFAULT_NAV 同步）
+      const DEFAULT_NAV = [
+        {
+          id: "btn1",
+          label: "臻鼎時代大廈管理表",
+          href: "臻鼎管理表.html",
+          target: "",
+          roles: ["admin", "write", "read"]
+        },
+        {
+          id: "btn2",
+          label: "缺失 / 品質",
+          href: "甄鼎quality.html",
+          target: "",
+          roles: ["admin", "write", "read"]
+        },
+        {
+          id: "btn3",
+          label: "雲端檔案",
+          href: "https://www.dropbox.com/",
+          target: "_blank",
+          roles: ["admin", "write", "read"]
+        },
+        {
+          id: "btn4",
+          label: "工程資料庫",
+          href: "工程資料庫.html",
+          target: "",
+          roles: ["admin", "write"]
+        },
+        {
+          id: "btn5",
+          label: "資料庫",
+          href: "#",
+          target: "",
+          roles: ["admin", "write", "read"]
+        }
+      ];
+
+      const navConfigBody = document.getElementById("navConfigBody");
+      const headerRow     = document.getElementById("headerRow");
+      const authBody      = document.getElementById("authBody");
+      const addRowBtn     = document.getElementById("addRowBtn");
+      const saveBtn       = document.getElementById("saveBtn");
+      const statusMsg     = document.getElementById("statusMsg");
 
       /* ---------------------------
-         從 index.html 抓按鈕名稱
+         僅 admin 可進入此頁
          --------------------------- */
-
-      function getFallbackButtonNames() {
-        // 抓不到 index.html 時的備用：目前首頁五顆
-        return [
-          "臻鼎時代大廈管理表",
-          "缺失 / 品質",
-          "雲端檔案",
-          "工程資料庫",
-          "資料庫"
-        ];
-      }
-
-      function extractButtonsFromIndex(htmlText) {
+      function ensureAdmin() {
+        const saved = localStorage.getItem(CURRENT_KEY);
+        if (!saved) {
+          alert("請先在首頁登入後再進入權限表。");
+          location.href = "index.html";
+          return null;
+        }
         try {
-          const parser = new DOMParser();
-          const doc = parser.parseFromString(htmlText, "text/html");
-
-          const allBtns = Array.from(doc.querySelectorAll("a.nav-btn[data-roles]"));
-          const names = [];
-          const nameSet = new Set();
-
-          allBtns.forEach(a => {
-            const href = (a.getAttribute("href") || "").trim();
-            if (href && href.indexOf("權限表") !== -1) return;
-
-            let text = a.textContent || "";
-            text = text.replace(/\s+/g, " ").trim();
-            if (!text) return;
-
-            if (!nameSet.has(text)) {
-              nameSet.add(text);
-              names.push(text);
-            }
-          });
-
-          if (!names.length) {
-            return getFallbackButtonNames();
+          const user = JSON.parse(saved);
+          if (!user || user.level !== "admin") {
+            alert("只有 admin 可以編輯權限表。");
+            location.href = "index.html";
+            return null;
           }
-          return names;
+          return user;
         } catch (e) {
-          return getFallbackButtonNames();
+          alert("登入資訊錯誤，請重新登入。");
+          location.href = "index.html";
+          return null;
         }
-      }
-
-      function loadButtonNamesFromIndex() {
-        return fetch("index.html", { cache: "no-store" })
-          .then(resp => {
-            if (!resp.ok) throw new Error("fetch index failed");
-            return resp.text();
-          })
-          .then(html => extractButtonsFromIndex(html))
-          .catch(() => getFallbackButtonNames());
       }
 
       /* ---------------------------
-         按鈕名稱設定（表頭下拉選單）
+         首頁按鈕設定：讀 / 寫 NAV_KEY
          --------------------------- */
+      function loadNavConfig() {
+        const base = DEFAULT_NAV.map(btn => ({ ...btn }));
+        const raw = localStorage.getItem(NAV_KEY);
+        if (!raw) return base;
+        try {
+          const arr = JSON.parse(raw);
+          if (!Array.isArray(arr)) return base;
 
-      function loadButtonLabels(buttonNames) {
-        const raw = localStorage.getItem(BTN_LABEL_KEY);
-        const n = buttonNames.length;
-        let stored = [];
+          for (let i = 0; i < base.length; i++) {
+            const src = arr[i];
+            if (!src || typeof src !== "object") continue;
 
-        if (raw) {
-          try {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed)) {
-              stored = parsed;
-            } else if (parsed && typeof parsed === "object") {
-              stored = LEGACY_BUTTON_KEYS.map(k => parsed[k]);
+            if (typeof src.label === "string" && src.label.trim()) {
+              base[i].label = src.label.trim();
             }
-          } catch (e) {}
-        }
-
-        const result = [];
-        for (let i = 0; i < n; i++) {
-          const val = stored[i];
-          if (typeof val === "string" && val && buttonNames.includes(val)) {
-            result[i] = val;
-          } else {
-            result[i] = buttonNames[i];
+            if (typeof src.href === "string" && src.href.trim()) {
+              base[i].href = src.href.trim();
+            }
+            if (typeof src.target === "string" && src.target.trim()) {
+              base[i].target = src.target.trim();
+            }
           }
+          return base;
+        } catch (e) {
+          return base;
         }
+      }
+
+      function saveNavConfig(navArr) {
+        // 只存 label + href + target，其他（id, roles）由 DEFAULT_NAV 管理
+        const compact = navArr.map(item => ({
+          label: item.label || "",
+          href:  item.href  || "",
+          target: item.target || ""
+        }));
+        localStorage.setItem(NAV_KEY, JSON.stringify(compact));
+      }
+
+      function renderNavConfig(navArr) {
+        navConfigBody.innerHTML = "";
+        navArr.forEach((item, index) => {
+          const tr = document.createElement("tr");
+
+          const tdIdx = document.createElement("td");
+          tdIdx.textContent = index + 1;
+          tr.appendChild(tdIdx);
+
+          const tdLabel = document.createElement("td");
+          const inLabel = document.createElement("input");
+          inLabel.type = "text";
+          inLabel.value = item.label || "";
+          inLabel.placeholder = "按鈕名稱";
+          inLabel.dataset.navIndex = String(index);
+          inLabel.dataset.field = "label";
+          tdLabel.appendChild(inLabel);
+          tr.appendChild(tdLabel);
+
+          const tdHref = document.createElement("td");
+          const inHref = document.createElement("input");
+          inHref.type = "text";
+          inHref.value = item.href || "";
+          inHref.placeholder = "例如：臻鼎管理表.html 或 https://...";
+          inHref.dataset.navIndex = String(index);
+          inHref.dataset.field = "href";
+          tdHref.appendChild(inHref);
+          tr.appendChild(tdHref);
+
+          navConfigBody.appendChild(tr);
+        });
+      }
+
+      function collectNavConfigFromUI(currentNavArr) {
+        const result = currentNavArr.map(item => ({ ...item }));
+        const inputs = navConfigBody.querySelectorAll("input[type='text']");
+        inputs.forEach(inp => {
+          const idx = parseInt(inp.dataset.navIndex || "0", 10);
+          const field = inp.dataset.field;
+          if (!Number.isFinite(idx) || idx < 0 || idx >= result.length) return;
+          if (field === "label") {
+            result[idx].label = inp.value.trim() || DEFAULT_NAV[idx].label;
+          } else if (field === "href") {
+            result[idx].href = inp.value.trim() || DEFAULT_NAV[idx].href;
+          }
+        });
         return result;
       }
 
-      function saveButtonLabels(labels) {
-        localStorage.setItem(BTN_LABEL_KEY, JSON.stringify(labels));
-      }
-
-      function getButtonLabelsFromUI() {
-        const selects = headerRow.querySelectorAll(".btn-label-select");
-        const labels = [];
-        selects.forEach((sel, idx) => {
-          labels[idx] = sel.value;
-        });
-        return labels;
-      }
-
       /* ---------------------------
-         權限資料（使用者列）
+         權限表：帳號 / 密碼 / 按鈕勾選
          --------------------------- */
-
       function makeButtonsAll(count) {
         return Array(count).fill(true);
       }
@@ -405,7 +479,7 @@
       function normalizeRowFromStorage(row, btnCount) {
         const username = row.username || "";
         const password = row.password || "";
-        const level = row.level || "read";
+        const level    = row.level || "read";
 
         let buttons = [];
 
@@ -452,36 +526,9 @@
       }
 
       /* ---------------------------
-         權限檢查：只有 admin 可進
-         --------------------------- */
-
-      function ensureAdmin() {
-        const saved = localStorage.getItem(CURRENT_KEY);
-        if (!saved) {
-          alert("請先在首頁登入後再進入權限表。");
-          location.href = "index.html";
-          return null;
-        }
-        try {
-          const user = JSON.parse(saved);
-          if (!user || user.level !== "admin") {
-            alert("只有 admin 可以編輯權限表。");
-            location.href = "index.html";
-            return null;
-          }
-          return user;
-        } catch (e) {
-          alert("登入資訊錯誤，請重新登入。");
-          location.href = "index.html";
-          return null;
-        }
-      }
-
-      /* ---------------------------
          畫面：表頭與使用者列
          --------------------------- */
-
-      function renderHeader(buttonNames, labelConfig) {
+      function renderHeader(navArr) {
         headerRow.innerHTML = "";
 
         const thUser = document.createElement("th");
@@ -496,36 +543,9 @@
         thLevel.textContent = "權限級別";
         headerRow.appendChild(thLevel);
 
-        buttonNames.forEach((btnName, idx) => {
+        navArr.forEach((btn, idx) => {
           const th = document.createElement("th");
-          const wrapper = document.createElement("div");
-          wrapper.className = "btn-header";
-
-          const title = document.createElement("div");
-          title.className = "btn-header-title";
-          title.textContent = "按鈕" + (idx + 1);
-
-          const select = document.createElement("select");
-          select.className = "btn-label-select";
-          select.dataset.index = String(idx);
-
-          buttonNames.forEach(name => {
-            const opt = document.createElement("option");
-            opt.value = name;
-            opt.textContent = name;
-            select.appendChild(opt);
-          });
-
-          const labelName = labelConfig[idx] || btnName;
-          if (buttonNames.includes(labelName)) {
-            select.value = labelName;
-          } else {
-            select.value = btnName;
-          }
-
-          wrapper.appendChild(title);
-          wrapper.appendChild(select);
-          th.appendChild(wrapper);
+          th.textContent = btn.label || ("按鈕" + (idx + 1));
           headerRow.appendChild(th);
         });
 
@@ -534,8 +554,8 @@
         headerRow.appendChild(thDel);
       }
 
-      function renderTable(data, btnCount) {
-        bodyEl.innerHTML = "";
+      function renderAuthTable(data, btnCount) {
+        authBody.innerHTML = "";
 
         data.forEach(row => {
           const tr = document.createElement("tr");
@@ -597,24 +617,24 @@
           tdDel.appendChild(delBtn);
           tr.appendChild(tdDel);
 
-          bodyEl.appendChild(tr);
+          authBody.appendChild(tr);
         });
       }
 
-      function collectTable(btnCount) {
-        const rows = Array.from(bodyEl.querySelectorAll("tr"));
+      function collectAuthTable(btnCount) {
+        const rows = Array.from(authBody.querySelectorAll("tr"));
         const result = [];
 
         rows.forEach(tr => {
           const tds = tr.querySelectorAll("td");
 
           const usernameInput = tds[0].querySelector("input");
-          const pwdInput = tds[1].querySelector(".pwd-input");
-          const levelSelect = tds[2].querySelector("select");
+          const pwdInput      = tds[1].querySelector(".pwd-input");
+          const levelSelect   = tds[2].querySelector("select");
 
           const username = usernameInput ? usernameInput.value.trim() : "";
           const password = pwdInput ? pwdInput.value.trim() : "";
-          const level = levelSelect ? levelSelect.value : "read";
+          const level    = levelSelect ? levelSelect.value : "read";
 
           if (!username || !password) {
             return;
@@ -636,37 +656,37 @@
       /* ---------------------------
          初始化
          --------------------------- */
+      document.addEventListener("DOMContentLoaded", function () {
+        const user = ensureAdmin();
+        if (!user) return;
 
-      function initWithButtonNames(buttonNames) {
-        const btnCount = buttonNames.length;
+        const navArr   = loadNavConfig();
+        const btnCount = navArr.length;
 
-        const labelConfig = loadButtonLabels(buttonNames);
-        renderHeader(buttonNames, labelConfig);
+        renderNavConfig(navArr);
+        renderHeader(navArr);
 
-        const tableData = loadAuthTable(btnCount);
-        renderTable(tableData, btnCount);
+        const authData = loadAuthTable(btnCount);
+        renderAuthTable(authData, btnCount);
 
         addRowBtn.addEventListener("click", function () {
-          const newRow = {
+          const current = collectAuthTable(btnCount);
+          current.push({
             username: "",
             password: "",
             level: "read",
             buttons: Array(btnCount).fill(false)
-          };
-          const data = collectTable(btnCount);
-          data.push(newRow);
-          renderTable(data, btnCount);
+          });
+          renderAuthTable(current, btnCount);
         });
 
-        bodyEl.addEventListener("click", function (e) {
+        authBody.addEventListener("click", function (e) {
           const target = e.target;
-
           if (target.classList.contains("btn-del")) {
             const tr = target.closest("tr");
             if (tr) tr.remove();
             return;
           }
-
           if (target.classList.contains("btn-eye")) {
             const td = target.closest("td");
             if (!td) return;
@@ -677,26 +697,20 @@
         });
 
         saveBtn.addEventListener("click", function () {
-          const data = collectTable(btnCount);
-          if (!data.length) {
+          statusMsg.textContent = "";
+
+          const newNavArr   = collectNavConfigFromUI(navArr);
+          const newAuthData = collectAuthTable(btnCount);
+
+          if (!newAuthData.length) {
             statusMsg.textContent = "至少需要一筆帳號資料。";
             return;
           }
 
-          const labels = getButtonLabelsFromUI();
-          saveAuthTable(data);
-          saveButtonLabels(labels);
+          saveNavConfig(newNavArr);
+          saveAuthTable(newAuthData);
 
-          statusMsg.textContent = "已儲存權限表與按鈕名稱。回到首頁重新登入即可套用。";
-        });
-      }
-
-      document.addEventListener("DOMContentLoaded", function () {
-        const user = ensureAdmin();
-        if (!user) return;
-
-        loadButtonNamesFromIndex().then(buttonNames => {
-          initWithButtonNames(buttonNames);
+          statusMsg.textContent = "已儲存「首頁按鈕設定」與「帳號權限」。請回首頁重新登入查看效果。";
         });
       });
     })();
