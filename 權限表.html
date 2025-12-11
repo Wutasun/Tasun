@@ -239,7 +239,7 @@
     </p>
 
     <!-- 首頁按鈕設定：名稱 + 連結 -->
-    <div class="nav-config-title">首頁按鈕設定（固定 5 顆，左上 → 右上 → 左中 → 右中 → 左下）</div>
+    <div class="nav-config-title">首頁按鈕設定（固定 5 顆，順序：左上 → 右上 → 左中 → 右中 → 左下）</div>
     <table class="nav-table">
       <thead>
         <tr>
@@ -279,7 +279,7 @@
 
       const LEGACY_BUTTON_KEYS = ["btn1", "btn2", "btn3", "btn4", "btn5"];
 
-      // 預設 5 顆首頁按鈕（與 index.html 的 DEFAULT_NAV 同步）
+      // 與 index.html 同步的預設 5 顆首頁按鈕
       const DEFAULT_NAV = [
         {
           id: "btn1",
@@ -317,6 +317,12 @@
           roles: ["admin", "write", "read"]
         }
       ];
+
+      // 以 id 快速查預設
+      const NAV_DEF_BY_ID = {};
+      DEFAULT_NAV.forEach(def => {
+        NAV_DEF_BY_ID[def.id] = def;
+      });
 
       const navConfigBody = document.getElementById("navConfigBody");
       const headerRow     = document.getElementById("headerRow");
@@ -382,7 +388,6 @@
       }
 
       function saveNavConfig(navArr) {
-        // 只存 label + href + target，其他（id, roles）由 DEFAULT_NAV 管理
         const compact = navArr.map(item => ({
           label: item.label || "",
           href:  item.href  || "",
@@ -400,16 +405,33 @@
           tdIdx.textContent = index + 1;
           tr.appendChild(tdIdx);
 
+          // 按鈕名稱：下拉選單（從 DEFAULT_NAV 選）
           const tdLabel = document.createElement("td");
-          const inLabel = document.createElement("input");
-          inLabel.type = "text";
-          inLabel.value = item.label || "";
-          inLabel.placeholder = "按鈕名稱";
-          inLabel.dataset.navIndex = String(index);
-          inLabel.dataset.field = "label";
-          tdLabel.appendChild(inLabel);
+          const selLabel = document.createElement("select");
+          selLabel.className = "nav-label-select";
+          selLabel.dataset.navIndex = String(index);
+
+          let selectedId = DEFAULT_NAV[0].id;
+          DEFAULT_NAV.some(def => {
+            if (item.label === def.label || item.id === def.id) {
+              selectedId = def.id;
+              return true;
+            }
+            return false;
+          });
+
+          DEFAULT_NAV.forEach(def => {
+            const opt = document.createElement("option");
+            opt.value = def.id;
+            opt.textContent = def.label;
+            selLabel.appendChild(opt);
+          });
+          selLabel.value = selectedId;
+
+          tdLabel.appendChild(selLabel);
           tr.appendChild(tdLabel);
 
+          // href 欄位：可手動修改
           const tdHref = document.createElement("td");
           const inHref = document.createElement("input");
           inHref.type = "text";
@@ -426,17 +448,34 @@
 
       function collectNavConfigFromUI(currentNavArr) {
         const result = currentNavArr.map(item => ({ ...item }));
-        const inputs = navConfigBody.querySelectorAll("input[type='text']");
-        inputs.forEach(inp => {
-          const idx = parseInt(inp.dataset.navIndex || "0", 10);
-          const field = inp.dataset.field;
+
+        // 依畫面上的 select + href input 回填
+        const rows = navConfigBody.querySelectorAll("tr");
+        rows.forEach(row => {
+          const sel = row.querySelector(".nav-label-select");
+          const hrefInput = row.querySelector("input[data-field='href']");
+          if (!sel || !hrefInput) return;
+
+          const idx = parseInt(sel.dataset.navIndex || "0", 10);
           if (!Number.isFinite(idx) || idx < 0 || idx >= result.length) return;
-          if (field === "label") {
-            result[idx].label = inp.value.trim() || DEFAULT_NAV[idx].label;
-          } else if (field === "href") {
-            result[idx].href = inp.value.trim() || DEFAULT_NAV[idx].href;
+
+          const defId = sel.value;
+          const def   = NAV_DEF_BY_ID[defId] || DEFAULT_NAV[idx];
+
+          const hrefVal = hrefInput.value.trim() || def.href;
+
+          result[idx].id    = def.id;
+          result[idx].label = def.label;
+          result[idx].href  = hrefVal;
+
+          // target：外部 http 開頭就自動開新視窗，否則沿用預設
+          if (/^https?:\/\//i.test(hrefVal)) {
+            result[idx].target = "_blank";
+          } else {
+            result[idx].target = def.target || "";
           }
         });
+
         return result;
       }
 
@@ -660,7 +699,7 @@
         const user = ensureAdmin();
         if (!user) return;
 
-        const navArr   = loadNavConfig();
+        let navArr   = loadNavConfig();
         const btnCount = navArr.length;
 
         renderNavConfig(navArr);
@@ -668,6 +707,22 @@
 
         const authData = loadAuthTable(btnCount);
         renderAuthTable(authData, btnCount);
+
+        // 「按鈕名稱」變更時，自動帶入預設 href
+        navConfigBody.addEventListener("change", function (e) {
+          const target = e.target;
+          if (!target.classList.contains("nav-label-select")) return;
+
+          const idx = parseInt(target.dataset.navIndex || "0", 10);
+          const defId = target.value;
+          const def   = NAV_DEF_BY_ID[defId] || DEFAULT_NAV[idx];
+
+          const tr       = target.closest("tr");
+          const hrefInput = tr ? tr.querySelector("input[data-field='href']") : null;
+          if (hrefInput && def) {
+            hrefInput.value = def.href;
+          }
+        });
 
         addRowBtn.addEventListener("click", function () {
           const current = collectAuthTable(btnCount);
@@ -699,7 +754,7 @@
         saveBtn.addEventListener("click", function () {
           statusMsg.textContent = "";
 
-          const newNavArr   = collectNavConfigFromUI(navArr);
+          navArr = collectNavConfigFromUI(navArr);
           const newAuthData = collectAuthTable(btnCount);
 
           if (!newAuthData.length) {
@@ -707,7 +762,7 @@
             return;
           }
 
-          saveNavConfig(newNavArr);
+          saveNavConfig(navArr);
           saveAuthTable(newAuthData);
 
           statusMsg.textContent = "已儲存「首頁按鈕設定」與「帳號權限」。請回首頁重新登入查看效果。";
