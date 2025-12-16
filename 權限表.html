@@ -321,20 +321,44 @@
   </div>
 
   <script>
-    // ==========================
-    // ✅ Dropbox 雲端同步設定（存到 /Tasun/權限/）
-    // ==========================
-    const DBX_TOKEN = "請在此貼上你的Dropbox Access Token"; // ← 必填（與 index.html 相同）
-    const DBX_AUTH  = "Bearer " + DBX_TOKEN;
+    // =========================================================
+    // ✅ Dropbox 雲端同步（存到 /Tasun/權限/）
+    // ✅ 安全做法：Token 不寫死在程式碼，改存在 localStorage
+    //    admin 第一次進入權限表會提示你貼上 token
+    // =========================================================
+    const DBX_TOKEN_KEY = "tasunDbxToken_v1";
     const DBX_FOLDER = "/Tasun/權限";
-
-    function dbxEnabled(){
-      return DBX_TOKEN && DBX_TOKEN.trim() && !DBX_TOKEN.includes("請在此貼上");
-    }
 
     const DBX_PATH_AUTH = `${DBX_FOLDER}/tasunAuthTable_v1.json`;
     const DBX_PATH_NAV  = `${DBX_FOLDER}/tasunNavButtons_v1.json`;
     const DBX_PATH_META = `${DBX_FOLDER}/tasunCloudMeta_v1.json`;
+
+    function getDbxToken(){
+      try{ return String(localStorage.getItem(DBX_TOKEN_KEY) || "").trim(); }catch(e){ return ""; }
+    }
+    function setDbxToken(t){
+      try{ localStorage.setItem(DBX_TOKEN_KEY, String(t || "").trim()); }catch(e){}
+    }
+    function dbxEnabled(){
+      return !!getDbxToken();
+    }
+    function dbxAuth(){
+      return "Bearer " + getDbxToken();
+    }
+
+    // ✅ 權限表（admin）需要能輸入 token，避免硬寫在檔案內
+    function ensureDbxToken(){
+      const token = getDbxToken();
+      if(token) return true;
+
+      const t = prompt("請貼上 Dropbox Access Token（只需一次，將儲存在本機瀏覽器）：", "");
+      if(t && String(t).trim()){
+        setDbxToken(String(t).trim());
+        return true;
+      }
+      alert("尚未設定 Dropbox Token，雲端同步功能將無法使用。");
+      return false;
+    }
 
     async function dbxUploadJson(path, obj){
       if(!dbxEnabled()) return false;
@@ -344,7 +368,7 @@
           method: "POST",
           cache: "no-store",
           headers: {
-            "Authorization": DBX_AUTH,
+            "Authorization": dbxAuth(),
             "Content-Type": "application/octet-stream",
             "Dropbox-API-Arg": JSON.stringify({
               path,
@@ -369,7 +393,7 @@
           method: "POST",
           cache: "no-store",
           headers: {
-            "Authorization": DBX_AUTH,
+            "Authorization": dbxAuth(),
             "Dropbox-API-Arg": JSON.stringify({ path })
           }
         });
@@ -390,6 +414,8 @@
     }
 
     async function cloudPushFromLocalStorage(){
+      if(!ensureDbxToken()) return false;
+
       const AUTH_KEY = "tasunAuthTable_v1";
       const NAV_KEY  = "tasunNavButtons_v1";
 
@@ -409,6 +435,8 @@
     }
 
     async function cloudPullToLocalStorage({ force=false } = {}){
+      if(!ensureDbxToken()) return false;
+
       const AUTH_KEY = "tasunAuthTable_v1";
       const NAV_KEY  = "tasunNavButtons_v1";
 
@@ -755,8 +783,8 @@
       saveNavToStorage();
       saveAuthToStorage();
 
-      await cloudPushFromLocalStorage();
-      alert("已儲存（本機 + 雲端）。手機登入將自動同步。");
+      const ok = await cloudPushFromLocalStorage();
+      alert(ok ? "已儲存（本機 + 雲端）。手機登入將自動同步。" : "已儲存本機，但雲端同步失敗（請確認 Token/網路）。");
     }
 
     async function doPull(){
@@ -803,6 +831,10 @@
         return;
       }
 
+      // ✅ admin 進來先提示 token（沒有就輸入一次）
+      ensureDbxToken();
+
+      // 先拉雲端一次，避免桌機/手機互相覆蓋舊資料
       await cloudPullToLocalStorage({ force:false });
 
       NAV_CONFIG = loadNavConfig();
