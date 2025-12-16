@@ -842,21 +842,26 @@
   </main>
 
   <script>
-    // ==========================
+    // =========================================================
     // ✅ Dropbox 雲端同步（/Tasun/權限/）
-    //    重要：index.html 也必須填 token，手機才抓得到新帳號（JOYCE）
-    // ==========================
-    const DBX_TOKEN  = "請在此貼上你的Dropbox Access Token"; // ← 必填（與權限表.html 相同）
-    const DBX_AUTH   = "Bearer " + DBX_TOKEN;
+    // ✅ 安全做法：Token 不寫死在程式碼，改存在 localStorage
+    //    權限表.html（admin）會提示你貼上 token 並存起來
+    // =========================================================
+    const DBX_TOKEN_KEY = "tasunDbxToken_v1";
     const DBX_FOLDER = "/Tasun/權限";
-
-    function dbxEnabled(){
-      return DBX_TOKEN && DBX_TOKEN.trim() && !DBX_TOKEN.includes("請在此貼上");
-    }
-
     const DBX_PATH_AUTH = `${DBX_FOLDER}/tasunAuthTable_v1.json`;
     const DBX_PATH_NAV  = `${DBX_FOLDER}/tasunNavButtons_v1.json`;
     const DBX_PATH_META = `${DBX_FOLDER}/tasunCloudMeta_v1.json`;
+
+    function getDbxToken(){
+      try{ return String(localStorage.getItem(DBX_TOKEN_KEY) || "").trim(); }catch(e){ return ""; }
+    }
+    function dbxEnabled(){
+      return !!getDbxToken();
+    }
+    function dbxAuth(){
+      return "Bearer " + getDbxToken();
+    }
 
     async function dbxDownloadJson(path){
       if(!dbxEnabled()) return null;
@@ -865,7 +870,7 @@
           method: "POST",
           cache: "no-store",
           headers: {
-            "Authorization": DBX_AUTH,
+            "Authorization": dbxAuth(),
             "Dropbox-API-Arg": JSON.stringify({ path })
           }
         });
@@ -886,6 +891,8 @@
     }
 
     async function cloudPullToLocalStorage({ force=false } = {}){
+      if(!dbxEnabled()) return false;
+
       const AUTH_KEY = "tasunAuthTable_v1";
       const NAV_KEY  = "tasunNavButtons_v1";
 
@@ -899,7 +906,6 @@
       const nav  = await dbxDownloadJson(DBX_PATH_NAV);
 
       let changed = false;
-
       if(auth && Array.isArray(auth)){
         localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
         changed = true;
@@ -1220,12 +1226,10 @@
         const u = String(row.username || "").trim();
         if(!u) return;
 
-        // datalist
         const opt = document.createElement("option");
         opt.value = u;
         usernameList.appendChild(opt);
 
-        // dropdown buttons (mobile reliable)
         const b = document.createElement("button");
         b.type = "button";
         b.textContent = u;
@@ -1237,7 +1241,6 @@
         userDrop.appendChild(b);
       });
 
-      // 若目前沒有值，預填第一個
       if(usernameInput && !String(usernameInput.value || "").trim()){
         const first = (AUTH_TABLE || []).find(r => String(r.username||"").trim());
         if(first) usernameInput.value = String(first.username || "").trim();
@@ -1257,7 +1260,6 @@
 
       const row = (AUTH_TABLE || []).find(r => r.username === cu.username);
       if(!row){
-        // 使用者被刪除 => 退登
         localStorage.removeItem(CURRENT_KEY);
         userInfo.textContent = "目前使用者：未登入";
         document.body.classList.add("locked");
@@ -1265,57 +1267,135 @@
         resetButtonsForLogout();
         return;
       }
-
-      // 更新顯示與權限
       applyUser(row);
     }
 
-    // ==========================
-    // ✅ 即時偵測更新：偵測到權限表更新就立刻同步
-    // ==========================
-    const CLOUD_WATCH_MS = 4000; // 可調：越小越即時（建議 3~6 秒）
-    let cloudWatchTimer = null;
-    let cloudWatchBusy = false;
+    // =========================================================
+    // ✅ 立即同步：優先使用 Dropbox Longpoll（接近即時）
+    //    若 longpoll 不可用，退回每 4 秒輪詢 meta
+    // =========================================================
+    const CLOUD_FALLBACK_MS = 4000;
+    let fallbackTimer = null;
+    let longpollStop = false;
+    let longpollCursor = "";
+    let cloudBusy = false;
 
     async function syncNowIfNew({ force=false } = {}){
-      if(cloudWatchBusy) return;
-      cloudWatchBusy = true;
+      if(cloudBusy) return;
+      cloudBusy = true;
       try{
         const changed = await cloudPullToLocalStorage({ force });
-        if(changed){
-          // 重新載入並刷新 UI（關鍵：手機會立刻看到 JOYCE）
-          buildMainButtons();
-          resetButtonsForLogout();
-          populateUserSelect();
+        NAV_CONFIG = loadNavConfig();
+        AUTH_TABLE = loadAuthTable(NAV_CONFIG.length);
 
-          // 如果當下已登入，權限/按鈕同步刷新
-          AUTH_TABLE = loadAuthTable(loadNavConfig().length);
-          NAV_CONFIG = loadNavConfig();
-          refreshSessionAfterSync();
-        }else{
-          // 沒變也要確保下拉存在（避免首次載入 localStorage 空白）
-          NAV_CONFIG = loadNavConfig();
-          AUTH_TABLE = loadAuthTable(NAV_CONFIG.length);
-          populateUserSelect();
-        }
+        // 無論有無變更，都刷新一次登入選單，確保手機/桌機一致
+        buildMainButtons();
+        resetButtonsForLogout();
+        populateUserSelect();
+        refreshSessionAfterSync();
+
+        return changed;
       } finally {
-        cloudWatchBusy = false;
+        cloudBusy = false;
       }
     }
 
-    function startCloudWatch(){
-      if(cloudWatchTimer) clearInterval(cloudWatchTimer);
-      cloudWatchTimer = setInterval(()=> syncNowIfNew({ force:false }), CLOUD_WATCH_MS);
+    async function dbxApiJson(url, bodyObj){
+      if(!dbxEnabled()) throw new Error("no token");
+      const res = await fetch(url, {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          "Authorization": dbxAuth(),
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(bodyObj || {})
+      });
+      if(!res.ok) throw new Error("http " + res.status);
+      return await res.json();
+    }
 
-      // 回到前景立刻檢查一次
+    async function getLatestCursor(){
+      const j = await dbxApiJson("https://api.dropboxapi.com/2/files/list_folder/get_latest_cursor", {
+        path: DBX_FOLDER,
+        recursive: false,
+        include_deleted: false,
+        include_media_info: false,
+        include_has_explicit_shared_members: false,
+        include_mounted_folders: true,
+        include_non_downloadable_files: true
+      });
+      return (j && j.cursor) ? j.cursor : "";
+    }
+
+    async function longpollOnce(cursor){
+      // Dropbox longpoll endpoint（可能因環境/CORS受限；若失敗會自動退回輪詢）
+      const res = await fetch("https://notify.dropboxapi.com/2/files/list_folder/longpoll", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cursor, timeout: 30 })
+      });
+      if(!res.ok) throw new Error("longpoll http " + res.status);
+      return await res.json(); // { changes:boolean, backoff?:number }
+    }
+
+    function startFallbackPolling(){
+      if(fallbackTimer) clearInterval(fallbackTimer);
+      fallbackTimer = setInterval(()=> syncNowIfNew({ force:false }), CLOUD_FALLBACK_MS);
+
       document.addEventListener("visibilitychange", ()=> {
         if(!document.hidden) syncNowIfNew({ force:false });
       });
     }
 
-    // 初始化：先拉雲端 → 再建按鈕/清單
+    async function startLongpollWatch(){
+      if(!dbxEnabled()){
+        // 沒 token -> 只能本機，不啟動雲端監看
+        return;
+      }
+
+      try{
+        longpollCursor = await getLatestCursor();
+        if(!longpollCursor) throw new Error("no cursor");
+      }catch(e){
+        // 取得 cursor 失敗 -> 退回輪詢
+        startFallbackPolling();
+        return;
+      }
+
+      // 先同步一次避免游標落後
+      await syncNowIfNew({ force:false });
+
+      longpollStop = false;
+
+      while(!longpollStop){
+        try{
+          const r = await longpollOnce(longpollCursor);
+          const backoff = Number(r && r.backoff ? r.backoff : 0);
+
+          if(backoff && backoff > 0){
+            await new Promise(res => setTimeout(res, backoff * 1000));
+          }
+
+          if(r && r.changes){
+            // 有變更 -> 立刻拉
+            await syncNowIfNew({ force:true });
+
+            // 變更後重新拿最新 cursor（簡化避免游標問題）
+            try{ longpollCursor = await getLatestCursor(); }catch(e){ /* ignore */ }
+          }
+        }catch(e){
+          // longpoll 不可用/被擋 -> 退回輪詢保底
+          startFallbackPolling();
+          return;
+        }
+      }
+    }
+
+    // 初始化：先同步一次（若有 token）→ 建按鈕/清單 → 開始監看
     (async function boot(){
-      // 1) 先同步一次（沒有 token 就跳過）
+      // 1) 先嘗試同步一次
       await syncNowIfNew({ force:false });
 
       // 2) 正常初始化 UI
@@ -1329,15 +1409,15 @@
       // 3) 若先前已登入，直接套用
       refreshSessionAfterSync();
 
-      // 4) 開始雲端偵測
-      startCloudWatch();
+      // 4) 雲端監看：優先 longpoll，失敗自動 fallback
+      startLongpollWatch();
     })();
 
     // ========= 事件 =========
     loginForm.addEventListener("submit", async function (e) {
       e.preventDefault();
 
-      // 登入前先確保抓到最新（避免桌機剛存，手機立刻登入卻還沒抓到）
+      // 登入前先拉一次最新（避免桌機剛存，手機立刻登入卻還沒抓到）
       await syncNowIfNew({ force:false });
 
       const username = (usernameInput.value || "").trim();
@@ -1361,7 +1441,6 @@
       loginError.textContent = "";
       loginForm.reset();
 
-      // 切換帳號時也先同步一次，確保立刻看到最新用戶
       await syncNowIfNew({ force:false });
 
       resetButtonsForLogout();
@@ -1375,14 +1454,11 @@
       pwdInput.type = pwdInput.type === "password" ? "text" : "password";
     });
 
-    // 使用者下拉（▼）
     btnUserDrop.addEventListener("click", async function(){
-      // 打開下拉前也先同步一次，確保列表最新
       await syncNowIfNew({ force:false });
       toggleUserDrop();
     });
 
-    // 點擊空白關閉下拉
     document.addEventListener("click", (e)=>{
       if(!userDrop) return;
       const inside = e.target === userDrop || userDrop.contains(e.target) ||
