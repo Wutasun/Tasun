@@ -267,6 +267,7 @@
 
   <script>
     const CURRENT_KEY  = "tasunCurrentUser_v1";
+    const AUTH_KEY     = "tasunAuthTable_v1"; // ✅ 同步權限表
     const DB_KEY       = "tasunEngineeringDetail_v1";
     const SYS_DICT_KEY = "tasunEngineeringDetail_systems_v1";
     const CAT_DICT_KEY = "tasunEngineeringDetail_categories_v1";
@@ -277,11 +278,69 @@
     const $=(id)=>document.getElementById(id);
     const norm=(s)=>(s??"").toString().trim();
 
+    // === ✅ 權限解析（與「工程資料登錄.html」同一套） ===
+    function mapRole(v){
+      const s = (v??"").toString().trim().toLowerCase();
+      if(!s) return "";
+      if(s==="admin") return "admin";
+      if(s==="write" || s==="edit") return "write";
+      if(s==="read" || s==="view") return "read";
+      if(s==="0") return "admin";
+      if(s==="1") return "write";
+      if(s==="2") return "read";
+      return s;
+    }
+    function loadAuthTable(){
+      try{
+        const raw = localStorage.getItem(AUTH_KEY);
+        if(!raw) return [];
+        const parsed = JSON.parse(raw);
+        if(Array.isArray(parsed)) return parsed;
+        if(parsed && Array.isArray(parsed.users)) return parsed.users;
+        return [];
+      }catch(e){ return []; }
+    }
+    function findRoleFromAuth(username){
+      const u = norm(username).toLowerCase();
+      if(!u) return "";
+      const rows = loadAuthTable();
+      for(const r of rows){
+        const ru = norm(r?.username).toLowerCase();
+        if(ru && ru===u){
+          const rr = mapRole(r?.role ?? r?.level ?? r?.perm ?? r?.permission);
+          if(rr) return rr;
+        }
+      }
+      return "";
+    }
+
     function loadCurrentUser(){
       try{ currentUser = JSON.parse(localStorage.getItem(CURRENT_KEY) || "null"); }catch(e){ currentUser=null; }
+      if(currentUser && typeof currentUser==="object"){
+        const uname = norm(currentUser.username ?? currentUser.user ?? currentUser.name ?? currentUser.account);
+        if(uname) currentUser.username = uname;
+        const localRole = mapRole(currentUser.role ?? currentUser.level ?? currentUser.perm ?? currentUser.permission);
+        if(localRole) currentUser.role = localRole;
+      }
     }
-    function role(){ return (currentUser?.role || "read").toLowerCase(); }
+    function role(){
+      const fromAuth  = findRoleFromAuth(currentUser?.username);
+      const fromLocal = mapRole(currentUser?.role ?? currentUser?.level ?? currentUser?.perm ?? currentUser?.permission);
+      const r = (fromAuth || fromLocal || "read").toLowerCase();
+
+      // ✅ 回寫，避免分頁讀到錯誤權限
+      try{
+        if(currentUser && currentUser.username){
+          if(currentUser.role !== r){
+            currentUser.role = r;
+            localStorage.setItem(CURRENT_KEY, JSON.stringify(currentUser));
+          }
+        }
+      }catch(e){}
+      return r;
+    }
     function canWrite(){ const r=role(); return r==="admin"||r==="write"; }
+
     function gate(){
       if(!currentUser || !currentUser.username){
         alert("尚未登入，將返回首頁。");
@@ -292,6 +351,7 @@
       $("uRole").textContent = role();
       return true;
     }
+
     function loadDB(){
       try{
         db = JSON.parse(localStorage.getItem(DB_KEY) || "[]");
