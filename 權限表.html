@@ -1,3 +1,9 @@
+<!-- =========================
+權限表.html（完整修正版）
+重點：
+1) CURRENT_KEY 改用 sessionStorage（只記到關閉瀏覽器/分頁）
+2) 從雲端下載時偵測雲端沒檔案 → admin 自動先建立一份（上傳 auth/nav/meta）
+========================= -->
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
@@ -221,6 +227,58 @@
   const CURRENT_KEY = "tasunCurrentUser_v1";
   const NAV_KEY     = "tasunNavButtons_v1";
 
+  // ✅ 登入狀態：只記到「關閉瀏覽器/分頁」(sessionStorage)
+  const CUR_STORE = sessionStorage;
+
+  function safeJsonParse(s, fallback){
+    try{ return JSON.parse(s); }catch(e){ return fallback; }
+  }
+
+  function mapRole(v){
+    const s = String(v ?? "").trim().toLowerCase();
+    if(!s) return "";
+    if(s==="admin") return "admin";
+    if(s==="write" || s==="edit") return "write";
+    if(s==="read"  || s==="view") return "read";
+    if(s==="0") return "admin";
+    if(s==="1") return "write";
+    if(s==="2") return "read";
+    return s;
+  }
+
+  function setCurrentUserSession(obj){
+    try{ CUR_STORE.setItem(CURRENT_KEY, JSON.stringify(obj)); }catch(e){}
+    // ✅ 舊版可能寫在 localStorage：一律清掉
+    try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
+  }
+
+  function getCurrentUser(){
+    // ✅ 先讀 sessionStorage
+    let cu = safeJsonParse(CUR_STORE.getItem(CURRENT_KEY) || "null", null);
+
+    // ✅ 相容舊版：若 localStorage 有，就搬到 sessionStorage 後刪除
+    if(!cu){
+      const old = safeJsonParse(localStorage.getItem(CURRENT_KEY) || "null", null);
+      if(old && old.username){
+        setCurrentUserSession(old);
+        cu = old;
+      }
+    }
+
+    if(!cu || !cu.username) return null;
+    const username = String(cu.username || "").trim();
+    const role = mapRole(cu.level ?? cu.role) || "read";
+    const out = { ...cu, username, level: role, role };
+    setCurrentUserSession(out);
+    return out;
+  }
+
+  function isAdmin(){
+    const cu = getCurrentUser();
+    const r = mapRole(cu && (cu.level || cu.role));
+    return !!(cu && r === "admin");
+  }
+
   // Dropbox token（與首頁一致）
   const DBX_TOKEN_KEY  = "tasunDbxToken_v1";
   const DBX_FOLDER_KEY = "tasunDbxFolder_v1";
@@ -273,22 +331,6 @@
   function setMsg(t){ msg.textContent = t || ""; }
   function setCloudState(t){ cloudState.textContent = t || "雲端：—"; }
 
-  function safeJsonParse(s, fallback){
-    try{ return JSON.parse(s); }catch(e){ return fallback; }
-  }
-
-  function getCurrentUser(){
-    const cu = safeJsonParse(localStorage.getItem(CURRENT_KEY) || "null", null);
-    return cu && cu.username ? cu : null;
-  }
-
-  function isAdmin(){
-    const cu = getCurrentUser();
-    // ✅ 與首頁一致：level 為主；相容 role
-    const r = String((cu && (cu.level || cu.role)) || "").toLowerCase();
-    return !!(cu && (r === "admin"));
-  }
-
   function loadNav(){
     const raw = localStorage.getItem(NAV_KEY);
     const arr = safeJsonParse(raw || "[]", []);
@@ -322,9 +364,9 @@
       const out = [];
       for(let i=0;i<btnCount;i++) out[i] = !!b[i];
       return {
-        username: String(r.username||""),
+        username: String(r.username||"").trim(),
         password: String(r.password||""),
-        level: String(r.level||"read"),
+        level: mapRole(r.level ?? r.role) || "read",
         buttons: out
       };
     });
@@ -359,13 +401,13 @@
       autorename: false
     });
 
-    // folder 已存在會回 conflict；把它當成功
     if(r.ok){
       ensureFolderExistsOnce.done = true;
       return true;
     }
-    const err = r.json && r.json.error && r.json.error[".tag"];
-    if(err === "path" && r.text.includes("conflict")){
+
+    // folder 已存在（conflict）也算成功
+    if(r.text && r.text.includes("conflict")){
       ensureFolderExistsOnce.done = true;
       return true;
     }
@@ -433,10 +475,12 @@
   // ==========================
   // render table
   // ==========================
+  let dirty = false;
+
   function render(){
     const cu = getCurrentUser();
-    const r = String((cu && (cu.level || cu.role)) || "").toLowerCase();
-    who.textContent = cu ? `目前：${cu.username} (${r || cu.level || cu.role})` : "目前：未登入";
+    const r = mapRole(cu && (cu.level || cu.role)) || "";
+    who.textContent = cu ? `目前：${cu.username} (${r || "read"})` : "目前：未登入";
 
     const admin = isAdmin();
     const nav = loadNav();
@@ -504,7 +548,7 @@
     if(!admin){
       setCloudState("雲端：僅 admin 可同步");
     }else{
-      setCloudState(dirty ? "雲端：待同步" : "雲端：—");
+      setCloudState(dirty ? "雲端：待同步" : (dbxEnabled() ? "雲端：—" : "雲端：未設定 Token"));
     }
   }
 
@@ -569,14 +613,14 @@
 
       const username = (tds[0].querySelector("input")?.value || "").trim();
       const password = (tds[1].querySelector("input")?.value || "");
-      const level    = (tds[3].querySelector("select")?.value || "read");
+      const level    = mapRole(tds[3].querySelector("select")?.value || "read") || "read";
 
       const buttons  = [];
       for(let i=0;i<nav.length;i++){
         const cb = tds[4+i].querySelector("input[type=checkbox]");
         buttons[i] = !!(cb && cb.checked);
       }
-      rows.push({ username, password, level, buttons });
+      rows.push({ username, password, level, role: level, buttons });
     });
 
     localStorage.setItem(AUTH_KEY, JSON.stringify(rows));
@@ -588,7 +632,6 @@
   let autoPushTimer = null;
   let autoPushBusy = false;
   let autoPushPending = false;
-  let dirty = false;
 
   function markDirty(hintText){
     if(!isAdmin()) return;
@@ -756,7 +799,12 @@ ${seed.msg}
     let changed = false;
 
     if(auth && Array.isArray(auth)){
-      localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
+      // ✅ 補齊 role/level
+      const fixed = auth.map(r=>{
+        const level = mapRole(r.level ?? r.role) || "read";
+        return { ...r, level, role: level };
+      });
+      localStorage.setItem(AUTH_KEY, JSON.stringify(fixed));
       changed = true;
     }
     if(nav && Array.isArray(nav)){
@@ -799,7 +847,7 @@ ${seed.msg}
     }
     const nav = loadNav();
     const arr = loadAuth(nav.length);
-    arr.push({ username:"", password:"", level:"read", buttons: Array(nav.length).fill(false) });
+    arr.push({ username:"", password:"", level:"read", role:"read", buttons: Array(nav.length).fill(false) });
     localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
     render();
     markDirty("已新增一列，準備自動同步…");
@@ -847,8 +895,8 @@ ${seed.msg}
   // boot
   (function boot(){
     const cu = getCurrentUser();
-    const r = String((cu && (cu.level || cu.role)) || "").toLowerCase();
-    who.textContent = cu ? `目前：${cu.username} (${r || cu.level || cu.role})` : "目前：未登入";
+    const r = mapRole(cu && (cu.level || cu.role)) || "";
+    who.textContent = cu ? `目前：${cu.username} (${r || "read"})` : "目前：未登入";
 
     if(!isAdmin()){
       setMsg("⚠️ 只有 admin 可以編輯與自動同步。請先在首頁用 alex(admin) 登入後再進來。");
