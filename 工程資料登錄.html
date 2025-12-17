@@ -284,6 +284,7 @@
 
   <script>
     const CURRENT_KEY  = "tasunCurrentUser_v1";
+    const AUTH_KEY     = "tasunAuthTable_v1";              // ✅ 以權限表為準
     const DB_KEY       = "tasunEngineeringDetail_v1";
     const COUNTER_KEY  = "tasunEngineeringDetail_counter_v1";
     const SYS_DICT_KEY = "tasunEngineeringDetail_systems_v1";
@@ -304,11 +305,91 @@
       toast._tm=setTimeout(()=>t.style.display="none",2200);
     }
 
-    function loadCurrentUser(){
-      try{ currentUser = JSON.parse(localStorage.getItem(CURRENT_KEY) || "null"); }catch(e){ currentUser=null; }
+    // === ✅ 權限解析（核心修正） ===
+    function mapRole(v){
+      const s = (v??"").toString().trim().toLowerCase();
+      if(!s) return "";
+      // 常見字串
+      if(s==="admin") return "admin";
+      if(s==="write" || s==="edit") return "write";
+      if(s==="read" || s==="view") return "read";
+      // 常見數字等級（若你有用 0/1/2）
+      if(s==="0") return "admin";
+      if(s==="1") return "write";
+      if(s==="2") return "read";
+      return s; // 其他就原樣（但後面 canWrite 只認 admin/write）
     }
-    function role(){ return (currentUser?.role || "read").toLowerCase(); }
-    function canWrite(){ const r=role(); return r==="admin"||r==="write"; }
+
+    function loadAuthTable(){
+      try{
+        const raw = localStorage.getItem(AUTH_KEY);
+        if(!raw) return [];
+        const parsed = JSON.parse(raw);
+
+        // 允許兩種格式：陣列 或 {users:[...]}
+        if(Array.isArray(parsed)) return parsed;
+        if(parsed && Array.isArray(parsed.users)) return parsed.users;
+
+        return [];
+      }catch(e){
+        return [];
+      }
+    }
+
+    function findRoleFromAuth(username){
+      const u = norm(username).toLowerCase();
+      if(!u) return "";
+      const rows = loadAuthTable();
+      for(const r of rows){
+        const ru = norm(r?.username).toLowerCase();
+        if(ru && ru===u){
+          // 權限表可能用 role 或 level
+          const rr = mapRole(r?.role ?? r?.level ?? r?.perm ?? r?.permission);
+          if(rr) return rr;
+        }
+      }
+      return "";
+    }
+
+    function loadCurrentUser(){
+      try{ currentUser = JSON.parse(localStorage.getItem(CURRENT_KEY) || "null"); }
+      catch(e){ currentUser=null; }
+
+      // 兼容不同欄位命名：username/user/name/account
+      if(currentUser && typeof currentUser==="object"){
+        const uname = norm(currentUser.username ?? currentUser.user ?? currentUser.name ?? currentUser.account);
+        if(uname) currentUser.username = uname;
+
+        // 先把本地的 role/level 映射一下（避免奇怪值）
+        const localRole = mapRole(currentUser.role ?? currentUser.level ?? currentUser.perm ?? currentUser.permission);
+        if(localRole) currentUser.role = localRole;
+      }
+    }
+
+    // ✅ 以「權限表」為最終來源；若有資料就覆蓋本地 currentUser.role 並回存
+    function role(){
+      const fromAuth = findRoleFromAuth(currentUser?.username);
+      const fromLocal = mapRole(currentUser?.role ?? currentUser?.level ?? currentUser?.perm ?? currentUser?.permission);
+
+      const r = (fromAuth || fromLocal || "read").toLowerCase();
+
+      // 同步回存，讓其他頁不再讀到錯誤
+      try{
+        if(currentUser && currentUser.username){
+          if(currentUser.role !== r){
+            currentUser.role = r;
+            localStorage.setItem(CURRENT_KEY, JSON.stringify(currentUser));
+          }
+        }
+      }catch(e){}
+
+      return r;
+    }
+
+    function canWrite(){
+      const r=role();
+      return r==="admin" || r==="write";
+    }
 
     function gate(){
       if(!currentUser || !currentUser.username){
@@ -317,7 +398,7 @@
         return false;
       }
       $("uName").textContent=currentUser.username;
-      $("uRole").textContent=role();
+      $("uRole").textContent=role(); // ✅ 顯示「權限表」解析後的權限
       return true;
     }
 
@@ -511,6 +592,9 @@
       if(!canWrite()){
         $("noPerm").style.display="block";
         $("btnSave").disabled=true;
+      }else{
+        $("noPerm").style.display="none";
+        $("btnSave").disabled=false;
       }
 
       $("btnAddSys").onclick = ()=>openPrompt("sys");
