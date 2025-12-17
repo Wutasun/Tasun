@@ -514,8 +514,6 @@
       background: url("首頁圖片.png") center 82% / auto 240% no-repeat;
       opacity: 0.98;
       filter:
-       _attachment: none;
-      filter:
         saturate(0.88)
         contrast(1.05)
         brightness(1.06)
@@ -970,10 +968,52 @@
 
   <script>
     // ==========================
-    // ✅ Dropbox Token：第一次輸入存 localStorage（新增）
+    // localStorage Key（與權限表一致）
     // ==========================
-    const DBX_TOKEN_KEY = "tasunDbxToken_v1";
-    const DBX_FOLDER = "/Tasun/權限";
+    const AUTH_KEY    = "tasunAuthTable_v1";
+    const CURRENT_KEY = "tasunCurrentUser_v1";
+    const NAV_KEY     = "tasunNavButtons_v1";
+
+    // ==========================
+    // ✅ 角色/權限正規化（兼容 role / level）
+    // ==========================
+    function mapRole(v){
+      const s = String(v ?? "").trim().toLowerCase();
+      if(!s) return "";
+      if(s==="admin") return "admin";
+      if(s==="write" || s==="edit") return "write";
+      if(s==="read"  || s==="view") return "read";
+      if(s==="0") return "admin";
+      if(s==="1") return "write";
+      if(s==="2") return "read";
+      return s;
+    }
+
+    function normalizeCurrentUser(cu){
+      if(!cu || typeof cu !== "object") return null;
+      const username = String(cu.username ?? cu.user ?? cu.name ?? cu.account ?? "").trim();
+      if(!username) return null;
+
+      const role = mapRole(cu.role ?? cu.level ?? cu.perm ?? cu.permission) || "read";
+      const out = { ...cu, username, role, level: role };
+
+      // ✅ 回寫一次，避免其他頁只看 role 或只看 level 造成不一致
+      try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(out)); }catch(e){}
+      return out;
+    }
+
+    function getCurrentUser(){
+      let cu = null;
+      try{ cu = JSON.parse(localStorage.getItem(CURRENT_KEY) || "null"); }catch(e){ cu = null; }
+      return normalizeCurrentUser(cu);
+    }
+
+    // ==========================
+    // ✅ Dropbox Token：第一次輸入存 localStorage（與權限表一致）
+    // ==========================
+    const DBX_TOKEN_KEY  = "tasunDbxToken_v1";
+    const DBX_FOLDER_KEY = "tasunDbxFolder_v1";
+    const DEFAULT_DBX_FOLDER = "/Tasun/權限";
 
     const tokenOverlay = document.getElementById("tokenOverlay");
     const tokenInput   = document.getElementById("tokenInput");
@@ -988,16 +1028,19 @@
     function setDbxToken(t){
       localStorage.setItem(DBX_TOKEN_KEY, String(t || "").trim());
     }
-    function clearDbxToken(){
-      localStorage.removeItem(DBX_TOKEN_KEY);
-    }
     function dbxEnabled(){
       const t = getDbxToken();
-      return !!(t && t.length > 20); // 不強制判斷格式，避免 Dropbox 未來變更
+      return !!(t && t.length > 20);
     }
     function dbxAuthHeader(){
       return "Bearer " + getDbxToken();
     }
+    function getDbxFolder(){
+      return String(localStorage.getItem(DBX_FOLDER_KEY) || DEFAULT_DBX_FOLDER).trim() || DEFAULT_DBX_FOLDER;
+    }
+    function dbxPathAuth(){ return `${getDbxFolder()}/tasunAuthTable_v1.json`; }
+    function dbxPathNav(){  return `${getDbxFolder()}/tasunNavButtons_v1.json`; }
+    function dbxPathMeta(){ return `${getDbxFolder()}/tasunCloudMeta_v1.json`; }
 
     function showTokenOverlay(){
       if(!tokenOverlay) return;
@@ -1034,19 +1077,14 @@
       setDbxToken(t);
       hideTokenOverlay();
 
-      // 儲存後立刻強制同步一次，讓手機立刻看到 JOYCE
+      // 儲存後立刻強制同步一次，讓手機立刻看到新用戶（例如 JOYCE）
       await syncNowIfNew({ force: true });
-      // 同步後，若列表更新，確保登入下拉立即刷新
       populateUserSelect();
     });
 
     // ==========================
-    // ✅ Dropbox 雲端同步（/Tasun/權限/）
+    // ✅ Dropbox 下載（App folder）
     // ==========================
-    const DBX_PATH_AUTH = `${DBX_FOLDER}/tasunAuthTable_v1.json`;
-    const DBX_PATH_NAV  = `${DBX_FOLDER}/tasunNavButtons_v1.json`;
-    const DBX_PATH_META = `${DBX_FOLDER}/tasunCloudMeta_v1.json`;
-
     async function dbxDownloadJson(path){
       if(!dbxEnabled()) return null;
       try{
@@ -1074,23 +1112,25 @@
       localStorage.setItem("tasunCloudUpdatedAt_v1", String(ts || 0));
     }
 
+    // ✅ 雲端 → 本機（並補齊 role/level）
     async function cloudPullToLocalStorage({ force=false } = {}){
-      const AUTH_KEY = "tasunAuthTable_v1";
-      const NAV_KEY  = "tasunNavButtons_v1";
-
-      const meta = await dbxDownloadJson(DBX_PATH_META);
+      const meta = await dbxDownloadJson(dbxPathMeta());
       const cloudTs = Number(meta && meta.updatedAt ? meta.updatedAt : 0);
       const localTs = getLocalUpdatedAt();
 
       if(!force && cloudTs && localTs && cloudTs <= localTs) return false;
 
-      const auth = await dbxDownloadJson(DBX_PATH_AUTH);
-      const nav  = await dbxDownloadJson(DBX_PATH_NAV);
+      const auth = await dbxDownloadJson(dbxPathAuth());
+      const nav  = await dbxDownloadJson(dbxPathNav());
 
       let changed = false;
 
       if(auth && Array.isArray(auth)){
-        localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
+        const fixed = auth.map(r=>{
+          const level = mapRole(r?.level ?? r?.role) || "read";
+          return { ...r, level, role: level };
+        });
+        localStorage.setItem(AUTH_KEY, JSON.stringify(fixed));
         changed = true;
       }
       if(nav && Array.isArray(nav)){
@@ -1104,12 +1144,8 @@
     }
 
     // ==========================
-    // localStorage Key（與權限表一致）
+    // 預設 Nav（同你原本）
     // ==========================
-    const AUTH_KEY    = "tasunAuthTable_v1";
-    const CURRENT_KEY = "tasunCurrentUser_v1";
-    const NAV_KEY     = "tasunNavButtons_v1";
-
     const DEFAULT_NAV = [
       { id: "btn1", label: "臻鼎時代大廈管理表", href: "臻鼎管理表.html", target: "", roles: ["admin","write","read"] },
       { id: "btn2", label: "缺失 / 品質",       href: "甄鼎quality.html", target: "", roles: ["admin","write","read"] },
@@ -1175,16 +1211,18 @@
 
     function getDefaultAuthTable(btnCount) {
       return [
-        { username: "alex",  password: "Tasun08040224", level: "admin", buttons: makeButtonsAll(btnCount) },
-        { username: "tasun", password: "tasun08040224", level: "write", buttons: makeButtonsAll(btnCount) },
-        { username: "wu",    password: "123456",        level: "read",  buttons: makeButtonsOnlyLast(btnCount) }
+        { username: "alex",  password: "Tasun08040224", level: "admin", role:"admin", buttons: makeButtonsAll(btnCount) },
+        { username: "tasun", password: "tasun08040224", level: "write", role:"write", buttons: makeButtonsAll(btnCount) },
+        { username: "wu",    password: "123456",        level: "read",  role:"read",  buttons: makeButtonsOnlyLast(btnCount) }
       ];
     }
 
     function normalizeRowFromStorage(row, btnCount) {
-      const username = row.username || "";
-      const password = row.password || "";
-      const level    = row.level || "read";
+      const username = String(row.username || "").trim();
+      const password = String(row.password || "");
+
+      // ✅ level/role 互通
+      const level = mapRole(row.level ?? row.role) || "read";
 
       let buttons = [];
       if (Array.isArray(row.buttons)) {
@@ -1199,7 +1237,8 @@
 
       const resultButtons = [];
       for (let i = 0; i < btnCount; i++) resultButtons[i] = !!buttons[i];
-      return { username, password, level, buttons: resultButtons };
+
+      return { username, password, level, role: level, buttons: resultButtons };
     }
 
     function loadAuthTable(btnCount) {
@@ -1207,15 +1246,20 @@
       if (!raw) {
         const defaults = getDefaultAuthTable(btnCount);
         localStorage.setItem(AUTH_KEY, JSON.stringify(defaults));
-        return defaults;
+        return defaults.map(r=> normalizeRowFromStorage(r, btnCount));
       }
       try {
         const arr = JSON.parse(raw);
-        if (Array.isArray(arr)) return arr.map(r => normalizeRowFromStorage(r, btnCount));
+        if (Array.isArray(arr)) {
+          const fixed = arr.map(r => normalizeRowFromStorage(r, btnCount));
+          // ✅ 讀到就補齊回寫一次（讓其他頁讀 role/level 都不會缺）
+          localStorage.setItem(AUTH_KEY, JSON.stringify(fixed));
+          return fixed;
+        }
       } catch (e) {}
       const defaults = getDefaultAuthTable(btnCount);
       localStorage.setItem(AUTH_KEY, JSON.stringify(defaults));
-      return defaults;
+      return defaults.map(r=> normalizeRowFromStorage(r, btnCount));
     }
 
     function buildMainButtons() {
@@ -1331,20 +1375,29 @@
     function isRoleAllowedForIndex(index, level) {
       const cfg = NAV_CONFIG[index];
       if (!cfg || !Array.isArray(cfg.roles)) return true;
-      return cfg.roles.includes(level);
+      const r = mapRole(level) || "read";
+      return cfg.roles.includes(r);
     }
 
     function applyUser(user) {
       document.body.classList.remove("locked");
       loginOverlay.style.display = "none";
 
-      localStorage.setItem(CURRENT_KEY, JSON.stringify({ username: user.username, level: user.level }));
-      userInfo.textContent = `目前使用者：${user.username} (${user.level})`;
+      const lvl = mapRole(user.level ?? user.role) || "read";
+
+      // ✅ 核心修正：登入後同時寫 role + level（全站一致）
+      localStorage.setItem(CURRENT_KEY, JSON.stringify({
+        username: String(user.username || "").trim(),
+        level: lvl,
+        role:  lvl
+      }));
+
+      userInfo.textContent = `目前使用者：${user.username} (${lvl})`;
 
       const visibleMain = [];
 
       mainNavBtns.forEach((btn, index) => {
-        const allowedByRole = isRoleAllowedForIndex(index, user.level);
+        const allowedByRole = isRoleAllowedForIndex(index, lvl);
         const btnFlags = Array.isArray(user.buttons) ? user.buttons : [];
         const allowedByAuth = index < btnFlags.length ? !!btnFlags[index] : true;
 
@@ -1359,7 +1412,7 @@
       currentVisibleBtns = visibleMain;
 
       if (systemBtn) {
-        systemBtn.style.display = (user.level === "admin") ? "flex" : "none";
+        systemBtn.style.display = (lvl === "admin") ? "flex" : "none";
       }
 
       layoutMainButtonsResponsive();
@@ -1436,8 +1489,7 @@
     }
 
     function refreshSessionAfterSync(){
-      let cu = null;
-      try{ cu = JSON.parse(localStorage.getItem(CURRENT_KEY) || "null"); }catch(e){ cu = null; }
+      const cu = getCurrentUser();
       if(!cu || !cu.username) return;
 
       const row = (AUTH_TABLE || []).find(r => r.username === cu.username);
