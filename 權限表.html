@@ -195,7 +195,8 @@
       <div style="font-size:.9rem; line-height:1.7; color:rgba(246,211,122,0.80);" class="muted">
         ✅ 你使用 App folder Token：上傳/下載會在「此 App 專用資料夾」內進行。<br>
         雲端儲存資料夾：<b>/Tasun/權限</b>（在 App folder 內，若不存在會自動建立）<br>
-        只要你改任何欄位，會自動上傳雲端（約 1.2 秒後）。
+        只要你改任何欄位，會自動上傳雲端（約 1.2 秒後）。<br>
+        ✅ 若雲端尚未有檔案：按「從雲端下載」會自動先建立一份（admin 才可）。
       </div>
 
       <div class="token-row">
@@ -276,48 +277,16 @@
     try{ return JSON.parse(s); }catch(e){ return fallback; }
   }
 
-  // ✅ 角色正規化：兼容 role / level（全站統一用 admin/write/read）
-  function mapRole(v){
-    const s = String(v ?? "").trim().toLowerCase();
-    if(!s) return "";
-    if(s==="admin") return "admin";
-    if(s==="write" || s==="edit") return "write";
-    if(s==="read"  || s==="view") return "read";
-    if(s==="0") return "admin";
-    if(s==="1") return "write";
-    if(s==="2") return "read";
-    return s;
-  }
-
-  // ✅ 讀 CURRENT_KEY：自動補齊 role/level，並回寫（避免某頁只寫 role、另一頁只看 level）
-  function normalizeCurrentUser(cu){
-    if(!cu || typeof cu !== "object") return null;
-
-    const username = String(cu.username ?? cu.user ?? cu.name ?? cu.account ?? "").trim();
-    if(!username) return null;
-
-    const r = mapRole(cu.role ?? cu.level ?? cu.perm ?? cu.permission) || "read";
-
-    const out = { ...cu };
-    out.username = username;
-    out.role = r;
-    out.level = r; // ✅ 讓舊程式看 level 也正確
-
-    // 回寫一次，讓所有頁面一致
-    try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(out)); }catch(e){}
-
-    return out;
-  }
-
   function getCurrentUser(){
     const cu = safeJsonParse(localStorage.getItem(CURRENT_KEY) || "null", null);
-    return normalizeCurrentUser(cu);
+    return cu && cu.username ? cu : null;
   }
 
   function isAdmin(){
     const cu = getCurrentUser();
-    const r = mapRole(cu?.level ?? cu?.role) || "read";
-    return r === "admin";
+    // ✅ 與首頁一致：level 為主；相容 role
+    const r = String((cu && (cu.level || cu.role)) || "").toLowerCase();
+    return !!(cu && (r === "admin"));
   }
 
   function loadNav(){
@@ -339,12 +308,11 @@
   function loadAuth(btnCount){
     const raw = localStorage.getItem(AUTH_KEY);
     let arr = safeJsonParse(raw || "null", null);
-
     if(!Array.isArray(arr)){
       arr = [
-        { username:"alex",  password:"Tasun08040224", level:"admin", role:"admin", buttons: Array(btnCount).fill(true) },
-        { username:"tasun", password:"tasun08040224", level:"write", role:"write", buttons: Array(btnCount).fill(true) },
-        { username:"wu",    password:"123456",        level:"read",  role:"read",  buttons: (()=>{ const a=Array(btnCount).fill(false); if(btnCount) a[btnCount-1]=true; return a; })() }
+        { username:"alex",  password:"Tasun08040224", level:"admin", buttons: Array(btnCount).fill(true) },
+        { username:"tasun", password:"tasun08040224", level:"write", buttons: Array(btnCount).fill(true) },
+        { username:"wu",    password:"123456",        level:"read",  buttons: (()=>{ const a=Array(btnCount).fill(false); if(btnCount) a[btnCount-1]=true; return a; })() }
       ];
       localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
     }
@@ -353,14 +321,10 @@
       const b = Array.isArray(r.buttons) ? r.buttons.slice() : [];
       const out = [];
       for(let i=0;i<btnCount;i++) out[i] = !!b[i];
-
-      const level = mapRole(r.level ?? r.role) || "read";
-
       return {
         username: String(r.username||""),
         password: String(r.password||""),
-        level,            // ✅ 舊欄位
-        role: level,      // ✅ 新欄位（給其他頁用）
+        level: String(r.level||"read"),
         buttons: out
       };
     });
@@ -395,6 +359,7 @@
       autorename: false
     });
 
+    // folder 已存在會回 conflict；把它當成功
     if(r.ok){
       ensureFolderExistsOnce.done = true;
       return true;
@@ -470,8 +435,8 @@
   // ==========================
   function render(){
     const cu = getCurrentUser();
-    const r = mapRole(cu?.level ?? cu?.role) || "read";
-    who.textContent = cu ? `目前：${cu.username} (${r})` : "目前：未登入";
+    const r = String((cu && (cu.level || cu.role)) || "").toLowerCase();
+    who.textContent = cu ? `目前：${cu.username} (${r || cu.level || cu.role})` : "目前：未登入";
 
     const admin = isAdmin();
     const nav = loadNav();
@@ -586,7 +551,7 @@
       o.value = k; o.textContent = k;
       sel.appendChild(o);
     });
-    sel.value = mapRole(value) || "read";
+    sel.value = value || "read";
     sel.disabled = !!disabled;
     td.appendChild(sel);
     return td;
@@ -604,16 +569,14 @@
 
       const username = (tds[0].querySelector("input")?.value || "").trim();
       const password = (tds[1].querySelector("input")?.value || "");
-      const level    = mapRole(tds[3].querySelector("select")?.value || "read") || "read";
+      const level    = (tds[3].querySelector("select")?.value || "read");
 
       const buttons  = [];
       for(let i=0;i<nav.length;i++){
         const cb = tds[4+i].querySelector("input[type=checkbox]");
         buttons[i] = !!(cb && cb.checked);
       }
-
-      // ✅ 同時存 level / role，給不同頁面讀
-      rows.push({ username, password, level, role: level, buttons });
+      rows.push({ username, password, level, buttons });
     });
 
     localStorage.setItem(AUTH_KEY, JSON.stringify(rows));
@@ -707,6 +670,51 @@
   }
 
   // ==========================
+  // ✅ 新增：偵測雲端尚未有檔案 → 自動先建立一份（admin + token 才可）
+  // ==========================
+  async function ensureCloudSeedIfMissing(){
+    if(!isAdmin()) return { ok:false, msg:"非 admin：不可建立雲端初始檔" };
+    if(!dbxEnabled()) return { ok:false, msg:"Token 未設定：不可建立雲端初始檔" };
+
+    setCloudState("雲端：檢查中…");
+
+    // 先確保資料夾存在
+    await ensureFolderExistsOnce();
+
+    // 只要 meta/auth/nav 任一不存在，就視為「雲端尚未初始化」
+    const meta = await dbxDownloadJson(dbxPathMeta());
+    const auth = await dbxDownloadJson(dbxPathAuth());
+    const nav  = await dbxDownloadJson(dbxPathNav());
+
+    const missing = (!meta) || (!auth) || (!nav);
+    if(!missing) return { ok:true, msg:"雲端已有檔案，無需建立" };
+
+    // 用本機資料建立雲端
+    setCloudState("雲端：建立初始檔…");
+    setMsg("⚠️ 偵測雲端尚未有檔案，正在自動建立一份…");
+
+    // 以目前畫面/本機為準
+    saveTableToLocal();
+    const localAuth = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
+    const localNav  = safeJsonParse(localStorage.getItem(NAV_KEY)  || "[]", []);
+
+    const up1 = await dbxUploadJson(dbxPathAuth(), localAuth);
+    if(!up1.ok) return { ok:false, msg:`建立失敗（auth，HTTP ${up1.status}）\n${up1.msg}` };
+
+    const up2 = await dbxUploadJson(dbxPathNav(), localNav);
+    if(!up2.ok) return { ok:false, msg:`建立失敗（nav，HTTP ${up2.status}）\n${up2.msg}` };
+
+    const newMeta = { updatedAt: Date.now() };
+    const up3 = await dbxUploadJson(dbxPathMeta(), newMeta);
+    if(!up3.ok) return { ok:false, msg:`建立失敗（meta，HTTP ${up3.status}）\n${up3.msg}` };
+
+    localStorage.setItem("tasunCloudUpdatedAt_v1", String(newMeta.updatedAt));
+    setCloudState("雲端：已建立 ✅");
+    setMsg("✅ 已自動建立雲端初始檔案（之後其他裝置即可下載/同步）。");
+    return { ok:true, msg:"已建立雲端初始檔案" };
+  }
+
+  // ==========================
   // pull/push（手動）
   // ==========================
   async function pullFromCloud(){
@@ -719,18 +727,36 @@
     setCloudState("雲端：下載中…");
     setMsg("正在從雲端下載…");
 
-    const auth = await dbxDownloadJson(dbxPathAuth());
-    const nav  = await dbxDownloadJson(dbxPathNav());
+    // 先嘗試下載
+    let auth = await dbxDownloadJson(dbxPathAuth());
+    let nav  = await dbxDownloadJson(dbxPathNav());
+
+    // ✅ 若雲端沒有檔案：自動建立一份（admin 才可）
+    if((!auth || !nav)){
+      const seed = await ensureCloudSeedIfMissing();
+      if(seed.ok){
+        // 建立成功後再下載一次（確保本機與雲端一致）
+        auth = await dbxDownloadJson(dbxPathAuth());
+        nav  = await dbxDownloadJson(dbxPathNav());
+      }else{
+        setCloudState("雲端：無資料/路徑不對");
+        setMsg(
+`⚠️ 雲端尚未有權限表檔案（或路徑/Token 權限不對）
+${seed.msg}
+
+✅ 解法：
+1) 確認 Token 正確（按「設定 Token」）
+2) 必須用 admin（alex）登入
+3) 再按一次「從雲端下載」或按「手動同步」`
+        );
+        return false;
+      }
+    }
 
     let changed = false;
 
     if(auth && Array.isArray(auth)){
-      // ✅ 下載回來也補齊 role/level
-      const fixed = auth.map(r=>{
-        const level = mapRole(r?.level ?? r?.role) || "read";
-        return { ...r, level, role: level };
-      });
-      localStorage.setItem(AUTH_KEY, JSON.stringify(fixed));
+      localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
       changed = true;
     }
     if(nav && Array.isArray(nav)){
@@ -747,8 +773,10 @@
     }else{
       setCloudState("雲端：無資料/路徑不對");
       setMsg(
-`⚠️ 雲端尚未有權限表檔案（或路徑/Token 權限不對）
-請先用 admin 在此頁修改任一欄位或按「手動同步」，讓雲端產生檔案。`
+`⚠️ 雲端仍讀不到檔案（可能路徑/Token 權限不對）
+請確認：
+- Token 是否為同一個 App folder Token
+- App folder 內路徑是否為：${getDbxFolder()}`
       );
       return false;
     }
@@ -771,7 +799,7 @@
     }
     const nav = loadNav();
     const arr = loadAuth(nav.length);
-    arr.push({ username:"", password:"", level:"read", role:"read", buttons: Array(nav.length).fill(false) });
+    arr.push({ username:"", password:"", level:"read", buttons: Array(nav.length).fill(false) });
     localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
     render();
     markDirty("已新增一列，準備自動同步…");
@@ -810,6 +838,7 @@
     if(!isAdmin()) return;
     if(!e || !e.target) return;
     if(!e.target.closest("#tbl")) return;
+
     markDirty("已修改，準備自動同步…");
   }
   tbl.addEventListener("input",  onAnyTableEdit, true);
@@ -818,8 +847,8 @@
   // boot
   (function boot(){
     const cu = getCurrentUser();
-    const r = mapRole(cu?.level ?? cu?.role) || "read";
-    who.textContent = cu ? `目前：${cu.username} (${r})` : "目前：未登入";
+    const r = String((cu && (cu.level || cu.role)) || "").toLowerCase();
+    who.textContent = cu ? `目前：${cu.username} (${r || cu.level || cu.role})` : "目前：未登入";
 
     if(!isAdmin()){
       setMsg("⚠️ 只有 admin 可以編輯與自動同步。請先在首頁用 alex(admin) 登入後再進來。");
