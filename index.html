@@ -1,3 +1,6 @@
+<!-- =========================
+index.html（完整修正版）
+========================= -->
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
@@ -46,7 +49,7 @@
     body.locked { overflow: hidden; }
 
     /* ==========================
-       ✅ Token 設定遮罩（新增：第一次輸入 Token 存 localStorage）
+       ✅ Token 設定遮罩（第一次輸入 Token 存 localStorage）
        ========================== */
     .token-overlay{
       position: fixed;
@@ -92,7 +95,7 @@
       width: 100%;
       padding: 0.55rem 0.7rem;
       border-radius: 999px;
-      border: 1px solid rgba(246, 211,ς ࡄ
+      border: 1px solid rgba(246, 211, 122, 0.5);
       background: rgba(0, 0, 0, 0.82);
       color: var(--gold);
       outline: none;
@@ -148,7 +151,7 @@
     }
 
     /* ==========================
-       登入遮罩與登入框
+       ✅ 登入遮罩與登入框
        ========================== */
     .login-overlay {
       position: fixed;
@@ -974,6 +977,36 @@
     const CURRENT_KEY = "tasunCurrentUser_v1";
     const NAV_KEY     = "tasunNavButtons_v1";
 
+    // ✅ 登入狀態：只記到「關閉瀏覽器/分頁」(sessionStorage)
+    const CUR_STORE = sessionStorage;
+
+    function setCurrentUserSession(obj){
+      try{ CUR_STORE.setItem(CURRENT_KEY, JSON.stringify(obj)); }catch(e){}
+      // ✅ 舊版可能寫在 localStorage：一律清掉，避免「關掉瀏覽器仍記住」
+      try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
+    }
+    function getCurrentUserSession(){
+      try{
+        const s = CUR_STORE.getItem(CURRENT_KEY);
+        if(s) return JSON.parse(s);
+
+        // ✅ 相容舊版：如果 localStorage 有，就搬到 sessionStorage 後刪除
+        const old = localStorage.getItem(CURRENT_KEY);
+        if(old){
+          const obj = JSON.parse(old);
+          if(obj && obj.username){
+            setCurrentUserSession(obj);
+            return obj;
+          }
+        }
+      }catch(e){}
+      return null;
+    }
+    function clearCurrentUserSession(){
+      try{ CUR_STORE.removeItem(CURRENT_KEY); }catch(e){}
+      try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
+    }
+
     // ==========================
     // ✅ 角色/權限正規化（兼容 role / level）
     // ==========================
@@ -997,15 +1030,13 @@
       const role = mapRole(cu.role ?? cu.level ?? cu.perm ?? cu.permission) || "read";
       const out = { ...cu, username, role, level: role };
 
-      // ✅ 回寫一次，避免其他頁只看 role 或只看 level 造成不一致
-      try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(out)); }catch(e){}
+      // ✅ 回寫到 sessionStorage（只記到關閉瀏覽器/分頁）
+      setCurrentUserSession(out);
       return out;
     }
 
     function getCurrentUser(){
-      let cu = null;
-      try{ cu = JSON.parse(localStorage.getItem(CURRENT_KEY) || "null"); }catch(e){ cu = null; }
-      return normalizeCurrentUser(cu);
+      return normalizeCurrentUser(getCurrentUserSession());
     }
 
     // ==========================
@@ -1385,12 +1416,12 @@
 
       const lvl = mapRole(user.level ?? user.role) || "read";
 
-      // ✅ 核心修正：登入後同時寫 role + level（全站一致）
-      localStorage.setItem(CURRENT_KEY, JSON.stringify({
+      // ✅ 登入後改寫到 sessionStorage（只記到關閉瀏覽器/分頁）
+      setCurrentUserSession({
         username: String(user.username || "").trim(),
         level: lvl,
         role:  lvl
-      }));
+      });
 
       userInfo.textContent = `目前使用者：${user.username} (${lvl})`;
 
@@ -1488,6 +1519,22 @@
       return (AUTH_TABLE || []).find(row => row.username === trimmedName && row.password === password);
     }
 
+    function refreshSessionAfterSync(){
+      const cu = getCurrentUser();
+      if(!cu || !cu.username) return;
+
+      const row = (AUTH_TABLE || []).find(r => r.username === cu.username);
+      if(!row){
+        clearCurrentUserSession();
+        userInfo.textContent = "目前使用者：未登入";
+        document.body.classList.add("locked");
+        loginOverlay.style.display = "flex";
+        resetButtonsForLogout();
+        return;
+      }
+      applyUser(row);
+    }
+
     // ==========================
     // ✅ 即時偵測更新：偵測到權限表更新就立刻同步
     // ==========================
@@ -1509,7 +1556,7 @@
           buildMainButtons();
           resetButtonsForLogout();
           populateUserSelect();
-          // ⚠️ 這裡不做自動登入（首頁必須先登入）
+          refreshSessionAfterSync();
         }else{
           populateUserSelect();
         }
@@ -1527,19 +1574,15 @@
       });
     }
 
-    // ==========================
-    // ✅ 初始化（重要修正：首頁一律先登入）
-    // ==========================
+    // 初始化
     (async function boot(){
-      // ✅【關鍵】每次進首頁都強制登出 → 必須先登入
-      try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
-
-      // ✅ 一律先鎖住 + 顯示登入遮罩
+      // ✅ 開啟首頁務必先登入：先把畫面鎖住 + 顯示登入遮罩
       document.body.classList.add("locked");
       loginOverlay.style.display = "flex";
-      if(userInfo) userInfo.textContent = "目前使用者：未登入";
+      userInfo.textContent = "目前使用者：未登入";
+      resetButtonsForLogout();
 
-      // 若沒 token：顯示 Token 視窗（不阻止你登入，但雲端不同步）
+      // 若沒 token：顯示 Token 視窗（不阻止你使用本機登入，但雲端不同步）
       if(!dbxEnabled()) showTokenOverlay();
 
       await syncNowIfNew({ force:false });
@@ -1551,11 +1594,23 @@
       resetButtonsForLogout();
       populateUserSelect();
 
-      // ✅ 一開始不套用任何已登入狀態（一定要手動登入）
-      startCloudWatch();
+      // ✅ 若 session 有登入：自動進首頁（只記到關閉瀏覽器/分頁）
+      const cu = getCurrentUser();
+      if(cu && cu.username){
+        const row = (AUTH_TABLE || []).find(r => r.username === cu.username);
+        if(row){
+          applyUser(row);
+        }else{
+          clearCurrentUserSession();
+          document.body.classList.add("locked");
+          loginOverlay.style.display = "flex";
+        }
+      }else{
+        document.body.classList.add("locked");
+        loginOverlay.style.display = "flex";
+      }
 
-      // focus
-      setTimeout(()=>{ try{ usernameInput?.focus(); }catch(e){} }, 60);
+      startCloudWatch();
     })();
 
     // ========= 事件 =========
@@ -1578,7 +1633,7 @@
     });
 
     btnSwitch.addEventListener("click", async function () {
-      localStorage.removeItem(CURRENT_KEY);
+      clearCurrentUserSession();
 
       document.body.classList.add("locked");
       loginOverlay.style.display = "flex";
