@@ -233,9 +233,7 @@
   // ==========================
   const AUTH_KEY    = "tasunAuthTable_v1";
   const NAV_KEY     = "tasunNavButtons_v1";
-
-  // ✅ 登入只記到「關閉瀏覽器」為止（sessionStorage）
-  const CURRENT_KEY = "tasunCurrentUser_v1";
+  const CURRENT_KEY = "tasunCurrentUser_v1"; // sessionStorage only
 
   // Dropbox
   const DBX_TOKEN_KEY   = "tasunDbxToken_v1";
@@ -269,7 +267,6 @@
   function dbxPathMeta(){ return `${getDbxFolder()}/tasunCloudMeta_v1.json`; }
 
   function getAppsWebUrl(){
-    // Dropbox 網站位置（給你直接打開看的）
     const app = encodeURIComponent(getAppName());
     const path = "Tasun/%E6%AC%8A%E9%99%90"; // Tasun/權限
     return `https://www.dropbox.com/home/Apps/${app}/${path}`;
@@ -363,10 +360,18 @@
   }
 
   // ==========================
-  // Dropbox API helpers (重要修正：空 body 改送 {})
+  // Dropbox API helpers（✅ 修正：null 必須送 "null"）
   // ==========================
   async function dbxPostJson(url, bodyObj){
-    const bodyText = (bodyObj === undefined || bodyObj === null) ? "{}" : JSON.stringify(bodyObj);
+    // ✅ Dropbox 有些 endpoint 需要 JSON null（例如 users/get_current_account）
+    // - bodyObj === null  => "null"
+    // - bodyObj === undefined => "{}"（一般 JSON endpoint）
+    // - object => JSON.stringify(object)
+    const bodyText =
+      (bodyObj === null) ? "null" :
+      (bodyObj === undefined) ? "{}" :
+      JSON.stringify(bodyObj);
+
     const res = await fetch(url, {
       method: "POST",
       cache: "no-store",
@@ -376,6 +381,7 @@
       },
       body: bodyText
     });
+
     const text = await res.text();
     let json = null;
     try{ json = JSON.parse(text); }catch(e){ json = null; }
@@ -442,13 +448,12 @@
       return true;
     }
 
-    // folder 已存在：當成功處理（Dropbox 常回 409 conflict）
+    // folder 已存在：視為成功（常回 409 conflict）
     if(r.status === 409 && (r.text || "").toLowerCase().includes("conflict")){
       ensureFolderExistsOnce.done = true;
       return true;
     }
 
-    // scope 不足會在這裡爆出來
     ensureFolderExistsOnce.done = true;
     return false;
   }
@@ -456,9 +461,12 @@
 
   async function getCurrentAccount(){
     if(!dbxEnabled()) return { ok:false, msg:"❌ Token 未設定" };
+
+    // ✅ 這支 endpoint 必須送 JSON null
     const acct = await dbxPostJson("https://api.dropboxapi.com/2/users/get_current_account", null);
+
     if(!acct.ok){
-      return { ok:false, msg:`❌ Token 無效或過期（HTTP ${acct.status}）\n${acct.text}` };
+      return { ok:false, msg:`❌ Token 測試失敗（HTTP ${acct.status}）\n${acct.text}` };
     }
     const email = acct.json && acct.json.email ? String(acct.json.email) : "";
     const name = acct.json && acct.json.name && acct.json.name.display_name ? acct.json.name.display_name : "";
@@ -467,12 +475,16 @@
 
   function detectScopeErrorText(t){
     const s = String(t || "");
-    if(s.includes("missing_scope") || s.includes("does not have the required scope") || s.includes("files.content.write")) return true;
-    return false;
+    return (
+      s.includes("missing_scope") ||
+      s.includes("does not have the required scope") ||
+      s.includes("files.content.write") ||
+      s.includes("insufficient_scope")
+    );
   }
 
   // ==========================
-  // 引導：一步一步（提示視窗）帶你去 Console
+  // 引導：一步一步（提示視窗）帶你去 Console（你要求：一按儲存就自動引導）
   // ==========================
   function guideToConsole(){
     alert("接下來會引導你到 Dropbox App Console（一步一步）。\n\n目的：勾選 scopes + Submit，然後重新產生 Access Token。\n\n按「確定」開始。");
@@ -480,12 +492,9 @@
     window.open("https://www.dropbox.com/developers/apps", "_blank", "noopener");
 
     alert("步驟 2：在 Apps 列表點進你的 App（例如：wutasun）。\n\n進去後找到「Permissions」分頁。");
-
     alert("步驟 3：在 Permissions 勾選（至少要有）：\n\n- files.content.write\n- files.content.read\n- files.metadata.read\n（建議也勾：account_info.read）\n\n勾好後按頁面底部的「Submit」。");
-
-    alert("步驟 4：回到 App 的「Settings」或「OAuth」區塊，找到 Access Token。\n\n⚠️ 注意：你必須「重新產生新的 token」(Generate)；舊 token 可能不會自動擁有新權限。");
-
-    alert("步驟 5：把新的 token 貼回本頁「Dropbox Token 設定」的輸入框，按「儲存並測試」。");
+    alert("步驟 4：回到 App 的 Settings/OAuth 區塊，按「Generate」重新產生新的 Access Token。\n\n⚠️ 重點：要『新 token』，舊 token 常常不會自動擁有新權限。");
+    alert("步驟 5：把新 token 貼回本頁，按「儲存並測試」。\n\n完成後再按「從雲端下載」或修改表格即可自動同步。");
   }
 
   // ==========================
@@ -500,7 +509,6 @@
     const nav = loadNav();
     const auth = loadAuth(nav.length);
 
-    // header
     hdrRow.innerHTML = "";
     const ths = ["用戶名","密碼","顯示","權限級別", ...nav.map(n=>n.label || n.id), "刪除"];
     ths.forEach(t=>{
@@ -562,7 +570,7 @@
     if(!admin){
       setCloudState("雲端：僅 admin 可同步");
     }else{
-      setCloudState(dirty ? "雲端：待同步" : "雲端：—");
+      setCloudState(dirty ? "雲端：待同步" : (dbxEnabled() ? "雲端：Token 已設定" : "雲端：未設定 Token"));
     }
   }
 
@@ -684,11 +692,10 @@
       setCloudState("雲端：同步中…");
       setMsg("正在自動同步到雲端…");
 
-      // 先確保資料夾存在（需要 files.content.write scope）
       const okFolder = await ensureFolderExistsOnce();
       if(!okFolder){
         setCloudState("雲端：Token 無效/權限不足");
-        setMsg("❌ 建立資料夾失敗（可能缺少 scopes：files.content.write）。\n請按「設定 Token」→「儲存並測試」，依提示引導去 Console 勾權限並重新產生 Token。");
+        setMsg("❌ 建立資料夾失敗（可能缺少 scopes：files.content.write）。\n請按「設定 Token」→「儲存並測試」，會自動引導去 Console 勾權限並重新產生 Token。");
         return;
       }
 
@@ -802,7 +809,7 @@ ${seed.msg}
 
 ✅ 解法：
 1) 按「設定 Token」→「儲存並測試」
-2) 若提示 scope 不足：按「一鍵引導去 Console 勾權限」
+2) 若提示 scope 不足：會自動引導去 Console 勾權限
 3) 重新產生新 Token 貼回來
 4) 再按一次「從雲端下載」`
         );
@@ -833,7 +840,7 @@ ${seed.msg}
   }
 
   // ==========================
-  // Token Save & Test
+  // Token Save & Test（✅ 一按儲存 → 若缺 scope 立即自動引導）
   // ==========================
   async function saveAndTestToken(){
     const appName = String(appNameInput.value || "").trim() || DEFAULT_APPNAME;
@@ -844,7 +851,6 @@ ${seed.msg}
       tokenMsg.textContent = "請先貼上 Token。";
       return;
     }
-
     setDbxToken(t);
 
     tokenMsg.textContent = "正在測試 Token…";
@@ -853,11 +859,10 @@ ${seed.msg}
       tokenMsg.textContent =
         acct.msg +
         "\n\n✅ 若你剛在 Console 勾權限，請注意：要重新產生新的 Access Token（舊 token 可能沒有新權限）。";
-      setCloudState("雲端：Token 無效");
+      setCloudState("雲端：Token 測試失敗");
       return;
     }
 
-    // Email 比對提示（無法強制，只能提醒）
     let emailHint = "";
     if(acct.email && acct.email.toLowerCase() !== EXPECT_EMAIL.toLowerCase()){
       emailHint = `\n⚠️ 提醒：這個 token 對應的 email 是：${acct.email}\n你期望的是：${EXPECT_EMAIL}\n（若不一致，表示你可能在另一個 Dropbox 帳號產生了 token）`;
@@ -867,7 +872,6 @@ ${seed.msg}
       emailHint = `\n⚠️ API 未回 email（仍可用）。`;
     }
 
-    // 測試建立資料夾（scope 不足會在這裡顯示）
     tokenMsg.textContent = acct.msg + emailHint + "\n\n正在測試建立資料夾與上傳權限…";
     setCloudState("雲端：測試中…");
 
@@ -882,18 +886,16 @@ ${seed.msg}
         acct.msg + emailHint +
         `\n\n❌ 建立資料夾失敗（HTTP ${r.status}）\n` +
         (isScope
-          ? "原因：App 沒有 files.content.write scope，或你沒有重新產生新 token。\n\n按下方「一鍵引導去 Console 勾權限」，照提示完成後，再回來貼新 token 測試。"
+          ? "原因：App 沒有 files.content.write scope，或你沒有重新產生新 token。\n\n✅ 依你要求：我現在直接開始「一步一步引導」去 Console 勾權限。"
           : "請檢查 Token 或 Dropbox 回應：\n" + r.text);
 
       setCloudState("雲端：權限不足/失敗");
 
-      // 自動提示是否引導
-      const go = confirm("偵測到可能是 scopes 不足（files.content.write）。\n\n要現在開始「一步一步引導」去 Dropbox Console 勾權限嗎？");
-      if(go) guideToConsole();
+      // ✅ 你要求：一按儲存就自動引導
+      if(isScope) guideToConsole();
       return;
     }
 
-    // 成功後：確保能上傳（實際寫入 3 檔）
     ensureFolderExistsOnce.done = true;
     const seed = await ensureCloudSeedIfMissing();
 
@@ -913,13 +915,11 @@ ${seed.msg}
   btnBack.addEventListener("click", ()=> location.href = "index.html");
 
   btnApps.addEventListener("click", ()=>{
-    const ok = confirm("將開啟 Dropbox 網站的 /Apps 位置。\n\n提醒：請使用 " + EXPECT_EMAIL + " 登入。\n\n是否開啟？");
-    if(ok) window.open(getAppsWebUrl(), "_blank", "noopener");
+    window.open(getAppsWebUrl(), "_blank", "noopener");
   });
 
   btnOpenAppsHere.addEventListener("click", ()=>{
-    const ok = confirm("將開啟：\n" + getAppsWebUrl() + "\n\n提醒：請使用 " + EXPECT_EMAIL + " 登入。\n\n是否開啟？");
-    if(ok) window.open(getAppsWebUrl(), "_blank", "noopener");
+    window.open(getAppsWebUrl(), "_blank", "noopener");
   });
 
   btnAdd.addEventListener("click", ()=>{
@@ -938,14 +938,15 @@ ${seed.msg}
   btnPull.addEventListener("click", pullFromCloud);
   btnPush.addEventListener("click", manualPush);
 
-  btnToken.addEventListener("click", async ()=>{
+  btnToken.addEventListener("click", ()=>{
     tokenOverlay.style.display = "flex";
     tokenOverlay.setAttribute("aria-hidden","false");
 
     appNameInput.value = getAppName();
     tokenInput.value = getDbxToken();
 
-    tokenMsg.textContent = "提示：若你看到 HTTP 400 並寫 files.content.write，代表 scopes 不足或 token 沒重新產生。\n按「儲存並測試」會自動偵測並引導。";
+    tokenMsg.textContent =
+      "提示：\n1) users/get_current_account 需要送 JSON null（本版已修正）。\n2) 若你看到 files.content.write missing_scope，表示要去 Console 勾權限並重新產生新 token。\n\n按「儲存並測試」會自動偵測並（依你要求）直接引導。";
     setTimeout(()=> tokenInput.focus(), 40);
   });
 
@@ -973,7 +974,6 @@ ${seed.msg}
   // boot
   // ==========================
   (function boot(){
-    // 顯示目前登入（sessionStorage）
     const cu = getCurrentUser();
     const r = String((cu && (cu.level || cu.role)) || "").toLowerCase();
     who.textContent = cu ? `目前：${cu.username} (${r || cu.level || cu.role})` : "目前：未登入";
