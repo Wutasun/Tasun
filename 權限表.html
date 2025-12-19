@@ -76,27 +76,20 @@
     .btn:disabled{ opacity:.45; cursor:not-allowed; }
     .msg{
       margin-top: 10px;
-      min-height: 1.2rem;
+      min-height: 1.1rem;
       font-size: .88rem;
       color: rgba(255, 220, 190, 0.95);
       white-space: pre-line;
     }
-
     .table-wrap{
       overflow:auto;
       border-radius: 18px;
       border: 1px solid rgba(246,211,122,0.18);
       background: rgba(0,0,0,0.55);
     }
-    table{
-      width:100%;
-      border-collapse:separate;
-      border-spacing:0;
-      min-width: 980px;
-    }
+    table{ width:100%; border-collapse:separate; border-spacing:0; min-width: 980px; }
     thead th{
-      position: sticky;
-      top: 0;
+      position: sticky; top: 0;
       background: rgba(246,211,122,0.12);
       border-bottom: 1px solid rgba(246,211,122,0.22);
       padding: 12px 10px;
@@ -133,7 +126,6 @@
       letter-spacing: .04em;
     }
 
-    /* token overlay */
     .token-overlay{
       position: fixed; inset:0;
       display:none;
@@ -143,7 +135,7 @@
       background: radial-gradient(circle at 50% 18%, rgba(255, 228, 170, 0.32), rgba(0, 0, 0, 0.98));
     }
     .token-box{
-      width: min(720px, 94vw);
+      width: min(680px, 92vw);
       padding: 1.6rem 1.6rem 1.2rem;
       border-radius: 18px;
       background: radial-gradient(circle at 0% 0%, rgba(246, 211, 122, 0.22), rgba(0, 0, 0, 0.95));
@@ -152,10 +144,9 @@
       color: var(--gold-soft);
     }
     .token-title{ text-align:center; font-size:1.15rem; letter-spacing:.18em; text-indent:.18em; margin-bottom:.6rem; }
-    .token-row{ display:flex; gap:.5rem; align-items:center; margin-top:.55rem; }
+    .token-row{ display:flex; gap:.5rem; align-items:center; margin-top:.5rem; }
     .token-msg{ margin-top:.7rem; min-height:1.2rem; font-size:.85rem; white-space: pre-line; }
-    .ok{ color: rgba(195, 255, 210, 0.95); }
-    .muted{ opacity:.85; }
+    .muted{ opacity:.88; line-height:1.7; }
   </style>
 </head>
 
@@ -165,8 +156,7 @@
       <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
         <div class="title">Tasun 權限表</div>
         <div class="pill" id="who">目前：未登入</div>
-        <div class="pill" id="cloudState">雲端：未同步</div>
-        <div class="pill" id="lastSync">最後同步：—</div>
+        <div class="pill" id="cloudState">雲端：—</div>
       </div>
 
       <div class="actions">
@@ -194,17 +184,10 @@
     <div class="token-box">
       <div class="token-title">Dropbox Token 設定（App folder）</div>
 
-      <div style="font-size:.92rem; line-height:1.75; color:rgba(246,211,122,0.82);" class="muted">
-        對應 Dropbox 帳號（指定）：<b>tasun_8@hotmail.com</b><br>
-        ✅ App folder Token：檔案會寫入 Dropbox 的 <b>/Apps/你的App/</b> 內（不是一般根目錄）。<br>
-        API 內部路徑：<b>/Tasun/權限</b>（若不存在會自動建立）<br>
-        ✅ 你改任何欄位 → 約 1.2 秒後自動同步雲端（並驗證 3 個檔案存在）。<br>
-        ✅ 若雲端尚未有檔案：會自動建立一份（admin + Token OK）。
-      </div>
+      <div class="muted" id="tokenHint"></div>
 
-      <div style="margin-top:.55rem; font-size:.88rem; color:rgba(246,211,122,0.85);">
-        Apps 內的「你的App」實際名稱：<b id="appNameText">（尚未檢查）</b><br>
-        Dropbox 網站位置（成功後可在 Apps 看到）：<b id="appPathText">/Apps/你的App/Tasun/權限</b>
+      <div class="token-row">
+        <input class="in" id="appNameInput" type="text" placeholder="Apps 內 App 資料夾名（用來顯示 /Apps/你的App/...）" />
       </div>
 
       <div class="token-row">
@@ -214,32 +197,34 @@
 
       <div class="token-msg" id="tokenMsg"></div>
 
-      <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:.85rem; flex-wrap:wrap;">
+      <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:.8rem; flex-wrap:wrap;">
+        <button class="btn" id="tokenOpenApps" type="button">開啟 Dropbox Apps</button>
         <button class="btn" id="tokenClose" type="button">關閉</button>
-        <button class="btn" id="tokenSave"  type="button">儲存</button>
+        <button class="btn" id="tokenSave"  type="button">儲存並檢查</button>
       </div>
     </div>
   </div>
 
 <script>
-  // ==========================
-  // 固定對應帳號（提示用）
-  // ==========================
-  const EXPECT_EMAIL = "tasun_8@hotmail.com";
+  // 你指定的 Dropbox 帳號（顯示/比對用）
+  const EXPECTED_DROPBOX_EMAIL = "tasun_8@hotmail.com";
 
   // localStorage keys
   const AUTH_KEY    = "tasunAuthTable_v1";
   const CURRENT_KEY = "tasunCurrentUser_v1";
   const NAV_KEY     = "tasunNavButtons_v1";
 
-  // Dropbox token keys
-  const DBX_TOKEN_KEY  = "tasunDbxToken_v1";
-  const DBX_FOLDER_KEY = "tasunDbxFolder_v1";
+  // 「記住到關閉瀏覽器」的 heartbeat（與首頁一致）
+  const SESSION_HB_KEY = "tasunSessionHeartbeat_v1";
+  const SESSION_EXPIRE_MS = 15000;
 
-  // App folder 內路徑
+  // Dropbox token
+  const DBX_TOKEN_KEY   = "tasunDbxToken_v1";
+  const DBX_APPNAME_KEY = "tasunDbxAppName_v1";
+  const DBX_FOLDER_KEY  = "tasunDbxFolder_v1";
   const DEFAULT_DBX_FOLDER = "/Tasun/權限";
 
-  // 自動同步 debounce
+  // auto sync
   const AUTO_PUSH_DEBOUNCE_MS = 1200;
 
   function getDbxToken(){ return String(localStorage.getItem(DBX_TOKEN_KEY) || "").trim(); }
@@ -251,18 +236,28 @@
     return String(localStorage.getItem(DBX_FOLDER_KEY) || DEFAULT_DBX_FOLDER).trim() || DEFAULT_DBX_FOLDER;
   }
 
+  function getAppName(){ return String(localStorage.getItem(DBX_APPNAME_KEY) || "").trim(); }
+  function setAppName(v){ localStorage.setItem(DBX_APPNAME_KEY, String(v||"").trim()); }
+
+  function getAppsWebPath(){
+    const app = getAppName() || "你的App";
+    return `/Apps/${app}${getDbxFolder()}`;
+  }
+  function getAppsWebUrl(){
+    const app = encodeURIComponent(getAppName() || "");
+    if(!app) return "https://www.dropbox.com/home/Apps";
+    const parts = (getDbxFolder() || "").split("/").filter(Boolean).map(encodeURIComponent).join("/");
+    return `https://www.dropbox.com/home/Apps/${app}/${parts}`;
+  }
+
   function dbxPathAuth(){ return `${getDbxFolder()}/tasunAuthTable_v1.json`; }
   function dbxPathNav(){  return `${getDbxFolder()}/tasunNavButtons_v1.json`; }
   function dbxPathMeta(){ return `${getDbxFolder()}/tasunCloudMeta_v1.json`; }
 
-  // ==========================
   // UI refs
-  // ==========================
   const who = document.getElementById("who");
   const msg = document.getElementById("msg");
   const cloudState = document.getElementById("cloudState");
-  const lastSync = document.getElementById("lastSync");
-
   const hdrRow = document.getElementById("hdrRow");
   const body = document.getElementById("body");
   const tbl = document.getElementById("tbl");
@@ -274,38 +269,35 @@
   const btnToken = document.getElementById("btnToken");
 
   const tokenOverlay = document.getElementById("tokenOverlay");
+  const tokenHint = document.getElementById("tokenHint");
   const tokenInput = document.getElementById("tokenInput");
+  const appNameInput = document.getElementById("appNameInput");
   const tokenEye   = document.getElementById("tokenEye");
   const tokenMsg   = document.getElementById("tokenMsg");
+  const tokenOpenApps = document.getElementById("tokenOpenApps");
   const tokenClose = document.getElementById("tokenClose");
   const tokenSave  = document.getElementById("tokenSave");
 
-  const appNameText = document.getElementById("appNameText");
-  const appPathText = document.getElementById("appPathText");
-
-  // ==========================
-  // helpers
-  // ==========================
   function setMsg(t){ msg.textContent = t || ""; }
   function setCloudState(t){ cloudState.textContent = t || "雲端：—"; }
-  function setLastSyncText(t){ lastSync.textContent = "最後同步：" + (t || "—"); }
 
-  function safeJsonParse(s, fallback){
-    try{ return JSON.parse(s); }catch(e){ return fallback; }
-  }
+  function safeJsonParse(s, fallback){ try{ return JSON.parse(s); }catch(e){ return fallback; } }
 
   function getCurrentUser(){
+    // 若 heartbeat 過期：視為已關閉瀏覽器（強制未登入）
+    const now = Date.now();
+    const last = Number(localStorage.getItem(SESSION_HB_KEY) || "0");
+    const stale = !last || !isFinite(last) || (now - last > SESSION_EXPIRE_MS);
+    if(stale) return null;
+
     const cu = safeJsonParse(localStorage.getItem(CURRENT_KEY) || "null", null);
-    if(!cu) return null;
-    const username = String(cu.username || "").trim();
-    const role = String(cu.level || cu.role || "").toLowerCase();
-    if(!username) return null;
-    return { username, role };
+    return cu && cu.username ? cu : null;
   }
 
   function isAdmin(){
     const cu = getCurrentUser();
-    return !!(cu && cu.role === "admin");
+    const r = String((cu && (cu.level || cu.role)) || "").toLowerCase();
+    return !!(cu && r === "admin");
   }
 
   function loadNav(){
@@ -316,7 +308,7 @@
     const defaults = [
       { id:"btn1", label:"臻鼎時代大廈管理表", href:"臻鼎管理表.html", target:"", roles:["admin","write","read"] },
       { id:"btn2", label:"缺失 / 品質", href:"甄鼎quality.html", target:"", roles:["admin","write","read"] },
-      { id:"btn3", label:"雲端檔案（Dropbox Apps）", href:"https://www.dropbox.com/home/Apps", target:"_blank", roles:["admin","write","read"] },
+      { id:"btn3", label:"雲端檔案", href:"https://www.dropbox.com/", target:"_blank", roles:["admin","write","read"] },
       { id:"btn4", label:"工程資料庫", href:"工程資料庫.html", target:"", roles:["admin","write"] },
       { id:"btn5", label:"資料庫", href:"#", target:"", roles:["admin","write","read"] }
     ];
@@ -324,56 +316,102 @@
     return defaults;
   }
 
-  function normalizeAuthRow(r, btnCount){
-    const b = Array.isArray(r.buttons) ? r.buttons.slice() : [];
-    const out = [];
-    for(let i=0;i<btnCount;i++) out[i] = !!b[i];
-    return {
-      username: String(r.username||"").trim(),
-      password: String(r.password||""),
-      level: String(r.level || r.role || "read").toLowerCase(),
-      role:  String(r.level || r.role || "read").toLowerCase(),
-      buttons: out
-    };
-  }
-
   function loadAuth(btnCount){
     const raw = localStorage.getItem(AUTH_KEY);
     let arr = safeJsonParse(raw || "null", null);
     if(!Array.isArray(arr)){
       arr = [
-        { username:"alex",  password:"Tasun08040224", level:"admin", buttons: Array(btnCount).fill(true) },
-        { username:"tasun", password:"tasun08040224", level:"write", buttons: Array(btnCount).fill(true) },
-        { username:"wu",    password:"123456",        level:"read",  buttons: (()=>{ const a=Array(btnCount).fill(false); if(btnCount) a[btnCount-1]=true; return a; })() }
+        { username:"alex",  password:"Tasun08040224", level:"admin", role:"admin", buttons: Array(btnCount).fill(true) },
+        { username:"tasun", password:"tasun08040224", level:"write", role:"write", buttons: Array(btnCount).fill(true) },
+        { username:"wu",    password:"123456",        level:"read",  role:"read",  buttons: (()=>{ const a=Array(btnCount).fill(false); if(btnCount) a[btnCount-1]=true; return a; })() }
       ];
       localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
     }
-    const fixed = arr.map(r=> normalizeAuthRow(r, btnCount));
-    localStorage.setItem(AUTH_KEY, JSON.stringify(fixed));
-    return fixed;
+
+    return arr.map(r=>{
+      const b = Array.isArray(r.buttons) ? r.buttons.slice() : [];
+      const out = [];
+      for(let i=0;i<btnCount;i++) out[i] = !!b[i];
+      const level = String(r.level || r.role || "read").toLowerCase();
+      return { username: String(r.username||""), password: String(r.password||""), level, role: level, buttons: out };
+    });
   }
 
-  // ==========================
-  // Dropbox API（顯示錯誤，不會卡住）
-  // ==========================
+  // Dropbox API helpers
   async function dbxPostJson(url, bodyObj){
-    const res = await fetch(url, {
-      method: "POST",
-      cache: "no-store",
-      headers: {
-        "Authorization": dbxAuthHeader(),
-        "Content-Type": "application/json"
-      },
-      body: bodyObj ? JSON.stringify(bodyObj) : null
-    });
-    const text = await res.text();
-    let json = null;
-    try{ json = JSON.parse(text); }catch(e){ json = null; }
-    return { ok: res.ok, status: res.status, json, text };
+    try{
+      const res = await fetch(url, {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          "Authorization": dbxAuthHeader(),
+          "Content-Type": "application/json"
+        },
+        body: bodyObj ? JSON.stringify(bodyObj) : null
+      });
+      const text = await res.text();
+      let json = null;
+      try{ json = JSON.parse(text); }catch(e){ json = null; }
+      return { ok: res.ok, status: res.status, json, text };
+    }catch(err){
+      return { ok:false, status:0, json:null, text: String(err?.message || err) };
+    }
   }
+
+  async function testToken(){
+    if(!dbxEnabled()) return { ok:false, msg:"❌ Token 未設定" };
+    const acct = await dbxPostJson("https://api.dropboxapi.com/2/users/get_current_account", null);
+    if(!acct.ok){
+      if(acct.status === 401) return { ok:false, msg:"❌ Token 無效或過期（HTTP 401）\n請到 https://www.dropbox.com/developers/apps 重新產生 Token" };
+      return { ok:false, msg:`❌ Token 驗證失敗（HTTP ${acct.status}）\n${acct.text}` };
+    }
+    const email = acct.json && acct.json.email ? String(acct.json.email) : "";
+    if(email && email.toLowerCase() !== EXPECTED_DROPBOX_EMAIL.toLowerCase()){
+      return { ok:true, msg:`✅ Token OK\n⚠️ 但此 Token 對應帳號是：${email}\n你指定的帳號是：${EXPECTED_DROPBOX_EMAIL}\n（若帳號不同，請換成正確帳號產生的 Token）` };
+    }
+    return { ok:true, msg:`✅ Token OK（對應帳號：${email || EXPECTED_DROPBOX_EMAIL}）` };
+  }
+
+  async function ensureFolderExistsOnce(){
+    if(ensureFolderExistsOnce.done) return true;
+    if(!dbxEnabled()) return false;
+
+    // 若 token 401，不要假裝成功
+    const chk = await testToken();
+    if(!chk.ok){
+      ensureFolderExistsOnce.done = false;
+      return false;
+    }
+
+    const folder = getDbxFolder();
+    const r = await dbxPostJson("https://api.dropboxapi.com/2/files/create_folder_v2", {
+      path: folder,
+      autorename: false
+    });
+
+    if(r.ok){
+      ensureFolderExistsOnce.done = true;
+      return true;
+    }
+
+    // 已存在 → 視為成功
+    if(r.status === 409){
+      ensureFolderExistsOnce.done = true;
+      return true;
+    }
+
+    ensureFolderExistsOnce.done = false;
+    return false;
+  }
+  ensureFolderExistsOnce.done = false;
 
   async function dbxDownloadJson(path){
     if(!dbxEnabled()) return null;
+
+    // token 401 → 直接 null，避免一直轉
+    const chk = await testToken();
+    if(!chk.ok) return null;
+
     try{
       const res = await fetch("https://content.dropboxapi.com/2/files/download", {
         method:"POST",
@@ -394,88 +432,44 @@
   async function dbxUploadJson(path, obj){
     if(!dbxEnabled()) return { ok:false, status:0, msg:"Token 未設定" };
 
-    await ensureFolderExistsOnce();
+    const chk = await testToken();
+    if(!chk.ok) return { ok:false, status:401, msg: chk.msg };
+
+    const okFolder = await ensureFolderExistsOnce();
+    if(!okFolder) return { ok:false, status:0, msg:"無法建立/存取 App folder 資料夾（請檢查 Token）" };
 
     const bodyText = JSON.stringify(obj ?? null);
-    const res = await fetch("https://content.dropboxapi.com/2/files/upload", {
-      method:"POST",
-      cache:"no-store",
-      headers:{
-        "Authorization": dbxAuthHeader(),
-        "Content-Type": "application/octet-stream",
-        "Dropbox-API-Arg": JSON.stringify({
-          path,
-          mode: "overwrite",
-          autorename: false,
-          mute: true,
-          strict_conflict: false
-        })
-      },
-      body: bodyText
-    });
 
-    const t = await res.text();
-    return { ok: res.ok, status: res.status, msg: res.ok ? "OK" : t };
-  }
+    try{
+      const res = await fetch("https://content.dropboxapi.com/2/files/upload", {
+        method:"POST",
+        cache:"no-store",
+        headers:{
+          "Authorization": dbxAuthHeader(),
+          "Content-Type": "application/octet-stream",
+          "Dropbox-API-Arg": JSON.stringify({
+            path,
+            mode: "overwrite",
+            autorename: false,
+            mute: true,
+            strict_conflict: false
+          })
+        },
+        body: bodyText
+      });
 
-  async function testTokenWithEmail(){
-    if(!dbxEnabled()) return { ok:false, msg:"❌ Token 未設定", email:"", status:0 };
-
-    const acct = await dbxPostJson("https://api.dropboxapi.com/2/users/get_current_account", null);
-    if(!acct.ok){
-      return { ok:false, msg:`❌ Token 無效或過期（HTTP ${acct.status}）`, email:"", status:acct.status };
+      const t = await res.text();
+      return { ok: res.ok, status: res.status, msg: res.ok ? "OK" : t };
+    }catch(err){
+      return { ok:false, status:0, msg: String(err?.message || err) };
     }
-
-    const email = (acct.json && acct.json.email) ? acct.json.email : "";
-    const okEmail = (email || "").toLowerCase() === EXPECT_EMAIL.toLowerCase();
-
-    return {
-      ok:true,
-      status:200,
-      email,
-      msg: okEmail ? `✅ Token OK\n對應帳號：${email}` : `⚠️ Token OK，但不是指定帳號\n目前：${email}\n應為：${EXPECT_EMAIL}`
-    };
   }
 
-  // ✅ 取得 Apps 內「你的App」資料夾名稱（/ 的 name）
-  async function getAppFolderName(){
-    if(!dbxEnabled()) return "";
-    const meta = await dbxPostJson("https://api.dropboxapi.com/2/files/get_metadata", { path: "" });
-    if(!meta.ok) return "";
-    return (meta.json && meta.json.name) ? String(meta.json.name) : "";
-  }
-
-  async function ensureFolderExistsOnce(){
-    if(ensureFolderExistsOnce.done) return true;
-    if(!dbxEnabled()) return false;
-
-    const folder = getDbxFolder();
-    const r = await dbxPostJson("https://api.dropboxapi.com/2/files/create_folder_v2", {
-      path: folder,
-      autorename: false
-    });
-
-    if(r.ok){
-      ensureFolderExistsOnce.done = true;
-      return true;
-    }
-    // 已存在
-    if(r.text && r.text.includes("conflict")){
-      ensureFolderExistsOnce.done = true;
-      return true;
-    }
-
-    ensureFolderExistsOnce.done = true;
-    return true;
-  }
-  ensureFolderExistsOnce.done = false;
-
-  // ==========================
-  // render
-  // ==========================
+  // render table
   function render(){
     const cu = getCurrentUser();
-    who.textContent = cu ? `目前：${cu.username} (${cu.role})` : "目前：未登入";
+    const r = String((cu && (cu.level || cu.role)) || "").toLowerCase();
+    who.textContent = cu ? `目前：${cu.username} (${r || cu.level || cu.role})` : "目前：未登入";
 
     const admin = isAdmin();
     const nav = loadNav();
@@ -595,15 +589,13 @@
     return td;
   }
 
-  // ==========================
-  // 表格 → localStorage
-  // ==========================
   function saveTableToLocal(){
     const nav = loadNav();
     const rows = [];
     const trs = Array.from(body.querySelectorAll("tr"));
     trs.forEach(tr=>{
       const tds = Array.from(tr.querySelectorAll("td"));
+
       const username = (tds[0].querySelector("input")?.value || "").trim();
       const password = (tds[1].querySelector("input")?.value || "");
       const level    = (tds[3].querySelector("select")?.value || "read").toLowerCase();
@@ -619,9 +611,7 @@
     localStorage.setItem(AUTH_KEY, JSON.stringify(rows));
   }
 
-  // ==========================
-  // 自動上傳（含超時保護，避免卡住）
-  // ==========================
+  // auto push
   let autoPushTimer = null;
   let autoPushBusy = false;
   let autoPushPending = false;
@@ -647,10 +637,14 @@
     autoPushTimer = setTimeout(()=> autoPushNow(), AUTO_PUSH_DEBOUNCE_MS);
   }
 
-  function nowText(){
-    const d = new Date();
-    const pad = n => String(n).padStart(2,"0");
-    return `${pad(d.getMonth()+1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  function fmtTime(ts){
+    try{
+      const d = new Date(ts);
+      const hh = String(d.getHours()).padStart(2,"0");
+      const mm = String(d.getMinutes()).padStart(2,"0");
+      const ss = String(d.getSeconds()).padStart(2,"0");
+      return `${hh}:${mm}:${ss}`;
+    }catch(e){ return ""; }
   }
 
   async function autoPushNow(){
@@ -667,60 +661,57 @@
     }
 
     autoPushBusy = true;
-
-    // ✅ 超時保護：15 秒
-    let timeoutId = null;
-    const timeout = new Promise((_, reject)=>{
-      timeoutId = setTimeout(()=> reject(new Error("同步逾時（15秒）")), 15000);
-    });
-
     try{
-      setCloudState("雲端：同步中…");
-      setMsg("正在自動同步到雲端…");
-
-      // 先確認 Token / email
-      const chk = await testTokenWithEmail();
+      const chk = await testToken();
       if(!chk.ok){
-        setCloudState("雲端：同步失敗");
-        setMsg(chk.msg + "\\n\\n請重新取得 Token（對應：" + EXPECT_EMAIL + "）");
+        setCloudState("雲端：Token 無效");
+        setMsg(chk.msg + `\n\n顯示路徑：${getAppsWebPath()}\n（注意：Token 無效時，Dropbox /Apps 不會建立資料夾）`);
         return;
       }
+
+      setCloudState("雲端：同步中…");
+      setMsg("正在自動同步到雲端…");
 
       saveTableToLocal();
 
       const auth = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
       const nav  = safeJsonParse(localStorage.getItem(NAV_KEY)  || "[]", []);
 
-      // ✅ 寫入雲端（與 timeout 競速）
-      await Promise.race([
-        (async ()=>{
-          const up1 = await dbxUploadJson(dbxPathAuth(), auth);
-          if(!up1.ok) throw new Error(`自動同步失敗（auth，HTTP ${up1.status}）\\n${up1.msg}`);
+      const up1 = await dbxUploadJson(dbxPathAuth(), auth);
+      if(!up1.ok){
+        setCloudState("雲端：同步失敗");
+        setMsg(`❌ 自動同步失敗（auth，HTTP ${up1.status}）\n${up1.msg}`);
+        return;
+      }
 
-          const up2 = await dbxUploadJson(dbxPathNav(), nav);
-          if(!up2.ok) throw new Error(`自動同步失敗（nav，HTTP ${up2.status}）\\n${up2.msg}`);
+      const up2 = await dbxUploadJson(dbxPathNav(), nav);
+      if(!up2.ok){
+        setCloudState("雲端：同步失敗");
+        setMsg(`❌ 自動同步失敗（nav，HTTP ${up2.status}）\n${up2.msg}`);
+        return;
+      }
 
-          const meta = { updatedAt: Date.now(), by: chk.email || "" };
-          const up3 = await dbxUploadJson(dbxPathMeta(), meta);
-          if(!up3.ok) throw new Error(`自動同步失敗（meta，HTTP ${up3.status}）\\n${up3.msg}`);
+      const meta = { updatedAt: Date.now() };
+      const up3 = await dbxUploadJson(dbxPathMeta(), meta);
+      if(!up3.ok){
+        setCloudState("雲端：部分成功");
+        setMsg(`⚠️ auth/nav 已上傳，但 meta 失敗（HTTP ${up3.status}）\n${up3.msg}`);
+        return;
+      }
 
-          localStorage.setItem("tasunCloudUpdatedAt_v1", String(meta.updatedAt));
-        })(),
-        timeout
-      ]);
+      localStorage.setItem("tasunCloudUpdatedAt_v1", String(meta.updatedAt));
 
       dirty = false;
-      setCloudState("雲端：已同步 ✅");
-      setLastSyncText(nowText());
-      setMsg("✅ 已自動同步到雲端（手機/其他裝置約 3~6 秒內會更新）\\n對應帳號：" + chk.email);
+      setCloudState(`雲端：已同步 ✅ ${fmtTime(meta.updatedAt)}`);
+      setMsg(
+`✅ 已同步到雲端（App folder）
+最後同步：${fmtTime(meta.updatedAt)}
 
-    } catch(err){
-      setCloudState("雲端：同步失敗");
-      setLastSyncText(nowText());
-      setMsg("❌ " + (err && err.message ? err.message : String(err)));
+顯示路徑：${getAppsWebPath()}
+提示：Dropbox 網站 /Apps/<AppName>/... 只有在成功寫入檔案後才會出現資料夾。`
+      );
 
     } finally {
-      if(timeoutId) clearTimeout(timeoutId);
       autoPushBusy = false;
 
       if(autoPushPending){
@@ -730,18 +721,18 @@
     }
   }
 
-  // ==========================
-  // ✅ 雲端沒有檔案 → 自動 seed
-  // ==========================
+  // 雲端沒檔案 → 自動建立初始檔
   async function ensureCloudSeedIfMissing(){
     if(!isAdmin()) return { ok:false, msg:"非 admin：不可建立雲端初始檔" };
     if(!dbxEnabled()) return { ok:false, msg:"Token 未設定：不可建立雲端初始檔" };
 
-    const chk = await testTokenWithEmail();
+    const chk = await testToken();
     if(!chk.ok) return { ok:false, msg: chk.msg };
+
     setCloudState("雲端：檢查中…");
 
-    await ensureFolderExistsOnce();
+    const okFolder = await ensureFolderExistsOnce();
+    if(!okFolder) return { ok:false, msg:"無法建立/存取 App folder 資料夾（請檢查 Token）" };
 
     const meta = await dbxDownloadJson(dbxPathMeta());
     const auth = await dbxDownloadJson(dbxPathAuth());
@@ -751,34 +742,37 @@
     if(!missing) return { ok:true, msg:"雲端已有檔案，無需建立" };
 
     setCloudState("雲端：建立初始檔…");
-    setMsg("⚠️ 偵測雲端尚未有檔案，正在自動建立一份…");
+    setMsg(
+`⚠️ 偵測雲端尚未有檔案，正在自動建立一份…
+顯示路徑：${getAppsWebPath()}
+（如果你在 Dropbox /Apps 看不到，多半是 AppName 尚未填或 Token 無效）`
+    );
 
     saveTableToLocal();
-
     const localAuth = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
     const localNav  = safeJsonParse(localStorage.getItem(NAV_KEY)  || "[]", []);
 
     const up1 = await dbxUploadJson(dbxPathAuth(), localAuth);
-    if(!up1.ok) return { ok:false, msg:`建立失敗（auth，HTTP ${up1.status}）\\n${up1.msg}` };
+    if(!up1.ok) return { ok:false, msg:`建立失敗（auth，HTTP ${up1.status}）\n${up1.msg}` };
 
     const up2 = await dbxUploadJson(dbxPathNav(), localNav);
-    if(!up2.ok) return { ok:false, msg:`建立失敗（nav，HTTP ${up2.status}）\\n${up2.msg}` };
+    if(!up2.ok) return { ok:false, msg:`建立失敗（nav，HTTP ${up2.status}）\n${up2.msg}` };
 
-    const newMeta = { updatedAt: Date.now(), by: chk.email || "" };
+    const newMeta = { updatedAt: Date.now() };
     const up3 = await dbxUploadJson(dbxPathMeta(), newMeta);
-    if(!up3.ok) return { ok:false, msg:`建立失敗（meta，HTTP ${up3.status}）\\n${up3.msg}` };
+    if(!up3.ok) return { ok:false, msg:`建立失敗（meta，HTTP ${up3.status}）\n${up3.msg}` };
 
     localStorage.setItem("tasunCloudUpdatedAt_v1", String(newMeta.updatedAt));
+    setCloudState(`雲端：已建立 ✅ ${fmtTime(newMeta.updatedAt)}`);
+    setMsg(
+`✅ 已自動建立雲端初始檔案（App folder）
+最後建立：${fmtTime(newMeta.updatedAt)}
 
-    setCloudState("雲端：已建立 ✅");
-    setLastSyncText(nowText());
-    setMsg("✅ 已自動建立雲端初始檔案（之後其他裝置即可下載/同步）。\\n對應帳號：" + (chk.email||""));
+顯示路徑：${getAppsWebPath()}`
+    );
     return { ok:true, msg:"已建立雲端初始檔案" };
   }
 
-  // ==========================
-  // pull/push（手動）
-  // ==========================
   async function pullFromCloud(){
     if(!dbxEnabled()){
       setMsg("❌ 尚未設定 Token，無法從雲端下載。");
@@ -786,10 +780,10 @@
       return false;
     }
 
-    const chk = await testTokenWithEmail();
+    const chk = await testToken();
     if(!chk.ok){
       setCloudState("雲端：Token 無效");
-      setMsg(chk.msg + "\\n\\n請重新取得 Token（對應：" + EXPECT_EMAIL + "）");
+      setMsg(chk.msg);
       return false;
     }
 
@@ -799,7 +793,6 @@
     let auth = await dbxDownloadJson(dbxPathAuth());
     let nav  = await dbxDownloadJson(dbxPathNav());
 
-    // ✅ 若雲端沒有檔案：自動建立
     if((!auth || !nav)){
       const seed = await ensureCloudSeedIfMissing();
       if(seed.ok){
@@ -807,7 +800,16 @@
         nav  = await dbxDownloadJson(dbxPathNav());
       }else{
         setCloudState("雲端：無資料/路徑不對");
-        setMsg("⚠️ 雲端尚未有權限表檔案（或路徑/Token 權限不對）\\n" + seed.msg);
+        setMsg(
+`⚠️ 雲端尚未有權限表檔案（或 Token/路徑不對）
+${seed.msg}
+
+✅ 檢查：
+1) Token 是否有效（HTTP 401 表示過期）
+2) 是否為 App folder Token
+3) 顯示路徑：${getAppsWebPath()}
+4) API 寫入路徑：${getDbxFolder()}`
+        );
         return false;
       }
     }
@@ -826,16 +828,20 @@
     if(changed){
       dirty = false;
       setCloudState("雲端：已同步 ✅");
-      setLastSyncText(nowText());
-      setMsg("✅ 已下載雲端資料並更新本機。\\n對應帳號：" + (chk.email||""));
+      setMsg(
+`✅ 已下載雲端資料並更新本機
+顯示路徑：${getAppsWebPath()}`
+      );
       render();
       return true;
-    }else{
-      setCloudState("雲端：無資料/路徑不對");
-      setLastSyncText(nowText());
-      setMsg("⚠️ 雲端仍讀不到檔案（可能路徑/Token 權限不對）\\nApp folder 內路徑：" + getDbxFolder());
-      return false;
     }
+
+    setCloudState("雲端：無資料/路徑不對");
+    setMsg(
+`⚠️ 雲端仍讀不到檔案
+請確認 Token 與 App folder 設定正確。`
+    );
+    return false;
   }
 
   async function manualPush(){
@@ -843,9 +849,7 @@
     await autoPushNow();
   }
 
-  // ==========================
   // events
-  // ==========================
   btnBack.addEventListener("click", ()=> location.href = "index.html");
 
   btnAdd.addEventListener("click", ()=>{
@@ -868,32 +872,22 @@
     tokenOverlay.style.display = "flex";
     tokenOverlay.setAttribute("aria-hidden","false");
     tokenInput.value = getDbxToken();
+    appNameInput.value = getAppName();
+
+    tokenHint.textContent =
+`對應帳號：${EXPECTED_DROPBOX_EMAIL}
+✅ App folder Token：檔案會寫入 Dropbox 的「Apps」區域（不是一般根目錄）。
+API 內部路徑：${getDbxFolder()}
+顯示路徑：${getAppsWebPath()}
+（AppName 要到 Dropbox Developers Console 看 App name，API 不能自動查到）`;
+
     tokenMsg.textContent = "正在檢查 Token…";
-    tokenMsg.classList.remove("ok");
-
-    if(!dbxEnabled()){
-      tokenMsg.textContent = "尚未設定 Token。請貼上 Token 後按「儲存」。";
-      appNameText.textContent = "（尚未檢查）";
-      appPathText.textContent = "/Apps/你的App" + getDbxFolder();
-      setTimeout(()=> tokenInput.focus(), 40);
-      return;
-    }
-
-    const chk = await testTokenWithEmail();
-    const appName = chk.ok ? (await getAppFolderName()) : "";
-    const appPath = appName ? `/Apps/${appName}${getDbxFolder()}` : `/Apps/你的App${getDbxFolder()}`;
-
-    appNameText.textContent = appName || "（無法取得，可能 Token 無效）";
-    appPathText.textContent = appPath;
-
-    tokenMsg.textContent = chk.msg + "\\n（App folder 內路徑：" + getDbxFolder() + "）";
-    if(chk.ok && (chk.email||"").toLowerCase() === EXPECT_EMAIL.toLowerCase()){
-      tokenMsg.classList.add("ok");
-    }
-
+    const chk = await testToken();
+    tokenMsg.textContent = chk.msg + `\n\n顯示路徑：${getAppsWebPath()}\nDropbox Apps：${getAppsWebUrl()}`;
     setTimeout(()=> tokenInput.focus(), 40);
   });
 
+  tokenOpenApps.addEventListener("click", ()=> window.open(getAppsWebUrl(), "_blank", "noopener,noreferrer"));
   tokenEye.addEventListener("click", ()=> tokenInput.type = (tokenInput.type==="password") ? "text" : "password");
   tokenClose.addEventListener("click", ()=>{
     tokenOverlay.style.display = "none";
@@ -901,39 +895,25 @@
   });
 
   tokenSave.addEventListener("click", async ()=>{
+    const appn = String(appNameInput.value||"").trim();
+    if(appn) setAppName(appn);
+
     const t = String(tokenInput.value||"").trim();
-    if(!t){ tokenMsg.textContent = "請先貼上 Token。"; tokenMsg.classList.remove("ok"); return; }
+    if(!t){ tokenMsg.textContent = "請先貼上 Token。"; return; }
     setDbxToken(t);
 
-    tokenMsg.textContent = "正在檢查 Token…";
-    tokenMsg.classList.remove("ok");
+    const chk = await testToken();
+    tokenMsg.textContent = chk.msg + `\n\n✅ 已儲存 Token。\n顯示路徑：${getAppsWebPath()}\nDropbox Apps：${getAppsWebUrl()}`;
 
-    const chk = await testTokenWithEmail();
-    const appName = chk.ok ? (await getAppFolderName()) : "";
-    const appPath = appName ? `/Apps/${appName}${getDbxFolder()}` : `/Apps/你的App${getDbxFolder()}`;
+    setCloudState(chk.ok ? "雲端：Token OK" : "雲端：Token 無效");
 
-    appNameText.textContent = appName || "（無法取得）";
-    appPathText.textContent = appPath;
-
-    tokenMsg.textContent =
-      chk.msg +
-      "\\n✅ 已儲存 Token。" +
-      "\\nDropbox 網站 Apps 位置：" + appPath +
-      "\\n提示：請到 https://www.dropbox.com/home/Apps 查看";
-
-    if(chk.ok && (chk.email||"").toLowerCase() === EXPECT_EMAIL.toLowerCase()){
-      tokenMsg.classList.add("ok");
-      setCloudState("雲端：Token OK");
-      // ✅ Token OK 後：立刻 seed（若沒有檔案）並拉一次
-      await ensureCloudSeedIfMissing();
-    } else if(chk.ok) {
-      setCloudState("雲端：Token OK（帳號不符）");
-    } else {
-      setCloudState("雲端：Token 無效");
+    // token OK 時，立即嘗試建立/同步一次，確保 /Apps 會出現
+    if(chk.ok && isAdmin()){
+      markDirty("Token OK，準備同步一次建立檔案…");
+      await autoPushNow();
     }
   });
 
-  // 監聽任何變更 → 自動同步
   function onAnyTableEdit(e){
     if(!isAdmin()) return;
     if(!e || !e.target) return;
@@ -944,28 +924,19 @@
   tbl.addEventListener("change", onAnyTableEdit, true);
 
   // boot
-  (async function boot(){
+  (function boot(){
     const cu = getCurrentUser();
-    who.textContent = cu ? `目前：${cu.username} (${cu.role})` : "目前：未登入";
-    setLastSyncText("—");
+    const r = String((cu && (cu.level || cu.role)) || "").toLowerCase();
+    who.textContent = cu ? `目前：${cu.username} (${r || cu.level || cu.role})` : "目前：未登入";
 
     if(!isAdmin()){
-      setMsg("⚠️ 只有 admin 可以編輯與自動同步。請先在首頁用 alex(admin) 登入後再進來。");
+      setMsg("⚠️ 只有 admin 可以編輯與自動同步。請先在首頁登入（alex/admin）。\n（若你剛關閉過瀏覽器，會話已失效，需重新登入）");
       setCloudState("雲端：僅 admin 可同步");
-      render();
-      return;
+    }else{
+      setCloudState(dbxEnabled() ? "雲端：Token 已設定" : "雲端：未設定 Token");
     }
 
-    // admin
-    setCloudState(dbxEnabled() ? "雲端：Token 已設定" : "雲端：未設定 Token");
     render();
-
-    // ✅ admin + token：啟動時先 seed（若雲端沒有）
-    if(dbxEnabled()){
-      await ensureCloudSeedIfMissing();
-    } else {
-      setMsg("⚠️ 你是 admin，但尚未設定 Token：無法自動同步到 Dropbox Apps。");
-    }
   })();
 </script>
 </body>
