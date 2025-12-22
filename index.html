@@ -57,7 +57,7 @@
       background: radial-gradient(circle at 50% 18%, rgba(255, 228, 170, 0.32), rgba(0, 0, 0, 0.98));
     }
     .token-box{
-      width: min(560px, 92vw);
+      width: min(620px, 94vw);
       padding: 1.6rem 1.6rem 1.2rem;
       border-radius: 18px;
       background: radial-gradient(circle at 0% 0%, rgba(246, 211, 122, 0.22), rgba(0, 0, 0, 0.95));
@@ -81,7 +81,7 @@
       margin-bottom: 0.8rem;
       white-space: pre-line;
     }
-    .token-row{ display:flex; align-items:center; gap: 0.5rem; margin-top: .5rem; }
+    .token-row{ display:flex; align-items:center; gap: 0.5rem; margin-top: .5rem; flex-wrap: wrap; }
     .token-input{
       flex: 1 1 auto;
       width: 100%;
@@ -124,6 +124,7 @@
       text-indent: 0.12em;
       box-shadow: 0 8px 16px rgba(0,0,0,0.75);
       transition: transform .15s ease, box-shadow .2s ease, background .2s ease;
+      white-space: nowrap;
     }
     .token-btn:hover{
       transform: translateY(-1px);
@@ -153,6 +154,10 @@
       margin-left: .35rem;
       letter-spacing: .06em;
       text-indent: .06em;
+    }
+    .mono{
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
+      color: rgba(255, 240, 200, 0.96);
     }
 
     /* ==========================
@@ -710,8 +715,8 @@
       <div class="token-title">Dropbox Token 設定（App folder）</div>
       <div class="token-hint" id="tokenHint">
 ① 你的 Dropbox 帳號：<b>tasun_8@hotmail.com</b>
-② 產生 Token：Dropbox Developers → App Console → 你的 App → Permissions 勾 scopes → Submit → Settings 重新產生 Access Token
-③ 本系統會寫入：/Tasun/權限（App folder 內），網站看到為：/Apps/&lt;App名&gt;/Tasun/權限
+② 產生 Token：Console → Permissions 勾 scopes → Submit → Settings 重新產生 Access Token
+③ 本系統會寫入：<b class="mono">/Tasun/權限</b>（App folder 內），網站看到為：/Apps/&lt;App名&gt;/Tasun/權限
       </div>
 
       <div style="margin-top:.2rem;">
@@ -719,6 +724,17 @@
           Apps 內「App 資料夾名」<span class="mini-pill">例如：wutasun</span>
         </div>
         <input class="token-input" id="appNameInput" type="text" placeholder="例如：wutasun" />
+      </div>
+
+      <div style="margin-top:.65rem;">
+        <div style="font-size:.86rem; color:rgba(246,211,122,0.8); margin-bottom:.35rem;">
+          App key（用來直接開 Permissions / Settings）<span class="mini-pill">例如：a5pm08kyb0bybdt</span>
+        </div>
+        <div class="token-row">
+          <input class="token-input" id="appKeyInput" type="text" placeholder="貼上 App key（info/&lt;這串&gt;#settings）" />
+          <button class="token-btn ghost" id="btnOpenPerm" type="button">開 Permissions</button>
+          <button class="token-btn ghost" id="btnOpenSet" type="button">開 Settings</button>
+        </div>
       </div>
 
       <div style="margin-top:.7rem; font-size:.86rem; color:rgba(246,211,122,0.8); margin-bottom:.35rem;">
@@ -732,7 +748,7 @@
       <div class="token-msg" id="tokenMsg"></div>
 
       <div class="token-actions">
-        <button class="token-btn ghost" id="tokenGuideBtn" type="button">一鍵引導去 Console 勾權限</button>
+        <button class="token-btn ghost" id="tokenGuideBtn" type="button">一步一步導覽（自動開連結）</button>
         <button class="token-btn ghost" id="tokenSkipBtn" type="button">稍後（只用本機）</button>
         <button class="token-btn" id="tokenSaveBtn" type="button">儲存並測試</button>
       </div>
@@ -824,9 +840,10 @@
     const CURRENT_KEY = "tasunCurrentUser_v1";
 
     // Dropbox token：可跨瀏覽器關閉保留 -> localStorage
-    const DBX_TOKEN_KEY  = "tasunDbxToken_v1";
-    const DBX_FOLDER_KEY = "tasunDbxFolder_v1";
+    const DBX_TOKEN_KEY   = "tasunDbxToken_v1";
+    const DBX_FOLDER_KEY  = "tasunDbxFolder_v1";
     const DBX_APPNAME_KEY = "tasunDbxAppName_v1";
+    const DBX_APPKEY_KEY  = "tasunDbxAppKey_v1"; // ✅ NEW（與權限表一致）
 
     const DEFAULT_DBX_FOLDER = "/Tasun/權限";
     const DEFAULT_APP_NAME = "wutasun";
@@ -843,6 +860,10 @@
     const tokenGuideBtn= document.getElementById("tokenGuideBtn");
     const tokenMsg     = document.getElementById("tokenMsg");
     const appNameInput = document.getElementById("appNameInput");
+
+    const appKeyInput  = document.getElementById("appKeyInput");
+    const btnOpenPerm  = document.getElementById("btnOpenPerm");
+    const btnOpenSet   = document.getElementById("btnOpenSet");
 
     const loginOverlay = document.getElementById("loginOverlay");
     const loginForm    = document.getElementById("loginForm");
@@ -915,13 +936,42 @@
       localStorage.setItem(DBX_APPNAME_KEY, v);
     }
 
+    function getDbxAppKey(){
+      return String(localStorage.getItem(DBX_APPKEY_KEY) || "").trim();
+    }
+    function setDbxAppKey(k){
+      localStorage.setItem(DBX_APPKEY_KEY, String(k||"").trim());
+    }
+
     function dbxPathAuth(){ return `${getDbxFolder()}/tasunAuthTable_v1.json`; }
     function dbxPathNav(){  return `${getDbxFolder()}/tasunNavButtons_v1.json`; }
     function dbxPathMeta(){ return `${getDbxFolder()}/tasunCloudMeta_v1.json`; }
 
     function dropboxWebFolderUrl(){
       const appName = encodeURIComponent(getDbxAppName());
+      // 網站路徑直接用 /Apps/<AppName>/Tasun/權限（中文在網址可接受）
       return `https://www.dropbox.com/home/Apps/${appName}${getDbxFolder()}`;
+    }
+
+    // ✅ Console links
+    function getConsoleBaseUrl(){
+      const k = getDbxAppKey();
+      return k ? `https://www.dropbox.com/developers/apps/info/${encodeURIComponent(k)}` : "";
+    }
+    function getConsolePermUrl(){ const b = getConsoleBaseUrl(); return b ? (b + "#permissions") : ""; }
+    function getConsoleSetUrl(){  const b = getConsoleBaseUrl(); return b ? (b + "#settings") : ""; }
+
+    function openConsoleTab(url, label){
+      if(!url){
+        alert(`尚未填 App key，無法直接開 ${label}。\n\n請在本視窗「App key」貼上：網址 info/<App key>#settings 那串。`);
+        return false;
+      }
+      const w = window.open(url, "_blank", "noopener");
+      if(!w){
+        alert("瀏覽器封鎖彈出視窗。\n請允許此網站開新分頁後再試一次。");
+        return false;
+      }
+      return true;
     }
 
     // ✅ 把 Dropbox-API-Arg 轉成純 ASCII（避免「權限」中文造成 header TypeError）
@@ -951,6 +1001,7 @@
       tokenOverlay.style.display = "flex";
       tokenOverlay.setAttribute("aria-hidden","false");
       appNameInput.value = getDbxAppName();
+      appKeyInput.value = getDbxAppKey();
       tokenInput.value = getDbxToken();
       tokenMsg.textContent = `Dropbox 網站位置（App folder）：\n${dropboxWebFolderUrl()}`;
       setTimeout(()=> (appNameInput || tokenInput).focus(), 60);
@@ -967,16 +1018,41 @@
 
     tokenSkipBtn?.addEventListener("click", ()=> hideTokenOverlay());
 
-    function guideToConsole(){
-      alert("接下來會一步一步引導你到 Dropbox Console。\n目的：勾 scopes + Submit，然後重新產生 Access Token。\n按「確定」開始。");
-      alert("步驟 1：開啟 Dropbox Developers Apps 列表（會開新分頁）。");
-      window.open("https://www.dropbox.com/developers/apps", "_blank", "noopener");
-      alert("步驟 2：點進你的 App（例如 wutasun）。\n找到 Permissions 分頁。");
-      alert("步驟 3：勾選 scopes（至少）：\n- files.content.write\n- files.content.read\n- files.metadata.read\n（建議也勾：account_info.read）\n勾好按 Submit。");
-      alert("步驟 4：到 Settings 重新產生 Access Token（Generate）。\n⚠️ 舊 token 不會自動擁有新 scope。");
-      alert("步驟 5：把新 token 貼回本頁 → 按「儲存並測試」。");
+    btnOpenPerm?.addEventListener("click", ()=>{
+      setDbxAppKey(String(appKeyInput.value||"").trim());
+      openConsoleTab(getConsolePermUrl(), "Permissions");
+    });
+    btnOpenSet?.addEventListener("click", ()=>{
+      setDbxAppKey(String(appKeyInput.value||"").trim());
+      openConsoleTab(getConsoleSetUrl(), "Settings");
+    });
+
+    function guideToConsoleStrong(){
+      // ✅ 必須由使用者點擊觸發，才能開分頁
+      const appKey = String(appKeyInput.value||"").trim();
+      if(appKey) setDbxAppKey(appKey);
+
+      alert("接下來進入「一步一步導覽」。\n會嘗試自動開 Permissions / Settings。\n按「確定」開始。");
+
+      const hasKey = !!getDbxAppKey();
+      if(!hasKey){
+        alert("你尚未填 App key，因此無法直達 Permissions/Settings。\n我先幫你開 Apps 列表，你點進 App 後，從網址複製 App key 回來。");
+        window.open("https://www.dropbox.com/developers/apps", "_blank", "noopener");
+        alert("步驟：\n1) Apps 列表 → 點你的 App\n2) 網址像：.../apps/info/『a5pm08...』#settings\n3) 複製『a5pm08...』貼回本視窗 App key\n4) 再按一次「一步一步導覽（自動開連結）」");
+        return;
+      }
+
+      const okPerm = openConsoleTab(getConsolePermUrl(), "Permissions");
+      if(okPerm){
+        alert("步驟 1（Permissions）：請勾 scopes（至少）：\n- files.content.write\n- files.content.read\n- files.metadata.read\n（建議也勾：account_info.read）\n勾好後按 Submit。");
+      }
+
+      const okSet = openConsoleTab(getConsoleSetUrl(), "Settings");
+      if(okSet){
+        alert("步驟 2（Settings）：請重新產生 Access Token（Generate）。\n⚠️ 勾完 scope 一定要新 token 才會生效。\n複製新 token → 回本頁 → 按「儲存並測試」。");
+      }
     }
-    tokenGuideBtn?.addEventListener("click", guideToConsole);
+    tokenGuideBtn?.addEventListener("click", guideToConsoleStrong);
 
     // ✅ 重要：get_current_account body 必須送 "null"
     async function testTokenAndGetEmail(){
@@ -1014,7 +1090,6 @@
         const txt = await res.text();
         if(res.ok) return { ok:true, msg:"✅ 資料夾已建立/確認" };
 
-        // folder 已存在通常 409 conflict
         if(res.status === 409 && (txt || "").toLowerCase().includes("conflict")){
           return { ok:true, msg:"✅ 資料夾已存在" };
         }
@@ -1028,6 +1103,9 @@
       const appName = String(appNameInput.value||"").trim() || DEFAULT_APP_NAME;
       setDbxAppName(appName);
 
+      const appKey = String(appKeyInput.value||"").trim();
+      setDbxAppKey(appKey);
+
       const t = String(tokenInput.value || "").trim();
       if(!t){
         tokenMsg.textContent = "請先貼上 Access Token。";
@@ -1038,7 +1116,7 @@
       tokenMsg.textContent = "正在測試 Token…";
       const chk = await testTokenAndGetEmail();
       if(!chk.ok){
-        tokenMsg.textContent = chk.msg + "\n\n若是 scopes 不足，按「一鍵引導去 Console 勾權限」。";
+        tokenMsg.textContent = chk.msg + "\n\n若是 scopes 不足，按「一步一步導覽（自動開連結）」。";
         return;
       }
 
@@ -1056,8 +1134,8 @@
           chk.msg + emailHint +
           "\n\n" + folderChk.msg +
           "\n\n✅ 若訊息中包含 files.content.write / missing_scope，請到 Console 勾權限並重新產生新 token。";
-        const go = confirm("可能是 scopes 不足（files.content.write）。\n\n要現在開始引導去 Console 勾權限嗎？");
-        if(go) guideToConsole();
+        const go = confirm("可能是 scopes 不足（files.content.write）。\n\n要現在開始導覽去 Console 嗎？");
+        if(go) guideToConsoleStrong();
         return;
       }
 
@@ -1074,7 +1152,7 @@ ${dropboxWebFolderUrl()}
     });
 
     // ==========================
-    // Default NAV
+    // Default NAV  ✅（修正：若雲端/本機寫成空，會自動回復）
     // ==========================
     const DEFAULT_NAV = [
       { id: "btn1", label: "臻鼎時代大廈管理表", href: "臻鼎管理表.html", target: "", roles: ["admin","write","read"] },
@@ -1098,14 +1176,32 @@ ${dropboxWebFolderUrl()}
 
     function loadNavConfig() {
       const raw = localStorage.getItem(NAV_KEY);
+
+      // 沒有就給預設
       if (!raw) {
         localStorage.setItem(NAV_KEY, JSON.stringify(DEFAULT_NAV.slice()));
         return DEFAULT_NAV.slice();
       }
+
       const arr = safeJsonParse(raw, null);
-      if (Array.isArray(arr) && arr.length) return arr.map((it, idx)=> normalizeNavEntry(it, idx));
-      localStorage.setItem(NAV_KEY, JSON.stringify(DEFAULT_NAV.slice()));
-      return DEFAULT_NAV.slice();
+
+      // ✅ 關鍵修正：若讀到空陣列/壞掉 → 回復預設（避免登入後沒有按鈕）
+      if (!Array.isArray(arr) || arr.length === 0) {
+        localStorage.setItem(NAV_KEY, JSON.stringify(DEFAULT_NAV.slice()));
+        return DEFAULT_NAV.slice();
+      }
+
+      // 正常：做 normalize
+      const fixed = arr.map((it, idx)=> normalizeNavEntry(it, idx));
+
+      // 如果 normalize 後還是空（極端狀況）→ 回復預設
+      if (!fixed.length) {
+        localStorage.setItem(NAV_KEY, JSON.stringify(DEFAULT_NAV.slice()));
+        return DEFAULT_NAV.slice();
+      }
+
+      localStorage.setItem(NAV_KEY, JSON.stringify(fixed));
+      return fixed;
     }
 
     function makeButtonsAll(count) { return Array(count).fill(true); }
@@ -1151,7 +1247,7 @@ ${dropboxWebFolderUrl()}
         return defaults.map(r=> normalizeRowFromStorage(r, btnCount));
       }
       const arr = safeJsonParse(raw, null);
-      if (Array.isArray(arr)) {
+      if (Array.isArray(arr) && arr.length) {
         const fixed = arr.map(r => normalizeRowFromStorage(r, btnCount));
         localStorage.setItem(AUTH_KEY, JSON.stringify(fixed));
         return fixed;
@@ -1204,7 +1300,8 @@ ${dropboxWebFolderUrl()}
 
       let changed = false;
 
-      if(auth && Array.isArray(auth)){
+      // ✅ 關鍵修正：雲端如果回傳空陣列，不覆蓋本機（避免按鈕整個消失）
+      if(auth && Array.isArray(auth) && auth.length){
         const fixed = auth.map(r=>{
           const level = mapRole(r?.level ?? r?.role) || "read";
           return { ...r, level, role: level };
@@ -1212,10 +1309,11 @@ ${dropboxWebFolderUrl()}
         localStorage.setItem(AUTH_KEY, JSON.stringify(fixed));
         changed = true;
       }
-      if(nav && Array.isArray(nav)){
+      if(nav && Array.isArray(nav) && nav.length){
         localStorage.setItem(NAV_KEY, JSON.stringify(nav));
         changed = true;
       }
+
       if(cloudTs) setLocalUpdatedAt(cloudTs);
       return changed;
     }
@@ -1456,6 +1554,7 @@ ${dropboxWebFolderUrl()}
           await cloudPullToLocalStorage({ force });
         }
 
+        // ✅ 再次自我修復：如果被覆蓋成空，這裡會回復 DEFAULT_NAV
         NAV_CONFIG = loadNavConfig();
         AUTH_TABLE = loadAuthTable(NAV_CONFIG.length);
 
