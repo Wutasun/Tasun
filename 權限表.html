@@ -149,7 +149,7 @@
       background: radial-gradient(circle at 50% 18%, rgba(255, 228, 170, 0.32), rgba(0, 0, 0, 0.98));
     }
     .token-box{
-      width: min(720px, 94vw);
+      width: min(760px, 95vw);
       padding: 1.35rem 1.35rem 1.1rem;
       border-radius: 18px;
       background: radial-gradient(circle at 0% 0%, rgba(246, 211, 122, 0.22), rgba(0, 0, 0, 0.95));
@@ -162,6 +162,24 @@
     .token-msg{ margin-top:.8rem; min-height:1.2rem; font-size:.86rem; white-space: pre-line; color: rgba(255,220,190,.95); }
     .muted{ opacity:.85; }
     .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+    .mini-line{
+      display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+      margin-top: .75rem;
+      padding-top: .75rem;
+      border-top: 1px solid rgba(246,211,122,0.18);
+    }
+    .toggle{
+      display:flex; align-items:center; gap:.45rem;
+      padding:.28rem .65rem;
+      border: 1px solid rgba(246,211,122,0.35);
+      border-radius: 999px;
+      background: rgba(0,0,0,0.55);
+      color: rgba(246,211,122,0.88);
+      user-select:none;
+      cursor:pointer;
+    }
+    .toggle input{ transform: translateY(1px); }
   </style>
 </head>
 
@@ -203,7 +221,8 @@
       <div style="font-size:.9rem; line-height:1.75; color:rgba(246,211,122,0.82);" class="muted">
         ✅ App folder Token：檔案會寫入 Dropbox「Apps」區域（不是一般根目錄）。<br>
         ✅ API 內部路徑固定：<b class="mono">/Tasun/權限</b>（不存在會自動建立）。<br>
-        ✅ Dropbox 網站看到的位置：<b class="mono">/Apps/&lt;App名&gt;/Tasun/權限</b>（App名無法由 API 直接取得，所以你在下方填入）。<br>
+        ✅ Dropbox 網站看到的位置：<b class="mono">/Apps/&lt;App名&gt;/Tasun/權限</b>（App名你在下方填入）。<br>
+        ✅ 你截圖的 App key（用來直接開 Permissions/Settings）：例如 <b class="mono">a5pm08kyb0bybdt</b><br>
         ✅ Dropbox 帳號提示：<b>tasun_8@hotmail.com</b>
       </div>
 
@@ -213,14 +232,29 @@
       </div>
 
       <div class="token-row">
+        <input class="in" id="appKeyInput" placeholder="App key（例：a5pm08kyb0bybdt）" />
+        <button class="btn ghost" id="btnOpenPerm" type="button">開啟 Permissions</button>
+        <button class="btn ghost" id="btnOpenSet"  type="button">開啟 Settings</button>
+      </div>
+
+      <div class="token-row">
         <input class="in" id="tokenInput" type="password" placeholder="貼上 Access Token（以 sl. 開頭）" />
         <button class="btn eye" id="tokenEye" type="button">👁</button>
+      </div>
+
+      <div class="mini-line">
+        <label class="toggle" title="同步成功後自動開 Dropbox Console（方便你立刻勾 scope / 重新產生 token）">
+          <input type="checkbox" id="chkAutoConsole" />
+          存檔同步成功後自動跳 Console
+        </label>
+
+        <button class="btn ghost" id="btnOpenConsole2" type="button">一鍵開啟 Permissions＋Settings</button>
+        <button class="btn ghost" id="btnGuide" type="button">一步一步導覽（自動開連結）</button>
       </div>
 
       <div class="token-msg" id="tokenMsg"></div>
 
       <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:.9rem; flex-wrap:wrap;">
-        <button class="btn ghost" id="btnGuide" type="button">一鍵引導去 Console 勾權限</button>
         <button class="btn" id="tokenClose" type="button">關閉</button>
         <button class="btn" id="tokenSaveTest"  type="button">儲存並測試</button>
       </div>
@@ -237,8 +271,10 @@
 
   const DBX_TOKEN_KEY   = "tasunDbxToken_v1";
   const DBX_APPNAME_KEY = "tasunDbxAppName_v1";
-  const DEFAULT_APPNAME = "wutasun";
+  const DBX_APPKEY_KEY  = "tasunDbxAppKey_v1";        // ✅ NEW：App key（用於直接開 Permissions/Settings）
+  const DBX_AUTOCONSOLE_KEY = "tasunDbxAutoConsole_v1"; // ✅ NEW：存檔後自動跳 Console
 
+  const DEFAULT_APPNAME = "wutasun";
   const DEFAULT_DBX_FOLDER = "/Tasun/權限";
   const AUTO_PUSH_DEBOUNCE_MS = 1200;
 
@@ -260,6 +296,20 @@
     localStorage.setItem(DBX_APPNAME_KEY, String(x||"").trim() || DEFAULT_APPNAME);
   }
 
+  function getAppKey(){
+    return String(localStorage.getItem(DBX_APPKEY_KEY) || "").trim();
+  }
+  function setAppKey(x){
+    localStorage.setItem(DBX_APPKEY_KEY, String(x||"").trim());
+  }
+
+  function getAutoConsole(){
+    return localStorage.getItem(DBX_AUTOCONSOLE_KEY) === "1";
+  }
+  function setAutoConsole(v){
+    localStorage.setItem(DBX_AUTOCONSOLE_KEY, v ? "1" : "0");
+  }
+
   function getDbxFolder(){ return DEFAULT_DBX_FOLDER; }
   function dbxPathAuth(){ return `${getDbxFolder()}/tasunAuthTable_v1.json`; }
   function dbxPathNav(){  return `${getDbxFolder()}/tasunNavButtons_v1.json`; }
@@ -271,6 +321,22 @@
     return `https://www.dropbox.com/home/Apps/${app}/${path}`;
   }
 
+  // ✅ Console links（需要 App key 才能直達）
+  function getConsoleBaseUrl(){
+    const k = getAppKey();
+    if(!k) return "";
+    return `https://www.dropbox.com/developers/apps/info/${encodeURIComponent(k)}`;
+  }
+  function getConsolePermUrl(){
+    const b = getConsoleBaseUrl(); return b ? (b + "#permissions") : "";
+  }
+  function getConsoleSetUrl(){
+    const b = getConsoleBaseUrl(); return b ? (b + "#settings") : "";
+  }
+  function openConsoleAppsList(){
+    window.open("https://www.dropbox.com/developers/apps", "_blank", "noopener");
+  }
+
   // ✅ 重要：Dropbox-API-Arg header 需 ASCII（中文要轉 \uXXXX）
   function jsonAscii(obj){
     return JSON.stringify(obj).replace(/[^\x00-\x7F]/g, (c)=>{
@@ -279,7 +345,7 @@
     });
   }
 
-  // ✅ timeout：避免卡住「同步中…」
+  // ✅ timeout：避免卡住
   async function fetchWithTimeout(url, options={}, timeoutMs=15000){
     const ctrl = new AbortController();
     const id = setTimeout(()=> ctrl.abort(), timeoutMs);
@@ -317,6 +383,12 @@
   const btnGuide = document.getElementById("btnGuide");
   const appNameInput = document.getElementById("appNameInput");
   const btnOpenAppsHere = document.getElementById("btnOpenAppsHere");
+
+  const appKeyInput = document.getElementById("appKeyInput"); // ✅ NEW
+  const btnOpenPerm = document.getElementById("btnOpenPerm"); // ✅ NEW
+  const btnOpenSet  = document.getElementById("btnOpenSet");  // ✅ NEW
+  const btnOpenConsole2 = document.getElementById("btnOpenConsole2"); // ✅ NEW
+  const chkAutoConsole = document.getElementById("chkAutoConsole");   // ✅ NEW
 
   function setMsg(t){ msg.textContent = t || ""; }
   function setCloudState(t){ cloudState.textContent = t || "雲端：—"; }
@@ -412,7 +484,7 @@
         cache:"no-store",
         headers:{
           "Authorization": dbxAuthHeader(),
-          "Dropbox-API-Arg": jsonAscii({ path })  // ✅ 修正：ASCII header
+          "Dropbox-API-Arg": jsonAscii({ path })
         }
       }, 15000);
       if(!res.ok) return null;
@@ -441,7 +513,7 @@
             autorename: false,
             mute: true,
             strict_conflict: false
-          }) // ✅ 修正：ASCII header
+          })
         },
         body: bodyText
       }, 15000);
@@ -481,7 +553,6 @@
   async function getCurrentAccount(){
     if(!dbxEnabled()) return { ok:false, msg:"❌ Token 未設定" };
 
-    // ✅ 必須送 null
     const acct = await dbxPostJson("https://api.dropboxapi.com/2/users/get_current_account", null);
 
     if(!acct.ok){
@@ -498,16 +569,62 @@
   }
 
   // ==========================
-  // 引導：一步一步帶你去 Console
+  // ✅ 強化版：一步一步導覽（含自動開 Permissions/Settings 連結）
   // ==========================
-  function guideToConsole(){
-    alert("接下來會引導你到 Dropbox App Console（一步一步）。\n目的：勾選 scopes + Submit，然後重新產生 Access Token。\n按「確定」開始。");
-    alert("步驟 1：開啟 Dropbox Console 的 Apps 列表（會開新分頁）。");
-    window.open("https://www.dropbox.com/developers/apps", "_blank", "noopener");
-    alert("步驟 2：在 Apps 列表點進你的 App（例如：wutasun）。\n找到「Permissions」分頁。");
-    alert("步驟 3：Permissions 勾選（至少要有）：\n- files.content.write\n- files.content.read\n- files.metadata.read\n（建議也勾：account_info.read）\n勾好按「Submit」。");
-    alert("步驟 4：到「Settings」找到 Access Token。\n⚠️ 必須重新產生新的 token（Generate），舊 token 不會自動有新 scope。");
-    alert("步驟 5：把新 token 貼回本頁「儲存並測試」。");
+  function openConsoleTab(url, label){
+    if(!url){
+      alert(`尚未設定 App key，無法直接開 ${label}。\n\n請在「設定 Token」視窗填入 App key（網址 info/<App key>#settings 那串）。`);
+      return false;
+    }
+    const w = window.open(url, "_blank", "noopener");
+    if(!w){
+      alert("瀏覽器封鎖彈出視窗。\n請允許此網站開新分頁（或按右上角提示允許），再重試。");
+      return false;
+    }
+    return true;
+  }
+
+  function openConsolePerm(){
+    return openConsoleTab(getConsolePermUrl(), "Permissions");
+  }
+  function openConsoleSettings(){
+    return openConsoleTab(getConsoleSetUrl(), "Settings");
+  }
+
+  function openConsolePermAndSettings(){
+    const ok1 = openConsolePerm();
+    const ok2 = openConsoleSettings();
+    if(ok1 || ok2){
+      alert("已嘗試開啟 Permissions / Settings。\n若沒有跳出，通常是瀏覽器封鎖彈出視窗，請允許後再按一次。");
+    }
+  }
+
+  function guideToConsoleStrong(){
+    // ✅ 這個函式一定要由「使用者點擊」觸發，才能開新分頁
+    alert("接下來會進入「一步一步導覽」。\n我會幫你直接開到 Permissions / Settings（需要 App key）。\n按「確定」開始。");
+
+    const hasKey = !!getAppKey();
+
+    if(!hasKey){
+      alert("你目前還沒填 App key，因此無法直達 Permissions/Settings。\n我先幫你開 Apps 列表，你點進 App 後，看網址 info/<這串>#settings，把 <這串> 貼回來。");
+      openConsoleAppsList();
+      alert("步驟：\n1) Apps 列表 → 點你的 App\n2) 進入後網址會像：.../apps/info/『a5pm08...』#settings\n3) 複製『a5pm08...』這串貼回本頁 Token 視窗的 App key\n4) 再按一次「一步一步導覽」就能自動直達");
+      return;
+    }
+
+    // 1) 先開 Permissions
+    const okPerm = openConsolePerm();
+    if(okPerm){
+      alert("步驟 1：在 Permissions 分頁，請勾 scopes（至少）：\n- files.content.write\n- files.content.read\n- files.metadata.read\n（建議也勾：account_info.read）\n勾好後按右下角「Submit」。");
+    }
+
+    // 2) 再開 Settings
+    const okSet = openConsoleSettings();
+    if(okSet){
+      alert("步驟 2：切到 Settings 分頁\n- 找到「Generated access token」\n- 重新產生/Generate 新 token（⚠️ 你剛剛勾權限後，一定要新 token 才會有 scope）\n- 複製 token 貼回本頁 → 按「儲存並測試」。");
+    }
+
+    alert("完成後：\n✅ 回到本頁 Token 視窗 → 貼新 token → 儲存並測試\n✅ 再按「從雲端下載」或直接編輯權限表，存檔會自動同步。");
   }
 
   // ==========================
@@ -688,6 +805,14 @@
     autoPushTimer = setTimeout(()=> autoPushNow(), AUTO_PUSH_DEBOUNCE_MS);
   }
 
+  function maybeAutoOpenConsoleAfterSave(){
+    // ✅ 同步成功後自動跳 Console（可關閉）
+    if(!getAutoConsole()) return;
+    // 避免一直連續跳：只在「成功上傳」後跳一次（本次）
+    alert("已同步成功。\n依設定：將自動開啟 Dropbox Console（Permissions / Settings）。");
+    openConsolePermAndSettings();
+  }
+
   async function autoPushNow(){
     if(!isAdmin()) return;
 
@@ -708,7 +833,7 @@
       const okFolder = await ensureFolderExistsOnce();
       if(!okFolder){
         setCloudState("雲端：Token 無效/權限不足");
-        setMsg("❌ 建立資料夾失敗（可能缺少 scopes：files.content.write）。\n請按「設定 Token」→「儲存並測試」，依提示引導去 Console 勾權限並重新產生 Token。");
+        setMsg("❌ 建立資料夾失敗（可能缺少 scopes：files.content.write）。\n請按「設定 Token」→「一步一步導覽（自動開連結）」並重新產生新 Token。");
         return;
       }
 
@@ -746,6 +871,9 @@
       const ss = String(dt.getSeconds()).padStart(2,"0");
       setCloudState(`雲端：已同步 ✅ ${hh}:${mm}:${ss}`);
       setMsg("✅ 已自動同步到雲端。\n你可以按「開啟 /Apps 位置」到 Dropbox 網站確認檔案是否出現。");
+
+      // ✅ NEW：同步成功後自動跳 Console（若開啟）
+      maybeAutoOpenConsoleAfterSave();
 
     } finally {
       autoPushBusy = false;
@@ -822,10 +950,9 @@
 ${seed.msg}
 
 ✅ 解法：
-1) 按「設定 Token」→「儲存並測試」
-2) 若提示 scope 不足：按「一鍵引導去 Console 勾權限」
-3) 重新產生新 Token 貼回來
-4) 再按一次「從雲端下載」`
+1) 按「設定 Token」→「一步一步導覽（自動開連結）」
+2) 重新產生新 Token 貼回來 → 儲存並測試
+3) 再按一次「從雲端下載」`
           );
           return false;
         }
@@ -847,7 +974,6 @@ ${seed.msg}
         return false;
       }
     } finally {
-      // ✅ 不要卡在「下載中…」
       if(dirty) setCloudState("雲端：待同步");
     }
   }
@@ -864,6 +990,11 @@ ${seed.msg}
     const appName = String(appNameInput.value || "").trim() || DEFAULT_APPNAME;
     setAppName(appName);
 
+    const appKey = String(appKeyInput.value || "").trim();
+    setAppKey(appKey);
+
+    setAutoConsole(!!chkAutoConsole.checked);
+
     const t = String(tokenInput.value||"").trim();
     if(!t){
       tokenMsg.textContent = "請先貼上 Token。";
@@ -877,7 +1008,8 @@ ${seed.msg}
     if(!acct.ok){
       tokenMsg.textContent =
         acct.msg +
-        "\n\n✅ 若你剛在 Console 勾權限，請注意：要重新產生新的 Access Token（舊 token 可能沒有新權限）。";
+        "\n\n✅ 若你剛在 Console 勾權限，請注意：要重新產生新的 Access Token（舊 token 可能沒有新權限）。\n" +
+        "👉 你可以按「一步一步導覽（自動開連結）」直接開 Permissions/Settings。";
       setCloudState("雲端：Token 無效");
       return;
     }
@@ -905,13 +1037,10 @@ ${seed.msg}
         acct.msg + emailHint +
         `\n\n❌ 建立資料夾失敗（HTTP ${r.status}）\n` +
         (isScope
-          ? "原因：App 沒有 files.content.write scope，或你沒有重新產生新 token。\n\n按「一鍵引導去 Console 勾權限」，完成後再回來貼新 token。"
+          ? "原因：App 沒有 files.content.write scope，或你沒有重新產生新 token。\n\n👉 按「一步一步導覽（自動開連結）」完成勾 scope + Submit + Generate 新 token。"
           : "請檢查 Token 或 Dropbox 回應：\n" + r.text);
 
       setCloudState("雲端：權限不足/失敗");
-
-      const go = confirm("偵測到可能是 scopes 不足（files.content.write）。\n\n要現在開始引導去 Dropbox Console 勾權限嗎？");
-      if(go) guideToConsole();
       return;
     }
 
@@ -924,7 +1053,8 @@ ${seed.msg}
       "\n\n✅ Token 測試成功！\n" +
       `✅ 已建立/確認資料夾：${getDbxFolder()}\n` +
       (seed.ok ? "✅ 已確保雲端有 3 個 JSON 檔（auth/nav/meta）。\n" : `⚠️ 建檔提醒：${seed.msg}\n`) +
-      "\nDropbox 網站位置（你登入後可看到）：\n" + getAppsWebUrl();
+      "\nDropbox 網站位置（你登入後可看到）：\n" + getAppsWebUrl() +
+      (getAppKey() ? ("\n\nConsole 直達：\nPermissions：\n" + getConsolePermUrl() + "\nSettings：\n" + getConsoleSetUrl()) : "\n\n（未填 App key：無法直達 Console 分頁）");
 
     setCloudState("雲端：Token OK ✅");
   }
@@ -943,6 +1073,11 @@ ${seed.msg}
     const ok = confirm("將開啟：\n" + getAppsWebUrl() + "\n\n提醒：請使用 " + EXPECT_EMAIL + " 登入。\n\n是否開啟？");
     if(ok) window.open(getAppsWebUrl(), "_blank", "noopener");
   });
+
+  btnOpenPerm.addEventListener("click", openConsolePerm);
+  btnOpenSet.addEventListener("click", openConsoleSettings);
+  btnOpenConsole2.addEventListener("click", openConsolePermAndSettings);
+  btnGuide.addEventListener("click", guideToConsoleStrong);
 
   btnAdd.addEventListener("click", ()=>{
     if(!isAdmin()){
@@ -965,13 +1100,17 @@ ${seed.msg}
     tokenOverlay.setAttribute("aria-hidden","false");
 
     appNameInput.value = getAppName();
+    appKeyInput.value = getAppKey();
     tokenInput.value = getDbxToken();
+    chkAutoConsole.checked = getAutoConsole();
 
-    tokenMsg.textContent = "提示：若你看到 HTTP 400 / missing_scope / files.content.write，代表 scopes 不足或 token 沒重新產生。\n按「儲存並測試」會自動偵測並引導。";
+    tokenMsg.textContent =
+      "提示：\n" +
+      "1) 建議填 App key（網址 info/<App key>#settings 那串），才能一鍵直達 Permissions/Settings。\n" +
+      "2) 若你看到 missing_scope / files.content.write，請按「一步一步導覽（自動開連結）」→ 勾 scope → Submit → Generate 新 token。\n" +
+      "3) 你也可開啟「存檔同步成功後自動跳 Console」。";
     setTimeout(()=> tokenInput.focus(), 40);
   });
-
-  btnGuide.addEventListener("click", guideToConsole);
 
   tokenEye.addEventListener("click", ()=> tokenInput.type = (tokenInput.type==="password") ? "text" : "password");
   tokenClose.addEventListener("click", ()=>{
