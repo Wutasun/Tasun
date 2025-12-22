@@ -5,6 +5,7 @@
   <title>Tasun 資料首頁 · 空無明</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
+  <!-- 中文網頁字型 -->
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet">
 
   <style>
@@ -37,7 +38,7 @@
       overflow-x: hidden;
     }
 
-    /* ✅ 一定先登入：鎖住主畫面互動（登入遮罩會蓋住） */
+    /* ✅ 一定先登入：鎖住主畫面互動 */
     body.locked { overflow: hidden; }
     body.locked main.hero { pointer-events: none; filter: blur(2px) brightness(0.92); }
     body.locked .user-bar, body.locked #systemBtn { pointer-events: none; opacity: 0.65; }
@@ -137,7 +138,7 @@
       margin-top: 0.65rem;
       min-height: 1.2rem;
       font-size: 0.85rem;
-      color: rgba(255, 180, 180, 0.95);
+      color: rgba(255, 200, 200, 0.95);
       text-align: left;
       white-space: pre-line;
     }
@@ -161,7 +162,7 @@
       position: fixed;
       inset: 0;
       background: radial-gradient(circle at 50% 18%, rgba(255, 228, 170, 0.35), rgba(0, 0, 0, 0.98));
-      display: flex; /* ✅ 預設一定顯示 */
+      display: flex;
       align-items: center;
       justify-content: center;
       z-index: 999;
@@ -319,7 +320,7 @@
     }
 
     /* ==========================
-       主視覺（蓮花＋四周文字）
+       主視覺
        ========================== */
     .hero {
       position: relative;
@@ -709,8 +710,8 @@
       <div class="token-title">Dropbox Token 設定（App folder）</div>
       <div class="token-hint" id="tokenHint">
 ① 你的 Dropbox 帳號：<b>tasun_8@hotmail.com</b>
-② App folder Token 產生處：Dropbox Developers → App Console → 你的 App → Permissions/Settings → Generate access token
-③ App folder 會寫到：/Apps/你的App/Tasun/權限（你的App 名稱需你填入）
+② 產生 Token：Dropbox Developers → App Console → 你的 App → Permissions 勾 scopes → Submit → Settings 重新產生 Access Token
+③ 本系統會寫入：/Tasun/權限（App folder 內），網站看到為：/Apps/&lt;App名&gt;/Tasun/權限
       </div>
 
       <div style="margin-top:.2rem;">
@@ -731,6 +732,7 @@
       <div class="token-msg" id="tokenMsg"></div>
 
       <div class="token-actions">
+        <button class="token-btn ghost" id="tokenGuideBtn" type="button">一鍵引導去 Console 勾權限</button>
         <button class="token-btn ghost" id="tokenSkipBtn" type="button">稍後（只用本機）</button>
         <button class="token-btn" id="tokenSaveBtn" type="button">儲存並測試</button>
       </div>
@@ -828,6 +830,7 @@
 
     const DEFAULT_DBX_FOLDER = "/Tasun/權限";
     const DEFAULT_APP_NAME = "wutasun";
+    const EXPECT_EMAIL = "tasun_8@hotmail.com";
 
     // ==========================
     // UI refs
@@ -837,6 +840,7 @@
     const tokenSaveBtn = document.getElementById("tokenSaveBtn");
     const tokenSkipBtn = document.getElementById("tokenSkipBtn");
     const tokenEyeBtn  = document.getElementById("tokenEyeBtn");
+    const tokenGuideBtn= document.getElementById("tokenGuideBtn");
     const tokenMsg     = document.getElementById("tokenMsg");
     const appNameInput = document.getElementById("appNameInput");
 
@@ -920,6 +924,15 @@
       return `https://www.dropbox.com/home/Apps/${appName}${getDbxFolder()}`;
     }
 
+    // ✅ 把 Dropbox-API-Arg 轉成純 ASCII（避免「權限」中文造成 header TypeError）
+    function jsonAscii(obj){
+      return JSON.stringify(obj).replace(/[^\x00-\x7F]/g, (c)=>{
+        const code = c.charCodeAt(0).toString(16).padStart(4,"0");
+        return "\\u" + code;
+      });
+    }
+
+    // fetch with timeout
     async function fetchWithTimeout(url, options={}, timeoutMs=15000){
       const ctrl = new AbortController();
       const id = setTimeout(()=> ctrl.abort(), timeoutMs);
@@ -954,10 +967,21 @@
 
     tokenSkipBtn?.addEventListener("click", ()=> hideTokenOverlay());
 
+    function guideToConsole(){
+      alert("接下來會一步一步引導你到 Dropbox Console。\n目的：勾 scopes + Submit，然後重新產生 Access Token。\n按「確定」開始。");
+      alert("步驟 1：開啟 Dropbox Developers Apps 列表（會開新分頁）。");
+      window.open("https://www.dropbox.com/developers/apps", "_blank", "noopener");
+      alert("步驟 2：點進你的 App（例如 wutasun）。\n找到 Permissions 分頁。");
+      alert("步驟 3：勾選 scopes（至少）：\n- files.content.write\n- files.content.read\n- files.metadata.read\n（建議也勾：account_info.read）\n勾好按 Submit。");
+      alert("步驟 4：到 Settings 重新產生 Access Token（Generate）。\n⚠️ 舊 token 不會自動擁有新 scope。");
+      alert("步驟 5：把新 token 貼回本頁 → 按「儲存並測試」。");
+    }
+    tokenGuideBtn?.addEventListener("click", guideToConsole);
+
+    // ✅ 重要：get_current_account body 必須送 "null"
     async function testTokenAndGetEmail(){
       if(!dbxEnabled()) return { ok:false, status:0, msg:"❌ Token 未設定", email:"" };
       try{
-        // ✅ Dropbox /users/get_current_account 必須送 body: "null"
         const res = await fetchWithTimeout("https://api.dropboxapi.com/2/users/get_current_account", {
           method:"POST",
           cache:"no-store",
@@ -967,13 +991,36 @@
 
         const txt = await res.text();
         const json = safeJsonParse(txt, null);
+
         if(!res.ok){
           return { ok:false, status:res.status, msg:`❌ Token 無效或過期（HTTP ${res.status}）\n${txt}`, email:"" };
         }
         const email = String(json && json.email ? json.email : "");
         return { ok:true, status:200, msg:`✅ Token OK\n對應帳號：${email || "(未回傳 email)"}`, email };
       }catch(e){
-        return { ok:false, status:0, msg:"❌ Token 測試失敗（可能網路逾時/被阻擋）", email:"" };
+        return { ok:false, status:0, msg:"❌ Token 測試失敗（可能網路或被阻擋/逾時）", email:"" };
+      }
+    }
+
+    async function ensureFolder(){
+      try{
+        const res = await fetchWithTimeout("https://api.dropboxapi.com/2/files/create_folder_v2", {
+          method:"POST",
+          cache:"no-store",
+          headers:{ "Authorization": dbxAuthHeader(), "Content-Type":"application/json" },
+          body: JSON.stringify({ path: getDbxFolder(), autorename:false })
+        }, 15000);
+
+        const txt = await res.text();
+        if(res.ok) return { ok:true, msg:"✅ 資料夾已建立/確認" };
+
+        // folder 已存在通常 409 conflict
+        if(res.status === 409 && (txt || "").toLowerCase().includes("conflict")){
+          return { ok:true, msg:"✅ 資料夾已存在" };
+        }
+        return { ok:false, msg:`❌ 建立資料夾失敗（HTTP ${res.status}）\n${txt}` };
+      }catch(e){
+        return { ok:false, msg:"❌ 建立資料夾失敗（逾時/網路）" };
       }
     }
 
@@ -988,17 +1035,42 @@
       }
       setDbxToken(t);
 
+      tokenMsg.textContent = "正在測試 Token…";
       const chk = await testTokenAndGetEmail();
+      if(!chk.ok){
+        tokenMsg.textContent = chk.msg + "\n\n若是 scopes 不足，按「一鍵引導去 Console 勾權限」。";
+        return;
+      }
+
+      let emailHint = "";
+      if(chk.email && chk.email.toLowerCase() !== EXPECT_EMAIL.toLowerCase()){
+        emailHint = `\n⚠️ 這個 token 對應 email：${chk.email}\n你期望：${EXPECT_EMAIL}\n（可能在不同 Dropbox 帳號產生 token）`;
+      }else if(chk.email){
+        emailHint = `\n✅ token 對應 email：${chk.email}`;
+      }
+
+      tokenMsg.textContent = chk.msg + emailHint + "\n\n正在測試建立資料夾…";
+      const folderChk = await ensureFolder();
+      if(!folderChk.ok){
+        tokenMsg.textContent =
+          chk.msg + emailHint +
+          "\n\n" + folderChk.msg +
+          "\n\n✅ 若訊息中包含 files.content.write / missing_scope，請到 Console 勾權限並重新產生新 token。";
+        const go = confirm("可能是 scopes 不足（files.content.write）。\n\n要現在開始引導去 Console 勾權限嗎？");
+        if(go) guideToConsole();
+        return;
+      }
+
       tokenMsg.textContent =
-`${chk.msg}
-預期帳號：tasun_8@hotmail.com
+`${chk.msg}${emailHint}
+${folderChk.msg}
+
 Dropbox 網站位置（App folder）：
 ${dropboxWebFolderUrl()}
 
-提醒：若顯示 HTTP 401/400，代表 Token 不正確/已過期/Scopes 不足。`;
-      if(chk.ok){
-        setTimeout(()=> hideTokenOverlay(), 700);
-      }
+✅ Token OK，已可同步。`;
+
+      setTimeout(()=> hideTokenOverlay(), 650);
     });
 
     // ==========================
@@ -1090,7 +1162,7 @@ ${dropboxWebFolderUrl()}
     }
 
     // ==========================
-    // Dropbox pull (optional)
+    // Dropbox pull (optional)  ✅修正：Dropbox-API-Arg 必須 ASCII
     // ==========================
     async function dbxDownloadJson(path){
       if(!dbxEnabled()) return null;
@@ -1100,7 +1172,7 @@ ${dropboxWebFolderUrl()}
           cache: "no-store",
           headers: {
             "Authorization": dbxAuthHeader(),
-            "Dropbox-API-Arg": JSON.stringify({ path })
+            "Dropbox-API-Arg": jsonAscii({ path })
           }
         }, 15000);
         if(!res.ok) return null;
@@ -1120,6 +1192,8 @@ ${dropboxWebFolderUrl()}
     }
 
     async function cloudPullToLocalStorage({ force=false } = {}){
+      if(!dbxEnabled()) return false;
+
       const meta = await dbxDownloadJson(dbxPathMeta());
       const cloudTs = Number(meta && meta.updatedAt ? meta.updatedAt : 0);
       const localTs = getLocalUpdatedAt();
@@ -1378,18 +1452,15 @@ ${dropboxWebFolderUrl()}
       if(cloudWatchBusy) return;
       cloudWatchBusy = true;
       try{
-        const changed = await cloudPullToLocalStorage({ force });
+        if(dbxEnabled()){
+          await cloudPullToLocalStorage({ force });
+        }
 
         NAV_CONFIG = loadNavConfig();
         AUTH_TABLE = loadAuthTable(NAV_CONFIG.length);
 
-        if(changed){
-          buildMainButtons();
-          resetButtonsForLogout();
-          populateUserSelect();
-        }else{
-          populateUserSelect();
-        }
+        buildMainButtons();
+        populateUserSelect();
       } finally {
         cloudWatchBusy = false;
       }
@@ -1425,10 +1496,6 @@ ${dropboxWebFolderUrl()}
       }
 
       await syncNowIfNew({ force:false });
-
-      buildMainButtons();
-      AUTH_TABLE = loadAuthTable(loadNavConfig().length);
-      populateUserSelect();
       startCloudWatch();
 
       const cu = getCurrentUser();
