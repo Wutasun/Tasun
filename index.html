@@ -836,10 +836,10 @@
     const AUTH_KEY    = "tasunAuthTable_v1";
     const NAV_KEY     = "tasunNavButtons_v1";
 
-    // ✅ 登入狀態：只記到「關閉瀏覽器/關閉分頁」 -> sessionStorage（原規則不改）
+    // ✅ 登入狀態：只記到「關閉瀏覽器/關閉分頁」 -> sessionStorage
     const CURRENT_KEY = "tasunCurrentUser_v1";
 
-    // Dropbox token：可跨瀏覽器關閉保留 -> localStorage（登入狀態不放這裡）
+    // Dropbox token：可跨瀏覽器關閉保留 -> localStorage
     const DBX_TOKEN_KEY   = "tasunDbxToken_v1";
     const DBX_FOLDER_KEY  = "tasunDbxFolder_v1";
     const DBX_APPNAME_KEY = "tasunDbxAppName_v1";
@@ -849,76 +849,19 @@
     const DEFAULT_APP_NAME = "wutasun";
     const EXPECT_EMAIL = "tasun_8@hotmail.com";
 
-    // ==========================
-    // ✅✅✅ 最小補丁：跨分頁同步「session 登入狀態」(不改規則)
-    // - 新分頁打開時，向其他分頁請求目前登入者
-    // - 只要還有任何一個舊分頁開著，就能把登入狀態同步過來
-    // - 不寫 localStorage，不會變成永久登入
-    // ==========================
-    const AUTH_SYNC_CH = "tasunAuthSync_v1";
-    const TAB_ID = (crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + "_" + Math.random().toString(16).slice(2));
+    // ✅ 不改 session 規則，但兼容新分頁：BroadcastChannel
+    const AUTH_BRIDGE_CH = "tasunAuthBridge_v1";
+    const TAB_ID_KEY = "tasunTabId_v1";
+    const TAB_ID = (() => {
+      let v = sessionStorage.getItem(TAB_ID_KEY);
+      if(!v){
+        v = "tab_" + Date.now() + "_" + Math.random().toString(16).slice(2);
+        sessionStorage.setItem(TAB_ID_KEY, v);
+      }
+      return v;
+    })();
     let bc = null;
-    let pendingAuthUser = null;
-
-    function bcPost(msg){
-      try{ if(bc) bc.postMessage(msg); }catch(e){}
-    }
-
-    function initAuthSyncChannel(){
-      if(!("BroadcastChannel" in window)) return;
-      try{
-        bc = new BroadcastChannel(AUTH_SYNC_CH);
-      }catch(e){
-        bc = null;
-        return;
-      }
-
-      bc.onmessage = (ev)=>{
-        const msg = ev && ev.data ? ev.data : null;
-        if(!msg || msg.src === TAB_ID) return;
-
-        // 新分頁請求：如果我已登入，回覆 AUTH
-        if(msg.type === "REQ_AUTH"){
-          const cu = getCurrentUser();
-          if(cu && cu.username){
-            bcPost({ type:"AUTH", src:TAB_ID, user:{ username: cu.username, role: cu.role || cu.level || "read", level: cu.role || cu.level || "read" } });
-          }
-          return;
-        }
-
-        // 收到登入資訊：若本分頁尚未登入，就採用
-        if(msg.type === "AUTH" && msg.user && msg.user.username){
-          pendingAuthUser = { username: String(msg.user.username||"").trim(), level: mapRole(msg.user.level ?? msg.user.role) || "read" };
-          tryAdoptAuthFromOtherTab();
-          return;
-        }
-
-        // 其他分頁登出/切換：本分頁也同步登出（避免權限混亂）
-        if(msg.type === "LOGOUT"){
-          clearCurrentUser(false); // false=不要再回廣播，避免循環
-          showLoginOverlay();
-          return;
-        }
-      };
-    }
-
-    function requestAuthFromOtherTabs(){
-      if(!bc) return;
-      bcPost({ type:"REQ_AUTH", src:TAB_ID });
-    }
-
-    function tryAdoptAuthFromOtherTab(){
-      // 已有 session 就不需要
-      const cu = getCurrentUser();
-      if(cu) return;
-      if(!pendingAuthUser || !pendingAuthUser.username) return;
-
-      const row = (AUTH_TABLE || []).find(r => r.username === pendingAuthUser.username);
-      if(row){
-        applyUser(row, false); // false=不要再回廣播（收到別人已廣播過）
-        pendingAuthUser = null;
-      }
-    }
+    let bcReady = false;
 
     // ==========================
     // UI refs
@@ -969,7 +912,7 @@
       try{ return JSON.parse(s); }catch(e){ return fallback; }
     }
 
-    // ✅ session current user（原規則：只存 sessionStorage）
+    // ✅ session current user
     function getCurrentUser(){
       const cu = safeJsonParse(sessionStorage.getItem(CURRENT_KEY) || "null", null);
       if(!cu || typeof cu !== "object") return null;
@@ -980,17 +923,27 @@
       sessionStorage.setItem(CURRENT_KEY, JSON.stringify(out));
       return out;
     }
+
+    // ✅ 廣播（跨分頁同步登入）：不寫入 localStorage，仍然是 session 規則
+    function bcPost(msg){
+      if(!bcReady || !bc) return;
+      try{ bc.postMessage({ ...msg, _from: TAB_ID, _ts: Date.now() }); }catch(e){}
+    }
+
     function setCurrentUser(u){
       const username = String(u.username||"").trim();
       const role = mapRole(u.level ?? u.role) || "read";
-      sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ username, role, level: role }));
+      const obj = { username, role, level: role };
+      sessionStorage.setItem(CURRENT_KEY, JSON.stringify(obj));
+      // ✅ 通知其他分頁
+      bcPost({ type:"login", user: obj });
     }
 
-    // ✅ 最小補丁：clearCurrentUser 可選擇是否要廣播
-    function clearCurrentUser(alsoBroadcast = true){
+    function clearCurrentUser(){
       sessionStorage.removeItem(CURRENT_KEY);
       try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
-      if(alsoBroadcast) bcPost({ type:"LOGOUT", src:TAB_ID });
+      // ✅ 通知其他分頁
+      bcPost({ type:"logout" });
     }
 
     // Dropbox token
@@ -1017,6 +970,13 @@
       localStorage.setItem(DBX_APPKEY_KEY, String(k||"").trim());
     }
 
+    // ✅ 修正：任何需要用 App key 前，都先把「輸入框」同步到 localStorage
+    function syncAppKeyFromInput(){
+      const v = String(appKeyInput?.value || "").trim();
+      if(v) setDbxAppKey(v);
+      return v || getDbxAppKey();
+    }
+
     function dbxPathAuth(){ return `${getDbxFolder()}/tasunAuthTable_v1.json`; }
     function dbxPathNav(){  return `${getDbxFolder()}/tasunNavButtons_v1.json`; }
     function dbxPathMeta(){ return `${getDbxFolder()}/tasunCloudMeta_v1.json`; }
@@ -1026,14 +986,18 @@
       return `https://www.dropbox.com/home/Apps/${appName}${getDbxFolder()}`;
     }
 
+    // ✅ Console links
     function getConsoleBaseUrl(){
-      const k = getDbxAppKey();
+      const k = syncAppKeyFromInput(); // ✅ FIX
       return k ? `https://www.dropbox.com/developers/apps/info/${encodeURIComponent(k)}` : "";
     }
     function getConsolePermUrl(){ const b = getConsoleBaseUrl(); return b ? (b + "#permissions") : ""; }
     function getConsoleSetUrl(){  const b = getConsoleBaseUrl(); return b ? (b + "#settings") : ""; }
 
     function openConsoleTab(url, label){
+      // ✅ 再保險：按下去前再同步一次
+      syncAppKeyFromInput();
+
       if(!url){
         alert(`尚未填 App key，無法直接開 ${label}。\n\n請在本視窗「App key」貼上：網址 info/<App key>#settings 那串。`);
         return false;
@@ -1046,6 +1010,7 @@
       return true;
     }
 
+    // ✅ 把 Dropbox-API-Arg 轉成純 ASCII（避免「權限」中文造成 header TypeError）
     function jsonAscii(obj){
       return JSON.stringify(obj).replace(/[^\x00-\x7F]/g, (c)=>{
         const code = c.charCodeAt(0).toString(16).padStart(4,"0");
@@ -1053,6 +1018,7 @@
       });
     }
 
+    // fetch with timeout
     async function fetchWithTimeout(url, options={}, timeoutMs=15000){
       const ctrl = new AbortController();
       const id = setTimeout(()=> ctrl.abort(), timeoutMs);
@@ -1089,23 +1055,22 @@
     tokenSkipBtn?.addEventListener("click", ()=> hideTokenOverlay());
 
     btnOpenPerm?.addEventListener("click", ()=>{
-      setDbxAppKey(String(appKeyInput.value||"").trim());
+      syncAppKeyFromInput(); // ✅ FIX
       openConsoleTab(getConsolePermUrl(), "Permissions");
     });
     btnOpenSet?.addEventListener("click", ()=>{
-      setDbxAppKey(String(appKeyInput.value||"").trim());
+      syncAppKeyFromInput(); // ✅ FIX
       openConsoleTab(getConsoleSetUrl(), "Settings");
     });
 
     function guideToConsoleStrong(){
-      const appKey = String(appKeyInput.value||"").trim();
-      if(appKey) setDbxAppKey(appKey);
+      // ✅ 必須由使用者點擊觸發，才能開分頁
+      const kNow = syncAppKeyFromInput(); // ✅ FIX：以輸入框為準立刻存
 
       alert("接下來進入「一步一步導覽」。\n會嘗試自動開 Permissions / Settings。\n按「確定」開始。");
 
-      const hasKey = !!getDbxAppKey();
-      if(!hasKey){
-        alert("你尚未填 App key，因此無法直達 Permissions/Settings。\n我先幫你開 Apps 列表，你點進 App 後，從網址複製 App key 回來。");
+      if(!kNow){
+        alert("你目前還沒填 App key，因此無法直達 Permissions/Settings。\n我先幫你開 Apps 列表，你點進 App 後，看網址 info/<這串>#settings，把 <這串> 貼回來。");
         window.open("https://www.dropbox.com/developers/apps", "_blank", "noopener");
         alert("步驟：\n1) Apps 列表 → 點你的 App\n2) 網址像：.../apps/info/『a5pm08...』#settings\n3) 複製『a5pm08...』貼回本視窗 App key\n4) 再按一次「一步一步導覽（自動開連結）」");
         return;
@@ -1123,6 +1088,7 @@
     }
     tokenGuideBtn?.addEventListener("click", guideToConsoleStrong);
 
+    // ✅ 重要：get_current_account body 必須送 "null"
     async function testTokenAndGetEmail(){
       if(!dbxEnabled()) return { ok:false, status:0, msg:"❌ Token 未設定", email:"" };
       try{
@@ -1171,8 +1137,8 @@
       const appName = String(appNameInput.value||"").trim() || DEFAULT_APP_NAME;
       setDbxAppName(appName);
 
-      const appKey = String(appKeyInput.value||"").trim();
-      setDbxAppKey(appKey);
+      // ✅ FIX：按儲存也同步 appKey
+      syncAppKeyFromInput();
 
       const t = String(tokenInput.value || "").trim();
       if(!t){
@@ -1220,7 +1186,7 @@ ${dropboxWebFolderUrl()}
     });
 
     // ==========================
-    // Default NAV  ✅（修正：若雲端/本機寫成空，會自動回復）
+    // Default NAV
     // ==========================
     const DEFAULT_NAV = [
       { id: "btn1", label: "臻鼎時代大廈管理表", href: "臻鼎管理表.html", target: "", roles: ["admin","write","read"] },
@@ -1248,16 +1214,19 @@ ${dropboxWebFolderUrl()}
         localStorage.setItem(NAV_KEY, JSON.stringify(DEFAULT_NAV.slice()));
         return DEFAULT_NAV.slice();
       }
+
       const arr = safeJsonParse(raw, null);
       if (!Array.isArray(arr) || arr.length === 0) {
         localStorage.setItem(NAV_KEY, JSON.stringify(DEFAULT_NAV.slice()));
         return DEFAULT_NAV.slice();
       }
+
       const fixed = arr.map((it, idx)=> normalizeNavEntry(it, idx));
       if (!fixed.length) {
         localStorage.setItem(NAV_KEY, JSON.stringify(DEFAULT_NAV.slice()));
         return DEFAULT_NAV.slice();
       }
+
       localStorage.setItem(NAV_KEY, JSON.stringify(fixed));
       return fixed;
     }
@@ -1500,8 +1469,7 @@ ${dropboxWebFolderUrl()}
       return cfg.roles.includes(r);
     }
 
-    // ✅ 最小補丁：applyUser 可選擇是否要廣播（避免收到別人的 AUTH 又回廣播造成震盪）
-    function applyUser(userRow, alsoBroadcast = true) {
+    function applyUser(userRow) {
       document.body.classList.remove("locked");
       loginOverlay.style.display = "none";
       loginOverlay.setAttribute("aria-hidden","true");
@@ -1530,11 +1498,6 @@ ${dropboxWebFolderUrl()}
 
       if (systemBtn) systemBtn.style.display = (lvl === "admin") ? "flex" : "none";
       layoutMainButtonsResponsive();
-
-      // ✅✅✅ 最小補丁：登入/切換成功後，通知其他分頁（只同步「目前登入者」）
-      if(alsoBroadcast){
-        bcPost({ type:"AUTH", src:TAB_ID, user:{ username: userRow.username, level: lvl, role: lvl } });
-      }
     }
 
     function resetButtonsForLogout() {
@@ -1622,22 +1585,6 @@ ${dropboxWebFolderUrl()}
 
         buildMainButtons();
         populateUserSelect();
-
-        const cu = getCurrentUser();
-        const isLocked = document.body.classList.contains("locked");
-        if(cu && cu.username && !isLocked){
-          const row = (AUTH_TABLE || []).find(r => r.username === cu.username);
-          if(row){
-            applyUser(row);
-          }else{
-            clearCurrentUser();
-            showLoginOverlay();
-          }
-        }
-
-        // ✅✅✅ 最小補丁：如果本分頁還沒登入、但已收到其他分頁的 AUTH，這裡就會套用
-        tryAdoptAuthFromOtherTab();
-
       } finally {
         cloudWatchBusy = false;
       }
@@ -1660,9 +1607,54 @@ ${dropboxWebFolderUrl()}
       userInfo.textContent = "目前使用者：未登入";
       loginError.textContent = "";
       setTimeout(()=> usernameInput?.focus(), 60);
+    }
 
-      // ✅✅✅ 最小補丁：顯示登入遮罩時，順便向其他分頁請求登入狀態
-      requestAuthFromOtherTabs();
+    // ==========================
+    // ✅ 跨分頁橋接（不改 session 規則）
+    // ==========================
+    function initAuthBridge(){
+      if(typeof BroadcastChannel === "undefined") return;
+      try{
+        bc = new BroadcastChannel(AUTH_BRIDGE_CH);
+        bcReady = true;
+
+        bc.onmessage = async (ev)=>{
+          const m = ev && ev.data ? ev.data : null;
+          if(!m || m._from === TAB_ID) return;
+
+          if(m.type === "who"){
+            const cu = getCurrentUser();
+            if(cu && cu.username){
+              bcPost({ type:"login", user: cu, _replyTo: m._from });
+            }
+            return;
+          }
+
+          if(m.type === "login" && m.user && m.user.username){
+            const u = m.user;
+            sessionStorage.setItem(CURRENT_KEY, JSON.stringify({
+              username: String(u.username||"").trim(),
+              role: mapRole(u.role ?? u.level) || "read",
+              level: mapRole(u.role ?? u.level) || "read"
+            }));
+
+            // ✅ 確保有資料後再 apply
+            await syncNowIfNew({ force:false });
+            const row = (AUTH_TABLE||[]).find(r=> r.username === String(u.username||"").trim());
+            if(row) applyUser(row);
+            return;
+          }
+
+          if(m.type === "logout"){
+            sessionStorage.removeItem(CURRENT_KEY);
+            showLoginOverlay();
+            return;
+          }
+        };
+      }catch(e){
+        bcReady = false;
+        bc = null;
+      }
     }
 
     // ==========================
@@ -1671,8 +1663,7 @@ ${dropboxWebFolderUrl()}
     (async function boot(){
       try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
 
-      // ✅✅✅ 最小補丁：先啟用跨分頁同步通道
-      initAuthSyncChannel();
+      initAuthBridge();
 
       if(!dbxEnabled()){
         showTokenOverlay();
@@ -1691,8 +1682,9 @@ ${dropboxWebFolderUrl()}
           showLoginOverlay();
         }
       }else{
-        // ✅ 原本規則：沒 session 就要登入；但這裡會同時向其他分頁要登入狀態
+        // ✅ 先顯示登入遮罩，但同時向其他分頁詢問是否已登入
         showLoginOverlay();
+        bcPost({ type:"who" });
       }
     })();
 
@@ -1714,12 +1706,11 @@ ${dropboxWebFolderUrl()}
       }
 
       loginError.textContent = "";
-      applyUser(user, true); // ✅登入後廣播給其他分頁
+      applyUser(user);
     });
 
     btnSwitch.addEventListener("click", async function () {
-      // ✅切換等同登出：所有分頁同步登出
-      clearCurrentUser(true);
+      clearCurrentUser();
       showLoginOverlay();
       loginForm.reset();
       await syncNowIfNew({ force:false });
