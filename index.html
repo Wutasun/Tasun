@@ -301,10 +301,12 @@
       margin-top: 0.8rem;
       display: flex;
       justify-content: center;
+      gap: .6rem; /* ✅ 新增急救按鈕留空間 */
+      flex-wrap: wrap;
     }
 
     .btn-login {
-      padding: 0.55rem 2.8rem;
+      padding: 0.55rem 2.3rem;
       border-radius: 999px;
       border: 1px solid rgba(246, 211, 122, 0.9);
       background: radial-gradient(circle at 0% 0%, rgba(246, 211, 122, 0.36), rgba(0, 0, 0, 0.98));
@@ -322,6 +324,12 @@
       box-shadow: 0 12px 22px rgba(0, 0, 0, 0.98), 0 0 22px rgba(246, 211, 122, 0.8);
       border-color: #fff4cf;
       background: radial-gradient(circle at 0% 0%, rgba(255, 244, 208, 0.45), rgba(0, 0, 0, 0.97));
+    }
+
+    .btn-login.ghost{
+      opacity:.88;
+      border-color: rgba(246,211,122,.55);
+      background: radial-gradient(circle at 0% 0%, rgba(246, 211, 122, 0.22), rgba(0, 0, 0, 0.98));
     }
 
     /* ==========================
@@ -455,8 +463,9 @@
       left: 0.9rem;
       display: flex;
       align-items: center;
-      gap: 0.75rem;
+      gap: 0.55rem;
       z-index: 10;
+      flex-wrap: wrap;
     }
 
     .user-pill {
@@ -784,6 +793,8 @@
         <div class="login-error" id="loginError"></div>
         <div class="login-actions">
           <button type="submit" class="btn-login">登入</button>
+          <!-- ✅ 新增：急救按鈕 -->
+          <button type="button" class="btn-login ghost" id="btnRescue">急救</button>
         </div>
       </form>
     </div>
@@ -798,6 +809,8 @@
       <div class="user-bar">
         <div class="user-pill" id="userInfo">目前使用者：未登入</div>
         <button class="btn-switch" id="btnSwitchUser">切換帳號</button>
+        <!-- ✅ 新增：急救按鈕（主畫面也可按） -->
+        <button class="btn-switch" id="btnRescueTop">急救</button>
       </div>
 
       <div class="site-title-wrapper">
@@ -893,6 +906,10 @@
     const btnUserDrop   = document.getElementById("btnUserDrop");
     const userDrop      = document.getElementById("userDrop");
 
+    // ✅ 急救按鈕
+    const btnRescue = document.getElementById("btnRescue");
+    const btnRescueTop = document.getElementById("btnRescueTop");
+
     // ==========================
     // helpers
     // ==========================
@@ -912,9 +929,20 @@
       try{ return JSON.parse(s); }catch(e){ return fallback; }
     }
 
-    // ✅ session current user
+    // ✅ session current user（兼容曾經誤存 localStorage 的舊狀況）
     function getCurrentUser(){
-      const cu = safeJsonParse(sessionStorage.getItem(CURRENT_KEY) || "null", null);
+      let cu = safeJsonParse(sessionStorage.getItem(CURRENT_KEY) || "null", null);
+
+      // 兼容：若曾經誤放 localStorage，搬到 session
+      if(!cu || typeof cu !== "object" || !String(cu.username ?? "").trim()){
+        const legacy = safeJsonParse(localStorage.getItem(CURRENT_KEY) || "null", null);
+        if(legacy && legacy.username){
+          cu = legacy;
+          try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
+          sessionStorage.setItem(CURRENT_KEY, JSON.stringify(cu));
+        }
+      }
+
       if(!cu || typeof cu !== "object") return null;
       const username = String(cu.username ?? "").trim();
       if(!username) return null;
@@ -970,12 +998,23 @@
       localStorage.setItem(DBX_APPKEY_KEY, String(k||"").trim());
     }
 
-    // ✅ 修正：任何需要用 App key 前，都先把「輸入框」同步到 localStorage
+    // ✅ FIX：App key 來源規則改成「輸入框優先」，並且 input 時即時寫入 localStorage
     function syncAppKeyFromInput(){
       const v = String(appKeyInput?.value || "").trim();
       if(v) setDbxAppKey(v);
       return v || getDbxAppKey();
     }
+    appKeyInput?.addEventListener("input", syncAppKeyFromInput);
+    appKeyInput?.addEventListener("blur", syncAppKeyFromInput);
+
+    // ✅ AppName 同步
+    function syncAppNameFromInput(){
+      const v = String(appNameInput?.value || "").trim();
+      if(v) setDbxAppName(v);
+      return v || getDbxAppName();
+    }
+    appNameInput?.addEventListener("input", syncAppNameFromInput);
+    appNameInput?.addEventListener("blur", syncAppNameFromInput);
 
     function dbxPathAuth(){ return `${getDbxFolder()}/tasunAuthTable_v1.json`; }
     function dbxPathNav(){  return `${getDbxFolder()}/tasunNavButtons_v1.json`; }
@@ -1136,9 +1175,7 @@
     tokenSaveBtn?.addEventListener("click", async ()=>{
       const appName = String(appNameInput.value||"").trim() || DEFAULT_APP_NAME;
       setDbxAppName(appName);
-
-      // ✅ FIX：按儲存也同步 appKey
-      syncAppKeyFromInput();
+      syncAppKeyFromInput(); // ✅ FIX：按儲存也同步 appKey
 
       const t = String(tokenInput.value || "").trim();
       if(!t){
@@ -1352,10 +1389,8 @@ ${dropboxWebFolderUrl()}
     let mainNavBtns = [];
     let currentVisibleBtns = [];
 
+    // ✅ FIX：buildMainButtons 不要自己再 load 一次（避免 syncNowIfNew 時重複載入）
     function buildMainButtons() {
-      NAV_CONFIG = loadNavConfig();
-      AUTH_TABLE = loadAuthTable(NAV_CONFIG.length);
-
       mainNavBtns = [];
       navArea.innerHTML = "";
 
@@ -1469,14 +1504,13 @@ ${dropboxWebFolderUrl()}
       return cfg.roles.includes(r);
     }
 
-    function applyUser(userRow) {
+    // ✅ FIX：拆成「只套用 UI（不重寫 session、不廣播）」的函數
+    function applyUserUI(userRow) {
       document.body.classList.remove("locked");
       loginOverlay.style.display = "none";
       loginOverlay.setAttribute("aria-hidden","true");
 
       const lvl = mapRole(userRow.level ?? userRow.role) || "read";
-      setCurrentUser({ username: userRow.username, level: lvl });
-
       userInfo.textContent = `目前使用者：${userRow.username} (${lvl})`;
 
       const visibleMain = [];
@@ -1498,6 +1532,13 @@ ${dropboxWebFolderUrl()}
 
       if (systemBtn) systemBtn.style.display = (lvl === "admin") ? "flex" : "none";
       layoutMainButtonsResponsive();
+    }
+
+    function applyUser(userRow) {
+      // 原本行為：登入成功時才要寫 session + 廣播
+      const lvl = mapRole(userRow.level ?? userRow.role) || "read";
+      setCurrentUser({ username: userRow.username, level: lvl });
+      applyUserUI(userRow);
     }
 
     function resetButtonsForLogout() {
@@ -1572,10 +1613,14 @@ ${dropboxWebFolderUrl()}
     let cloudWatchTimer = null;
     let cloudWatchBusy = false;
 
+    // ✅ FIX：sync 後若已登入，必須重新套用 UI，避免「幾秒後按鍵消失」
     async function syncNowIfNew({ force=false } = {}){
       if(cloudWatchBusy) return;
       cloudWatchBusy = true;
+
       try{
+        const hadUser = getCurrentUser(); // 先記起來
+
         if(dbxEnabled()){
           await cloudPullToLocalStorage({ force });
         }
@@ -1585,12 +1630,24 @@ ${dropboxWebFolderUrl()}
 
         buildMainButtons();
         populateUserSelect();
+
+        // ✅ 核心修正：若已登入，就在重建按鈕後再套用一次權限顯示
+        const cu = hadUser || getCurrentUser();
+        if(cu && cu.username){
+          const row = (AUTH_TABLE||[]).find(r=> r.username === cu.username);
+          if(row){
+            applyUserUI(row); // ✅ 不重寫 session、不廣播（避免每 4 秒一直 broadcast）
+          }
+        }
       } finally {
         cloudWatchBusy = false;
       }
     }
 
     function startCloudWatch(){
+      // ✅ 建議：只有啟用 Dropbox 才需要定時拉雲端；否則會多餘
+      if(!dbxEnabled()) return;
+
       if(cloudWatchTimer) clearInterval(cloudWatchTimer);
       cloudWatchTimer = setInterval(()=> syncNowIfNew({ force:false }), CLOUD_WATCH_MS);
 
@@ -1638,10 +1695,10 @@ ${dropboxWebFolderUrl()}
               level: mapRole(u.role ?? u.level) || "read"
             }));
 
-            // ✅ 確保有資料後再 apply
             await syncNowIfNew({ force:false });
+
             const row = (AUTH_TABLE||[]).find(r=> r.username === String(u.username||"").trim());
-            if(row) applyUser(row);
+            if(row) applyUserUI(row);
             return;
           }
 
@@ -1655,6 +1712,37 @@ ${dropboxWebFolderUrl()}
         bcReady = false;
         bc = null;
       }
+    }
+
+    // ==========================
+    // 急救（強制重新套用）
+    // ==========================
+    async function doRescue(){
+      await syncNowIfNew({ force:true });
+
+      const cu = getCurrentUser();
+      if(cu && cu.username){
+        const row = (AUTH_TABLE||[]).find(r=> r.username === cu.username);
+        if(row){
+          applyUserUI(row);
+          return;
+        }
+      }
+
+      // 若本分頁沒有 session，詢問其他分頁
+      bcPost({ type:"who" });
+
+      setTimeout(async ()=>{
+        await syncNowIfNew({ force:false });
+        const cu2 = getCurrentUser();
+        if(cu2 && cu2.username){
+          const row2 = (AUTH_TABLE||[]).find(r=> r.username === cu2.username);
+          if(row2) applyUserUI(row2);
+          else showLoginOverlay();
+        }else{
+          showLoginOverlay();
+        }
+      }, 420);
     }
 
     // ==========================
@@ -1676,7 +1764,7 @@ ${dropboxWebFolderUrl()}
       if(cu && cu.username){
         const row = (AUTH_TABLE||[]).find(r=> r.username === cu.username);
         if(row){
-          applyUser(row);
+          applyUserUI(row);
         }else{
           clearCurrentUser();
           showLoginOverlay();
@@ -1738,6 +1826,18 @@ ${dropboxWebFolderUrl()}
       if(e.key === "Escape"){
         if(tokenOverlay && tokenOverlay.style.display === "flex") hideTokenOverlay();
         closeUserDrop();
+      }
+    });
+
+    // ✅ 急救按鈕
+    btnRescue?.addEventListener("click", doRescue);
+    btnRescueTop?.addEventListener("click", doRescue);
+
+    // ✅ storage 事件：當權限表更新 AUTH/NAV 時，立即同步並重套 UI
+    window.addEventListener("storage", (e)=>{
+      if(!e) return;
+      if(e.key === AUTH_KEY || e.key === NAV_KEY){
+        syncNowIfNew({ force:false });
       }
     });
   </script>
