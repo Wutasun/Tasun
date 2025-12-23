@@ -33,7 +33,6 @@
       overflow-x:hidden;
     }
 
-    /* ✅ 整頁融入底圖 */
     .page{
       position:relative;
       width:min(1400px, 100%);
@@ -140,6 +139,7 @@
       cursor:pointer;
       font-size:.92rem;
       letter-spacing:.08em;
+      text-indent:.08em;
     }
     .more-menu button:hover{
       background:rgba(246,211,122,.10);
@@ -246,7 +246,6 @@
     }
     tbody tr:hover td{background:rgba(246,211,122,.06)}
 
-    /* input look */
     .in{
       width:100%;
       max-width:260px;
@@ -296,7 +295,6 @@
 
     .muted{opacity:.55}
 
-    /* Bottom actions */
     .actions{
       display:flex;
       gap:.75rem;
@@ -392,6 +390,7 @@
       justify-content:center;
       color:rgba(246,211,122,.9);
       flex:0 0 auto;
+      transition:transform .18s ease;
     }
     details[open] .chev{ transform:rotate(180deg); }
 
@@ -426,7 +425,6 @@
       text-indent:.06em;
     }
 
-    /* ✅ 按鍵欄位橫向滑動 */
     .btn-strip{
       display:flex;
       gap:.55rem;
@@ -639,7 +637,7 @@
         </table>
       </div>
 
-      <!-- ✅ Mobile cards -->
+      <!-- Mobile cards -->
       <div class="cards-wrap" id="cardsWrap"></div>
 
       <div class="actions">
@@ -658,7 +656,7 @@
 
   <script>
     // ==========================
-    // keys (固定沿用你的版本)
+    // keys
     // ==========================
     const AUTH_KEY    = "tasunAuthTable_v1";
     const CURRENT_KEY = "tasunCurrentUser_v1";
@@ -738,14 +736,35 @@
     }
 
     // ==========================
+    // ✅ 修正：自動暫存（避免 cloudWatch 重畫把你改的洗掉）
+    // ==========================
+    let autosaveTimer = null;
+    function scheduleAutoSaveLocal(){
+      if(!isAdmin) return;
+      clearTimeout(autosaveTimer);
+      autosaveTimer = setTimeout(()=>{
+        try{
+          localStorage.setItem(AUTH_KEY, JSON.stringify(AUTH));
+          // 不要一直跳訊息，只在空白時顯示
+          if(!msg.textContent) msg.textContent = "（已自動暫存本機）";
+          setTimeout(()=>{ if(msg.textContent==="（已自動暫存本機）") msg.textContent=""; }, 1200);
+        }catch(e){}
+      }, 300);
+    }
+
+    // ==========================
     // current user / permission
     // ==========================
     function getCurrentUser(){
-      const cu = safeJsonParse(sessionStorage.getItem(CURRENT_KEY) || "null", null);
+      // ✅ 修正：sessionStorage / localStorage 都讀（避免首頁用 localStorage）
+      const raw = sessionStorage.getItem(CURRENT_KEY) || localStorage.getItem(CURRENT_KEY) || "null";
+      const cu = safeJsonParse(raw, null);
       if(!cu || typeof cu !== "object") return null;
-      const username = String(cu.username ?? "").trim();
+
+      const username = String(cu.username ?? cu.user ?? "").trim();
       if(!username) return null;
-      const role = mapRole(cu.role ?? cu.level) || "read";
+
+      const role = mapRole(cu.role ?? cu.level ?? cu.permission) || "read";
       return { username, role, level: role };
     }
 
@@ -762,7 +781,7 @@
     }
 
     // ==========================
-    // nav config (btn1/2/3 標題 = 按鍵名稱)
+    // nav config
     // ==========================
     const DEFAULT_NAV = [
       { id:"btn1", label:"臻鼎時代大廈管理表", href:"臻鼎管理表.html", target:"", roles:["admin","write","read"] },
@@ -799,7 +818,7 @@
     }
 
     // ==========================
-    // auth table (支援舊版 btn1~btn5 → buttons[])
+    // auth table (legacy)
     // ==========================
     const LEGACY_BUTTON_KEYS = ["btn1","btn2","btn3","btn4","btn5"];
 
@@ -856,7 +875,7 @@
     }
 
     // ==========================
-    // Dropbox helpers（與首頁一致）
+    // Dropbox helpers（維持原功能）
     // ==========================
     function getDbxToken(){ return String(localStorage.getItem(DBX_TOKEN_KEY) || "").trim(); }
     function setDbxToken(t){ localStorage.setItem(DBX_TOKEN_KEY, String(t || "").trim()); }
@@ -1154,7 +1173,7 @@ ${dropboxWebFolderUrl()}
     });
 
     // ==========================
-    // render (desktop table + mobile cards)
+    // render
     // ==========================
     let NAV = [];
     let AUTH = [];
@@ -1187,7 +1206,6 @@ ${dropboxWebFolderUrl()}
       return sel;
     }
 
-    // --- desktop headers
     function renderHeaders(){
       theadRow.innerHTML = "";
 
@@ -1214,7 +1232,6 @@ ${dropboxWebFolderUrl()}
       theadRow.appendChild(thDel);
     }
 
-    // --- desktop body
     function renderTableBody(){
       tbody.innerHTML = "";
 
@@ -1274,6 +1291,7 @@ ${dropboxWebFolderUrl()}
           if(!isAdmin) return;
           if(confirm("確定刪除此列？")){
             AUTH.splice(rIdx,1);
+            localStorage.setItem(AUTH_KEY, JSON.stringify(AUTH));
             renderAll();
           }
         });
@@ -1299,23 +1317,24 @@ ${dropboxWebFolderUrl()}
           for(let i=0;i<NAV.length;i++){
             row.buttons[i] = !!(cks[i] && cks[i].checked);
           }
+          // ✅ 立刻排程暫存本機（解決 admin 不能改）
+          scheduleAutoSaveLocal();
         }
 
-        [inU,inP,sel].forEach(el=> el.addEventListener("input", syncRow));
+        [inU,inP].forEach(el=> el.addEventListener("input", syncRow));
+        sel.addEventListener("change", syncRow);
         tr.querySelectorAll(".chk").forEach(el=> el.addEventListener("change", syncRow));
 
         tbody.appendChild(tr);
       });
     }
 
-    // --- ✅ mobile cards
     function renderCards(){
       cardsWrap.innerHTML = "";
 
       AUTH.forEach((row, rIdx)=>{
         const details = document.createElement("details");
         details.className = "mcard";
-        // 預設收合（更好滑）
         details.open = false;
 
         const summary = document.createElement("summary");
@@ -1348,7 +1367,6 @@ ${dropboxWebFolderUrl()}
         const body = document.createElement("div");
         body.className = "mcard-body";
 
-        // 使用者
         const fU = document.createElement("div");
         fU.className = "field";
         fU.innerHTML = `<div class="label">使用者</div>`;
@@ -1359,7 +1377,6 @@ ${dropboxWebFolderUrl()}
         fU.appendChild(inU);
         body.appendChild(fU);
 
-        // 密碼
         const fP = document.createElement("div");
         fP.className = "field";
         fP.innerHTML = `<div class="label">密碼</div>`;
@@ -1370,7 +1387,6 @@ ${dropboxWebFolderUrl()}
         fP.appendChild(inP);
         body.appendChild(fP);
 
-        // 權限 + 系統
         const fR = document.createElement("div");
         fR.className = "field";
         const labelR = document.createElement("div");
@@ -1397,9 +1413,6 @@ ${dropboxWebFolderUrl()}
         fR.appendChild(row2);
         body.appendChild(fR);
 
-        sel.addEventListener("change", refreshSys);
-
-        // ✅ 按鍵橫向滑動
         const fB = document.createElement("div");
         fB.className = "field";
         fB.innerHTML = `<div class="label">首頁按鍵顯示（左右滑動）</div>`;
@@ -1424,14 +1437,10 @@ ${dropboxWebFolderUrl()}
           pill.appendChild(t);
           strip.appendChild(pill);
           cks.push(ck);
-
-          ck.addEventListener("change", ()=> syncRow());
         });
-
         fB.appendChild(strip);
         body.appendChild(fB);
 
-        // 刪除
         const danger = document.createElement("div");
         danger.className = "danger-row";
         const del = document.createElement("button");
@@ -1442,13 +1451,13 @@ ${dropboxWebFolderUrl()}
           if(!isAdmin) return;
           if(confirm("確定刪除此列？")){
             AUTH.splice(rIdx,1);
+            localStorage.setItem(AUTH_KEY, JSON.stringify(AUTH));
             renderAll();
           }
         });
         danger.appendChild(del);
         body.appendChild(danger);
 
-        // admin lock
         if(!isAdmin){
           inU.disabled = true;
           inP.disabled = true;
@@ -1459,7 +1468,6 @@ ${dropboxWebFolderUrl()}
           sub.textContent = "（你目前為非 admin：僅可查看）";
         }
 
-        // sync row data
         function syncRow(){
           row.username = String(inU.value||"").trim();
           row.password = String(inP.value||"");
@@ -1469,13 +1477,16 @@ ${dropboxWebFolderUrl()}
           for(let i=0;i<NAV.length;i++){
             row.buttons[i] = !!(cks[i] && cks[i].checked);
           }
-          // 更新 summary 顯示
           u.textContent = row.username ? row.username : "(未命名使用者)";
           chip.textContent = row.level;
+
+          // ✅ 立刻排程暫存本機（解決 admin 不能改）
+          scheduleAutoSaveLocal();
         }
 
-        [inU,inP,sel].forEach(el=> el.addEventListener("input", syncRow));
-        [inU,inP,sel].forEach(el=> el.addEventListener("change", syncRow));
+        [inU,inP].forEach(el=> el.addEventListener("input", syncRow));
+        sel.addEventListener("change", syncRow);
+        cks.forEach(el=> el.addEventListener("change", syncRow));
 
         details.appendChild(summary);
         details.appendChild(body);
@@ -1489,21 +1500,15 @@ ${dropboxWebFolderUrl()}
       renderCards();
     }
 
-    // ✅ 按鍵數量/名稱變動時，自動同步
     function syncToNavShape(){
       NAV = loadNavConfig();
       const btnCount = NAV.length;
       AUTH = loadAuthTable(btnCount);
-
       AUTH = AUTH.map(r=> normalizeRowFromStorage(r, btnCount));
       localStorage.setItem(AUTH_KEY, JSON.stringify(AUTH));
-
       renderAll();
     }
 
-    // ==========================
-    // save / load
-    // ==========================
     function saveLocal(){
       AUTH = AUTH.filter(r => String(r.username||"").trim().length > 0);
       localStorage.setItem(AUTH_KEY, JSON.stringify(AUTH));
@@ -1511,7 +1516,7 @@ ${dropboxWebFolderUrl()}
     }
 
     // ==========================
-    // cloud watch（手機/桌機都會同步刷新）
+    // cloud watch
     // ==========================
     const CLOUD_WATCH_MS = 4000;
     let cloudWatchTimer = null;
@@ -1549,6 +1554,7 @@ ${dropboxWebFolderUrl()}
 
     btnSwitch.addEventListener("click", ()=>{
       sessionStorage.removeItem(CURRENT_KEY);
+      localStorage.removeItem(CURRENT_KEY);
       alert("已切換帳號，返回首頁重新登入。");
       location.href="index.html";
     });
@@ -1587,6 +1593,7 @@ ${dropboxWebFolderUrl()}
         role:"read",
         buttons: Array(NAV.length).fill(false)
       });
+      localStorage.setItem(AUTH_KEY, JSON.stringify(AUTH));
       renderAll();
     });
 
@@ -1595,7 +1602,6 @@ ${dropboxWebFolderUrl()}
       saveLocal();
     });
 
-    // mobile menu
     btnMore.addEventListener("click", ()=>{
       const open = moreMenu.style.display === "block";
       moreMenu.style.display = open ? "none" : "block";
@@ -1622,9 +1628,7 @@ ${dropboxWebFolderUrl()}
       }
     });
 
-    // 旋轉/改視窗時重畫（避免手機→桌機顯示不同步）
     window.addEventListener("resize", ()=>{
-      // 不做雲端，只重畫 UI
       renderAll();
     });
 
