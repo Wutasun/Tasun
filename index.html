@@ -407,7 +407,7 @@
     .hero-title span:nth-child(2){
       left: 50%;
       top: 18%;
-      transform: translate(-50%,-50%) rotate(0deg) scale(1.02); /* ✅ 只改 rotate=0 */
+      transform: translate(-50%,-50%) rotate(0deg) scale(1.02);
       opacity:.98;
     }
     .hero-title span:nth-child(3){
@@ -556,11 +556,10 @@
         transform: translate(-50%,-50%) rotate(-12deg) scale(1.02);
         opacity:.98;
       }
-      /* ✅ 無：位置不動，只把字體擺正 */
       .hero-title span:nth-child(2){
         left: 50%;
         top: 20%;
-        transform: translate(-50%,-50%) rotate(0deg) scale(1.02); /* ✅ rotate=0 */
+        transform: translate(-50%,-50%) rotate(0deg) scale(1.02);
         opacity:.98;
       }
       .hero-title span:nth-child(3){
@@ -656,6 +655,9 @@
     const CURRENT_KEY = "tasunCurrentUser_v1";
     const NAV_KEY     = "tasunNavButtons_v1";
 
+    // ✅ 本次瀏覽器開啟期間登入旗標（Session Cookie：關閉瀏覽器就消失）
+    const SESSION_COOKIE = "tasunSessionLogin_v1";
+
     const DEFAULT_NAV = [
       { id: "btn1", label: "臻鼎時代大廈管理表", href: "臻鼎管理表.html", target: "", roles: ["admin","write","read"] },
       { id: "btn2", label: "缺失 / 品質",       href: "甄鼎quality.html", target: "", roles: ["admin","write","read"] },
@@ -678,6 +680,22 @@
     let AUTH_TABLE = [];
     let mainNavBtns = [];
     let currentVisibleBtns = [];
+
+    // ===== Cookie helpers (session cookie) =====
+    function getCookie(name){
+      const m = document.cookie.match(new RegExp("(?:^|; )" + name.replace(/([.$?*|{}()[\\]\\\\/+^])/g, "\\$1") + "=([^;]*)"));
+      return m ? decodeURIComponent(m[1]) : "";
+    }
+    function hasSessionLogin(){
+      return getCookie(SESSION_COOKIE) === "1";
+    }
+    function setSessionLogin(){
+      // 不設定 expires/max-age => session cookie（關閉瀏覽器就消失）
+      document.cookie = `${SESSION_COOKIE}=1; path=/; SameSite=Lax`;
+    }
+    function clearSessionLogin(){
+      document.cookie = `${SESSION_COOKIE}=; Max-Age=0; path=/; SameSite=Lax`;
+    }
 
     function normalizeNavEntry(entry, index) {
       const base = DEFAULT_NAV[index] || {};
@@ -708,12 +726,11 @@
       return arr;
     }
 
-    // ✅ 改成與「權限表.html」相容的 legacy 格式（user/pass/role + btn1..btn5）
+    // ✅ 與「權限表.html」相容的 legacy seed（user/pass/role + btn1..）
     function getDefaultAuthTableLegacy(btnCount){
       const keys = Array.from({length: btnCount}, (_, i) => `btn${i+1}`);
       const mkAll = () => Object.fromEntries(keys.map(k => [k, true]));
       const mkOnlyLast = () => Object.fromEntries(keys.map((k, i) => [k, i === btnCount - 1]));
-
       return [
         { user:"alex",  pass:"Tasun08040224", role:"admin", ...mkAll() },
         { user:"JOYCE", pass:"09220224",      role:"admin", ...mkAll() },
@@ -745,7 +762,6 @@
     function loadAuthTable(btnCount){
       const raw = localStorage.getItem(AUTH_KEY);
 
-      // ✅ 沒有就 seed legacy，並回傳「內部格式」(username/password/level/buttons)
       if(!raw){
         const legacy = getDefaultAuthTableLegacy(btnCount);
         localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
@@ -830,7 +846,10 @@
       document.body.classList.remove("locked");
       loginOverlay.style.display = "none";
 
-      // ✅ 重要修正：改成權限表.html 讀得懂的格式 {user, role}
+      // ✅ 設定本次瀏覽器 session 已登入（關閉瀏覽器就會消失）
+      setSessionLogin();
+
+      // ✅ 權限表讀得懂的格式
       localStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: user.level }));
 
       userInfo.textContent = `目前使用者：${user.username} (${user.level})`;
@@ -879,12 +898,51 @@
       return AUTH_TABLE.find(row => row.username === u && row.password === password);
     }
 
-    /* ✅ 強制：開啟首頁先登入（保留原行為） */
-    localStorage.removeItem(CURRENT_KEY);
+    // ✅ 讀取目前使用者（兼容舊欄位：username/level）
+    function getCurrentUserNameFromStorage(){
+      try{
+        const obj = JSON.parse(localStorage.getItem(CURRENT_KEY) || "null");
+        if(!obj || typeof obj !== "object") return "";
+        return String(obj.user || obj.username || "").trim();
+      }catch(e){
+        return "";
+      }
+    }
 
+    // ✅ 顯示登入畫面（但不刪 session cookie；只是要求重新登入）
+    function showLogin(){
+      document.body.classList.add("locked");
+      loginOverlay.style.display = "flex";
+      loginError.textContent = "";
+      document.getElementById("password").value = "";
+      populateUserSelect();
+      resetButtonsForLogout();
+      userInfo.textContent = "目前使用者：未登入";
+    }
+
+    // ===== init =====
     buildMainButtons();
     resetButtonsForLogout();
     populateUserSelect();
+
+    // ✅ 第一次開啟(沒有 session cookie) => 清掉 CURRENT_KEY，強制登入
+    if(!hasSessionLogin()){
+      localStorage.removeItem(CURRENT_KEY);
+    }
+
+    // ✅ 已在同一瀏覽器開啟期間登入過：可自動進入，不必再登入（含刷新/新分頁）
+    const curName = getCurrentUserNameFromStorage();
+    if(hasSessionLogin() && curName){
+      const u = AUTH_TABLE.find(r => r.username === curName);
+      if(u){
+        applyUser(u);
+        document.getElementById("password").value = "";
+      }else{
+        showLogin();
+      }
+    }else{
+      showLogin();
+    }
 
     loginForm.addEventListener("submit", (e) => {
       e.preventDefault();
@@ -898,17 +956,13 @@
       }
       loginError.textContent = "";
       applyUser(user);
+      document.getElementById("password").value = "";
     });
 
+    // 切換帳號：清掉目前使用者，立刻回登入畫面（同一瀏覽器 session 仍有效）
     btnSwitch.addEventListener("click", () => {
       localStorage.removeItem(CURRENT_KEY);
-      document.body.classList.add("locked");
-      loginOverlay.style.display = "flex";
-      loginError.textContent = "";
-      loginForm.reset();
-      populateUserSelect();
-      resetButtonsForLogout();
-      userInfo.textContent = "目前使用者：未登入";
+      showLogin();
     });
 
     btnTogglePwd.addEventListener("click", () => {
