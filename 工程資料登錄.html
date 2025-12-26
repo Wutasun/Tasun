@@ -19,6 +19,7 @@
       --r:18px;
     }
     *{box-sizing:border-box}
+    html,body{height:100%}
     body{
       margin:0;
       color:var(--text);
@@ -32,7 +33,7 @@
 
     .wrap{max-width:980px;margin:0 auto;padding:20px 16px 34px}
 
-    /* ✅ 不用 fixed / sticky */
+    /* ✅ 不用 fixed / sticky（避免遮擋） */
     .topbar{
       position:relative;
       display:grid;
@@ -98,6 +99,7 @@
       white-space:nowrap;
     }
     .btn:hover{transform:translateY(-1px); filter:brightness(1.06)}
+    .btn:active{transform:translateY(0); filter:brightness(.98)}
     .btn.ghost{
       background:rgba(255,255,255,.05);
       border:1px solid rgba(255,255,255,.18);
@@ -165,7 +167,9 @@
       padding:10px 12px;
       font-family:inherit;
       outline:none;
+      transition:border-color .12s ease, filter .12s ease;
     }
+    input:focus,select:focus{border-color:rgba(246,211,122,.55); filter:brightness(1.05)}
     .miniHint{font-size:12px; color:rgba(236,236,236,.62); line-height:1.5}
     .warn{color:rgba(255,190,190,.95)}
     .inline2{display:grid; grid-template-columns: 1fr auto; gap:10px; align-items:end}
@@ -219,6 +223,56 @@
       z-index:200;
       backdrop-filter:blur(10px);
     }
+
+    /* ===== Login Modal（共用）===== */
+    .loginMask{
+      position:fixed; inset:0;
+      background:rgba(0,0,0,.68);
+      display:none;
+      align-items:center;
+      justify-content:center;
+      padding:20px;
+      z-index:999;
+    }
+    .loginMask.show{display:flex;}
+    .loginModal{
+      width:min(520px, 96vw);
+      border-radius:22px;
+      border:1px solid var(--border2);
+      background:linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.04));
+      box-shadow:0 30px 90px rgba(0,0,0,.78);
+      overflow:hidden;
+      backdrop-filter:blur(12px);
+    }
+    .loginHead{
+      padding:14px 16px;
+      display:flex; align-items:center; justify-content:space-between; gap:10px;
+      border-bottom:1px solid rgba(255,255,255,.10);
+    }
+    .loginTitle{
+      font-weight:900; letter-spacing:.08em;
+      color:var(--gold);
+      text-shadow:0 0 18px rgba(246,211,122,.22);
+    }
+    .loginBody{padding:14px 16px 10px;}
+    .loginFoot{
+      padding:12px 16px;
+      display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;
+      border-top:1px solid rgba(255,255,255,.10);
+    }
+    .loginErr{
+      margin-top:10px;
+      color:rgba(255,190,190,.95);
+      font-size:13px;
+      line-height:1.5;
+      display:none;
+    }
+    .loginHint{
+      margin-top:10px;
+      color:rgba(236,236,236,.65);
+      font-size:12px;
+      line-height:1.6;
+    }
   </style>
 </head>
 
@@ -237,6 +291,7 @@
           <div class="moreWrap">
             <button class="btn ghost small" id="mMoreBtn" type="button">更多 ▾</button>
             <div class="moreMenu" id="mMoreMenu" role="menu" aria-label="更多選單">
+              <button class="menuItem" data-href="工程資料庫.html" type="button">工程資料庫</button>
               <button class="menuItem" data-href="工程資料明細表.html" type="button">工程資料明細表</button>
               <button class="menuItem" data-href="工程資料查詢.html" type="button">工程資料查詢</button>
               <div class="menuSep"></div>
@@ -330,9 +385,38 @@
     </div>
   </div>
 
+  <!-- Login Modal（共用） -->
+  <div class="loginMask" id="loginMask" aria-hidden="true">
+    <div class="loginModal" role="dialog" aria-modal="true" aria-label="登入">
+      <div class="loginHead">
+        <div class="loginTitle">登入</div>
+        <button class="btn ghost small" id="loginClose" type="button">關閉</button>
+      </div>
+      <div class="loginBody">
+        <div class="field">
+          <div class="label">帳號</div>
+          <input id="loginUser" autocomplete="username" placeholder="例如：alex / tasun / wu" />
+        </div>
+        <div class="field" style="margin-top:10px;">
+          <div class="label">密碼</div>
+          <input id="loginPass" type="password" autocomplete="current-password" placeholder="請輸入密碼" />
+        </div>
+        <div class="loginErr" id="loginErr"></div>
+        <div class="loginHint" id="loginHint">
+          登入帳密完全以「權限表.html」的權限表（localStorage: <b>tasunAuthTable_v1</b>）為準。
+        </div>
+      </div>
+      <div class="loginFoot">
+        <button class="btn ghost" id="loginToAuth" type="button">前往權限表</button>
+        <button class="btn" id="loginBtn" type="button">登入</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toast" id="toast"></div>
 
   <script>
+    // ===== Keys =====
     const CURRENT_KEY = "tasunCurrentUser_v1";
     const AUTH_KEY = "tasunAuthTable_v1";
     const DB_KEY = "tasunEngineeringDetail_v1";
@@ -340,10 +424,12 @@
     const SYS_DICT_KEY = "tasunEngineeringDetail_systems_v1";
     const CAT_DICT_KEY = "tasunEngineeringDetail_categories_v1";
 
+    // ===== State =====
     let currentUser=null;
     let db=[];
     let promptMode=null;
 
+    // ===== Utils =====
     const $=(id)=>document.getElementById(id);
     const norm=(s)=>(s??"").toString().trim();
 
@@ -355,9 +441,19 @@
       toast._tm=setTimeout(()=>t.style.display="none",2200);
     }
 
+    function escHtml(s){
+      return (s??"").toString()
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#39;");
+    }
+
+    // ===== Auth Table (唯一真相來源) =====
     function mapRole(v){
       const s=(v??"").toString().trim().toLowerCase();
-      if(!s) return "";
+      if(!s) return "read";
       if(s==="admin") return "admin";
       if(s==="write"||s==="edit") return "write";
       if(s==="read"||s==="view") return "read";
@@ -378,64 +474,211 @@
       }catch(e){ return []; }
     }
 
-    function findRoleFromAuth(username){
+    function findAuthUser(username){
       const u=norm(username).toLowerCase();
-      if(!u) return "";
+      if(!u) return null;
       const rows=loadAuthTable();
       for(const r of rows){
         const ru=norm(r?.username).toLowerCase();
         if(ru && ru===u){
-          const rr=mapRole(r?.role ?? r?.level ?? r?.perm ?? r?.permission);
-          if(rr) return rr;
+          return {
+            username: norm(r?.username),
+            password: (r?.password ?? "").toString(),
+            role: mapRole(r?.role ?? r?.level ?? r?.perm ?? r?.permission)
+          };
         }
       }
-      return "";
+      return null;
     }
 
     function loadCurrentUser(){
-      try{
-        currentUser=JSON.parse(localStorage.getItem(CURRENT_KEY) || "null");
-      }catch(e){ currentUser=null; }
-
+      try{ currentUser = JSON.parse(localStorage.getItem(CURRENT_KEY) || "null"); }
+      catch(e){ currentUser=null; }
       if(currentUser && typeof currentUser==="object"){
-        const uname=norm(currentUser.username ?? currentUser.user ?? currentUser.name ?? currentUser.account);
-        if(uname) currentUser.username=uname;
-        const localRole=mapRole(currentUser.role ?? currentUser.level ?? currentUser.perm ?? currentUser.permission);
-        if(localRole) currentUser.role=localRole;
+        const uname = norm(currentUser.username ?? currentUser.user ?? currentUser.name ?? currentUser.account);
+        if(uname) currentUser.username = uname;
+        if(currentUser.role) currentUser.role = mapRole(currentUser.role);
       }
+    }
+
+    function setCurrentUser(username, role, authStamp){
+      const u = { username, role, level: role, authStamp: authStamp || "" };
+      localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
+      currentUser = u;
     }
 
     function role(){
-      const fromAuth=findRoleFromAuth(currentUser?.username);
-      const fromLocal=mapRole(currentUser?.role ?? currentUser?.level ?? currentUser?.perm ?? currentUser?.permission);
-      const r=(fromAuth || fromLocal || "read").toLowerCase();
-      try{
-        if(currentUser && currentUser.username){
-          if(currentUser.role !== r){
-            currentUser.role=r;
-            localStorage.setItem(CURRENT_KEY, JSON.stringify(currentUser));
-          }
-        }
-      }catch(e){}
-      return r;
+      return mapRole(currentUser?.role ?? currentUser?.level ?? "read");
     }
-
     function canWrite(){
-      const r=role();
+      const r = role();
       return r==="admin" || r==="write";
     }
 
-    function gate(){
-      if(!currentUser || !currentUser.username){
-        alert("尚未登入，將返回首頁。");
-        location.href="index.html";
+    // ===== Session Watch Patch =====
+    const SESSION_WATCH_MS = 3000;
+    let _watchStarted = false;
+
+    function fnv1a(str){
+      let h = 0x811c9dc5;
+      for(let i=0;i<str.length;i++){
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+      }
+      return (h >>> 0).toString(16).padStart(8, "0");
+    }
+    function authStampFromAuth(auth){
+      return fnv1a(`${auth.username}|${auth.password ?? ""}`);
+    }
+
+    function openLoginModal(msg){
+      const m = $("loginMask");
+      $("loginErr").style.display = "none";
+      if(msg){
+        $("loginErr").textContent = msg;
+        $("loginErr").style.display = "block";
+      }
+      $("loginUser").value = "";
+      $("loginPass").value = "";
+      m.classList.add("show");
+      m.setAttribute("aria-hidden","false");
+      setTimeout(()=> $("loginUser").focus(), 0);
+    }
+    function closeLoginModal(){
+      const m = $("loginMask");
+      m.classList.remove("show");
+      m.setAttribute("aria-hidden","true");
+    }
+
+    function forceReLogin(msg){
+      try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
+      currentUser = null;
+      toast(msg || "權限表已更新，請重新登入");
+      openLoginModal(msg || "權限表已更新，請重新登入");
+      // 同步 UI
+      $("uName").textContent = "—";
+      $("uRole").textContent = "—";
+    }
+
+    function validateSession(){
+      const lm = $("loginMask");
+      if(lm && lm.classList.contains("show")) return;
+
+      loadCurrentUser();
+      if(!currentUser || !currentUser.username) return;
+
+      const auth = findAuthUser(currentUser.username);
+      if(!auth){
+        forceReLogin("帳號已被移除，請重新登入");
+        return;
+      }
+
+      const stampNow = authStampFromAuth(auth);
+
+      if(!currentUser.authStamp){
+        // 舊資料補齊，不踢出
+        setCurrentUser(auth.username, auth.role || "read", stampNow);
+        $("uName").textContent = auth.username;
+        $("uRole").textContent = role();
+        return;
+      }
+
+      if(currentUser.authStamp !== stampNow){
+        forceReLogin("密碼已更新，請重新登入");
+        return;
+      }
+
+      // role 變更：不強制重登，只同步
+      const r = auth.role || "read";
+      if(mapRole(currentUser.role) !== r){
+        setCurrentUser(auth.username, r, stampNow);
+        $("uRole").textContent = r;
+      }
+    }
+
+    function startSessionWatch(){
+      if(_watchStarted) return;
+      _watchStarted = true;
+
+      window.addEventListener("storage", (e)=>{
+        if(e.key === AUTH_KEY || e.key === CURRENT_KEY){
+          validateSession();
+        }
+      });
+
+      setInterval(validateSession, SESSION_WATCH_MS);
+    }
+
+    function ensureLoggedIn(){
+      loadCurrentUser();
+      const rows = loadAuthTable();
+      if(!Array.isArray(rows) || rows.length === 0){
+        openLoginModal("尚未建立權限表：請先到「權限表.html」建立帳號。");
         return false;
       }
-      $("uName").textContent=currentUser.username;
-      $("uRole").textContent=role();
+
+      if(!currentUser || !currentUser.username){
+        openLoginModal();
+        return false;
+      }
+
+      const auth = findAuthUser(currentUser.username);
+      if(!auth){
+        forceReLogin("帳號已被移除，請重新登入");
+        return false;
+      }
+
+      const stampNow = authStampFromAuth(auth);
+
+      if(currentUser.authStamp && currentUser.authStamp !== stampNow){
+        forceReLogin("密碼已更新，請重新登入");
+        return false;
+      }
+
+      // 同步 role + stamp（不逼重登）
+      setCurrentUser(auth.username, auth.role || "read", stampNow);
+      $("uName").textContent = auth.username;
+      $("uRole").textContent = role();
       return true;
     }
 
+    function doLogin(){
+      const u = norm($("loginUser").value);
+      const p = ($("loginPass").value ?? "").toString();
+      const rows = loadAuthTable();
+
+      if(!Array.isArray(rows) || rows.length === 0){
+        $("loginErr").textContent = "尚未建立權限表：請先到「權限表.html」建立帳號。";
+        $("loginErr").style.display = "block";
+        return;
+      }
+      if(!u || !p){
+        $("loginErr").textContent = "請輸入帳號與密碼。";
+        $("loginErr").style.display = "block";
+        return;
+      }
+
+      const auth = findAuthUser(u);
+      if(!auth){
+        $("loginErr").textContent = "帳號不存在（以權限表為準）。";
+        $("loginErr").style.display = "block";
+        return;
+      }
+      if((auth.password ?? "") !== p){
+        $("loginErr").textContent = "密碼錯誤（以權限表為準）。";
+        $("loginErr").style.display = "block";
+        return;
+      }
+
+      const stampNow = authStampFromAuth(auth);
+      setCurrentUser(auth.username, auth.role || "read", stampNow);
+
+      closeLoginModal();
+      toast("登入成功");
+      start(); // ✅ 登入後啟動頁面
+    }
+
+    // ===== Data =====
     function loadDB(){
       try{
         db=JSON.parse(localStorage.getItem(DB_KEY) || "[]");
@@ -443,28 +686,6 @@
       }catch(e){ db=[]; }
     }
     function saveDB(){ localStorage.setItem(DB_KEY, JSON.stringify(db)); }
-
-    function getCounter(){
-      const n=Number(localStorage.getItem(COUNTER_KEY) || "0");
-      return Number.isFinite(n)?n:0;
-    }
-    function nextCounter(){
-      const n=getCounter()+1;
-      localStorage.setItem(COUNTER_KEY, String(n));
-      return n;
-    }
-    function padNo(n){
-      const s=String(n);
-      return s.length>=4?s:("0000".slice(s.length)+s);
-    }
-    function escHtml(s){
-      return (s??"").toString()
-        .replaceAll("&","&amp;")
-        .replaceAll("<","&lt;")
-        .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
-        .replaceAll("'","&#39;");
-    }
 
     function loadDict(key){
       try{
@@ -489,6 +710,20 @@
       const arr=Array.from(set);
       arr.sort((a,b)=>a.localeCompare(b,"zh-Hant"));
       return arr;
+    }
+
+    function getCounter(){
+      const n=Number(localStorage.getItem(COUNTER_KEY) || "0");
+      return Number.isFinite(n)?n:0;
+    }
+    function nextCounter(){
+      const n=getCounter()+1;
+      localStorage.setItem(COUNTER_KEY, String(n));
+      return n;
+    }
+    function padNo(n){
+      const s=String(n);
+      return s.length>=4?s:("0000".slice(s.length)+s);
     }
 
     function fillSelect(selId, options, placeholder){
@@ -568,6 +803,12 @@
     }
 
     function save(){
+      validateSession();
+      if(!currentUser || !currentUser.username){
+        openLoginModal();
+        return;
+      }
+
       if(!canWrite()){ toast("read 權限不可登錄"); return; }
 
       const name=norm($("name").value);
@@ -616,18 +857,19 @@
       window.addEventListener("keydown",(e)=>{ if(e.key==="Escape") close(); });
     }
 
-    function init(){
-      loadCurrentUser();
-      if(!gate()) return;
+    // ===== Page Start =====
+    function start(){
+      // 若尚未登入：停在登入視窗
+      if(!ensureLoggedIn()) return;
 
       loadDB();
 
-      // ✅ 左上返回工程資料庫
       $("navBackList").onclick = ()=>location.href="工程資料庫.html";
       setupMoreMenu("工程資料庫.html");
 
       $("btnHome").onclick = ()=>location.href="index.html";
 
+      // 權限提示
       if(!canWrite()){
         $("noPerm").style.display="block";
         $("btnSave").disabled=true;
@@ -654,7 +896,25 @@
       resetForm();
     }
 
-    init();
+    // ===== Login Modal Bindings =====
+    (function bindLogin(){
+      $("loginClose").onclick = closeLoginModal;
+      $("loginToAuth").onclick = ()=> location.href="權限表.html";
+      $("loginBtn").onclick = doLogin;
+
+      $("loginMask").addEventListener("click",(e)=>{
+        if(e.target === $("loginMask")) closeLoginModal();
+      });
+
+      window.addEventListener("keydown",(e)=>{
+        if(e.key === "Escape" && $("loginMask").classList.contains("show")) closeLoginModal();
+        if(e.key === "Enter" && $("loginMask").classList.contains("show")) doLogin();
+      });
+    })();
+
+    // ===== Boot =====
+    startSessionWatch();
+    start();
   </script>
 </body>
 </html>
