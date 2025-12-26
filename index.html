@@ -403,6 +403,7 @@
       transform: translate(-50%,-50%) rotate(-12deg) scale(1.02);
       opacity:.98;
     }
+    /* ✅ 無：位置不動，只把字體擺正（不旋轉） */
     .hero-title span:nth-child(2){
       left: 50%;
       top: 18%;
@@ -680,30 +681,14 @@
     let mainNavBtns = [];
     let currentVisibleBtns = [];
 
-    // ===== Cookie helpers (session cookie) - 改成更保險的寫法（避免 regex 造成整段 JS 停掉）=====
+    // ===== Cookie helpers (session cookie) =====
     function getCookie(name){
-      const parts = (document.cookie || "").split("; ");
-      for(const p of parts){
-        if(!p) continue;
-        const eq = p.indexOf("=");
-        const k = eq >= 0 ? p.slice(0, eq) : p;
-        if(k === name){
-          const v = eq >= 0 ? p.slice(eq+1) : "";
-          return decodeURIComponent(v || "");
-        }
-      }
-      return "";
+      const m = document.cookie.match(new RegExp("(?:^|; )" + name.replace(/([.$?*|{}()[\]\\/+^])/g, "\\$1") + "=([^;]*)"));
+      return m ? decodeURIComponent(m[1]) : "";
     }
-    function hasSessionLogin(){
-      return getCookie(SESSION_COOKIE) === "1";
-    }
-    function setSessionLogin(){
-      // 不設定 expires/max-age => session cookie（關閉瀏覽器就消失）
-      document.cookie = `${SESSION_COOKIE}=1; path=/; SameSite=Lax`;
-    }
-    function clearSessionLogin(){
-      document.cookie = `${SESSION_COOKIE}=; Max-Age=0; path=/; SameSite=Lax`;
-    }
+    function hasSessionLogin(){ return getCookie(SESSION_COOKIE) === "1"; }
+    function setSessionLogin(){ document.cookie = `${SESSION_COOKIE}=1; path=/; SameSite=Lax`; }
+    function clearSessionLogin(){ document.cookie = `${SESSION_COOKIE}=; Max-Age=0; path=/; SameSite=Lax`; }
 
     function normalizeNavEntry(entry, index) {
       const base = DEFAULT_NAV[index] || {};
@@ -741,9 +726,9 @@
     }
 
     function normalizeRowFromStorage(row, btnCount){
-      const username = String(row?.username || row?.user || "").trim();
-      const password = String(row?.password || row?.pass || "");
-      const level    = String(row?.level || row?.role || "read").trim() || "read";
+      const username = (row?.username ?? row?.user ?? row?.name ?? row?.account ?? "").toString().trim();
+      const password = (row?.password ?? row?.pass ?? "").toString();
+      const level    = (row?.level ?? row?.role ?? "read").toString().trim().toLowerCase();
 
       let buttons = [];
       if(Array.isArray(row?.buttons)) buttons = row.buttons.slice();
@@ -760,27 +745,30 @@
       return { username, password, level, buttons: out };
     }
 
-    // ✅ 這個函數做了「保險」：讀不到/解析壞掉/解析後空陣列 => 一律 seed
+    // ✅（核心修正）每次都從 localStorage 重新抓權限表，避免下拉變空
     function loadAuthTable(btnCount){
-      const seedAndReturn = () => {
+      const raw = localStorage.getItem(AUTH_KEY);
+
+      if(!raw){
         const legacy = getDefaultAuthTableLegacy(btnCount);
         localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
-        return legacy.map(r => normalizeRowFromStorage(r, btnCount)).filter(u => u.username);
-      };
-
-      const raw = localStorage.getItem(AUTH_KEY);
-      if(!raw) return seedAndReturn();
+        return legacy.map(r => normalizeRowFromStorage(r, btnCount));
+      }
 
       try{
-        const arr = JSON.parse(raw);
-        if(Array.isArray(arr) && arr.length){
-          const normalized = arr.map(r => normalizeRowFromStorage(r, btnCount)).filter(u => u.username);
-          if(normalized.length) return normalized;
+        const parsed = JSON.parse(raw);
+
+        // 允許：陣列 或 {users:[...]}（更保險）
+        const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
+        if(Array.isArray(arr)){
+          const mapped = arr.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
+          if(mapped.length) return mapped;
         }
-      }catch(e){
-        // 解析錯誤就 seed
-      }
-      return seedAndReturn();
+      }catch(e){}
+
+      const legacy = getDefaultAuthTableLegacy(btnCount);
+      localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
+      return legacy.map(r => normalizeRowFromStorage(r, btnCount));
     }
 
     function buildMainButtons(){
@@ -881,27 +869,36 @@
       layoutMainButtonsResponsive();
     }
 
-    // ✅ 下拉選單：去重/過濾空值/至少有一項可選
+    // ✅（核心修正）下拉選單永遠依 AUTH_KEY 即時生成
     function populateUserSelect(){
       const sel = document.getElementById("username");
+      const btnCount = (NAV_CONFIG && NAV_CONFIG.length) ? NAV_CONFIG.length : DEFAULT_NAV.length;
+
+      AUTH_TABLE = loadAuthTable(btnCount);
+
       sel.innerHTML = "";
 
-      const names = Array.from(new Set(
-        (AUTH_TABLE || [])
-          .map(r => String(r.username || "").trim())
-          .filter(Boolean)
-      ));
-
-      if(!names.length){
+      if(!AUTH_TABLE.length){
         const opt = document.createElement("option");
         opt.value = "";
-        opt.textContent = "（尚無使用者，請先到 權限表 新增）";
+        opt.textContent = "（尚無使用者，請先到「系統 / 權限」新增）";
+        opt.disabled = true;
+        opt.selected = true;
         sel.appendChild(opt);
-        sel.disabled = true;
         return;
       }
 
-      sel.disabled = false;
+      // placeholder
+      const ph = document.createElement("option");
+      ph.value = "";
+      ph.textContent = "請選擇使用者";
+      ph.disabled = true;
+      ph.selected = true;
+      sel.appendChild(ph);
+
+      // unique + sort
+      const names = Array.from(new Set(AUTH_TABLE.map(r => r.username).filter(Boolean)));
+      names.sort((a,b)=>a.localeCompare(b, "zh-Hant"));
 
       names.forEach(name => {
         const opt = document.createElement("option");
@@ -919,7 +916,7 @@
 
     function findUser(username, password){
       const u = (username || "").trim();
-      return (AUTH_TABLE || []).find(row => row.username === u && row.password === password);
+      return AUTH_TABLE.find(row => row.username === u && row.password === password);
     }
 
     // ✅ 讀取目前使用者（兼容舊欄位：username/level）
@@ -933,12 +930,16 @@
       }
     }
 
+    // ✅ 顯示登入畫面（但不刪 session cookie；只是要求重新登入）
     function showLogin(){
       document.body.classList.add("locked");
       loginOverlay.style.display = "flex";
       loginError.textContent = "";
       document.getElementById("password").value = "";
+
+      // ✅ 每次顯示登入都重抓權限表 → 下拉不會空
       populateUserSelect();
+
       resetButtonsForLogout();
       userInfo.textContent = "目前使用者：未登入";
     }
@@ -948,14 +949,6 @@
     resetButtonsForLogout();
     populateUserSelect();
 
-    // ✅ 若權限表在另一分頁改了資料，這邊同步更新下拉
-    window.addEventListener("storage", (e) => {
-      if(e.key === AUTH_KEY){
-        AUTH_TABLE = loadAuthTable(NAV_CONFIG.length);
-        populateUserSelect();
-      }
-    });
-
     // ✅ 第一次開啟(沒有 session cookie) => 清掉 CURRENT_KEY，強制登入
     if(!hasSessionLogin()){
       localStorage.removeItem(CURRENT_KEY);
@@ -964,7 +957,7 @@
     // ✅ 已在同一瀏覽器開啟期間登入過：可自動進入，不必再登入（含刷新/新分頁）
     const curName = getCurrentUserNameFromStorage();
     if(hasSessionLogin() && curName){
-      const u = (AUTH_TABLE || []).find(r => r.username === curName);
+      const u = AUTH_TABLE.find(r => r.username === curName);
       if(u){
         applyUser(u);
         document.getElementById("password").value = "";
@@ -975,10 +968,23 @@
       showLogin();
     }
 
+    // ✅ 若權限表在另一分頁被更新，這裡立刻刷新下拉
+    window.addEventListener("storage", (e) => {
+      if(e.key === AUTH_KEY){
+        try{ AUTH_TABLE = loadAuthTable((NAV_CONFIG && NAV_CONFIG.length) ? NAV_CONFIG.length : DEFAULT_NAV.length); }catch(_){}
+        if(document.body.classList.contains("locked")) populateUserSelect();
+      }
+    });
+
     loginForm.addEventListener("submit", (e) => {
       e.preventDefault();
       const username = document.getElementById("username").value;
       const password = document.getElementById("password").value;
+
+      if(!username){
+        loginError.textContent = "請先選擇使用者名稱。";
+        return;
+      }
 
       const user = findUser(username, password);
       if(!user){
