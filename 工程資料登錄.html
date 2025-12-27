@@ -170,6 +170,12 @@
       transition:border-color .12s ease, filter .12s ease;
     }
     input:focus,select:focus{border-color:rgba(246,211,122,.55); filter:brightness(1.05)}
+    input:disabled,select:disabled{
+      opacity:.55;
+      cursor:not-allowed;
+      filter:saturate(.85);
+    }
+
     .miniHint{font-size:12px; color:rgba(236,236,236,.62); line-height:1.5}
     .warn{color:rgba(255,190,190,.95)}
     .inline2{display:grid; grid-template-columns: 1fr auto; gap:10px; align-items:end}
@@ -446,6 +452,7 @@
     let currentUser=null;
     let db=[];
     let promptMode=null;
+    let pageReady=false; // ✅ 用於 validateSession 之後同步 UI
 
     // ===== Utils =====
     const $=(id)=>document.getElementById(id);
@@ -546,6 +553,24 @@
       return r==="admin" || r==="write";
     }
 
+    // ✅ UI：權限同步（read 時整個表單不可輸入）
+    function applyPermissionUI(){
+      if(!pageReady) return;
+      const writable = canWrite();
+
+      $("noPerm").style.display = writable ? "none" : "block";
+      $("btnSave").disabled = !writable;
+
+      $("name").disabled = !writable;
+      $("sys").disabled  = !writable;
+      $("cat").disabled  = !writable;
+      $("url").disabled  = !writable;
+      $("date").disabled = !writable;
+
+      $("btnAddSys").style.display = writable ? "inline-block" : "none";
+      $("btnAddCat").style.display = writable ? "inline-block" : "none";
+    }
+
     // ===== Session Watch Patch =====
     const SESSION_WATCH_MS = 3000;
     let _watchStarted = false;
@@ -617,6 +642,7 @@
       openLoginModal(msg || "權限表已更新，請重新登入");
       $("uName").textContent = "—";
       $("uRole").textContent = "—";
+      if(pageReady) applyPermissionUI();
     }
 
     function validateSession(){
@@ -638,6 +664,7 @@
         setCurrentUser(auth.username, auth.role || "read", stampNow);
         $("uName").textContent = auth.username;
         $("uRole").textContent = role();
+        if(pageReady) applyPermissionUI();
         return;
       }
 
@@ -650,6 +677,7 @@
       if(mapRole(currentUser.role) !== r){
         setCurrentUser(auth.username, r, stampNow);
         $("uRole").textContent = r;
+        if(pageReady) applyPermissionUI();
       }
     }
 
@@ -786,34 +814,44 @@
       return s.length>=4?s:("0000".slice(s.length)+s);
     }
 
-    function fillSelect(selId, options, placeholder){
+    // ✅ 一律保留 placeholder，避免「自動選到第一項」誤存
+    function fillSelectWithPlaceholder(selId, options, placeholder, keepValue){
       const sel=$(selId);
-      if(options.length===0){
-        sel.innerHTML = `<option value="" disabled selected>${escHtml(placeholder)}</option>`;
-      }else{
-        sel.innerHTML = options.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
+      const ph = placeholder || "請選擇";
+      const keep = norm(keepValue);
+
+      sel.innerHTML =
+        `<option value="" disabled ${keep ? "" : "selected"}>${escHtml(ph)}</option>` +
+        options.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
+
+      if(keep){
+        const ok = options.some(x => x === keep);
+        if(ok) sel.value = keep;
       }
     }
 
-    function rebuildOptions(){
+    // keepSelection: true 會嘗試保留原選擇；false 會回到 placeholder
+    function rebuildOptions(keepSelection){
       $("no").value = padNo(getCounter()+1);
       $("date").value = new Date().toISOString().slice(0,10);
+
+      const prevSys = keepSelection ? norm($("sys").value) : "";
+      const prevCat = keepSelection ? norm($("cat").value) : "";
 
       const sys = unionOptions("system", SYS_DICT_KEY);
       const cat = unionOptions("category", CAT_DICT_KEY);
 
-      fillSelect("sys", sys, "（請先新增系統）");
-      fillSelect("cat", cat, "（請先新增類別）");
+      fillSelectWithPlaceholder("sys", sys, "（請選擇系統 / 或先新增）", prevSys);
+      fillSelectWithPlaceholder("cat", cat, "（請選擇類別 / 或先新增）", prevCat);
 
-      $("btnAddSys").style.display = canWrite() ? "inline-block" : "none";
-      $("btnAddCat").style.display = canWrite() ? "inline-block" : "none";
+      applyPermissionUI();
     }
 
     function resetForm(){
       $("name").value="";
       $("url").value="";
-      rebuildOptions();
-      $("name").focus();
+      rebuildOptions(false);
+      if(canWrite()) $("name").focus();
     }
 
     function openPrompt(mode){
@@ -855,7 +893,7 @@
       dict.sort((a,b)=>a.localeCompare(b,"zh-Hant"));
       saveDict(key, dict);
 
-      rebuildOptions();
+      rebuildOptions(true);
       if(promptMode==="sys") $("sys").value=v; else $("cat").value=v;
 
       closePrompt();
@@ -876,8 +914,8 @@
 
       const system=norm($("sys").value);
       const category=norm($("cat").value);
-      if(!system){ toast("系統尚未建立：請先按「新增系統」"); return; }
-      if(!category){ toast("類別尚未建立：請先按「新增類別」"); return; }
+      if(!system){ toast("請先選擇系統（或先新增系統）"); return; }
+      if(!category){ toast("請先選擇類別（或先新增類別）"); return; }
 
       const url=norm($("url").value);
       const regDate=norm($("date").value) || new Date().toISOString().slice(0,10);
@@ -929,15 +967,6 @@
 
       $("btnHome").onclick = ()=>location.href="index.html";
 
-      // 權限提示
-      if(!canWrite()){
-        $("noPerm").style.display="block";
-        $("btnSave").disabled=true;
-      }else{
-        $("noPerm").style.display="none";
-        $("btnSave").disabled=false;
-      }
-
       $("btnAddSys").onclick=()=>openPrompt("sys");
       $("btnAddCat").onclick=()=>openPrompt("cat");
       $("btnReset").onclick=resetForm;
@@ -953,7 +982,9 @@
         if(e.key==="Enter" && $("pMask").style.display==="flex") addOption();
       });
 
+      pageReady = true;
       resetForm();
+      applyPermissionUI();
     }
 
     // ===== Login Modal Bindings =====
