@@ -266,12 +266,27 @@
       font-size:13px;
       line-height:1.5;
       display:none;
+      white-space: pre-wrap;
     }
     .loginHint{
       margin-top:10px;
       color:rgba(236,236,236,.65);
       font-size:12px;
       line-height:1.6;
+    }
+    /* ✅ 下拉箭頭（不影響你原本風格） */
+    .loginBody select{
+      appearance:none;
+      -webkit-appearance:none;
+      background-image:
+        linear-gradient(45deg, transparent 50%, rgba(236,236,236,.85) 50%),
+        linear-gradient(135deg, rgba(236,236,236,.85) 50%, transparent 50%);
+      background-position:
+        calc(100% - 18px) 50%,
+        calc(100% - 12px) 50%;
+      background-size: 6px 6px, 6px 6px;
+      background-repeat:no-repeat;
+      padding-right:34px;
     }
   </style>
 </head>
@@ -395,7 +410,10 @@
       <div class="loginBody">
         <div class="field">
           <div class="label">帳號</div>
-          <input id="loginUser" autocomplete="username" placeholder="例如：alex / tasun / wu" />
+          <!-- ✅ 改為下拉：由 權限表(localStorage: tasunAuthTable_v1) 自動帶入 -->
+          <select id="loginUser" autocomplete="username">
+            <option value="">請選擇帳號</option>
+          </select>
         </div>
         <div class="field" style="margin-top:10px;">
           <div class="label">密碼</div>
@@ -474,17 +492,28 @@
       }catch(e){ return []; }
     }
 
+    // ✅ 兼容 權限表欄位：user/pass/role 或 username/password/role
+    function pickUsername(row){
+      return norm(row?.user ?? row?.username ?? row?.account ?? row?.name);
+    }
+    function pickPassword(row){
+      return (row?.pass ?? row?.password ?? row?.pwd ?? "").toString();
+    }
+    function pickRole(row){
+      return mapRole(row?.role ?? row?.level ?? row?.perm ?? row?.permission);
+    }
+
     function findAuthUser(username){
       const u=norm(username).toLowerCase();
       if(!u) return null;
       const rows=loadAuthTable();
       for(const r of rows){
-        const ru=norm(r?.username).toLowerCase();
+        const ru=pickUsername(r).toLowerCase();
         if(ru && ru===u){
           return {
-            username: norm(r?.username),
-            password: (r?.password ?? "").toString(),
-            role: mapRole(r?.role ?? r?.level ?? r?.perm ?? r?.permission)
+            username: pickUsername(r),
+            password: pickPassword(r),
+            role: pickRole(r) || "read"
           };
         }
       }
@@ -498,11 +527,13 @@
         const uname = norm(currentUser.username ?? currentUser.user ?? currentUser.name ?? currentUser.account);
         if(uname) currentUser.username = uname;
         if(currentUser.role) currentUser.role = mapRole(currentUser.role);
+        if(currentUser.level) currentUser.level = mapRole(currentUser.level);
+        currentUser.authStamp = (currentUser.authStamp ?? "").toString();
       }
     }
 
     function setCurrentUser(username, role, authStamp){
-      const u = { username, role, level: role, authStamp: authStamp || "" };
+      const u = { username, user: username, role: mapRole(role), level: mapRole(role), authStamp: authStamp || "" };
       localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
       currentUser = u;
     }
@@ -531,6 +562,28 @@
       return fnv1a(`${auth.username}|${auth.password ?? ""}`);
     }
 
+    function rebuildUserDropdown(preselectUser){
+      const sel = $("loginUser");
+      const rows = loadAuthTable();
+      const users = rows.map(r => pickUsername(r)).filter(x => !!norm(x));
+
+      const seen = new Set();
+      const uniq = [];
+      for(const u of users){
+        const k = u.toLowerCase();
+        if(seen.has(k)) continue;
+        seen.add(k);
+        uniq.push(u);
+      }
+
+      sel.innerHTML =
+        `<option value="">請選擇帳號</option>` +
+        uniq.map(u=>{
+          const s = (preselectUser && u.toLowerCase() === preselectUser.toLowerCase()) ? "selected" : "";
+          return `<option value="${u.replace(/"/g,"&quot;")}" ${s}>${escHtml(u)}</option>`;
+        }).join("");
+    }
+
     function openLoginModal(msg){
       const m = $("loginMask");
       $("loginErr").style.display = "none";
@@ -538,11 +591,18 @@
         $("loginErr").textContent = msg;
         $("loginErr").style.display = "block";
       }
-      $("loginUser").value = "";
+
+      loadCurrentUser();
+      rebuildUserDropdown(currentUser?.username || "");
       $("loginPass").value = "";
+
       m.classList.add("show");
       m.setAttribute("aria-hidden","false");
-      setTimeout(()=> $("loginUser").focus(), 0);
+
+      setTimeout(()=>{
+        if($("loginUser").value) $("loginPass").focus();
+        else $("loginUser").focus();
+      }, 0);
     }
     function closeLoginModal(){
       const m = $("loginMask");
@@ -555,7 +615,6 @@
       currentUser = null;
       toast(msg || "權限表已更新，請重新登入");
       openLoginModal(msg || "權限表已更新，請重新登入");
-      // 同步 UI
       $("uName").textContent = "—";
       $("uRole").textContent = "—";
     }
@@ -576,7 +635,6 @@
       const stampNow = authStampFromAuth(auth);
 
       if(!currentUser.authStamp){
-        // 舊資料補齊，不踢出
         setCurrentUser(auth.username, auth.role || "read", stampNow);
         $("uName").textContent = auth.username;
         $("uRole").textContent = role();
@@ -588,7 +646,6 @@
         return;
       }
 
-      // role 變更：不強制重登，只同步
       const r = auth.role || "read";
       if(mapRole(currentUser.role) !== r){
         setCurrentUser(auth.username, r, stampNow);
@@ -629,13 +686,11 @@
       }
 
       const stampNow = authStampFromAuth(auth);
-
       if(currentUser.authStamp && currentUser.authStamp !== stampNow){
         forceReLogin("密碼已更新，請重新登入");
         return false;
       }
 
-      // 同步 role + stamp（不逼重登）
       setCurrentUser(auth.username, auth.role || "read", stampNow);
       $("uName").textContent = auth.username;
       $("uRole").textContent = role();
@@ -652,8 +707,13 @@
         $("loginErr").style.display = "block";
         return;
       }
-      if(!u || !p){
-        $("loginErr").textContent = "請輸入帳號與密碼。";
+      if(!u){
+        $("loginErr").textContent = "請先選擇帳號。";
+        $("loginErr").style.display = "block";
+        return;
+      }
+      if(!p){
+        $("loginErr").textContent = "請輸入密碼。";
         $("loginErr").style.display = "block";
         return;
       }
@@ -901,6 +961,10 @@
       $("loginClose").onclick = closeLoginModal;
       $("loginToAuth").onclick = ()=> location.href="權限表.html";
       $("loginBtn").onclick = doLogin;
+
+      $("loginUser").addEventListener("change", ()=>{
+        if($("loginUser").value) $("loginPass").focus();
+      });
 
       $("loginMask").addEventListener("click",(e)=>{
         if(e.target === $("loginMask")) closeLoginModal();
