@@ -579,6 +579,13 @@
 
       window.addEventListener("storage", (e)=>{
         if(e.key === AUTH_KEY || e.key === CURRENT_KEY) validateSession();
+        // ✅ 明細表資料更新（例如另頁新增/編輯）
+        if(e.key === DB_KEY){
+          loadDB();
+          rebuildSysSelect();              // 系統可能新增
+          rebuildCatSelectForSys(norm($("sys").value), norm($("cat").value)); // 類別依系統重算
+          renderTableOnly();
+        }
       });
       setInterval(validateSession, SESSION_WATCH_MS);
     }
@@ -692,18 +699,49 @@
       return arr;
     }
 
-    function rebuildSelects(){
-      const keepS = $("sys").value;
-      const keepC = $("cat").value;
-
+    // ✅ 系統：仍採「明細表資料不重複 + 系統字典」
+    function rebuildSysSelect(){
+      const keepS = norm($("sys").value);
       const sys = unionOptions("system", SYS_DICT_KEY);
-      const cat = unionOptions("category", CAT_DICT_KEY);
 
-      $("sys").innerHTML = `<option value="">全部</option>` + sys.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
-      $("cat").innerHTML = `<option value="">全部</option>` + cat.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
+      $("sys").innerHTML =
+        `<option value="">全部</option>` +
+        sys.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
 
       if(sys.includes(keepS)) $("sys").value = keepS;
-      if(cat.includes(keepC)) $("cat").value = keepC;
+    }
+
+    // ✅ 類別：依「已選系統」→ 從明細表資料抓出「不重複類別」做下拉
+    //   - sys="" → 類別顯示全部（資料不重複 + 類別字典，維持原邏輯）
+    //   - sys!= "" → 類別只顯示該系統在明細表內出現過的類別（不重複）
+    function rebuildCatSelectForSys(sysValue, keepCat){
+      const sys = norm(sysValue);
+      const keep = norm(keepCat);
+
+      let cats = [];
+
+      if(!sys){
+        // 全部（維持原本：資料不重複 + 字典）
+        cats = unionOptions("category", CAT_DICT_KEY);
+      }else{
+        // 只取該系統在資料中「實際存在」的類別
+        const set = new Set();
+        for(const r of db){
+          if(norm(r.system) !== sys) continue;
+          const c = norm(r.category);
+          if(c) set.add(c);
+        }
+        cats = Array.from(set);
+        cats.sort((a,b)=>a.localeCompare(b,"zh-Hant"));
+      }
+
+      $("cat").innerHTML =
+        `<option value="">全部</option>` +
+        cats.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
+
+      // 若原本已選類別不在新清單 → 自動回到全部
+      if(keep && cats.includes(keep)) $("cat").value = keep;
+      else $("cat").value = "";
     }
 
     function filtered(){
@@ -727,8 +765,7 @@
       return rows;
     }
 
-    function render(){
-      rebuildSelects();
+    function renderTableOnly(){
       const rows=filtered();
 
       $("tbody").innerHTML = rows.map(r=>{
@@ -749,9 +786,32 @@
         `;
       }).join("") || `<tr><td colspan="6" class="muted" style="padding:18px;">尚無資料</td></tr>`;
 
+      // 顯示：該系統的「不重複類別數」
+      const sysNow = norm($("sys").value);
+      let catCount = 0;
+      if(sysNow){
+        const set = new Set();
+        for(const r of db){
+          if(norm(r.system) !== sysNow) continue;
+          const c = norm(r.category);
+          if(c) set.add(c);
+        }
+        catCount = set.size;
+      }
+
       const writable = canWrite();
-      $("hint").innerHTML = `筆數：<b style="color:var(--gold)">${rows.length}</b>。`
-        + (writable ? ` 你也可以到「登錄資料」新增。` : `（read 權限僅可查詢）`);
+      $("hint").innerHTML =
+        `筆數：<b style="color:var(--gold)">${rows.length}</b>。` +
+        (sysNow ? ` 該系統不重複類別：<b style="color:var(--gold)">${catCount}</b>。` : ``) +
+        (writable ? ` 你也可以到「登錄資料」新增。` : `（read 權限僅可查詢）`);
+    }
+
+    function render(){
+      // ✅ 系統下拉（全域）
+      rebuildSysSelect();
+      // ✅ 類別下拉（依系統而變）
+      rebuildCatSelectForSys(norm($("sys").value), norm($("cat").value));
+      renderTableOnly();
     }
 
     function setupMoreMenu(backHref){
@@ -795,17 +855,26 @@
       // ✅ 登錄按鈕權限控制
       $("btnReg").style.display = canWrite() ? "inline-block" : "none";
 
-      $("q").addEventListener("input", render);
-      $("sys").addEventListener("change", render);
-      $("cat").addEventListener("change", render);
+      // 🔑 重點：系統變更 → 先重建「該系統的類別清單」→ 再渲染
+      $("sys").addEventListener("change", ()=>{
+        rebuildCatSelectForSys(norm($("sys").value), ""); // 系統變更 → 類別重置為全部
+        renderTableOnly();
+      });
+
+      $("q").addEventListener("input", renderTableOnly);
+      $("cat").addEventListener("change", renderTableOnly);
+
       $("btnClear").onclick = ()=>{
         $("q").value="";
         $("sys").value="";
-        $("cat").value="";
-        render();
+        rebuildCatSelectForSys("", ""); // 回到全部類別
+        renderTableOnly();
       };
 
-      render();
+      // 初始建一次
+      rebuildSysSelect();
+      rebuildCatSelectForSys(norm($("sys").value), norm($("cat").value));
+      renderTableOnly();
     }
 
     // ===== Login Modal Bindings =====
