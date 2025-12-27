@@ -215,6 +215,71 @@
       border-top:1px solid rgba(255,255,255,.10);
     }
 
+    /* ✅ 重複確認 Modal */
+    .dMask{
+      position:fixed; inset:0;
+      background:rgba(0,0,0,.68);
+      display:none;
+      align-items:center; justify-content:center;
+      padding:20px; z-index:180;
+    }
+    .dMask.show{display:flex;}
+    .dModal{
+      width:min(760px, 96vw);
+      border-radius:22px;
+      border:1px solid rgba(246,211,122,.40);
+      background:linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.04));
+      box-shadow:0 30px 90px rgba(0,0,0,.78);
+      overflow:hidden;
+      backdrop-filter:blur(12px);
+    }
+    .dHead{
+      padding:14px 16px;
+      display:flex; align-items:center; justify-content:space-between; gap:10px;
+      border-bottom:1px solid rgba(255,255,255,.10);
+    }
+    .dTitle{
+      font-weight:900; letter-spacing:.08em;
+      color:var(--gold);
+      text-shadow:0 0 18px rgba(246,211,122,.22);
+    }
+    .dBody{padding:14px 16px 10px;}
+    .dFoot{
+      padding:12px 16px;
+      display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;
+      border-top:1px solid rgba(255,255,255,.10);
+    }
+    .dTableWrap{
+      margin-top:10px;
+      border-radius:14px;
+      border:1px solid rgba(255,255,255,.12);
+      overflow:auto;
+      max-height: 42vh;
+      background:rgba(0,0,0,.18);
+    }
+    .dTable{
+      width:100%;
+      border-collapse:collapse;
+      min-width: 640px;
+    }
+    .dTable th,.dTable td{
+      padding:10px 10px;
+      border-bottom:1px solid rgba(255,255,255,.08);
+      text-align:left;
+      font-size:13px;
+      color:rgba(236,236,236,.92);
+      vertical-align:top;
+      white-space:nowrap;
+    }
+    .dTable th{
+      position:sticky; top:0; z-index:2;
+      background:linear-gradient(180deg, rgba(0,0,0,.62), rgba(0,0,0,.38));
+      color:rgba(246,211,122,.95);
+      letter-spacing:.06em;
+    }
+    .dMsg{color:rgba(236,236,236,.85); line-height:1.6; font-size:13px;}
+    .dMsg b{color:var(--gold)}
+
     .toast{
       position:fixed; left:50%; transform:translateX(-50%);
       bottom:18px;
@@ -352,6 +417,7 @@
         <div class="field span2">
           <div class="label">文件名稱</div>
           <input id="name" placeholder="例如：消防系統施工圖（核准版）" />
+          <div class="miniHint warn" id="dupNameHint" style="display:none;"></div>
         </div>
 
         <div class="field">
@@ -375,6 +441,7 @@
         <div class="field span2">
           <div class="label">檔案連結（Dropbox / 雲端 / 內網網址）</div>
           <input id="url" type="url" placeholder="https://..." />
+          <div class="miniHint warn" id="dupUrlHint" style="display:none;"></div>
         </div>
       </div>
 
@@ -406,6 +473,40 @@
     </div>
   </div>
 
+  <!-- ✅ 重複確認 Modal -->
+  <div class="dMask" id="dMask" aria-hidden="true">
+    <div class="dModal" role="dialog" aria-modal="true" aria-label="重複確認">
+      <div class="dHead">
+        <div class="dTitle" id="dTitle">偵測到可能重複</div>
+        <button class="btn ghost small" id="dClose" type="button">關閉</button>
+      </div>
+      <div class="dBody">
+        <div class="dMsg" id="dMsg"></div>
+        <div class="dTableWrap" id="dTableWrap" style="display:none;">
+          <table class="dTable">
+            <thead>
+              <tr>
+                <th style="width:90px;">編號</th>
+                <th>文件名稱</th>
+                <th style="width:140px;">系統</th>
+                <th style="width:140px;">類別</th>
+                <th style="width:130px;">登錄日期</th>
+              </tr>
+            </thead>
+            <tbody id="dTbody"></tbody>
+          </table>
+        </div>
+        <div class="miniHint" style="margin-top:10px;">
+          你可以選「仍要使用」繼續輸入；或選「取消」回去修改。
+        </div>
+      </div>
+      <div class="dFoot">
+        <button class="btn ghost" id="dCancel" type="button">取消</button>
+        <button class="btn" id="dOk" type="button">仍要使用</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Login Modal（共用） -->
   <div class="loginMask" id="loginMask" aria-hidden="true">
     <div class="loginModal" role="dialog" aria-modal="true" aria-label="登入">
@@ -416,7 +517,6 @@
       <div class="loginBody">
         <div class="field">
           <div class="label">帳號</div>
-          <!-- ✅ 改為下拉：由 權限表(localStorage: tasunAuthTable_v1) 自動帶入 -->
           <select id="loginUser" autocomplete="username">
             <option value="">請選擇帳號</option>
           </select>
@@ -452,7 +552,12 @@
     let currentUser=null;
     let db=[];
     let promptMode=null;
-    let pageReady=false; // ✅ 用於 validateSession 之後同步 UI
+    let pageReady=false;
+
+    // ✅ 重複確認：避免同一個值一直跳提示
+    let confirmedNameSig = "";
+    let confirmedUrlSig  = "";
+    let _dupConfirm = { open:false, onOk:null, onCancel:null };
 
     // ===== Utils =====
     const $=(id)=>document.getElementById(id);
@@ -499,7 +604,6 @@
       }catch(e){ return []; }
     }
 
-    // ✅ 兼容 權限表欄位：user/pass/role 或 username/password/role
     function pickUsername(row){
       return norm(row?.user ?? row?.username ?? row?.account ?? row?.name);
     }
@@ -553,7 +657,6 @@
       return r==="admin" || r==="write";
     }
 
-    // ✅ UI：權限同步（read 時整個表單不可輸入）
     function applyPermissionUI(){
       if(!pageReady) return;
       const writable = canWrite();
@@ -763,7 +866,7 @@
 
       closeLoginModal();
       toast("登入成功");
-      start(); // ✅ 登入後啟動頁面
+      start();
     }
 
     // ===== Data =====
@@ -809,12 +912,7 @@
       localStorage.setItem(COUNTER_KEY, String(n));
       return n;
     }
-    function padNo(n){
-      const s=String(n);
-      return s.length>=4?s:("0000".slice(s.length)+s);
-    }
 
-    // ✅ 一律保留 placeholder，避免「自動選到第一項」誤存
     function fillSelectWithPlaceholder(selId, options, placeholder, keepValue){
       const sel=$(selId);
       const ph = placeholder || "請選擇";
@@ -830,9 +928,9 @@
       }
     }
 
-    // keepSelection: true 會嘗試保留原選擇；false 會回到 placeholder
+    // ✅ 編號不固定 4 位數：直接顯示自然數字
     function rebuildOptions(keepSelection){
-      $("no").value = padNo(getCounter()+1);
+      $("no").value = String(getCounter()+1);
       $("date").value = new Date().toISOString().slice(0,10);
 
       const prevSys = keepSelection ? norm($("sys").value) : "";
@@ -847,13 +945,256 @@
       applyPermissionUI();
     }
 
+    function resetDupHints(){
+      $("dupNameHint").style.display="none";
+      $("dupNameHint").textContent="";
+      $("dupUrlHint").style.display="none";
+      $("dupUrlHint").textContent="";
+    }
+
     function resetForm(){
       $("name").value="";
       $("url").value="";
+      confirmedNameSig = "";
+      confirmedUrlSig  = "";
+      resetDupHints();
       rebuildOptions(false);
       if(canWrite()) $("name").focus();
     }
 
+    // ===== ✅ 重複檢查（文件名稱 / 檔案連結）=====
+    function normNameKey(s){
+      return norm(s).toLowerCase().replace(/\s+/g," ");
+    }
+
+    function normUrlKey(u){
+      let s = norm(u);
+      if(!s) return "";
+      s = s.trim();
+
+      // 盡量做一致化（避免 dropbox dl=0/1 造成同檔不同字串）
+      try{
+        const url = new URL(s);
+        url.hash = "";
+
+        // 若是 dropbox：忽略 dl=0/1（同一檔不同下載模式）
+        if(url.hostname.includes("dropbox.com")){
+          url.searchParams.delete("dl");
+        }
+
+        // 移除一些常見追蹤參數（可選，不影響其他雲端/內網）
+        url.searchParams.delete("utm_source");
+        url.searchParams.delete("utm_medium");
+        url.searchParams.delete("utm_campaign");
+        url.searchParams.delete("utm_content");
+        url.searchParams.delete("utm_term");
+
+        // 去掉尾端 /
+        let out = url.toString();
+        out = out.replace(/\/+$/,"");
+        return out.toLowerCase();
+      }catch(e){
+        // 非標準 URL（內網可能是檔案路徑之類）：至少做 trim + lower
+        return s.replace(/\/+$/,"").toLowerCase();
+      }
+    }
+
+    function findDupByName(name){
+      const k = normNameKey(name);
+      if(!k) return [];
+      const hits = [];
+      for(const r of db){
+        if(normNameKey(r?.name) === k) hits.push(r);
+      }
+      return hits;
+    }
+
+    function findDupByUrl(url){
+      const k = normUrlKey(url);
+      if(!k) return [];
+      const hits = [];
+      for(const r of db){
+        if(normUrlKey(r?.url) === k) hits.push(r);
+      }
+      return hits;
+    }
+
+    function buildDupTable(rows){
+      const list = rows.slice(0, 12);
+      $("dTbody").innerHTML = list.map(r=>{
+        return `
+          <tr>
+            <td>${escHtml(r?.id ?? "")}</td>
+            <td>${escHtml(r?.name ?? "")}</td>
+            <td>${escHtml(r?.system ?? "")}</td>
+            <td>${escHtml(r?.category ?? "")}</td>
+            <td>${escHtml(r?.regDate ?? "")}</td>
+          </tr>
+        `;
+      }).join("");
+      $("dTableWrap").style.display = list.length ? "block" : "none";
+    }
+
+    function openDupConfirm(messageHtml, rowsForTable, onOk, onCancel){
+      if(_dupConfirm.open) return;
+      _dupConfirm.open = true;
+      _dupConfirm.onOk = onOk || null;
+      _dupConfirm.onCancel = onCancel || null;
+
+      $("dMsg").innerHTML = messageHtml || "";
+      buildDupTable(rowsForTable || []);
+
+      $("dMask").classList.add("show");
+      $("dMask").setAttribute("aria-hidden","false");
+
+      setTimeout(()=> $("dOk").focus(), 0);
+    }
+
+    function closeDupConfirm(){
+      $("dMask").classList.remove("show");
+      $("dMask").setAttribute("aria-hidden","true");
+      _dupConfirm.open = false;
+      _dupConfirm.onOk = null;
+      _dupConfirm.onCancel = null;
+    }
+
+    function checkDupHintsOnly(){
+      // 僅顯示提示，不打斷（用於 blur）
+      const name = norm($("name").value);
+      const url  = norm($("url").value);
+
+      const dn = findDupByName(name);
+      if(name && dn.length){
+        $("dupNameHint").style.display="block";
+        $("dupNameHint").textContent = `⚠ 文件名稱疑似重複：已存在 ${dn.length} 筆`;
+      }else{
+        $("dupNameHint").style.display="none";
+        $("dupNameHint").textContent = "";
+      }
+
+      const du = findDupByUrl(url);
+      if(url && du.length){
+        $("dupUrlHint").style.display="block";
+        $("dupUrlHint").textContent = `⚠ 檔案連結疑似重複：已存在 ${du.length} 筆`;
+      }else{
+        $("dupUrlHint").style.display="none";
+        $("dupUrlHint").textContent = "";
+      }
+    }
+
+    function confirmIfDuplicate(field){
+      // field: "name" | "url"
+      if(!canWrite()) return;
+
+      const name = norm($("name").value);
+      const url  = norm($("url").value);
+
+      // 更新提示（不一定會彈窗）
+      checkDupHintsOnly();
+
+      if(field === "name"){
+        const sig = normNameKey(name);
+        if(!sig) return;
+
+        const dn = findDupByName(name);
+        if(!dn.length) return;
+
+        if(confirmedNameSig === sig) return; // 已確認過這個值
+
+        openDupConfirm(
+          `你剛剛貼上的 <b>文件名稱</b> 可能重複（已存在 <b>${dn.length}</b> 筆）。<br>是否仍要使用這個文件名稱？`,
+          dn,
+          ()=>{
+            confirmedNameSig = sig;
+            closeDupConfirm();
+            toast("已確認：允許重複文件名稱");
+          },
+          ()=>{
+            closeDupConfirm();
+            $("name").value = "";
+            confirmedNameSig = "";
+            checkDupHintsOnly();
+            $("name").focus();
+          }
+        );
+        return;
+      }
+
+      if(field === "url"){
+        const sig = normUrlKey(url);
+        if(!sig) return;
+
+        const du = findDupByUrl(url);
+        if(!du.length) return;
+
+        if(confirmedUrlSig === sig) return; // 已確認過這個值
+
+        openDupConfirm(
+          `你剛剛貼上的 <b>檔案連結</b> 可能重複（已存在 <b>${du.length}</b> 筆）。<br>是否仍要使用這個連結？`,
+          du,
+          ()=>{
+            confirmedUrlSig = sig;
+            closeDupConfirm();
+            toast("已確認：允許重複檔案連結");
+          },
+          ()=>{
+            closeDupConfirm();
+            $("url").value = "";
+            confirmedUrlSig = "";
+            checkDupHintsOnly();
+            $("url").focus();
+          }
+        );
+        return;
+      }
+    }
+
+    function confirmDuplicatesBeforeSave(onOk){
+      const name = norm($("name").value);
+      const url  = norm($("url").value);
+
+      const dn = name ? findDupByName(name) : [];
+      const du = url  ? findDupByUrl(url)  : [];
+
+      const nameSig = normNameKey(name);
+      const urlSig  = normUrlKey(url);
+
+      const needNameConfirm = dn.length && confirmedNameSig !== nameSig;
+      const needUrlConfirm  = du.length && confirmedUrlSig  !== urlSig;
+
+      if(!needNameConfirm && !needUrlConfirm){
+        onOk && onOk();
+        return;
+      }
+
+      // 合併顯示（一次確認兩個欄位）
+      const msgs = [];
+      let tableRows = [];
+      if(needNameConfirm){
+        msgs.push(`• <b>文件名稱</b> 重複：<b>${dn.length}</b> 筆`);
+        tableRows = dn;
+      }
+      if(needUrlConfirm){
+        msgs.push(`• <b>檔案連結</b> 重複：<b>${du.length}</b> 筆`);
+        if(!tableRows.length) tableRows = du;
+      }
+
+      openDupConfirm(
+        `偵測到可能重複：<br>${msgs.join("<br>")}<br><br>是否仍要「新增」？`,
+        tableRows,
+        ()=>{
+          if(needNameConfirm) confirmedNameSig = nameSig;
+          if(needUrlConfirm)  confirmedUrlSig  = urlSig;
+          closeDupConfirm();
+          onOk && onOk();
+        },
+        ()=>{
+          closeDupConfirm();
+        }
+      );
+    }
+
+    // ===== 新增系統/類別 prompt =====
     function openPrompt(mode){
       if(!canWrite()){ toast("read 權限不可新增"); return; }
       promptMode=mode;
@@ -900,6 +1241,7 @@
       toast("已新增選項");
     }
 
+    // ===== Save =====
     function save(){
       validateSession();
       if(!currentUser || !currentUser.username){
@@ -920,12 +1262,15 @@
       const url=norm($("url").value);
       const regDate=norm($("date").value) || new Date().toISOString().slice(0,10);
 
-      const id=nextCounter();
-      db.unshift({ id, name, system, category, url, regDate });
-      saveDB();
+      // ✅ 按新增時也要確認是否重複（避免漏掉）
+      confirmDuplicatesBeforeSave(()=>{
+        const id=nextCounter();
+        db.unshift({ id, name, system, category, url, regDate });
+        saveDB();
 
-      toast("已新增");
-      resetForm();
+        toast("已新增");
+        resetForm();
+      });
     }
 
     function setupMoreMenu(backHref){
@@ -957,7 +1302,6 @@
 
     // ===== Page Start =====
     function start(){
-      // 若尚未登入：停在登入視窗
       if(!ensureLoggedIn()) return;
 
       loadDB();
@@ -977,10 +1321,65 @@
       $("pOk").onclick=addOption;
       $("pMask").addEventListener("click",(e)=>{ if(e.target===$("pMask")) closePrompt(); });
 
+      // ✅ 重複確認 modal bindings
+      $("dClose").onclick = ()=>{ closeDupConfirm(); };
+      $("dCancel").onclick = ()=>{
+        // 若是 paste 彈出來，走 onCancel（清欄位）
+        if(_dupConfirm.onCancel) _dupConfirm.onCancel();
+        else closeDupConfirm();
+      };
+      $("dOk").onclick = ()=>{
+        if(_dupConfirm.onOk) _dupConfirm.onOk();
+        else closeDupConfirm();
+      };
+      $("dMask").addEventListener("click",(e)=>{
+        if(e.target === $("dMask")){
+          // 點遮罩視為取消
+          if(_dupConfirm.onCancel) _dupConfirm.onCancel();
+          else closeDupConfirm();
+        }
+      });
+
       window.addEventListener("keydown",(e)=>{
         if(e.key==="Escape" && $("pMask").style.display==="flex") closePrompt();
         if(e.key==="Enter" && $("pMask").style.display==="flex") addOption();
+
+        if(e.key==="Escape" && $("dMask").classList.contains("show")){
+          if(_dupConfirm.onCancel) _dupConfirm.onCancel();
+          else closeDupConfirm();
+        }
+        if(e.key==="Enter" && $("dMask").classList.contains("show")){
+          if(_dupConfirm.onOk) _dupConfirm.onOk();
+          else closeDupConfirm();
+        }
       });
+
+      // ✅ 兩欄貼上要確認是否重複（paste 後檢查）
+      $("name").addEventListener("paste", ()=>{
+        setTimeout(()=>{
+          // 值變了就重置確認狀態
+          confirmedNameSig = "";
+          confirmIfDuplicate("name");
+        }, 0);
+      });
+      $("url").addEventListener("paste", ()=>{
+        setTimeout(()=>{
+          confirmedUrlSig = "";
+          confirmIfDuplicate("url");
+        }, 0);
+      });
+
+      // ✅ 平常輸入時：只顯示提示（不打斷），離開欄位再提示一次
+      $("name").addEventListener("input", ()=>{
+        confirmedNameSig = ""; // 值改了 → 需重新確認
+        checkDupHintsOnly();
+      });
+      $("url").addEventListener("input", ()=>{
+        confirmedUrlSig = "";
+        checkDupHintsOnly();
+      });
+      $("name").addEventListener("blur", ()=> checkDupHintsOnly());
+      $("url").addEventListener("blur", ()=> checkDupHintsOnly());
 
       pageReady = true;
       resetForm();
