@@ -249,6 +249,7 @@
       font-size:13px;
       line-height:1.5;
       display:none;
+      white-space:pre-wrap;
     }
     .loginHint{
       margin-top:10px;
@@ -345,7 +346,9 @@
       <div class="loginBody">
         <div class="field">
           <div class="label">帳號</div>
-          <input id="loginUser" autocomplete="username" placeholder="例如：alex / tasun / wu" />
+          <select id="loginUser" autocomplete="username">
+            <option value="">請選擇帳號</option>
+          </select>
         </div>
         <div class="field" style="margin-top:10px;">
           <div class="label">密碼</div>
@@ -421,18 +424,18 @@
       }catch(e){ return []; }
     }
 
+    function pickUsername(row){ return norm(row?.username ?? row?.user ?? row?.account ?? row?.name); }
+    function pickPassword(row){ return (row?.password ?? row?.pass ?? row?.pwd ?? "").toString(); }
+    function pickRole(row){ return mapRole(row?.role ?? row?.level ?? row?.perm ?? row?.permission); }
+
     function findAuthUser(username){
       const u=norm(username).toLowerCase();
       if(!u) return null;
       const rows=loadAuthTable();
       for(const r of rows){
-        const ru=norm(r?.username).toLowerCase();
+        const ru=pickUsername(r).toLowerCase();
         if(ru && ru===u){
-          return {
-            username: norm(r?.username),
-            password: (r?.password ?? "").toString(),
-            role: mapRole(r?.role ?? r?.level ?? r?.perm ?? r?.permission)
-          };
+          return { user: pickUsername(r), pass: pickPassword(r), role: pickRole(r) || "read" };
         }
       }
       return null;
@@ -442,23 +445,31 @@
       try{ currentUser = JSON.parse(localStorage.getItem(CURRENT_KEY) || "null"); }
       catch(e){ currentUser=null; }
       if(currentUser && typeof currentUser==="object"){
-        const uname = norm(currentUser.username ?? currentUser.user ?? currentUser.name ?? currentUser.account);
-        if(uname) currentUser.username = uname;
+        const uname = norm(currentUser.user ?? currentUser.username ?? currentUser.name ?? currentUser.account);
+        if(uname){
+          currentUser.user = uname;
+          currentUser.username = uname; // 兼容
+        }
         if(currentUser.role) currentUser.role = mapRole(currentUser.role);
+        if(currentUser.level) currentUser.level = mapRole(currentUser.level);
+        currentUser.authStamp = (currentUser.authStamp ?? "").toString();
       }
     }
 
-    function setCurrentUser(username, role, authStamp){
-      const u = { username, role, level: role, authStamp: authStamp || "" };
+    function setCurrentUser(user, role, authStamp){
+      const u = {
+        user,
+        username: user,        // 兼容舊頁
+        role: mapRole(role),
+        level: mapRole(role),  // 兼容舊頁
+        authStamp: (authStamp || "").toString()
+      };
       localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
       currentUser = u;
     }
 
     function role(){ return mapRole(currentUser?.role ?? currentUser?.level ?? "read"); }
-    function canWrite(){
-      const r = role();
-      return r==="admin" || r==="write";
-    }
+    function canWrite(){ const r = role(); return r==="admin" || r==="write"; }
 
     // ===== Session Watch Patch =====
     const SESSION_WATCH_MS = 3000;
@@ -473,7 +484,27 @@
       return (h >>> 0).toString(16).padStart(8, "0");
     }
     function authStampFromAuth(auth){
-      return fnv1a(`${auth.username}|${auth.password ?? ""}`);
+      return fnv1a(`${auth.user}|${auth.pass ?? ""}`);
+    }
+
+    function rebuildUserDropdown(preselectUser){
+      const sel = $("loginUser");
+      const rows = loadAuthTable();
+      const users = rows.map(r => pickUsername(r)).filter(Boolean);
+
+      const seen = new Set();
+      const uniq = [];
+      for(const u of users){
+        const k = u.toLowerCase();
+        if(seen.has(k)) continue;
+        seen.add(k);
+        uniq.push(u);
+      }
+
+      sel.innerHTML = `<option value="">請選擇帳號</option>` + uniq.map(u=>{
+        const s = (preselectUser && u.toLowerCase() === preselectUser.toLowerCase()) ? "selected" : "";
+        return `<option value="${escHtml(u)}" ${s}>${escHtml(u)}</option>`;
+      }).join("");
     }
 
     function openLoginModal(msg){
@@ -482,11 +513,17 @@
         $("loginErr").textContent = msg;
         $("loginErr").style.display="block";
       }
-      $("loginUser").value="";
+      loadCurrentUser();
+      rebuildUserDropdown(currentUser?.user || "");
+
       $("loginPass").value="";
       $("loginMask").classList.add("show");
       $("loginMask").setAttribute("aria-hidden","false");
-      setTimeout(()=> $("loginUser").focus(), 0);
+
+      setTimeout(()=>{
+        if($("loginUser").value) $("loginPass").focus();
+        else $("loginUser").focus();
+      },0);
     }
     function closeLoginModal(){
       $("loginMask").classList.remove("show");
@@ -500,6 +537,7 @@
       openLoginModal(msg || "權限表已更新，請重新登入");
       $("uName").textContent="—";
       $("uRole").textContent="—";
+      $("btnReg").style.display="none";
     }
 
     function validateSession(){
@@ -507,20 +545,18 @@
       if(lm && lm.classList.contains("show")) return;
 
       loadCurrentUser();
-      if(!currentUser || !currentUser.username) return;
+      if(!currentUser || !currentUser.user) return;
 
-      const auth = findAuthUser(currentUser.username);
-      if(!auth){
-        forceReLogin("帳號已被移除，請重新登入");
-        return;
-      }
+      const auth = findAuthUser(currentUser.user);
+      if(!auth){ forceReLogin("帳號已被移除，請重新登入"); return; }
 
       const stampNow = authStampFromAuth(auth);
 
       if(!currentUser.authStamp){
-        setCurrentUser(auth.username, auth.role || "read", stampNow);
-        $("uName").textContent = auth.username;
+        setCurrentUser(auth.user, auth.role || "read", stampNow);
+        $("uName").textContent = auth.user;
         $("uRole").textContent = role();
+        $("btnReg").style.display = canWrite() ? "inline-block" : "none";
         return;
       }
 
@@ -531,8 +567,9 @@
 
       const r = auth.role || "read";
       if(mapRole(currentUser.role) !== r){
-        setCurrentUser(auth.username, r, stampNow);
+        setCurrentUser(auth.user, r, stampNow);
         $("uRole").textContent = r;
+        $("btnReg").style.display = canWrite() ? "inline-block" : "none";
       }
     }
 
@@ -541,11 +578,8 @@
       _watchStarted = true;
 
       window.addEventListener("storage", (e)=>{
-        if(e.key === AUTH_KEY || e.key === CURRENT_KEY){
-          validateSession();
-        }
+        if(e.key === AUTH_KEY || e.key === CURRENT_KEY) validateSession();
       });
-
       setInterval(validateSession, SESSION_WATCH_MS);
     }
 
@@ -557,16 +591,13 @@
         return false;
       }
 
-      if(!currentUser || !currentUser.username){
+      if(!currentUser || !currentUser.user){
         openLoginModal();
         return false;
       }
 
-      const auth = findAuthUser(currentUser.username);
-      if(!auth){
-        forceReLogin("帳號已被移除，請重新登入");
-        return false;
-      }
+      const auth = findAuthUser(currentUser.user);
+      if(!auth){ forceReLogin("帳號已被移除，請重新登入"); return false; }
 
       const stampNow = authStampFromAuth(auth);
       if(currentUser.authStamp && currentUser.authStamp !== stampNow){
@@ -574,9 +605,10 @@
         return false;
       }
 
-      setCurrentUser(auth.username, auth.role || "read", stampNow);
-      $("uName").textContent = auth.username;
+      setCurrentUser(auth.user, auth.role || "read", stampNow);
+      $("uName").textContent = auth.user;
       $("uRole").textContent = role();
+      $("btnReg").style.display = canWrite() ? "inline-block" : "none";
       return true;
     }
 
@@ -590,8 +622,13 @@
         $("loginErr").style.display = "block";
         return;
       }
-      if(!u || !p){
-        $("loginErr").textContent = "請輸入帳號與密碼。";
+      if(!u){
+        $("loginErr").textContent = "請先選擇帳號。";
+        $("loginErr").style.display = "block";
+        return;
+      }
+      if(!p){
+        $("loginErr").textContent = "請輸入密碼。";
         $("loginErr").style.display = "block";
         return;
       }
@@ -602,18 +639,18 @@
         $("loginErr").style.display = "block";
         return;
       }
-      if((auth.password ?? "") !== p){
+      if((auth.pass ?? "") !== p){
         $("loginErr").textContent = "密碼錯誤（以權限表為準）。";
         $("loginErr").style.display = "block";
         return;
       }
 
       const stampNow = authStampFromAuth(auth);
-      setCurrentUser(auth.username, auth.role || "read", stampNow);
+      setCurrentUser(auth.user, auth.role || "read", stampNow);
 
       closeLoginModal();
       toast("登入成功");
-      start();
+      start(); // 重跑初始化（確保權限與按鈕狀態正確）
     }
 
     // ===== Data =====
@@ -625,7 +662,8 @@
     }
 
     function padNo(n){
-      const s=String(n);
+      const nn = Number(n);
+      const s = Number.isFinite(nn) ? String(nn) : String(n ?? "");
       return s.length>=4?s:("0000".slice(s.length)+s);
     }
 
@@ -754,6 +792,9 @@
       $("btnHome").onclick = ()=>location.href="index.html";
       $("btnReg").onclick = ()=>location.href="工程資料登錄.html";
 
+      // ✅ 登錄按鈕權限控制
+      $("btnReg").style.display = canWrite() ? "inline-block" : "none";
+
       $("q").addEventListener("input", render);
       $("sys").addEventListener("change", render);
       $("cat").addEventListener("change", render);
@@ -780,6 +821,10 @@
       window.addEventListener("keydown",(e)=>{
         if(e.key === "Escape" && $("loginMask").classList.contains("show")) closeLoginModal();
         if(e.key === "Enter" && $("loginMask").classList.contains("show")) doLogin();
+      });
+
+      $("loginUser").addEventListener("change", ()=>{
+        if($("loginUser").value) $("loginPass").focus();
       });
     })();
 
