@@ -52,7 +52,6 @@
       padding-bottom: 16px;
     }
 
-    /* 頂列：桌機 */
     .topbar{
       display:flex;
       gap: 10px;
@@ -108,6 +107,11 @@
       transform:none !important;
     }
 
+    .btn-token-link{
+      border-color: rgba(255,244,208,.55);
+      box-shadow: 0 10px 28px rgba(0,0,0,.40), 0 0 18px rgba(246,211,122,.20);
+    }
+
     .header{
       padding: 10px 20px 8px;
       border-top: 1px solid rgba(246,211,122,.10);
@@ -131,7 +135,6 @@
 
     .content{ padding: 14px 14px 8px; }
 
-    /* 桌機表格 */
     .tableWrap{
       width:100%;
       overflow:auto;
@@ -226,7 +229,6 @@
       min-height: 44px;
     }
 
-    /* 手機：返回/更多 下拉一致 UI */
     .topbarMobile{
       display:none;
       padding: 12px 14px;
@@ -268,7 +270,6 @@
     .menu button:hover{ background: rgba(255,255,255,.04); }
     .menu button[disabled]{ opacity:.45; cursor:not-allowed; }
 
-    /* 手機卡片式 */
     .cards{ display:none; margin-top: 10px; gap: 12px; }
     .card{
       border-radius: 18px;
@@ -349,6 +350,7 @@
             <button class="btn" id="moreBtn">更多</button>
             <div class="menu" id="moreMenu">
               <button id="switchBtnM">切換帳號</button>
+              <button id="getTokenBtnM" style="display:none;">取得 Token（開啟 Dropbox）</button>
               <button id="tokenBtnM">設定 Token</button>
               <button id="downloadBtnM">雲端下載</button>
               <button id="uploadBtnM">儲存並上傳</button>
@@ -365,6 +367,7 @@
         </div>
         <div class="rightGroup">
           <button class="btn" id="backBtnD">返回首頁</button>
+          <button class="btn btn-token-link" id="getTokenBtnD" style="display:none;">取得 Token（Dropbox）</button>
           <button class="btn" id="tokenBtnD">設定 Token</button>
           <button class="btn" id="downloadBtnD">雲端下載</button>
           <button class="btn" id="uploadBtnD">儲存並上傳</button>
@@ -421,8 +424,10 @@
   const TOKEN_KEY    = 'tasunDropboxToken_v1';
   const BTN_META_KEY = 'tasunButtonMeta_v1';
 
-  // ✅ App folder 正確路徑：只用根目錄檔名即可
   const DROPBOX_PATH = '/權限表.json';
+
+  // ✅ Token 取得網址（你提供的 Dropbox App info）
+  const TOKEN_HELP_URL = 'https://www.dropbox.com/developers/apps/info/a5pm08kyb0bybdt';
 
   const roleOptions = ['admin','write','read'];
 
@@ -460,10 +465,16 @@
   const moreBtn   = el('moreBtn');
   const moreMenu  = el('moreMenu');
 
+  const getTokenBtnD = el('getTokenBtnD');
+  const getTokenBtnM = el('getTokenBtnM');
+
   let auth = [];
   let btnMeta = [];
   let current = null;
   let isAdmin = false;
+
+  // ✅ Token 過期旗標：過期就自動顯示訊息 + 停用雲端按鈕
+  let tokenExpired = false;
 
   function safeJsonParse(s, fallback){
     try{ return JSON.parse(s); }catch(e){ return fallback; }
@@ -489,7 +500,6 @@
       .trim();
   }
 
-  // 將任何非 ISO-8859-1 轉成 ASCII 序列，確保 headers 永遠安全
   function latin1Safe(s){
     s = stripInvisibles(s);
     let out = '';
@@ -513,13 +523,38 @@
 
   function sanitizeToken(raw){
     let t = stripInvisibles(raw);
-    // token 正常是 ASCII：移除任何非可見 ASCII，避免 headers 直接爆
     t = t.replace(/[^\x21-\x7E]/g, '');
     return t.trim();
   }
 
   function getToken(){
     return sanitizeToken(localStorage.getItem(TOKEN_KEY) || '');
+  }
+
+  function setTokenHelpVisible(visible){
+    const show = !!visible && isAdmin;
+    if(getTokenBtnD) getTokenBtnD.style.display = show ? '' : 'none';
+    if(getTokenBtnM) getTokenBtnM.style.display = show ? '' : 'none';
+  }
+
+  function markTokenExpired(reasonText){
+    tokenExpired = true;
+    setTokenHelpVisible(true);
+
+    // ✅ 你要的：過期就「自動顯示訊息」
+    setMsg(
+      'Token 已過期（expired_access_token）。\n' +
+      '請先點「取得 Token（Dropbox）」開啟網址複製新 Token，然後按「設定 Token」貼上。\n' +
+      (reasonText ? `（原因：${reasonText}）` : ''),
+      true
+    );
+
+    updateStates();
+  }
+
+  function clearTokenExpired(){
+    tokenExpired = false;
+    setTokenHelpVisible(false);
   }
 
   function askTokenIfNeeded(reasonText){
@@ -529,6 +564,8 @@
     if(t === null) return null;
     const cleaned = sanitizeToken(t);
     localStorage.setItem(TOKEN_KEY, cleaned);
+    clearTokenExpired();
+    updateStates('已更新 Token。');
     return cleaned;
   }
 
@@ -673,31 +710,40 @@
   function closeMoreMenu(){ moreMenu.classList.remove('show'); }
 
   function setCloudButtonsEnabled(){
-    const tokenOk = !!getToken();
+    const tokenOk = !!getToken() && !tokenExpired;
+
     downloadBtnD.disabled = !tokenOk;
     downloadBtnM.disabled = !tokenOk;
-    // 上傳還要 admin
+
     uploadBtnD.disabled = !(tokenOk && isAdmin);
     uploadBtnM.disabled = !(tokenOk && isAdmin);
 
-    // 若不是 admin，明顯提示
     if(!isAdmin){
       uploadBtnD.title = '需 admin 且已設定 Token';
       uploadBtnM.title = '需 admin 且已設定 Token';
     }else{
-      uploadBtnD.title = tokenOk ? '' : '尚未設定 Token';
-      uploadBtnM.title = tokenOk ? '' : '尚未設定 Token';
+      uploadBtnD.title = tokenOk ? '' : (tokenExpired ? 'Token 過期，請更新' : '尚未設定 Token');
+      uploadBtnM.title = tokenOk ? '' : (tokenExpired ? 'Token 過期，請更新' : '尚未設定 Token');
     }
 
-    downloadBtnD.title = tokenOk ? '' : '尚未設定 Token';
-    downloadBtnM.title = tokenOk ? '' : '尚未設定 Token';
+    downloadBtnD.title = tokenOk ? '' : (tokenExpired ? 'Token 過期，請更新' : '尚未設定 Token');
+    downloadBtnM.title = tokenOk ? '' : (tokenExpired ? 'Token 過期，請更新' : '尚未設定 Token');
   }
 
   function updateStates(text){
     const token = getToken();
-    tokenState.textContent = token ? '狀態：已設定 Token（可同步）' : '狀態：未設定 Token';
+
+    if(tokenExpired){
+      tokenState.textContent = '狀態：Token 過期（請更新）';
+    }else{
+      tokenState.textContent = token ? '狀態：已設定 Token（可同步）' : '狀態：未設定 Token';
+    }
+
     setCloudButtonsEnabled();
-    if(text) setMsg(text, false);
+
+    if(text && !tokenExpired){
+      setMsg(text, false);
+    }
   }
 
   function renderAll(){
@@ -707,6 +753,8 @@
     renderCards();
 
     addBtn.disabled = !isAdmin;
+
+    setTokenHelpVisible(tokenExpired);
 
     setCloudButtonsEnabled();
 
@@ -734,7 +782,6 @@
     setMsg('已刪除一列並儲存本機。');
   }
 
-  // ✅ 勾選可反勾
   function onTableInput(e){
     const tr = e.target.closest('tr');
     if(!tr) return;
@@ -804,7 +851,6 @@
     saveLocal();
   }
 
-  // Mobile menu
   moreBtn.addEventListener('click', () => {
     moreMenu.classList.toggle('show');
   });
@@ -812,7 +858,6 @@
     if(!e.target.closest('.moreWrap')) moreMenu.classList.remove('show');
   });
 
-  // navigation
   function goHome(){ location.href = 'index.html'; }
   backBtnD.addEventListener('click', goHome);
   backBtnM.addEventListener('click', () => { closeMoreMenu(); goHome(); });
@@ -824,19 +869,27 @@
   switchBtnD.addEventListener('click', switchAccount);
   switchBtnM.addEventListener('click', () => { closeMoreMenu(); switchAccount(); });
 
-  // token UI
+  function openTokenHelp(){
+    window.open(TOKEN_HELP_URL, '_blank', 'noopener');
+  }
+  if(getTokenBtnD) getTokenBtnD.addEventListener('click', openTokenHelp);
+  if(getTokenBtnM) getTokenBtnM.addEventListener('click', () => { closeMoreMenu(); openTokenHelp(); });
+
   function setToken(){
-    const t = askTokenIfNeeded('');
-    if(t === null) return;
-    updateStates('已更新 Token。');
+    askTokenIfNeeded('');
   }
   tokenBtnD.addEventListener('click', setToken);
   tokenBtnM.addEventListener('click', () => { closeMoreMenu(); setToken(); });
 
-  // download / upload with “disabled+提示”
   function guardTokenOrHint(){
     const token = getToken();
-    if(token) return token;
+    if(token && !tokenExpired) return token;
+
+    if(tokenExpired){
+      markTokenExpired('expired_access_token');
+      return '';
+    }
+
     setMsg('尚未設定 Token。\n請按「設定 Token」貼上 Dropbox Access Token。', true);
     updateStates();
     return '';
@@ -878,6 +931,39 @@
   cards.addEventListener('input', onCardInput);
   cards.addEventListener('change', onCardInput);
 
+  // ✅ 新增：頁面載入時（admin）自動驗證 Token，有過期就「自動顯示訊息」
+  async function verifyTokenAutoMessage(){
+    try{
+      if(!isAdmin) return;
+      const token = getToken();
+      if(!token) return;
+
+      const headers = new Headers();
+      headers.set('Authorization', latin1Safe('Bearer ' + token));
+
+      const res = await fetch('https://api.dropboxapi.com/2/users/get_current_account', {
+        method:'POST',
+        headers
+      });
+
+      if(!res.ok){
+        const t = await res.text().catch(()=> '');
+        if(res.status === 401 && /expired_access_token/i.test(t)){
+          markTokenExpired('expired_access_token');
+        }
+        return;
+      }
+
+      // token 正常：不要打擾（保持安靜），只要確保狀態正確
+      if(tokenExpired){
+        clearTokenExpired();
+        updateStates();
+      }
+    }catch(_){
+      // 忽略網路錯誤（不打擾）
+    }
+  }
+
   // === Dropbox ===
   async function cloudDownload(token){
     try{
@@ -897,9 +983,7 @@
       if(!res.ok){
         const t = await res.text().catch(()=> '');
         if(res.status === 401 && /expired_access_token/i.test(t)){
-          const newT = askTokenIfNeeded('Token 過期（expired_access_token），請重新貼上');
-          if(!newT) return;
-          updateStates('已更新 Token，請再按一次「雲端下載」。');
+          markTokenExpired('expired_access_token');
           return;
         }
         throw new Error(`下載失敗 HTTP ${res.status}\n${t}`);
@@ -915,7 +999,6 @@
       normalizeAuth();
       saveLocal();
 
-      // 下載後重新判定 admin（避免雲端資料改角色）
       current.role = getEffectiveRole();
       isAdmin = (getEffectiveRole() === 'admin');
 
@@ -961,9 +1044,7 @@
 
       if(!res.ok){
         if(res.status === 401 && /expired_access_token/i.test(text)){
-          const newT = askTokenIfNeeded('Token 過期（expired_access_token），請重新貼上');
-          if(!newT) return;
-          updateStates('已更新 Token，請再按一次「儲存並上傳」。');
+          markTokenExpired('expired_access_token');
           return;
         }
         if(/files\.content\.write/i.test(text)){
@@ -973,7 +1054,6 @@
         throw new Error(`上傳失敗 HTTP ${res.status}\n${text}`);
       }
 
-      // ✅ 上傳成功：顯示雲端時間戳（從回傳 JSON 取 client_modified / server_modified）
       const info = safeJsonParse(text, null);
       let stamp = '';
       if(info && typeof info === 'object'){
@@ -1022,8 +1102,14 @@
     current.role = getEffectiveRole();
     isAdmin = (getEffectiveRole() === 'admin');
 
+    tokenExpired = false;
+    setTokenHelpVisible(false);
+
     renderAll();
     updateStates('已載入本機資料。');
+
+    // ✅ 重點：載入後自動驗證 Token，過期就自動顯示訊息
+    verifyTokenAutoMessage();
   }
 
   window.addEventListener('storage', (e) => {
@@ -1032,7 +1118,6 @@
     }
   });
 
-  // init
   load();
 
 })();
