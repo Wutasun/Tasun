@@ -434,7 +434,7 @@
       <div class="right">
         <div class="pill">使用者：<b id="uName">—</b></div>
         <div class="pill">權限：<b id="uRole">—</b></div>
-        <!-- ✅ 已依標示 1：移除「新增資料」按鍵 -->
+        <!-- ✅ 已移除「新增資料」按鍵 -->
       </div>
     </div>
 
@@ -922,20 +922,47 @@
       return arr;
     }
 
+    /* ✅ 核心修正：
+       類別篩選下拉選單 = 「所選系統」在明細表(DB)中的不重複類別（不使用類別字典）
+       - 系統=空白(全部) → 類別顯示全資料的不重複類別
+       - 系統=某值 → 類別只顯示該系統的不重複類別
+    */
+    function categoriesBySystem(sys){
+      const set = new Set();
+      for(const r of db){
+        if(sys && norm(r.system) !== sys) continue;
+        const v = norm(r.category);
+        if(v) set.add(v);
+      }
+      const arr = Array.from(set);
+      arr.sort((a,b)=> a.localeCompare(b, "zh-Hant"));
+      return arr;
+    }
+
     function rebuildFilters(){
+      // 系統：仍維持「明細表不重複 + 系統字典」
       const sys = unionOptions("system", SYS_DICT_KEY);
-      const cat = unionOptions("category", CAT_DICT_KEY);
 
       const sSel = $("fSysFilter");
       const cSel = $("fCatFilter");
-      const keepS = sSel.value;
-      const keepC = cSel.value;
 
+      const keepS = norm(sSel.value);
+      const keepC = norm(cSel.value);
+
+      // rebuild system
       sSel.innerHTML = `<option value="">全部</option>` + sys.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
-      cSel.innerHTML = `<option value="">全部</option>` + cat.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
-
       if(sys.includes(keepS)) sSel.value = keepS;
-      if(cat.includes(keepC)) cSel.value = keepC;
+      else sSel.value = "";
+
+      const effSys = norm(sSel.value);
+
+      // rebuild category (依所選系統的 DB 不重複類別)
+      const cats = categoriesBySystem(effSys);
+      cSel.innerHTML = `<option value="">全部</option>` + cats.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
+
+      // 只在新清單仍存在時才保留舊選項；否則回到「全部」
+      if(cats.includes(keepC)) cSel.value = keepC;
+      else cSel.value = "";
     }
 
     function filteredRows(){
@@ -1207,8 +1234,7 @@
       $("navQuery").onclick= () => location.href = "工程資料查詢.html";
       setupMoreMenu("index.html");
 
-      // ✅ 已移除右上新增資料按鍵：此頁只顯示明細與編輯（依權限）
-      // 篩選
+      // 篩選（✅ 系統改變時，render 會自動把類別清單改成該系統的不重複類別）
       $("q").addEventListener("input", render);
       $("fSysFilter").addEventListener("change", render);
       $("fCatFilter").addEventListener("change", render);
@@ -1229,6 +1255,12 @@
 
       $("btnAddSys").onclick = () => openPrompt("sys");
       $("btnAddCat").onclick = () => openPrompt("cat");
+
+      // Prompt buttons
+      $("pClose").onclick = closePrompt;
+      $("pCancel").onclick = closePrompt;
+      $("pOk").onclick = addOption;
+      $("pMask").addEventListener("click", (e)=>{ if(e.target === $("pMask")) closePrompt(); });
 
       // Table actions
       $("tbody").addEventListener("click", (e)=>{
