@@ -862,12 +862,19 @@
 
     const SESSION_KEY = "tasunSessionLogin_v1"; // sessionStorage
 
+    // ✅ 本次修正：捷運汐止東湖線 → 汐東工程管理表.html
+    const METRO_LABEL = "捷運汐止東湖線";
+    const METRO_HREF  = "汐東工程管理表.html";
+
     const DEFAULT_NAV = [
       { id: "btn1", label: "臻鼎時代大廈管理表", href: "臻鼎管理表.html", target: "", roles: ["admin","write","read"] },
-      { id: "btn2", label: "缺失 / 品質",       href: "甄鼎quality.html", target: "", roles: ["admin","write","read"] },
-      { id: "btn3", label: "雲端檔案",          href: "https://www.dropbox.com/", target: "_blank", roles: ["admin","write","read"] },
-      { id: "btn4", label: "工程資料庫",        href: "工程資料庫.html", target: "", roles: ["admin","write"] },
-      { id: "btn5", label: "資料庫",            href: "資料庫.html", target: "", roles: ["admin","write","read"] }
+
+      // ✅ btn2：捷運汐止東湖線 → 汐東工程管理表.html（read 也允許）
+      { id: "btn2", label: METRO_LABEL, href: METRO_HREF, target: "", roles: ["admin","write","read"] },
+
+      { id: "btn3", label: "雲端檔案",   href: "https://www.dropbox.com/", target: "_blank", roles: ["admin","write","read"] },
+      { id: "btn4", label: "工程資料庫", href: "工程資料庫.html",          target: "", roles: ["admin","write"] },
+      { id: "btn5", label: "資料庫",     href: "資料庫.html",              target: "", roles: ["admin","write","read"] }
     ];
     const LEGACY_BUTTON_KEYS = ["btn1", "btn2", "btn3", "btn4", "btn5"];
 
@@ -923,15 +930,51 @@
       return { id: `btn${index + 1}`, label, href, target, roles };
     }
 
+    // ✅ NAV 遷移：舊的缺失/品質(甄鼎quality.html) 或 舊捷運管理表(捷運管理表.html) → 一律改成汐東工程管理表.html
+    function migrateNavToMetro(arr){
+      if(!Array.isArray(arr) || arr.length < 2) return arr;
+
+      const b2 = arr[1];
+      if(!b2) return arr;
+
+      const labelNoSpace = String(b2.label || "").replace(/\s+/g, "");
+      const href = String(b2.href || "").trim();
+
+      const isOld =
+        href === "甄鼎quality.html" ||
+        href === "捷運管理表.html" ||
+        labelNoSpace === "缺失/品質" ||
+        labelNoSpace.includes("缺失") ||
+        labelNoSpace.includes("品質") ||
+        labelNoSpace.includes("捷運汐止東湖線");
+
+      // ✅ 不論舊資料如何，只要判定是 btn2，就統一修成你要的
+      if(isOld){
+        b2.label = METRO_LABEL;
+        b2.href  = METRO_HREF;
+        try{ localStorage.setItem(NAV_KEY, JSON.stringify(arr)); }catch(e){}
+      }
+
+      return arr;
+    }
+
     function loadNavConfig() {
       const raw = localStorage.getItem(NAV_KEY);
-      if (!raw) { localStorage.setItem(NAV_KEY, JSON.stringify(DEFAULT_NAV.slice())); return DEFAULT_NAV.slice(); }
+      if (!raw) {
+        const init = DEFAULT_NAV.slice();
+        localStorage.setItem(NAV_KEY, JSON.stringify(init));
+        return init;
+      }
       try{
         const arr = JSON.parse(raw);
-        if (Array.isArray(arr) && arr.length) return arr.map((it, idx) => normalizeNavEntry(it, idx));
+        if (Array.isArray(arr) && arr.length){
+          const mapped = arr.map((it, idx) => normalizeNavEntry(it, idx));
+          return migrateNavToMetro(mapped);
+        }
       }catch(e){}
-      localStorage.setItem(NAV_KEY, JSON.stringify(DEFAULT_NAV.slice()));
-      return DEFAULT_NAV.slice();
+      const reset = DEFAULT_NAV.slice();
+      localStorage.setItem(NAV_KEY, JSON.stringify(reset));
+      return reset;
     }
 
     function getDefaultAuthTableLegacy(btnCount){
@@ -1121,11 +1164,9 @@
         if(col === 0){
           zoneL = leftZoneL;
           zoneR = leftZoneR;
-          // 如果左區太窄，仍以舞台左側為準（不壓字）
           const maxW = Math.max(220, zoneR - zoneL);
           const w = Math.min(desiredW, maxW);
           btn.style.width = w + "px";
-          // 左欄：靠左貼近箭頭區（外側）
           x = zoneL;
         }else{
           zoneL = rightZoneL;
@@ -1133,11 +1174,9 @@
           const maxW = Math.max(220, zoneR - zoneL);
           const w = Math.min(desiredW, maxW);
           btn.style.width = w + "px";
-          // 右欄：靠右貼近箭頭區（外側）
           x = zoneR - w;
         }
 
-        // 若區域不足（zoneR <= zoneL），退回到舞台邊緣內側（仍不壓到中央蓮花）
         if(!(zoneR > zoneL)){
           const w = Math.min(desiredW, Math.max(240, (stageRect.width * 0.38)));
           btn.style.width = w + "px";
@@ -1146,7 +1185,6 @@
 
         const y = yStart + step * row;
 
-        // 轉成 hero-inner 座標
         btn.style.left = (x - heroRect.left) + "px";
         btn.style.top  = (y - heroRect.top)  + "px";
       });
@@ -1169,8 +1207,14 @@
       const visibleMain = [];
       mainNavBtns.forEach((btn, index) => {
         const allowedByRole = isRoleAllowedForIndex(index, user.level);
+
         const flags = Array.isArray(user.buttons) ? user.buttons : [];
-        const allowedByAuth = index < flags.length ? !!flags[index] : true;
+        let allowedByAuth = index < flags.length ? !!flags[index] : true;
+
+        // ✅ 本次新增：read 權限「捷運汐止東湖線(btn2)」一定要顯示（強制開啟）
+        if(user.level === "read" && index === 1){
+          allowedByAuth = true;
+        }
 
         if(allowedByRole && allowedByAuth){
           btn.style.display = "flex";
