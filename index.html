@@ -10,11 +10,6 @@
     :root{
       --gold:#f6d37a;
 
-      /* =================== 構圖邏輯（依你圖 1 / 2 / 3） ===================
-         1) 兩側黑邊：固定保留但不要太大，左右一致
-         3) 舞台：盡量擴到黑邊內側（不空曠）
-         2) 按鍵：放到左右外側空白區（紅色箭頭區域），避免壓到蓮花與左右禪字
-      ===================================================================== */
       --outer-side: clamp(18px, 2.2vw, 64px);
 
       /* frame */
@@ -23,7 +18,7 @@
       --stage-top: clamp(4.0rem, 7vh, 5.4rem);
       --glass-inset: clamp(8px, 0.9vw, 14px);
 
-      /* 按鍵尺寸（維持你現有風格） */
+      /* 按鍵尺寸 */
       --btn-w: clamp(300px, 26vw, 520px);
       --btn-h: clamp(92px, 11vh, 148px);
       --btn-font-max: clamp(1.02rem, 1.10vw, 1.24rem);
@@ -45,7 +40,7 @@
       --liquid-speed: 16s;
       --liquid-shift: 4%;
 
-      /* 左右水波紋玻璃（更透明、不搶戲） */
+      /* 左右水波紋玻璃 */
       --sideglass-w: clamp(70px, 6.2vw, 150px);
       --sideglass-op: .30;
       --ripple-op: .16;
@@ -342,7 +337,10 @@
       right: calc(var(--frame-inset) + var(--glass-inset));
       border-radius: calc(var(--frame-radius) - 2px);
       overflow:hidden;
+
+      /* ✅ 重要：整個舞台層不吃點擊，避免任何透明玻璃層攔截 */
       pointer-events:none;
+
       z-index:-3;
 
       background:
@@ -455,14 +453,12 @@
       align-items:center;
       gap:.75rem;
 
-      /* ✅ 關鍵修正：避免 user-bar 的「堆疊層」或透明區擋住按鍵點擊 */
+      /* ✅ 重要：整條列不吃點擊，避免透明區擋到按鍵 */
       pointer-events:none;
 
       z-index:40;
     }
-    .user-pill, .btn-switch{
-      pointer-events:auto;
-    }
+    .user-pill, .btn-switch{ pointer-events:auto; }
 
     .user-pill{
       padding:.30rem 1.05rem;
@@ -623,7 +619,6 @@
     }
 
     /* ========================== Buttons ========================== */
-    /* ✅ 關鍵修正：nav-area 層級調整（但仍低於 user-bar / title），配合 user-bar pointer-events:none 不會擋點擊 */
     .nav-area{ position:absolute; inset:0; z-index:25; }
 
     .nav-btn{
@@ -659,6 +654,10 @@
       z-index:26;
       transform: translateZ(0);
       overflow:hidden;
+
+      /* ✅ 手機點擊更穩、減少延遲 */
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
     }
     .nav-btn::before{
       content:"";
@@ -835,7 +834,7 @@
 
       <div class="user-bar">
         <div class="user-pill" id="userInfo">目前使用者：未登入</div>
-        <button class="btn-switch" id="btnSwitchUser">切換帳號</button>
+        <button class="btn-switch" id="btnSwitchUser" type="button">切換帳號</button>
       </div>
 
       <div class="site-title-wrapper">
@@ -870,17 +869,59 @@
     const NAV_KEY     = "tasunNavButtons_v1";
     const SESSION_KEY = "tasunSessionLogin_v1"; // sessionStorage
 
-    // ✅ 「捷運汐止東湖線」完全硬連結（只保留導向這頁）
+    // ✅ btn2（捷運汐止東湖線）硬導向檔名
     const METRO_LABEL = "捷運汐止東湖線";
     const METRO_FILE  = "汐東工程管理表.html";
 
+    // ✅ 絕對網址（最穩：baseURI）
     function metroUrl(){
-      // ✅ 最穩：用 URL 生成絕對網址（自動正確編碼 + 相對路徑處理）
-      return new URL(METRO_FILE, window.location.href).href;
+      return new URL(METRO_FILE, document.baseURI).href;
     }
-    function goMetro(){
+
+    // ✅ 真正跳轉（用 assign 保留上一頁，若你要不可返回可改 replace）
+    function goMetroHard(){
       window.location.assign(metroUrl());
     }
+
+    // ✅ 全域捕獲攔截（100% 不被任何 click/bubble/其他監聽器干擾）
+    function installMetroGuard(){
+      const isMetroTarget = (t) => {
+        if(!t || t.nodeType !== 1) return false;
+        return !!t.closest('#btn2Metro, a[data-metro="1"]');
+      };
+
+      const hard = (ev) => {
+        // 只要點到 btn2，就立刻截斷整個事件鏈
+        try{ ev.preventDefault(); }catch(_){}
+        try{ ev.stopPropagation(); }catch(_){}
+        try{ ev.stopImmediatePropagation(); }catch(_){}
+        goMetroHard();
+      };
+
+      // 1) pointerdown：先搶到「第一手」手勢
+      document.addEventListener("pointerdown", (ev) => {
+        if(isMetroTarget(ev.target)) hard(ev);
+      }, { capture:true, passive:false });
+
+      // 2) touchstart：舊裝置補強
+      document.addEventListener("touchstart", (ev) => {
+        if(isMetroTarget(ev.target)) hard(ev);
+      }, { capture:true, passive:false });
+
+      // 3) click：再保底一次
+      document.addEventListener("click", (ev) => {
+        if(isMetroTarget(ev.target)) hard(ev);
+      }, { capture:true });
+
+      // 4) 鍵盤 Enter/Space（可聚焦後啟用）
+      document.addEventListener("keydown", (ev) => {
+        const k = ev.key || "";
+        if(k !== "Enter" && k !== " " && k !== "Spacebar") return;
+        const a = document.activeElement;
+        if(isMetroTarget(a)) hard(ev);
+      }, { capture:true });
+    }
+    installMetroGuard();
 
     function hrefToDom(href){
       const h = String(href || "").trim();
@@ -1053,17 +1094,25 @@
         span.textContent = cfg.label;
         a.appendChild(span);
 
-        // ✅ btn2：完全硬導向（不吃 cfg.href / 不吃 localStorage）
+        // ✅ btn2：100% 硬導向（不吃 localStorage / 不吃 cfg.href）
         if(index === 1){
+          a.id = "btn2Metro";
           a.dataset.metro = "1";
           a.setAttribute("href", metroUrl());
 
-          // ✅ 最保險：捕獲階段攔截，避免任何其他點擊/冒泡導致「切換帳號」被觸發
-          a.addEventListener("click", (ev) => {
+          // 再加一層「元素本身 capture」：即使有人只監聽在按鈕上，也先被截斷
+          const hard = (ev) => {
             ev.preventDefault();
             ev.stopPropagation();
             ev.stopImmediatePropagation();
-            goMetro();
+            goMetroHard();
+          };
+          a.addEventListener("pointerdown", hard, {capture:true, passive:false});
+          a.addEventListener("touchstart",  hard, {capture:true, passive:false});
+          a.addEventListener("click",       hard, true);
+          a.addEventListener("keydown", (ev) => {
+            const k = ev.key || "";
+            if(k === "Enter" || k === " " || k === "Spacebar") hard(ev);
           }, true);
         }else{
           a.setAttribute("href", hrefToDom(cfg.href));
@@ -1161,13 +1210,11 @@
 
       const rowCount = Math.ceil(count / 2);
 
-      // ✅ 關鍵修正：按鍵「起始高度」保證在上方 UI（使用者列/標題）下方，避免重疊誤點觸發切換帳號 → 回登入
-      const uiTopSafe = heroRect.top + 140; // 固定安全高度（依你頁面 UI 高度設計）
+      const uiTopSafe = heroRect.top + 140;
       let yStart = stageRect.top + stageRect.height * 0.20;
       let yEnd   = stageRect.top + stageRect.height * 0.72;
 
       if(yStart < uiTopSafe) yStart = uiTopSafe;
-      // 若壓縮到過小，改成以舞台區可用高度重新分配
       if(yEnd < yStart + 80){
         yEnd = Math.min(stageRect.bottom - 90, yStart + 220);
       }
@@ -1223,7 +1270,6 @@
       loginSub.textContent = "";
 
       setSession(user);
-
       localStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: user.level }));
 
       userInfo.textContent = `目前使用者：${user.username} (${user.level})`;
@@ -1261,7 +1307,6 @@
       const btnCount = (NAV_CONFIG && NAV_CONFIG.length) ? NAV_CONFIG.length : DEFAULT_NAV.length;
 
       AUTH_TABLE = loadAuthTable(btnCount);
-
       sel.innerHTML = "";
 
       if(!AUTH_TABLE.length){
@@ -1351,7 +1396,6 @@
         clearSession();
         return;
       }
-
       if(String(u.level || "").toLowerCase() !== String(sess.role || "").toLowerCase()){
         clearSession();
         return;
