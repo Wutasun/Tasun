@@ -647,7 +647,10 @@
       -webkit-backdrop-filter: blur(18px) saturate(1.12);
 
       transition: transform .18s ease-out, box-shadow .22s ease-out, border-color .2s ease-out, filter .2s ease-out;
-      z-index:16;
+
+      /* ✅ 修正：按鍵層級提升，避免誤點到上方「切換帳號」導致回登入遮罩 */
+      z-index:50;
+
       transform: translateZ(0);
       overflow:hidden;
     }
@@ -861,23 +864,28 @@
     const NAV_KEY     = "tasunNavButtons_v1";
     const SESSION_KEY = "tasunSessionLogin_v1"; // sessionStorage
 
-    // ✅ 修正重點：中文檔名連結用 encodeURI，避免 GitHub Pages 偶發找不到
-    const METRO_LABEL    = "捷運汐止東湖線";
-    const METRO_HREF_RAW = "汐東工程管理表.html"; // localStorage 內保存「原始檔名」
-    const METRO_DOM_HREF = () => encodeURI(METRO_HREF_RAW); // DOM href 使用編碼
+    // ✅ 「捷運汐止東湖線」完全硬連結（只保留導向這頁）
+    const METRO_LABEL = "捷運汐止東湖線";
+    const METRO_FILE  = "汐東工程管理表.html";
+    function metroUrl(){
+      // 用 URL 讓瀏覽器自動做正確編碼 + 相對路徑處理（比 encodeURI 更穩）
+      return new URL(METRO_FILE, window.location.href).href;
+    }
+    function goMetro(){
+      window.location.assign(metroUrl());
+    }
 
-    // 將 href 轉成真正可用的連結（含中文檔名編碼）
     function hrefToDom(href){
       const h = String(href || "").trim();
       if(!h) return "#";
-      if(/^https?:\/\//i.test(h)) return h;      // 外部網址不編碼
+      if(/^https?:\/\//i.test(h)) return h;
       if(/^mailto:/i.test(h)) return h;
-      return encodeURI(h);                        // 內部頁面（含中文）編碼
+      return encodeURI(h);
     }
 
     const DEFAULT_NAV = [
       { id: "btn1", label: "臻鼎時代大廈管理表", href: "臻鼎管理表.html", target: "", roles: ["admin","write","read"] },
-      { id: "btn2", label: METRO_LABEL,           href: METRO_HREF_RAW,    target: "", roles: ["admin","write","read"] },
+      { id: "btn2", label: METRO_LABEL,           href: METRO_FILE,         target: "", roles: ["admin","write","read"] },
       { id: "btn3", label: "雲端檔案",            href: "https://www.dropbox.com/", target: "_blank", roles: ["admin","write","read"] },
       { id: "btn4", label: "工程資料庫",          href: "工程資料庫.html", target: "", roles: ["admin","write"] },
       { id: "btn5", label: "資料庫",              href: "資料庫.html", target: "", roles: ["admin","write","read"] }
@@ -936,13 +944,13 @@
       return { id: `btn${index + 1}`, label, href, target, roles };
     }
 
-    // ✅ 強制修正：不管 localStorage 以前存什麼，btn2 一律固定為「捷運汐止東湖線 → 汐東工程管理表.html」，並寫回 localStorage
+    // ✅ 強制把 btn2 固定成「捷運汐止東湖線 → 汐東工程管理表.html」
     function forceMetroBtn2(arr){
       if(!Array.isArray(arr) || arr.length < 2) return arr;
       if(!arr[1]) return arr;
 
       arr[1].label  = METRO_LABEL;
-      arr[1].href   = METRO_HREF_RAW;     // 存 raw（顯示正常）
+      arr[1].href   = METRO_FILE;
       arr[1].target = "";
       arr[1].roles  = ["admin","write","read"];
 
@@ -1038,19 +1046,18 @@
         span.textContent = cfg.label;
         a.appendChild(span);
 
-        // ✅ DOM 連結一律走 hrefToDom（中文檔名會 encodeURI）
-        const realHref = (index === 1) ? METRO_DOM_HREF() : hrefToDom(cfg.href);
-        a.setAttribute("href", realHref);
-
-        // ✅ 再保險：點擊時用 JS 導頁（避免某些情況 href 被瀏覽器改寫）
-        a.addEventListener("click", (ev) => {
-          const href = a.getAttribute("href") || "#";
-          if(href === "#") return;
-          if(a.target === "_blank") return; // 交給瀏覽器開新分頁
-          // 同頁導向
-          window.location.href = href;
-          ev.preventDefault();
-        });
+        // ✅ btn2：硬連結（完全不吃 cfg.href）
+        if(index === 1){
+          a.dataset.metro = "1";
+          a.setAttribute("href", metroUrl());
+          a.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+            goMetro();
+          }, true);
+        }else{
+          a.setAttribute("href", hrefToDom(cfg.href));
+        }
 
         if(cfg.target){
           a.target = cfg.target;
@@ -1208,7 +1215,7 @@
         const flags = Array.isArray(user.buttons) ? user.buttons : [];
         let allowedByAuth = index < flags.length ? !!flags[index] : true;
 
-        // ✅ read 權限：btn2（捷運汐止東湖線）一定顯示
+        // ✅ read 權限：btn2 一定顯示
         if(user.level === "read" && index === 1){
           allowedByAuth = true;
         }
