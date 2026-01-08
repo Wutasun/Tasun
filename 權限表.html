@@ -243,7 +243,7 @@
       position:absolute;
       right:0;
       top: calc(100% + 8px);
-      min-width: 210px;
+      min-width: 220px;
       border-radius: 16px;
       border: 1px solid rgba(246,211,122,.18);
       background: rgba(0,0,0,.66);
@@ -350,7 +350,7 @@
             <button class="btn" id="moreBtn">更多</button>
             <div class="menu" id="moreMenu">
               <button id="switchBtnM">切換帳號</button>
-              <button id="getTokenBtnM" style="display:none;">取得 Token（開啟 Dropbox）</button>
+              <button id="downloadTokenBtnM">下載Token（Dropbox）</button>
               <button id="tokenBtnM">設定 Token</button>
               <button id="downloadBtnM">雲端下載</button>
               <button id="uploadBtnM">儲存並上傳</button>
@@ -367,7 +367,7 @@
         </div>
         <div class="rightGroup">
           <button class="btn" id="backBtnD">返回首頁</button>
-          <button class="btn btn-token-link" id="getTokenBtnD" style="display:none;">取得 Token（Dropbox）</button>
+          <button class="btn btn-token-link" id="downloadTokenBtnD">下載Token（Dropbox）</button>
           <button class="btn" id="tokenBtnD">設定 Token</button>
           <button class="btn" id="downloadBtnD">雲端下載</button>
           <button class="btn" id="uploadBtnD">儲存並上傳</button>
@@ -378,7 +378,7 @@
         <h1>Tasun 權限表</h1>
         <p>
           只有 <b>admin</b> 可以編輯；其他權限只能查看。<br>
-          提示：按鍵欄位標題會自動改為「首頁按鍵名稱」，並會隨首頁按鍵新增/改名自動同步。<br>
+          提示：btn1～btn5 欄位標題會自動抓取 <b>index.html</b> 的按鍵名稱（localStorage：tasunNavButtons_v1）。<br>
           雲端模式（App folder）：<b>/權限表.json</b>
         </p>
       </div>
@@ -422,12 +422,17 @@
   const AUTH_KEY     = 'tasunAuthTable_v1';
   const CURRENT_KEY  = 'tasunCurrentUser_v1';
   const TOKEN_KEY    = 'tasunDropboxToken_v1';
+
+  // ✅ index.html 的按鍵設定（用它抓 btn1~btn5 的名稱）
+  const NAV_KEY      = 'tasunNavButtons_v1';
+
+  // 權限表顯示欄名快取（仍保留，方便沒開過 index 的情況）
   const BTN_META_KEY = 'tasunButtonMeta_v1';
 
   const DROPBOX_PATH = '/權限表.json';
 
-  // ✅ Token 取得網址（你提供的 Dropbox App info）
-  const TOKEN_HELP_URL = 'https://www.dropbox.com/developers/apps/info/a5pm08kyb0bybdt';
+  // ✅ 你指定的「下載Token」網址
+  const TOKEN_DOWNLOAD_URL = 'https://www.dropbox.com/developers/apps';
 
   const roleOptions = ['admin','write','read'];
 
@@ -465,16 +470,17 @@
   const moreBtn   = el('moreBtn');
   const moreMenu  = el('moreMenu');
 
-  const getTokenBtnD = el('getTokenBtnD');
-  const getTokenBtnM = el('getTokenBtnM');
+  const downloadTokenBtnD = el('downloadTokenBtnD');
+  const downloadTokenBtnM = el('downloadTokenBtnM');
 
   let auth = [];
   let btnMeta = [];
   let current = null;
   let isAdmin = false;
 
-  // ✅ Token 過期旗標：過期就自動顯示訊息 + 停用雲端按鈕
+  // Token 狀態旗標
   let tokenExpired = false;
+  let tokenInvalid = false;
 
   function safeJsonParse(s, fallback){
     try{ return JSON.parse(s); }catch(e){ return fallback; }
@@ -500,6 +506,7 @@
       .trim();
   }
 
+  // ✅ Dropbox-API-Arg header 需要 ASCII：把非 ASCII 轉成 \uXXXX
   function latin1Safe(s){
     s = stripInvisibles(s);
     let out = '';
@@ -516,45 +523,65 @@
     }
     return out;
   }
-
   function jsonToAsciiSafe(obj){
     return latin1Safe(JSON.stringify(obj));
   }
 
+  // ✅ Token 清理（修正 malformed 常見原因：前後空白、不可見字、貼到 Bearer、引號）
   function sanitizeToken(raw){
     let t = stripInvisibles(raw);
+
+    // 去掉常見前綴
+    t = t.replace(/^Bearer\s+/i, '');
+    t = t.replace(/^Token\s*:\s*/i, '');
+
+    // 去掉外層引號
+    t = t.replace(/^["'`]/, '').replace(/["'`]$/, '');
+
+    // 只保留可見 ASCII
     t = t.replace(/[^\x21-\x7E]/g, '');
     return t.trim();
+  }
+
+  function isTokenLooksValid(token){
+    const t = sanitizeToken(token);
+    // Dropbox token 多為 sl. 開頭，但不強制；以「長度 + 字元集合」判定
+    if(t.length < 20) return false;
+    if(!/^[A-Za-z0-9._-]+$/.test(t)) return false;
+    return true;
   }
 
   function getToken(){
     return sanitizeToken(localStorage.getItem(TOKEN_KEY) || '');
   }
 
-  function setTokenHelpVisible(visible){
-    const show = !!visible && isAdmin;
-    if(getTokenBtnD) getTokenBtnD.style.display = show ? '' : 'none';
-    if(getTokenBtnM) getTokenBtnM.style.display = show ? '' : 'none';
+  function clearTokenFlags(){
+    tokenExpired = false;
+    tokenInvalid = false;
   }
 
   function markTokenExpired(reasonText){
     tokenExpired = true;
-    setTokenHelpVisible(true);
-
-    // ✅ 你要的：過期就「自動顯示訊息」
+    tokenInvalid = false;
     setMsg(
       'Token 已過期（expired_access_token）。\n' +
-      '請先點「取得 Token（Dropbox）」開啟網址複製新 Token，然後按「設定 Token」貼上。\n' +
+      '請先點「下載Token（Dropbox）」產生新 Token，再按「設定 Token」貼上。\n' +
       (reasonText ? `（原因：${reasonText}）` : ''),
       true
     );
-
     updateStates();
   }
 
-  function clearTokenExpired(){
+  function markTokenInvalid(reasonText){
+    tokenInvalid = true;
     tokenExpired = false;
-    setTokenHelpVisible(false);
+    setMsg(
+      'Token 格式不正確（malformed_access_token）。\n' +
+      '請點「下載Token（Dropbox）」重新產生 Token，再按「設定 Token」貼上。\n' +
+      (reasonText ? `（原因：${reasonText}）` : ''),
+      true
+    );
+    updateStates();
   }
 
   function askTokenIfNeeded(reasonText){
@@ -562,9 +589,17 @@
     const tip = reasonText ? `\n\n（原因：${reasonText}）` : '';
     const t = prompt('請貼上 Dropbox Access Token（僅儲存在本機瀏覽器）' + tip, old);
     if(t === null) return null;
+
     const cleaned = sanitizeToken(t);
     localStorage.setItem(TOKEN_KEY, cleaned);
-    clearTokenExpired();
+
+    clearTokenFlags();
+
+    if(cleaned && !isTokenLooksValid(cleaned)){
+      markTokenInvalid('貼上的內容不像 Dropbox Access Token');
+      return cleaned;
+    }
+
     updateStates('已更新 Token。');
     return cleaned;
   }
@@ -575,9 +610,9 @@
 
     const seed = [
       { user:'alex',  pass:'Tasun08040224', role:'admin', btn1:true, btn2:true, btn3:true, btn4:true, btn5:true },
-      { user:'tasun', pass:'tasun08040224', role:'write', btn1:true, btn2:true, btn3:false, btn4:true, btn5:false },
-      { user:'wu',    pass:'123456',        role:'read',  btn1:true, btn2:false,btn3:false, btn4:false,btn5:false },
       { user:'JOYCE', pass:'09220224',      role:'admin', btn1:true, btn2:true, btn3:true, btn4:true, btn5:true },
+      { user:'tasun', pass:'tasun08040224', role:'write', btn1:true, btn2:true, btn3:false,btn4:true, btn5:false },
+      { user:'wu',    pass:'123456',        role:'read',  btn1:true, btn2:false,btn3:false,btn4:false,btn5:false },
     ];
     localStorage.setItem(AUTH_KEY, JSON.stringify(seed));
   }
@@ -606,6 +641,54 @@
     const t = `目前使用者：${current.user} (${current.role})`;
     whoDesk.textContent = t;
     whoMobile.textContent = t;
+  }
+
+  // ✅ 從 index.html 的 NAV_KEY 取得 btn1~btn5 名稱
+  function buildBtnMetaFromIndexNav(){
+    const raw = localStorage.getItem(NAV_KEY) || '';
+    const arr = safeJsonParse(raw, []);
+    if(!Array.isArray(arr) || !arr.length) return null;
+
+    const out = [];
+    for(let i=1;i<=5;i++){
+      const it = arr[i-1] || {};
+      const name = String(it.label || it.name || it.title || `btn${i}`).trim() || `btn${i}`;
+      out.push({ key:`btn${i}`, name });
+    }
+    return out;
+  }
+
+  function ensureBtnMeta(){
+    // 1) 先抓 index 的按鍵名稱（最準）
+    const fromIndex = buildBtnMetaFromIndexNav();
+    if(fromIndex && fromIndex.length){
+      btnMeta = fromIndex;
+      localStorage.setItem(BTN_META_KEY, JSON.stringify(btnMeta));
+      return;
+    }
+
+    // 2) 沒有 NAV_KEY（可能沒開過首頁）→ 用快取
+    const cached = safeJsonParse(localStorage.getItem(BTN_META_KEY) || '[]', []);
+    if(Array.isArray(cached) && cached.length){
+      btnMeta = cached.filter(x => /^btn[1-5]$/.test(String(x.key||'')));
+    }
+
+    // 3) 還是沒有 → fallback
+    if(!Array.isArray(btnMeta) || !btnMeta.length){
+      btnMeta = [
+        { key:'btn1', name:'btn1' },
+        { key:'btn2', name:'btn2' },
+        { key:'btn3', name:'btn3' },
+        { key:'btn4', name:'btn4' },
+        { key:'btn5', name:'btn5' },
+      ];
+    }
+
+    // 補齊缺的 key
+    for(let i=1;i<=5;i++){
+      const k = 'btn'+i;
+      if(!btnMeta.find(b => b.key === k)) btnMeta.push({ key:k, name:k });
+    }
   }
 
   function renderHeaders(){
@@ -710,7 +793,8 @@
   function closeMoreMenu(){ moreMenu.classList.remove('show'); }
 
   function setCloudButtonsEnabled(){
-    const tokenOk = !!getToken() && !tokenExpired;
+    const token = getToken();
+    const tokenOk = !!token && !tokenExpired && !tokenInvalid && isTokenLooksValid(token);
 
     downloadBtnD.disabled = !tokenOk;
     downloadBtnM.disabled = !tokenOk;
@@ -718,22 +802,29 @@
     uploadBtnD.disabled = !(tokenOk && isAdmin);
     uploadBtnM.disabled = !(tokenOk && isAdmin);
 
+    const hint = !token ? '尚未設定 Token'
+      : (tokenInvalid ? 'Token 格式錯誤，請更新'
+      : (tokenExpired ? 'Token 過期，請更新'
+      : (!isTokenLooksValid(token) ? 'Token 看起來不正確，請更新' : '')));
+
+    downloadBtnD.title = tokenOk ? '' : hint;
+    downloadBtnM.title = tokenOk ? '' : hint;
+
     if(!isAdmin){
       uploadBtnD.title = '需 admin 且已設定 Token';
       uploadBtnM.title = '需 admin 且已設定 Token';
     }else{
-      uploadBtnD.title = tokenOk ? '' : (tokenExpired ? 'Token 過期，請更新' : '尚未設定 Token');
-      uploadBtnM.title = tokenOk ? '' : (tokenExpired ? 'Token 過期，請更新' : '尚未設定 Token');
+      uploadBtnD.title = tokenOk ? '' : hint;
+      uploadBtnM.title = tokenOk ? '' : hint;
     }
-
-    downloadBtnD.title = tokenOk ? '' : (tokenExpired ? 'Token 過期，請更新' : '尚未設定 Token');
-    downloadBtnM.title = tokenOk ? '' : (tokenExpired ? 'Token 過期，請更新' : '尚未設定 Token');
   }
 
   function updateStates(text){
     const token = getToken();
 
-    if(tokenExpired){
+    if(tokenInvalid){
+      tokenState.textContent = '狀態：Token 格式錯誤（請更新）';
+    }else if(tokenExpired){
       tokenState.textContent = '狀態：Token 過期（請更新）';
     }else{
       tokenState.textContent = token ? '狀態：已設定 Token（可同步）' : '狀態：未設定 Token';
@@ -741,7 +832,7 @@
 
     setCloudButtonsEnabled();
 
-    if(text && !tokenExpired){
+    if(text && !tokenExpired && !tokenInvalid){
       setMsg(text, false);
     }
   }
@@ -753,8 +844,6 @@
     renderCards();
 
     addBtn.disabled = !isAdmin;
-
-    setTokenHelpVisible(tokenExpired);
 
     setCloudButtonsEnabled();
 
@@ -869,11 +958,11 @@
   switchBtnD.addEventListener('click', switchAccount);
   switchBtnM.addEventListener('click', () => { closeMoreMenu(); switchAccount(); });
 
-  function openTokenHelp(){
-    window.open(TOKEN_HELP_URL, '_blank', 'noopener');
+  function openTokenDownload(){
+    window.open(TOKEN_DOWNLOAD_URL, '_blank', 'noopener');
   }
-  if(getTokenBtnD) getTokenBtnD.addEventListener('click', openTokenHelp);
-  if(getTokenBtnM) getTokenBtnM.addEventListener('click', () => { closeMoreMenu(); openTokenHelp(); });
+  downloadTokenBtnD.addEventListener('click', openTokenDownload);
+  downloadTokenBtnM.addEventListener('click', () => { closeMoreMenu(); openTokenDownload(); });
 
   function setToken(){
     askTokenIfNeeded('');
@@ -883,16 +972,24 @@
 
   function guardTokenOrHint(){
     const token = getToken();
-    if(token && !tokenExpired) return token;
-
+    if(!token){
+      setMsg('尚未設定 Token。\n請按「設定 Token」貼上 Dropbox Access Token。', true);
+      updateStates();
+      return '';
+    }
+    if(!isTokenLooksValid(token)){
+      markTokenInvalid('貼上的內容不像 Dropbox Access Token');
+      return '';
+    }
     if(tokenExpired){
       markTokenExpired('expired_access_token');
       return '';
     }
-
-    setMsg('尚未設定 Token。\n請按「設定 Token」貼上 Dropbox Access Token。', true);
-    updateStates();
-    return '';
+    if(tokenInvalid){
+      markTokenInvalid('malformed_access_token');
+      return '';
+    }
+    return token;
   }
 
   downloadBtnD.addEventListener('click', () => {
@@ -931,15 +1028,21 @@
   cards.addEventListener('input', onCardInput);
   cards.addEventListener('change', onCardInput);
 
-  // ✅ 新增：頁面載入時（admin）自動驗證 Token，有過期就「自動顯示訊息」
+  // ✅ 進入頁面時驗證 Token（避免你按上傳才知道 malformed/expired）
   async function verifyTokenAutoMessage(){
     try{
       if(!isAdmin) return;
       const token = getToken();
       if(!token) return;
 
+      if(!isTokenLooksValid(token)){
+        markTokenInvalid('貼上的內容不像 Dropbox Access Token');
+        return;
+      }
+
       const headers = new Headers();
-      headers.set('Authorization', latin1Safe('Bearer ' + token));
+      // ✅ Authorization 一律用原字串，不做任何轉碼，避免 token 變形
+      headers.set('Authorization', 'Bearer ' + token);
 
       const res = await fetch('https://api.dropboxapi.com/2/users/get_current_account', {
         method:'POST',
@@ -950,17 +1053,23 @@
         const t = await res.text().catch(()=> '');
         if(res.status === 401 && /expired_access_token/i.test(t)){
           markTokenExpired('expired_access_token');
+          return;
         }
+        if(res.status === 400 && /malformed|OAuth 2 access token is malformed/i.test(t)){
+          markTokenInvalid('OAuth 2 access token is malformed');
+          return;
+        }
+        // 其他錯誤不打擾（只讓按下載/上傳時顯示）
         return;
       }
 
-      // token 正常：不要打擾（保持安靜），只要確保狀態正確
-      if(tokenExpired){
-        clearTokenExpired();
+      // token 正常：清旗標
+      if(tokenExpired || tokenInvalid){
+        clearTokenFlags();
         updateStates();
       }
     }catch(_){
-      // 忽略網路錯誤（不打擾）
+      // 忽略網路錯誤
     }
   }
 
@@ -972,7 +1081,7 @@
       const arg = jsonToAsciiSafe({ path: DROPBOX_PATH });
 
       const headers = new Headers();
-      headers.set('Authorization', latin1Safe('Bearer ' + token));
+      headers.set('Authorization', 'Bearer ' + token);
       headers.set('Dropbox-API-Arg', arg);
 
       const res = await fetch('https://content.dropboxapi.com/2/files/download', {
@@ -984,6 +1093,10 @@
         const t = await res.text().catch(()=> '');
         if(res.status === 401 && /expired_access_token/i.test(t)){
           markTokenExpired('expired_access_token');
+          return;
+        }
+        if((res.status === 400 || res.status === 401) && /malformed|OAuth 2 access token is malformed/i.test(t)){
+          markTokenInvalid('OAuth 2 access token is malformed');
           return;
         }
         throw new Error(`下載失敗 HTTP ${res.status}\n${t}`);
@@ -1001,6 +1114,9 @@
 
       current.role = getEffectiveRole();
       isAdmin = (getEffectiveRole() === 'admin');
+
+      // 下載後也順便更新 btnMeta（若 index 有變更）
+      ensureBtnMeta();
 
       renderAll();
       updateStates('雲端下載完成，已覆蓋本機並更新畫面。');
@@ -1030,7 +1146,7 @@
       });
 
       const headers = new Headers();
-      headers.set('Authorization', latin1Safe('Bearer ' + token));
+      headers.set('Authorization', 'Bearer ' + token);
       headers.set('Content-Type', 'application/octet-stream');
       headers.set('Dropbox-API-Arg', apiArg);
 
@@ -1045,6 +1161,10 @@
       if(!res.ok){
         if(res.status === 401 && /expired_access_token/i.test(text)){
           markTokenExpired('expired_access_token');
+          return;
+        }
+        if((res.status === 400 || res.status === 401) && /malformed|OAuth 2 access token is malformed/i.test(text)){
+          markTokenInvalid('OAuth 2 access token is malformed');
           return;
         }
         if(/files\.content\.write/i.test(text)){
@@ -1082,37 +1202,28 @@
       current.role = String(current.role || 'read');
     }
 
-    btnMeta = safeJsonParse(localStorage.getItem(BTN_META_KEY) || '[]', []);
-    if(!Array.isArray(btnMeta) || !btnMeta.length){
-      btnMeta = [
-        { key:'btn1', name:'btn1' },
-        { key:'btn2', name:'btn2' },
-        { key:'btn3', name:'btn3' },
-        { key:'btn4', name:'btn4' },
-        { key:'btn5', name:'btn5' },
-      ];
-    }else{
-      btnMeta = btnMeta.filter(x => /^btn[1-5]$/.test(String(x.key||'')));
-      for(let i=1;i<=5;i++){
-        const k = 'btn'+i;
-        if(!btnMeta.find(b => b.key === k)) btnMeta.push({ key:k, name:k });
-      }
-    }
+    // ✅ 先確保 btnMeta 會抓 index 按鍵名稱
+    ensureBtnMeta();
 
     current.role = getEffectiveRole();
     isAdmin = (getEffectiveRole() === 'admin');
 
-    tokenExpired = false;
-    setTokenHelpVisible(false);
+    clearTokenFlags();
 
     renderAll();
     updateStates('已載入本機資料。');
 
-    // ✅ 重點：載入後自動驗證 Token，過期就自動顯示訊息
     verifyTokenAutoMessage();
   }
 
+  // ✅ 監聽 index.html 改了按鍵名稱（NAV_KEY）→ 權限表自動同步欄名
   window.addEventListener('storage', (e) => {
+    if(e.key === NAV_KEY){
+      ensureBtnMeta();
+      renderAll();
+      updateStates('已同步首頁按鍵名稱。');
+      return;
+    }
     if(e.key === AUTH_KEY || e.key === BTN_META_KEY || e.key === CURRENT_KEY || e.key === TOKEN_KEY){
       load();
     }
