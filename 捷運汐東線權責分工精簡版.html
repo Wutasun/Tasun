@@ -6,8 +6,7 @@
   <title>捷運汐東線權責分工精簡版 · Tasun</title>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet">
 
-  <!-- ✅ 不再使用 repo 內 assets/vendor/xlsx.full.min.js
-       ✅ 改成：先走 CDN（jsDelivr），若載入失敗會在程式內自動改用 unpkg 再試一次 -->
+  <!-- ✅ 先走 CDN（jsDelivr），若載入失敗程式內會自動改用 unpkg 再試一次 -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
   <style>
@@ -430,15 +429,12 @@
         <div class="pill">使用者：<b id="uName">—</b></div>
         <div class="pill">權限：<b id="uRole">—</b></div>
 
-        <!-- ✅ 只給 write/admin 顯示 -->
         <button class="btn small" id="btnAdd" style="display:none;">新增</button>
         <button class="btn small" id="btnEdit" style="display:none;">編輯</button>
         <button class="btn ghost small" id="btnTemplate" style="display:none;">下載Excel</button>
 
-        <!-- ✅ 「編上傳」改成「上傳」 -->
         <button class="btn ghost small" id="btnUpload" style="display:none;">上傳</button>
 
-        <!-- ✅ 支援 xlsx / 二進位 xls -->
         <input id="fileInput" type="file"
                accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                style="display:none;" />
@@ -447,10 +443,13 @@
 
     <div class="panel">
       <div class="controls">
+        <!-- ✅ 改成：工程項目搜尋（可選單/可手動） -->
         <div class="field">
-          <div class="label">搜尋（工程項目 / 權責 / 期限）</div>
-          <input id="q" placeholder="例如：土建、機電、送審、提報..." />
+          <div class="label">搜尋（工程項目：可下拉選單或手動輸入）</div>
+          <input id="qProject" list="projectList" placeholder="例如：土建、機電、材料送審、現勘..." />
+          <datalist id="projectList"></datalist>
         </div>
+
         <div class="field">
           <div class="label">權責</div>
           <select id="fOwner"><option value="">全部</option></select>
@@ -620,10 +619,8 @@
 
     function loadScriptOnce(url){
       return new Promise((resolve, reject)=>{
-        // 已存在同 src 就不重複塞
         const existed = [...document.scripts].some(s => (s.src || "").includes(url));
         if(existed){ resolve(true); return; }
-
         const s = document.createElement("script");
         s.src = url;
         s.async = true;
@@ -639,7 +636,7 @@
         try{
           await loadScriptOnce(url);
           if(window.XLSX) return true;
-        }catch(e){ /* try next */ }
+        }catch(e){}
       }
       return false;
     }
@@ -951,6 +948,21 @@
       return arr;
     }
 
+    // ✅ 產生「工程項目」datalist（可選也可手動）
+    function rebuildProjectDatalist(){
+      const dl = $("projectList");
+      if(!dl) return;
+
+      const set = new Set();
+      for(const r of db){
+        const p = norm(r.project);
+        if(p) set.add(p);
+      }
+      const arr = Array.from(set).sort((a,b)=> a.localeCompare(b, "zh-Hant"));
+
+      dl.innerHTML = arr.map(v=>`<option value="${escHtml(v)}"></option>`).join("");
+    }
+
     function rebuildFilters(){
       const owners = unionOptions("owner", OWNER_DICT_KEY);
       const dues   = unionOptions("due", DUE_DICT_KEY);
@@ -969,7 +981,7 @@
     }
 
     function filteredRows(){
-      const q = norm($("q").value).toLowerCase();
+      const qProject = norm($("qProject").value).toLowerCase();
       const owner = norm($("fOwner").value);
       const due   = norm($("fDue").value);
 
@@ -977,11 +989,9 @@
       if(owner) rows = rows.filter(r => norm(r.owner) === owner);
       if(due)   rows = rows.filter(r => norm(r.due) === due);
 
-      if(q){
-        rows = rows.filter(r => {
-          const hay = [r.project, r.owner, r.due].map(x => (x ?? "").toString().toLowerCase()).join(" | ");
-          return hay.includes(q);
-        });
+      // ✅ 只搜尋工程項目（包含式），可手動輸入或從 datalist 選
+      if(qProject){
+        rows = rows.filter(r => (r.project ?? "").toString().toLowerCase().includes(qProject));
       }
 
       rows.sort((a,b)=> (a.id||0) - (b.id||0));
@@ -989,6 +999,7 @@
     }
 
     function render(){
+      rebuildProjectDatalist();  // ✅ 每次 render 都同步工程項目選單
       rebuildFilters();
 
       const rows = filteredRows();
@@ -1189,29 +1200,19 @@
       toast("已新增選項");
     }
 
-    // ===== ✅ 下載Excel：匯出「目前表格內資料」（含搜尋/篩選結果）
-    // 需求：沒資料也可下載空白檔（至少含表頭）
     async function downloadExcel(){
       if(!canWrite()){ toast("唯讀不可下載"); return; }
-
       const ok = await ensureXLSX();
-      if(!ok){
-        toast("Excel 功能載入失敗（請確認網路可連線）");
-        return;
-      }
+      if(!ok){ toast("Excel 功能載入失敗（請確認網路可連線）"); return; }
 
       try{
         const rows = filteredRows();
-
-        // ✅ 即使沒資料，也至少要有表頭，方便貼上後再上傳
         const aoa = [["工程項目","權責","期限"]];
         for(const r of rows){
           aoa.push([ norm(r.project), norm(r.owner), norm(r.due) ]);
         }
-
         const ws = XLSX.utils.aoa_to_sheet(aoa);
         ws["!cols"] = [{ wch: 52 }, { wch: 18 }, { wch: 18 }];
-
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "權責分工精簡版");
 
@@ -1219,17 +1220,14 @@
         const y = d.getFullYear();
         const m = String(d.getMonth()+1).padStart(2,"0");
         const dd= String(d.getDate()).padStart(2,"0");
-
-        // ✅ 先嘗試 xlsx，若不明原因失敗，再退回 xls（符合你要支援 xlsx/二進位 xls）
         const base = `捷運汐東線權責分工精簡版_${y}${m}${dd}`;
 
         try{
-          XLSX.writeFile(wb, `${base}.xlsx`, { bookType: "xlsx" });
+          XLSX.writeFile(wb, `${base}.xlsx`, { bookType:"xlsx" });
           toast(`已下載 Excel（${rows.length} 筆；xlsx）`);
           return;
         }catch(e1){
-          // fallback to xls
-          XLSX.writeFile(wb, `${base}.xls`, { bookType: "xls" });
+          XLSX.writeFile(wb, `${base}.xls`, { bookType:"xls" });
           toast(`已下載 Excel（${rows.length} 筆；xls）`);
         }
       }catch(e){
@@ -1243,49 +1241,36 @@
       $("fileInput").click();
     }
 
-    // ===== ✅ 匯入 xlsx / 二進位 xls =====
     async function importExcel(file){
       if(!canWrite()){ toast("唯讀不可上傳"); return; }
-
       const ok = await ensureXLSX();
-      if(!ok){
-        toast("匯入功能載入失敗（請確認網路可連線）");
-        return;
-      }
+      if(!ok){ toast("匯入功能載入失敗（請確認網路可連線）"); return; }
 
       const reader = new FileReader();
       reader.onload = (evt)=>{
         try{
           const data = new Uint8Array(evt.target.result);
-
-          // ✅ type:"array" 可讀 xlsx 與多數 xls（二進位 BIFF）
           const wb = XLSX.read(data, { type:"array", cellDates:true });
           const ws = wb.Sheets[wb.SheetNames[0]];
           const rows = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:"" });
 
-          if(!rows || rows.length < 1){
-            toast("檔案是空白");
-            return;
-          }
+          if(!rows || rows.length < 1){ toast("檔案是空白"); return; }
 
           const header = (rows[0] || []).map(x=>norm(x));
           const idxProject = header.indexOf("工程項目");
           const idxOwner   = header.indexOf("權責");
           const idxDue     = header.indexOf("期限");
 
-          // ✅ 允許使用者下載空白檔後貼上：必須有表頭
           if(idxProject < 0 || idxOwner < 0 || idxDue < 0){
             toast("表頭需為：工程項目 / 權責 / 期限");
             return;
           }
 
-          // ✅ 若原本有資料，先詢問是否覆蓋（避免多人/版本誤操作）
           let mode = "append";
           if(db.length > 0){
             const yes = confirm("是否要先清空既有資料，再匯入檔案內容？\n確定：清空後匯入\n取消：保留原資料並追加匯入");
             mode = yes ? "replace" : "append";
           }
-
           if(mode === "replace"){
             db = [];
             localStorage.setItem(COUNTER_KEY, "0");
@@ -1298,7 +1283,6 @@
             const owner   = norm(r[idxOwner]);
             const due     = norm(r[idxDue]);
 
-            // 空白列略過
             if(!project && !owner && !due) continue;
             if(!project) continue;
 
@@ -1353,11 +1337,13 @@
       $("navHome").onclick = () => location.href = "index.html";
       setupMoreMenu("index.html");
 
-      $("q").addEventListener("input", render);
+      // ✅ 工程項目搜尋（可選單/可手動）
+      $("qProject").addEventListener("input", render);
       $("fOwner").addEventListener("change", render);
       $("fDue").addEventListener("change", render);
+
       $("btnClear").onclick = () => {
-        $("q").value = "";
+        $("qProject").value = "";
         $("fOwner").value = "";
         $("fDue").value = "";
         render();
