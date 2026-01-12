@@ -6,8 +6,9 @@
   <title>捷運汐東線權責分工精簡版 · Tasun</title>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet">
 
-  <!-- ✅ SheetJS：用於「下載Excel(匯出表格資料) / Excel匯入」 -->
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.19.3/dist/xlsx.full.min.js"></script>
+  <!-- ✅ 方案C：改用本機檔案（repo 根目錄的相對路徑） -->
+  <!-- 你的檔案結構：/assets/vendor/xlsx.full.min.js -->
+  <script defer src="assets/vendor/xlsx.full.min.js"></script>
 
   <style>
     :root{
@@ -421,7 +422,6 @@
       </div>
 
       <div class="brand">
-        <!-- ✅ 網頁標題（畫面上顯示）已改 -->
         <div class="title">捷運汐東線權責分工精簡版</div>
         <div class="sub">工程項目 · 權責 · 期限</div>
       </div>
@@ -435,8 +435,13 @@
         <button class="btn small" id="btnEdit" style="display:none;">編輯</button>
         <button class="btn ghost small" id="btnTemplate" style="display:none;">下載Excel</button>
 
-        <button class="btn ghost small" id="btnUpload" style="display:none;">編上傳</button>
-        <input id="fileInput" type="file" accept=".xlsx" style="display:none;" />
+        <!-- ✅ 文字改為「上傳」 -->
+        <button class="btn ghost small" id="btnUpload" style="display:none;">上傳</button>
+
+        <!-- ✅ 支援 xlsx/二進位 xls -->
+        <input id="fileInput" type="file"
+               accept=".xlsx,.xls,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+               style="display:none;" />
       </div>
     </div>
 
@@ -595,7 +600,7 @@
       t.textContent = msg;
       t.style.display = "block";
       clearTimeout(toast._tm);
-      toast._tm = setTimeout(()=> t.style.display = "none", 2200);
+      toast._tm = setTimeout(()=> t.style.display = "none", 2400);
     }
 
     function escHtml(s){
@@ -1152,14 +1157,29 @@
       toast("已新增選項");
     }
 
-    // ===== ✅ 下載Excel：匯出「目前網頁表格內資料」(含搜尋/篩選後結果) =====
-    function downloadTemplateXlsx(){
+    // ===== Excel helper =====
+    function ensureXlsxReady(){
+      if(window.XLSX) return true;
+      // 明確提示你檢查本機路徑（避免你看到「匯入功能載入失敗(XLSX)」但不知道原因）
+      toast("Excel 功能未載入：請確認 assets/vendor/xlsx.full.min.js 已上傳且路徑正確");
+      return false;
+    }
+
+    function todayYMD(){
+      const d = new Date();
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,"0");
+      const dd= String(d.getDate()).padStart(2,"0");
+      return `${y}${m}${dd}`;
+    }
+
+    // ===== ✅ 下載Excel：支援 xlsx/二進位 xls；無資料也可下載空白表頭 =====
+    function downloadExcel(){
       try{
         if(!canWrite()){ toast("唯讀不可下載"); return; }
-        if(!window.XLSX){ toast("Excel 功能載入失敗（XLSX）"); return; }
+        if(!ensureXlsxReady()) return;
 
-        const rows = filteredRows(); // ✅ 目前表格資料
-
+        const rows = filteredRows(); // 下載「目前表格顯示」(含搜尋/篩選)
         const aoa = [["工程項目","權責","期限"]];
         for(const r of rows){
           aoa.push([ norm(r.project), norm(r.owner), norm(r.due) ]);
@@ -1171,16 +1191,22 @@
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "權責分工精簡版");
 
-        const d = new Date();
-        const y = d.getFullYear();
-        const m = String(d.getMonth()+1).padStart(2,"0");
-        const dd= String(d.getDate()).padStart(2,"0");
-        const fname = `捷運汐東線權責分工精簡版_${y}${m}${dd}.xlsx`;
+        const base = `捷運汐東線權責分工精簡版_${todayYMD()}`;
 
-        XLSX.writeFile(wb, fname);
-        toast(`已下載 Excel（${rows.length} 筆）`);
+        // 先嘗試 xlsx，失敗自動 fallback 到 xls（二進位）
+        try{
+          XLSX.writeFile(wb, `${base}.xlsx`, { bookType:"xlsx" });
+          toast(`已下載 Excel（${rows.length} 筆 / xlsx）`);
+        }catch(e1){
+          try{
+            XLSX.writeFile(wb, `${base}.xls`, { bookType:"xls" });
+            toast(`已下載 Excel（${rows.length} 筆 / xls）`);
+          }catch(e2){
+            toast("執行下載失敗(xlsx/xls)");
+          }
+        }
       }catch(e){
-        toast("下載失敗");
+        toast("執行下載失敗(xlsx/xls)");
       }
     }
 
@@ -1190,22 +1216,25 @@
       $("fileInput").click();
     }
 
-    function importXlsx(file){
-      if(!window.XLSX){ toast("Excel 匯入功能載入失敗（XLSX）"); return; }
+    // ===== ✅ 匯入：支援 xlsx / 二進位 xls =====
+    function importExcel(file){
+      if(!ensureXlsxReady()) { toast("匯入功能載入失敗(XLSX)"); return; }
+
       const reader = new FileReader();
       reader.onload = (evt)=>{
         try{
           const data = new Uint8Array(evt.target.result);
-          const wb = XLSX.read(data, { type:"array" });
+          const wb = XLSX.read(data, { type:"array" }); // xlsx/xls 都可
           const ws = wb.Sheets[wb.SheetNames[0]];
           const rows = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:"" });
 
-          if(!rows || rows.length < 2){
-            toast("檔案沒有資料列");
+          // 允許空白檔（只有表頭也算 OK，不新增任何筆）
+          if(!rows || rows.length < 1){
+            toast("檔案是空白");
             return;
           }
 
-          const header = rows[0].map(x=>norm(x));
+          const header = (rows[0] || []).map(x=>norm(x));
           const idxProject = header.indexOf("工程項目");
           const idxOwner   = header.indexOf("權責");
           const idxDue     = header.indexOf("期限");
@@ -1222,6 +1251,10 @@
             const owner   = norm(r[idxOwner]);
             const due     = norm(r[idxDue]);
 
+            // 允許空白列略過
+            if(!project && !owner && !due) continue;
+
+            // 若工程項目空白就略過（避免垃圾資料）
             if(!project) continue;
 
             const id = nextCounter();
@@ -1231,9 +1264,9 @@
 
           saveDB();
           render();
-          toast(`匯入完成：新增 ${addCount} 筆`);
+          toast(addCount ? `匯入完成：新增 ${addCount} 筆` : "匯入完成：沒有新增資料（可能只有表頭或空白列）");
         }catch(e){
-          toast("匯入失敗：請確認檔案格式");
+          toast("匯入失敗：請確認檔案為 xlsx/xls");
         }
       };
       reader.readAsArrayBuffer(file);
@@ -1297,12 +1330,13 @@
         openModal(selectedId, true);
       };
 
-      $("btnTemplate").onclick = downloadTemplateXlsx;
+      $("btnTemplate").onclick = downloadExcel;
       $("btnUpload").onclick = triggerUpload;
+
       $("fileInput").addEventListener("change", ()=>{
         const f = $("fileInput").files?.[0];
         if(!f) return;
-        importXlsx(f);
+        importExcel(f);
       });
 
       $("btnClose").onclick = closeModal;
@@ -1344,6 +1378,9 @@
       });
 
       render();
+
+      // 提醒：如果 XLSX 還沒載到，提示一次（不影響其他功能）
+      setTimeout(()=>{ if(!window.XLSX) ensureXlsxReady(); }, 50);
     }
 
     (function bindLogin(){
