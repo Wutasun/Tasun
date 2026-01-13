@@ -31,11 +31,12 @@
     }
     .wrap{max-width:1400px;margin:0 auto;padding:20px 16px 34px}
 
+    /* ✅ 頁首：左右分離 + 中央置中（同步登錄表） */
     .topbar{
       position:relative;
       z-index:20;
       display:grid;
-      grid-template-columns:auto 1fr auto;
+      grid-template-columns: 1fr auto 1fr;
       gap:12px;
       align-items:center;
       padding:14px;
@@ -60,7 +61,15 @@
       .nav-mobile{ display:flex; }
     }
 
-    .brand{display:flex; flex-direction:column}
+    /* ✅ 中央標題置中 */
+    .brand{
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      text-align:center;
+      padding:0 6px;
+    }
     .title{
       font-weight:900; letter-spacing:.06em;
       font-size: clamp(16px, 1.5vw, 20px);
@@ -69,7 +78,7 @@
     }
     .sub{font-size:12px; color:var(--muted); letter-spacing:.08em; margin-top:4px}
 
-    .right{display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end}
+    .right{display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end; min-width:220px;}
     @media (max-width:920px){ .right{justify-content:flex-start;} }
 
     .pill{
@@ -204,16 +213,6 @@
     .muted{color:rgba(236,236,236,.55)}
     .hint{margin-top:10px; color:var(--muted); font-size:13px; line-height:1.6}
 
-    .tag{
-      display:inline-flex; align-items:center; gap:6px;
-      padding:6px 10px; border-radius:999px;
-      border:1px solid rgba(255,255,255,.14);
-      background:rgba(0,0,0,.25);
-      font-size:12px;
-      white-space:nowrap;
-    }
-    .tag b{color:var(--gold)}
-
     .toast{
       position:fixed; left:50%; transform:translateX(-50%);
       bottom:18px;
@@ -336,7 +335,7 @@
 
       <div class="brand">
         <div class="title">捷運汐東線審查文件管制查詢表-水環組</div>
-        <div class="sub">純查詢 / 篩選 / 不修改資料</div>
+        <div class="sub">純查詢 / 篩選 / 不修改資料（到期日距今=到期日-今日+1，完成不算）</div>
       </div>
 
       <div class="right">
@@ -755,6 +754,20 @@ function escHtml(s){
     .replaceAll('"',"&quot;")
     .replaceAll("'","&#39;");
 }
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+function daysDiff(aISO, bISO){
+  const a = new Date(aISO+"T00:00:00");
+  const b = new Date(bISO+"T00:00:00");
+  return Math.round((a - b)/86400000);
+}
+/* ✅ 查詢表即時計算：到期日-今日+1（完成不算） */
+function dueInDaysLive(row){
+  if(norm(row?.status) === "完成") return "";
+  const due = norm(row?.dueDate);
+  if(!due) return "";
+  return String(daysDiff(due, todayISO()) + 1);
+}
+
 function loadDB(){
   try{
     db = JSON.parse(localStorage.getItem(DB_KEY) || "[]");
@@ -771,14 +784,29 @@ function uniqueOptions(field){
   arr.sort((a,b)=>a.localeCompare(b,"zh-Hant"));
   return arr;
 }
+
+/* ✅ seed：避免資料空白時下拉選單沒內容 */
+const SEED = {
+  status: ["辦理中","待審","補正","完成"],
+  version: ["A","B","0","1"],
+  system: ["水環","排水","污水"],
+  docType: ["送審文件","回覆文件","補正文件"],
+  result: ["核可","需補正","退件","備查"],
+};
+function mergeSeed(seedArr, dynArr){
+  return Array.from(new Set([...(seedArr||[]), ...(dynArr||[])]))
+    .map(norm).filter(Boolean)
+    .sort((a,b)=>a.localeCompare(b,"zh-Hant"));
+}
+
 function rebuildSelects(){
   const docCode = uniqueOptions("docCode");
   const docName = uniqueOptions("docName");
-  const version = uniqueOptions("version");
-  const system  = uniqueOptions("system");
-  const docType = uniqueOptions("docType");
-  const status  = uniqueOptions("status");
-  const result  = uniqueOptions("reviewResult");
+  const version = mergeSeed(SEED.version, uniqueOptions("version"));
+  const system  = mergeSeed(SEED.system, uniqueOptions("system"));
+  const docType = mergeSeed(SEED.docType, uniqueOptions("docType"));
+  const status  = mergeSeed(SEED.status, uniqueOptions("status"));
+  const result  = mergeSeed(SEED.result, uniqueOptions("reviewResult"));
   const officer = uniqueOptions("officer");
   const duty    = uniqueOptions("duty");
 
@@ -809,12 +837,7 @@ function rebuildSelects(){
     if(Array.from(el.options).some(o=>o.value===keep[k])) el.value = keep[k];
   });
 }
-function inRange(val, from, to){
-  if(!val) return false;
-  if(from && val < from) return false;
-  if(to && val > to) return false;
-  return true;
-}
+
 function filtered(){
   const q = norm($("q").value).toLowerCase();
   const docCode = norm($("docCode").value);
@@ -867,24 +890,27 @@ function filtered(){
 
   if(q){
     rows = rows.filter(r=>{
+      const live = dueInDaysLive(r);
       const hay = [
         r.id, r.docCode, r.docName, r.version, r.system, r.docType,
-        r.submitDate, r.dueDate, r.dueInDays, r.termDays,
+        r.submitDate, r.dueDate, live, r.termDays,
         r.status, r.reviewResult, r.officer, r.duty, r.placeNo
       ].map(x=>(x??"").toString().toLowerCase()).join(" | ");
       return hay.includes(q);
     });
   }
 
-  // 同管制表：未完成依到期日距今近到遠、完成在後
+  // ✅ 排序：未完成依「即時計算」到期日距今由小到大（近到遠）；完成在後
   const active=[], done=[];
   rows.forEach(r=>{
     if(norm(r.status)==="完成") done.push(r);
     else active.push(r);
   });
   active.sort((a,b)=>{
-    const ai = (a.dueInDays === "" || a.dueInDays === null || a.dueInDays === undefined) ? 999999 : Number(a.dueInDays);
-    const bi = (b.dueInDays === "" || b.dueInDays === null || b.dueInDays === undefined) ? 999999 : Number(b.dueInDays);
+    const aiStr = dueInDaysLive(a);
+    const biStr = dueInDaysLive(b);
+    const ai = (aiStr === "") ? 999999 : Number(aiStr);
+    const bi = (biStr === "") ? 999999 : Number(biStr);
     if(ai !== bi) return ai - bi;
     return (Number(a.id)||0)-(Number(b.id)||0);
   });
@@ -892,10 +918,12 @@ function filtered(){
 
   return active.concat(done);
 }
+
 function render(){
   const rows = filtered();
 
   $("tbody").innerHTML = rows.map(r=>{
+    const liveDueIn = (norm(r.status)==="完成") ? "" : dueInDaysLive(r);
     return `
       <tr>
         <td>${escHtml(r.id)}</td>
@@ -906,7 +934,7 @@ function render(){
         <td>${escHtml(r.docType) || `<span class="muted">—</span>`}</td>
         <td>${escHtml(r.submitDate) || `<span class="muted">—</span>`}</td>
         <td>${escHtml(r.dueDate) || `<span class="muted">—</span>`}</td>
-        <td>${escHtml((r.status==="完成") ? "" : (r.dueInDays ?? "")) || `<span class="muted">—</span>`}</td>
+        <td>${escHtml(liveDueIn) || `<span class="muted">—</span>`}</td>
         <td>${escHtml(r.termDays ?? "") || `<span class="muted">—</span>`}</td>
         <td>${escHtml(r.status) || `<span class="muted">—</span>`}</td>
         <td>${escHtml(r.reviewResult) || `<span class="muted">—</span>`}</td>
@@ -921,6 +949,7 @@ function render(){
     `筆數：<b style="color:var(--gold)">${rows.length}</b>。` +
     (TasunAuth.canWrite() ? ` 你也可以到「登錄表」新增，或到「管制表」修改。` : `（read 權限僅可查詢）`);
 }
+
 function setupMoreMenu(backHref){
   const backBtn = $("mBack");
   const moreBtn = $("mMoreBtn");
@@ -948,11 +977,13 @@ function setupMoreMenu(backHref){
   document.addEventListener("click", close);
   window.addEventListener("keydown", (e)=>{ if(e.key === "Escape") close(); });
 }
+
 function syncUserUI(){
   const u = TasunAuth.current();
   $("uName").textContent = u?.user || u?.username || "—";
   $("uRole").textContent = TasunAuth.role();
 }
+
 function start(){
   if(!TasunAuth.ensureLoggedIn()) return;
   syncUserUI();
