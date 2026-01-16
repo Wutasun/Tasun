@@ -773,11 +773,11 @@
 
     const withV = window.__withV || ((u)=>u);
 
-    // ✅ 捷運入口：永遠固定到這裡（不受 localStorage 影響）
-    const METRO_HREF = "汐東工程管理表.html";
+    // ✅ 捷運入口：固定（完全比照臻鼎按鍵寫法：直接在 CANONICAL 寫死 href）
+    const METRO_HREF  = "汐東工程管理表.html";
     const METRO_LABEL = "捷運汐止東湖線";
 
-    // ======= 原始方式：標準對照表（名稱 → href + 權限槽位） =======
+    // ======= 標準對照表（名稱 → href + 權限槽位） =======
     const CANONICAL = [
       { slot: 0, label: "臻鼎時代大廈管理表", href: "臻鼎管理表.html", roles: ["admin","write","read"] },
       { slot: 1, label: METRO_LABEL,          href: METRO_HREF,         roles: ["admin","write","read"] },
@@ -794,7 +794,6 @@
       target: ""
     };
 
-    // ======= 工具 =======
     const $ = (sel) => document.querySelector(sel);
 
     function hrefToDom(href){
@@ -815,7 +814,7 @@
         .forEach(crystalizeEl);
     }
 
-    // ======= 預設 NAV（前 5 顆） =======
+    // ======= DEFAULT_NAV（前 5 顆） =======
     const DEFAULT_NAV = CANONICAL.map((c, i)=>( {
       id: `btn${i+1}`,
       label: c.label,
@@ -835,65 +834,53 @@
       return { id: entry?.id || `btn${index + 1}`, label, href, target, roles };
     }
 
-    // ✅✅✅ 核心：硬修第 2 顆（btn2 / index=1）到固定入口
-    function hardFixMetroSlot(navArr){
-      if(!Array.isArray(navArr)) return { arr: navArr, changed: false };
-
-      let changed = false;
-
-      // 確保至少有 2 格
-      while(navArr.length < 2){
-        navArr.push(normalizeNavEntry(null, navArr.length));
-        changed = true;
+    // ✅✅✅ 核心修正：不管 localStorage 存什麼，第2顆永遠鎖死為汐東工程管理表
+    // 並且「回寫」到 localStorage，讓舊資料自然被清掉（但不做任何舊檔名防護/導向）
+    function enforceCanonicalNav(arr){
+      // 1) 先建 5 格
+      const out = [];
+      for(let i=0;i<5;i++){
+        out[i] = normalizeNavEntry(arr?.[i] ?? null, i);
       }
 
-      const it = navArr[1] || {};
-      const id = String(it.id || "btn2");
-      if(id.toLowerCase() !== "btn2"){ it.id = "btn2"; changed = true; }
+      // 2) slot 1（第2顆）完全鎖死（比照臻鼎：用 CANONICAL 寫死）
+      out[1] = {
+        id: "btn2",
+        label: METRO_LABEL,
+        href: METRO_HREF,
+        target: "",
+        roles: CANONICAL[1].roles.slice()
+      };
 
-      if(String(it.label || "") !== METRO_LABEL){ it.label = METRO_LABEL; changed = true; }
-      if(String(it.href  || "") !== METRO_HREF ){ it.href  = METRO_HREF;  changed = true; }
-
-      // roles 同步 canonical slot1
-      const c = CANONICAL[1];
-      if(JSON.stringify(it.roles || []) !== JSON.stringify(c.roles)){
-        it.roles = c.roles.slice();
-        changed = true;
+      // 3) 保證 id 唯一且按順序 btn1..btn5（避免 localStorage 出現多個 btn2）
+      for(let i=0;i<5;i++){
+        out[i].id = `btn${i+1}`;
       }
 
-      // target 不需要強制（留空）
-      it.target = it.target || "";
-
-      navArr[1] = it;
-      return { arr: navArr, changed };
+      return out;
     }
 
     function loadNavConfig() {
       const raw = localStorage.getItem(NAV_KEY);
 
-      // 沒資料：用預設
-      if (!raw) {
-        const init = DEFAULT_NAV.slice();
-        const fixed = hardFixMetroSlot(init);
-        localStorage.setItem(NAV_KEY, JSON.stringify(fixed.arr));
-        return fixed.arr;
+      // 沒資料：直接存預設（已含鎖死 btn2）
+      if(!raw){
+        const fixed = enforceCanonicalNav(DEFAULT_NAV);
+        localStorage.setItem(NAV_KEY, JSON.stringify(fixed));
+        return fixed;
       }
 
-      // 有資料：讀出並正規化
+      // 有資料：讀出 → 正規化 → 強制鎖死 btn2 → 回存
       try{
-        const arr0 = JSON.parse(raw);
-        const arr = Array.isArray(arr0) && arr0.length ? arr0 : DEFAULT_NAV.slice();
-        const mapped = arr.map((it, idx) => normalizeNavEntry(it, idx));
-        const fixed = hardFixMetroSlot(mapped);
-        if(fixed.changed){
-          localStorage.setItem(NAV_KEY, JSON.stringify(fixed.arr));
-        }
-        return fixed.arr;
+        const parsed = JSON.parse(raw);
+        const arr0 = Array.isArray(parsed) ? parsed : DEFAULT_NAV;
+        const fixed = enforceCanonicalNav(arr0);
+        localStorage.setItem(NAV_KEY, JSON.stringify(fixed));
+        return fixed;
       }catch(e){
-        const reset = DEFAULT_NAV.slice();
-        const fixed = hardFixMetroSlot(reset);
-        localStorage.setItem(NAV_KEY, JSON.stringify(fixed.arr));
-        return fixed.arr;
+        const fixed = enforceCanonicalNav(DEFAULT_NAV);
+        localStorage.setItem(NAV_KEY, JSON.stringify(fixed));
+        return fixed;
       }
     }
 
@@ -990,16 +977,15 @@
     let BTN_CONFIGS = [];
     let mainNavBtns = [];
 
-    // ======= 建按鈕：順序= NAV_CONFIG（前5） + SYSTEM（第6） =======
     function buildMainButtons(){
-      NAV_CONFIG = loadNavConfig();
+      NAV_CONFIG = loadNavConfig();              // ✅ 這裡已鎖死 btn2 並回寫
       AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
 
       BTN_CONFIGS = [...NAV_CONFIG, SYSTEM_BTN];
       mainNavBtns = [];
       navArea.innerHTML = "";
 
-      BTN_CONFIGS.forEach((cfg, idx) => {
+      BTN_CONFIGS.forEach((cfg) => {
         const a = document.createElement("a");
         a.className = "nav-btn";
         a.id = cfg.id || "";
@@ -1008,13 +994,7 @@
         span.textContent = cfg.label;
         a.appendChild(span);
 
-        // ✅ 再保險一次：第2顆永遠固定入口
-        let finalHref = cfg.href || "#";
-        if ((cfg.id || "").toLowerCase() === "btn2" || idx === 1) {
-          finalHref = METRO_HREF;
-        }
-
-        a.setAttribute("href", hrefToDom(finalHref));
+        a.setAttribute("href", hrefToDom(cfg.href || "#"));
 
         const t = cfg.target || "";
         if(t){
@@ -1035,15 +1015,12 @@
       return cfg.roles.includes(level);
     }
 
-    function isAllowedByAuth(user, cfg, fallbackIndex){
+    function isAllowedByAuth(user, cfg, index){
       if(cfg && cfg.id === "systemBtn") return true;
-
       const flags = Array.isArray(user.buttons) ? user.buttons : [];
-      // 權限槽位：用順序（與原本一致）
-      return !!flags[fallbackIndex];
+      return !!flags[index]; // ✅ 與 btn1~btn5 的槽位一致
     }
 
-    // ======= Login/UI =======
     function populateUserSelect(){
       const sel = document.getElementById("username");
       AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
@@ -1131,22 +1108,14 @@
 
       mainNavBtns.forEach((btn, index) => {
         const cfg = BTN_CONFIGS[index];
-
         const okRole = isRoleAllowed(cfg, user.level);
         const okAuth = isAllowedByAuth(user, cfg, index);
-
         btn.style.display = (okRole && okAuth) ? "flex" : "none";
-
-        // ✅ 再保險：若是第2顆顯示時，href 仍固定入口
-        if ((cfg?.id || "").toLowerCase() === "btn2" || index === 1) {
-          btn.setAttribute("href", hrefToDom(METRO_HREF));
-        }
       });
 
       crystalizeAll(document);
     }
 
-    // ======= 初始化 =======
     (function(){
       const img = document.getElementById("zenImg");
       if(img) img.src = withV(img.getAttribute("src") || img.src);
