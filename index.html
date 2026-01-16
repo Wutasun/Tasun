@@ -773,16 +773,10 @@
 
     const withV = window.__withV || ((u)=>u);
 
-    // ✅✅✅ 最終正確目標：捷運必定去這裡
+    // ✅ 正確捷運頁面（只保留這個目標，不做任何舊檔名判斷/攔截）
     const METRO_HREF = "汐東工程管理表.html";
 
-    // ✅✅✅ 舊的錯誤目標（只要遇到就導正）
-    const METRO_OLD_HREFS = [
-      "捷運汐東線記事.html",
-      "捷運汐止東湖線記事.html"
-    ];
-
-    // ======= ✅ 名稱驅動：標準對照表（名稱 → href + 權限槽位） =======
+    // ======= 原始方式：標準對照表（名稱 → href + 權限槽位） =======
     const CANONICAL = [
       { slot: 0, label: "臻鼎時代大廈管理表", href: "臻鼎管理表.html", roles: ["admin","write","read"] },
       { slot: 1, label: "捷運汐止東湖線",     href: METRO_HREF,         roles: ["admin","write","read"] },
@@ -799,41 +793,16 @@
       target: ""
     };
 
-    // ✅ Metro 別名：不怕你在權限表改字
-    const METRO_ALIASES = [
-      "捷運汐止東湖線",
-      "捷運汐東線",
-      "汐止東湖線",
-      "汐東線",
-      "捷運汐東線"
-    ];
-
     // ======= 工具 =======
     const $ = (sel) => document.querySelector(sel);
     const normTxt = (s)=> (s||"").toString().replace(/\s+/g,"").trim();
-
-    function hrefLooksLikeOldMetro(href){
-      const h = String(href||"").trim();
-      if(!h) return false;
-      return METRO_OLD_HREFS.some(old => h.includes(old));
-    }
-
-    function normalizeMetroHref(href){
-      const h = String(href||"").trim();
-      if(!h) return href;
-      if(hrefLooksLikeOldMetro(h)) return METRO_HREF;
-      return href;
-    }
 
     function hrefToDom(href){
       const h0 = String(href || "").trim();
       if(!h0) return "#";
       if(/^https?:\/\//i.test(h0)) return h0;
       if(/^mailto:/i.test(h0)) return h0;
-
-      // ✅ 入口就洗掉舊捷運檔名
-      const h = normalizeMetroHref(h0);
-      return withV(encodeURI(h));
+      return withV(encodeURI(h0));
     }
 
     function crystalizeEl(el){
@@ -846,61 +815,24 @@
         .forEach(crystalizeEl);
     }
 
-    // ======= ✅ Metro 判斷：label + href 雙保險 =======
-    function isMetroLabel(label){
-      const n = normTxt(label);
-      if(!n) return false;
-
-      if(METRO_ALIASES.some(a => n === normTxt(a) || n.includes(normTxt(a)))) return true;
-
-      // 保險：含「捷運」+「汐」+「東湖」 或 「捷運」+「汐東線」
-      const okMust = ["捷運","汐","東湖"].every(k => n.includes(normTxt(k)));
-      if(okMust) return true;
-      if(n.includes("捷運") && n.includes("汐東線")) return true;
-
-      return false;
-    }
-
-    function isMetroEntryByLabelOrHref(label, href){
-      if(isMetroLabel(label)) return true;
-      if(hrefLooksLikeOldMetro(href)) return true;
-      return false;
-    }
-
-    // ======= ✅ 名稱→標準物件（含別名映射到同一個 canonical） =======
+    // ======= 名稱→標準物件（原始方式：只用 label 對照） =======
     const CANONICAL_BY_LABEL = new Map(CANONICAL.map(x => [normTxt(x.label), x]));
-    (function(){
-      const metroCanonical = CANONICAL.find(x => isMetroLabel(x.label)) || CANONICAL[1];
-      METRO_ALIASES.forEach(a => CANONICAL_BY_LABEL.set(normTxt(a), metroCanonical));
-    })();
-
     function canonicalOfLabel(label){
       const n = normTxt(label);
-      if(CANONICAL_BY_LABEL.has(n)) return CANONICAL_BY_LABEL.get(n);
-      if(isMetroLabel(label)) return CANONICAL[1] || null;
-      return null;
+      return CANONICAL_BY_LABEL.get(n) || null;
     }
 
-    // ======= ✅ 修正：storage 裡只要命中捷運（label 或舊 href），就強制改 href =======
+    // ✅ 依 label 套用 CANONICAL（把 localStorage 裡被改壞的 href 洗回正確，且回存）
     function applyCanonicalFix(navArr){
       if(!Array.isArray(navArr)) return navArr;
-
       let changed = false;
 
       for(const it of navArr){
         if(!it) continue;
-
-        if(isMetroEntryByLabelOrHref(it.label, it.href)){
-          if(it.href !== METRO_HREF){
-            it.href = METRO_HREF;
-            changed = true;
-          }
-        }
-
         const c = canonicalOfLabel(it.label);
         if(!c) continue;
 
-        if(it.href !== c.href) { it.href = c.href; changed = true; }
+        if(String(it.href||"") !== String(c.href||"")) { it.href = c.href; changed = true; }
         if(Array.isArray(c.roles) && JSON.stringify(it.roles||[]) !== JSON.stringify(c.roles)){
           it.roles = c.roles.slice();
           changed = true;
@@ -1052,35 +984,6 @@
     let BTN_CONFIGS = [];
     let mainNavBtns = [];
 
-    // ======= 導向工具 =======
-    function goTo(href){
-      // ✅ 即使外部傳入舊捷運檔名，也先導正
-      const fixed = normalizeMetroHref(href);
-      window.location.assign(hrefToDom(fixed));
-    }
-
-    // ✅✅✅ 最強保險：全域捕捉
-    // 1) data-metro
-    // 2) href 指到舊檔名
-    // 3) 文字看起來像捷運
-    function installGlobalMetroGuard(){
-      document.addEventListener("click", (ev) => {
-        const a = ev.target && ev.target.closest ? ev.target.closest("a.nav-btn") : null;
-        if(!a) return;
-
-        const text = (a.innerText || a.textContent || "").trim();
-        const rawHref = a.getAttribute("href") || "";
-        const looksMetro = (a.dataset && a.dataset.metro === "1")
-          || hrefLooksLikeOldMetro(rawHref)
-          || isMetroLabel(text);
-
-        if(!looksMetro) return;
-
-        try{ ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); }catch(_){}
-        goTo(METRO_HREF);
-      }, true);
-    }
-
     // ======= 建按鈕：順序= NAV_CONFIG（前5） + SYSTEM（第6） =======
     function buildMainButtons(){
       NAV_CONFIG = loadNavConfig();
@@ -1100,22 +1003,13 @@
         a.appendChild(span);
 
         const c = canonicalOfLabel(cfg.label);
-
-        // ✅ Metro：label 或舊 href 任何命中，都強制 METRO_HREF
-        const isMetro = isMetroEntryByLabelOrHref(cfg.label, cfg.href);
-
-        const finalHref = isMetro ? METRO_HREF : (c ? c.href : (cfg.href || "#"));
+        const finalHref = c ? c.href : (cfg.href || "#");
         a.setAttribute("href", hrefToDom(finalHref));
 
         const t = cfg.target || (c && c.target) || "";
         if(t){
           a.target = t;
           if(t === "_blank") a.rel = "noopener noreferrer";
-        }
-
-        if(isMetro){
-          a.dataset.metro = "1";
-          a.setAttribute("href", hrefToDom(METRO_HREF));
         }
 
         a.style.display = "none";
@@ -1232,15 +1126,7 @@
         const okRole = isRoleAllowed(cfg, user.level);
         const okAuth = isAllowedByAuth(user, cfg, index);
 
-        const isMetro = isMetroEntryByLabelOrHref(cfg?.label, cfg?.href);
-        const finalOk = (user.level === "read" && isMetro) ? true : (okRole && okAuth);
-
-        btn.style.display = finalOk ? "flex" : "none";
-
-        if(isMetro){
-          btn.dataset.metro = "1";
-          btn.setAttribute("href", hrefToDom(METRO_HREF));
-        }
+        btn.style.display = (okRole && okAuth) ? "flex" : "none";
       });
 
       crystalizeAll(document);
@@ -1252,7 +1138,6 @@
       if(img) img.src = withV(img.getAttribute("src") || img.src);
     })();
 
-    installGlobalMetroGuard();
     buildMainButtons();
     crystalizeAll(document);
     showLogin();
