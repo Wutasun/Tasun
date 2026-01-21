@@ -1525,21 +1525,58 @@
       return arr;
     }
 
-    function rebuildFilters(){
-      const trades = unionOptions("trade", TRADE_DICT_KEY);
-      const systems= unionOptions("system", SYS_DICT_KEY);
+    /* =========================================================
+       ✅✅✅ 重點優化：系統下拉依「工種」篩選（不重複）
+       - 工種未選：系統顯示全部（DB + 字典）
+       - 工種已選：系統只顯示該工種在 DB 中出現過的系統（不重複）
+       - 若該工種尚無系統：系統下拉只剩「全部」並自動 disabled
+       ========================================================= */
+    function systemsByTradeFromDB(trade){
+      const t = norm(trade);
+      const set = new Set();
+      if(!t) return [];
+      for(const r of db){
+        if(norm(r.trade) !== t) continue;
+        const s = norm(r.system);
+        if(s) set.add(s);
+      }
+      const arr = Array.from(set);
+      arr.sort((a,b)=> a.localeCompare(b, "zh-Hant"));
+      return arr;
+    }
 
+    function rebuildFilters(){
       const tSel = $("fTrade");
       const sSel = $("fSys");
 
       const keepT = norm(tSel.value);
       const keepS = norm(sSel.value);
 
+      // 工種：維持既有（DB + 工種字典）
+      const trades = unionOptions("trade", TRADE_DICT_KEY);
       tSel.innerHTML = `<option value="">全部</option>` + trades.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
+      tSel.value = trades.includes(keepT) ? keepT : "";
+
+      // 系統：依工種動態
+      const pickedTrade = norm(tSel.value);
+
+      let systems = [];
+      if(pickedTrade){
+        systems = systemsByTradeFromDB(pickedTrade); // ✅只取該工種的系統（不重複）
+      }else{
+        systems = unionOptions("system", SYS_DICT_KEY); // ✅未選工種：全部（DB + 字典）
+      }
+
       sSel.innerHTML = `<option value="">全部</option>` + systems.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
 
-      if(trades.includes(keepT)) tSel.value = keepT; else tSel.value = "";
-      if(systems.includes(keepS)) sSel.value = keepS; else sSel.value = "";
+      // 若已選工種但該工種尚無系統 → 只留「全部」並 disable
+      if(pickedTrade && systems.length === 0){
+        sSel.value = "";
+        sSel.disabled = true;
+      }else{
+        sSel.disabled = false;
+        sSel.value = systems.includes(keepS) ? keepS : "";
+      }
     }
 
     function filteredRows(){
@@ -1569,9 +1606,36 @@
       }
     }
 
-    function refreshModalDropdowns(){
-      fillDropdown("mTradeSel", unionOptions("trade", TRADE_DICT_KEY), "（請先新增工種）");
-      fillDropdown("mSysSel",   unionOptions("system", SYS_DICT_KEY), "（請先新增系統）");
+    /* ✅Modal 下拉：仍保留「字典」可新增邏輯，但會跟著選到的工種微調系統候選 */
+    function modalSystemsForTrade(trade){
+      const t = norm(trade);
+      const set = new Set();
+
+      // 1) DB 中該工種已出現的系統（優先收斂）
+      if(t){
+        for(const v of systemsByTradeFromDB(t)) set.add(v);
+      }
+
+      // 2) 系統字典仍提供（避免新增第一筆時完全沒得選）
+      for(const v of loadDict(SYS_DICT_KEY)) set.add(norm(v));
+
+      const arr = Array.from(set).filter(Boolean);
+      arr.sort((a,b)=> a.localeCompare(b, "zh-Hant"));
+      return arr;
+    }
+
+    function rebuildModalTradeOptions(selected){
+      const trades = unionOptions("trade", TRADE_DICT_KEY);
+      fillDropdown("mTradeSel", trades, "（請先新增工種）");
+      const v = norm(selected);
+      if(v && trades.includes(v)) $("mTradeSel").value = v;
+    }
+
+    function rebuildModalSystemOptions(trade, selected){
+      const systems = modalSystemsForTrade(trade);
+      fillDropdown("mSysSel", systems, "（請先新增系統）");
+      const v = norm(selected);
+      if(v && systems.includes(v)) $("mSysSel").value = v;
     }
 
     function setModalEditable(editable){
@@ -1597,7 +1661,9 @@
       const item = (id == null) ? null : (db.find(x => x.id === id) || null);
       editingId = item ? item.id : null;
 
-      refreshModalDropdowns();
+      // ✅先建立下拉：trade → system（system 會跟著 trade）
+      rebuildModalTradeOptions(item?.trade || "");
+      rebuildModalSystemOptions(norm($("mTradeSel").value) || item?.trade || "", item?.system || "");
 
       $("mTitle").textContent = editable ? (item ? "編輯" : "新增") : "查看";
       setModalEditable(editable);
@@ -1608,13 +1674,10 @@
       $("mDate").value = (item?.date || new Date().toISOString().slice(0,10));
       $("mAttach").value = item?.attach || item?.attachment || item?.file || "";
 
-      if(item?.trade){
-        const ok = Array.from($("mTradeSel").options).some(o => o.value === item.trade);
-        if(ok) $("mTradeSel").value = item.trade;
-      }
-      if(item?.system){
-        const ok = Array.from($("mSysSel").options).some(o => o.value === item.system);
-        if(ok) $("mSysSel").value = item.system;
+      // ✅若是新增：讓系統清楚對應當前工種（避免留到舊值）
+      if(!item){
+        const t = norm($("mTradeSel").value);
+        rebuildModalSystemOptions(t, norm($("mSysSel").value));
       }
 
       $("mask").style.display = "flex";
@@ -1723,14 +1786,20 @@
       dict.sort((a,b)=> a.localeCompare(b, "zh-Hant"));
       saveDict(key, dict);
 
-      refreshModalDropdowns();
-      rebuildFilters();
+      // ✅新增後：更新 modal 下拉（系統會依工種重新算）
+      if(promptMode === "trade"){
+        rebuildModalTradeOptions(v);
+        rebuildModalSystemOptions(norm($("mTradeSel").value), norm($("mSysSel").value));
+        $("mTradeSel").value = v;
+      }else{
+        rebuildModalSystemOptions(norm($("mTradeSel").value), v);
+        $("mSysSel").value = v;
+      }
 
-      if(promptMode === "trade") $("mTradeSel").value = v;
-      else $("mSysSel").value = v;
+      // ✅更新上方篩選（系統依工種）
+      render();
 
       closePrompt();
-      render();
       toast("已新增選項");
     }
 
@@ -1763,7 +1832,7 @@
 
     /* ✅渲染：表格模式/閱讀模式分流 */
     function render(){
-      rebuildFilters();
+      rebuildFilters(); // ✅此處已包含：系統下拉依工種動態收斂
 
       const rows = filteredRows();
       const writable = canWrite();
@@ -1803,7 +1872,6 @@
 
               <div class="cardNote">${escHtml((r.text ?? "").toString()).replaceAll("\n","<br>")}</div>
 
-              <!-- ✅摘要一行：點一下展開/收合 -->
               <div class="cardSummary" data-act="toggle" data-id="${r.id}">
                 <div class="sumLeft">
                   <span class="chip">登錄：<b>${escHtml(date)}</b></span>
@@ -1880,10 +1948,14 @@
         `;
       }
 
+      const pickedTrade = norm($("fTrade").value);
+      const sysDisabled = $("fSys").disabled;
+
       $("hint").innerHTML =
         `目前為 <b style="color:var(--goldText)">${writable ? "可維護模式" : "唯讀模式"}</b>（role: ${escHtml(role())}）。` +
         ` 模式：<b style="color:var(--goldText)">${rm ? "閱讀模式（摘要點一下展開/收合）" : "表格模式"}</b>。` +
         ` 筆數：<b style="color:var(--goldText)">${rows.length}</b>。` +
+        (pickedTrade && sysDisabled ? ` <span style="color:rgba(35,26,16,.78)">（此工種尚無系統可篩選）</span>` : ``) +
         (selectedId ? ` 已選取：<b style="color:var(--goldText)">#${selectedId}</b>` : `（可點選項目再按「編輯」）`);
     }
 
@@ -1900,7 +1972,12 @@
       $("btnRead").onclick = toggleReadMode;
 
       $("qText").addEventListener("input", render);
-      $("fTrade").addEventListener("change", render);
+
+      // ✅工種改變：系統下拉會被 render() 內的 rebuildFilters() 自動重建（依工種）
+      $("fTrade").addEventListener("change", () => {
+        // 防止工種改變後，系統仍維持舊選項（render 會處理）
+        render();
+      });
       $("fSys").addEventListener("change", render);
 
       $("btnClear").onclick = () => {
@@ -1936,6 +2013,13 @@
       $("pCancel").onclick = closePrompt;
       $("pOk").onclick = addOption;
       $("pMask").addEventListener("click", (e)=>{ if(e.target === $("pMask")) closePrompt(); });
+
+      // ✅Modal：工種變更 → 系統候選重新收斂（仍保留字典支援）
+      $("mTradeSel").addEventListener("change", ()=>{
+        const t = norm($("mTradeSel").value);
+        const keepSys = norm($("mSysSel").value);
+        rebuildModalSystemOptions(t, keepSys);
+      });
 
       /* ✅表格模式：點列選取 + 查看 + 附件 */
       $("tbody").addEventListener("click", (e)=>{
@@ -1988,14 +2072,10 @@
           const card = toggle.closest(".card");
           if(!card) return;
           card.classList.toggle("expanded");
-          // 讓摘要右側文字跟著變化
           const sr = card.querySelector(".sumRight");
           if(sr) sr.firstChild && (sr.firstChild.textContent = card.classList.contains("expanded") ? "收合 " : "展開 ");
-          // 同時選取
           const id = Number(card.getAttribute("data-id"));
           if(Number.isFinite(id)) selectedId = id;
-          // 不重繪，避免展開瞬間被 render 收回
-          // 只同步選取樣式：
           document.querySelectorAll(".card.sel").forEach(x=>x.classList.remove("sel"));
           card.classList.add("sel");
           return;
