@@ -6,6 +6,51 @@
   <title>工程資料查詢 · Tasun</title>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet">
 
+  <!-- ✅✅✅ APP_VER 強制同步（全站一致）+ 自動帶 v + 導航 withV -->
+  <script>
+  (function(){
+    const APP_VER = "2026-01-26"; // ←請改成你全站一致的版本字串
+    const APPKEY  = "tasun_app_ver_v1";
+    const FLAG    = "tasun_app_ver_refresh_once__" + APP_VER;
+
+    try{
+      const u = new URL(location.href);
+      const stored = (localStorage.getItem(APPKEY) || "").trim();
+      const curV = (u.searchParams.get("v") || "").trim();
+
+      const needSync = stored !== APP_VER;
+      if(needSync) localStorage.setItem(APPKEY, APP_VER);
+
+      // 若：首次進入沒 v、或 v 不等於 APP_VER、或偵測到版本更新 → 強制 replace 一次
+      if((needSync || !curV || curV !== APP_VER) && !sessionStorage.getItem(FLAG)){
+        sessionStorage.setItem(FLAG, "1");
+        u.searchParams.set("v", APP_VER);
+        location.replace(u.toString());
+        return;
+      }
+
+      // 統一全站用的 cache v
+      window.APP_VER = APP_VER;
+      window.__CACHE_V = curV || APP_VER;
+
+      // 只對同網域（含相對路徑）自動加 v
+      window.__withV = function(url){
+        const vv = (window.__CACHE_V || APP_VER || "").trim();
+        if(!vv) return url;
+        try{
+          const uu = new URL(url, document.baseURI);
+          if(uu.origin === location.origin){
+            uu.searchParams.set("v", vv);
+          }
+          return uu.toString();
+        }catch(e){
+          return url;
+        }
+      };
+    }catch(e){}
+  })();
+  </script>
+
   <style>
     :root{
       --bg0:#070809;
@@ -582,8 +627,8 @@
         // ✅ 明細表資料更新（例如另頁新增/編輯）
         if(e.key === DB_KEY){
           loadDB();
-          rebuildSysSelect();              // 系統可能新增
-          rebuildCatSelectForSys(norm($("sys").value), norm($("cat").value)); // 類別依系統重算
+          rebuildSysSelect();
+          rebuildCatSelectForSys(norm($("sys").value), norm($("cat").value));
           renderTableOnly();
         }
       });
@@ -657,7 +702,7 @@
 
       closeLoginModal();
       toast("登入成功");
-      start(); // 重跑初始化（確保權限與按鈕狀態正確）
+      start();
     }
 
     // ===== Data =====
@@ -712,8 +757,6 @@
     }
 
     // ✅ 類別：依「已選系統」→ 從明細表資料抓出「不重複類別」做下拉
-    //   - sys="" → 類別顯示全部（資料不重複 + 類別字典，維持原邏輯）
-    //   - sys!= "" → 類別只顯示該系統在明細表內出現過的類別（不重複）
     function rebuildCatSelectForSys(sysValue, keepCat){
       const sys = norm(sysValue);
       const keep = norm(keepCat);
@@ -721,10 +764,8 @@
       let cats = [];
 
       if(!sys){
-        // 全部（維持原本：資料不重複 + 字典）
         cats = unionOptions("category", CAT_DICT_KEY);
       }else{
-        // 只取該系統在資料中「實際存在」的類別
         const set = new Set();
         for(const r of db){
           if(norm(r.system) !== sys) continue;
@@ -739,7 +780,6 @@
         `<option value="">全部</option>` +
         cats.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
 
-      // 若原本已選類別不在新清單 → 自動回到全部
       if(keep && cats.includes(keep)) $("cat").value = keep;
       else $("cat").value = "";
     }
@@ -786,7 +826,6 @@
         `;
       }).join("") || `<tr><td colspan="6" class="muted" style="padding:18px;">尚無資料</td></tr>`;
 
-      // 顯示：該系統的「不重複類別數」
       const sysNow = norm($("sys").value);
       let catCount = 0;
       if(sysNow){
@@ -806,14 +845,6 @@
         (writable ? ` 你也可以到「登錄資料」新增。` : `（read 權限僅可查詢）`);
     }
 
-    function render(){
-      // ✅ 系統下拉（全域）
-      rebuildSysSelect();
-      // ✅ 類別下拉（依系統而變）
-      rebuildCatSelectForSys(norm($("sys").value), norm($("cat").value));
-      renderTableOnly();
-    }
-
     function setupMoreMenu(backHref){
       const backBtn = $("mBack");
       const moreBtn = $("mMoreBtn");
@@ -826,7 +857,7 @@
         menu.classList.toggle("open");
       };
 
-      backBtn.onclick = ()=> location.href = backHref;
+      backBtn.onclick = ()=> location.href = __withV(backHref);
       moreBtn.addEventListener("click", toggle);
 
       menu.addEventListener("click", (e)=>{
@@ -834,7 +865,7 @@
         const item = e.target.closest("button.menuItem[data-href]");
         if(!item) return;
         const href = item.getAttribute("data-href");
-        if(href) location.href = href;
+        if(href) location.href = __withV(href);
       });
 
       document.addEventListener("click", close);
@@ -846,18 +877,16 @@
 
       loadDB();
 
-      $("navBackList").onclick = ()=>location.href="工程資料明細表.html";
+      $("navBackList").onclick = ()=>location.href=__withV("工程資料明細表.html");
       setupMoreMenu("工程資料明細表.html");
 
-      $("btnHome").onclick = ()=>location.href="index.html";
-      $("btnReg").onclick = ()=>location.href="工程資料登錄.html";
+      $("btnHome").onclick = ()=>location.href=__withV("index.html");
+      $("btnReg").onclick = ()=>location.href=__withV("工程資料登錄.html");
 
-      // ✅ 登錄按鈕權限控制
       $("btnReg").style.display = canWrite() ? "inline-block" : "none";
 
-      // 🔑 重點：系統變更 → 先重建「該系統的類別清單」→ 再渲染
       $("sys").addEventListener("change", ()=>{
-        rebuildCatSelectForSys(norm($("sys").value), ""); // 系統變更 → 類別重置為全部
+        rebuildCatSelectForSys(norm($("sys").value), "");
         renderTableOnly();
       });
 
@@ -867,11 +896,10 @@
       $("btnClear").onclick = ()=>{
         $("q").value="";
         $("sys").value="";
-        rebuildCatSelectForSys("", ""); // 回到全部類別
+        rebuildCatSelectForSys("", "");
         renderTableOnly();
       };
 
-      // 初始建一次
       rebuildSysSelect();
       rebuildCatSelectForSys(norm($("sys").value), norm($("cat").value));
       renderTableOnly();
@@ -880,7 +908,7 @@
     // ===== Login Modal Bindings =====
     (function bindLogin(){
       $("loginClose").onclick = closeLoginModal;
-      $("loginToAuth").onclick = ()=> location.href="權限表.html";
+      $("loginToAuth").onclick = ()=> location.href=__withV("權限表.html");
       $("loginBtn").onclick = doLogin;
 
       $("loginMask").addEventListener("click",(e)=>{
