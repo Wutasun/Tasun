@@ -1,412 +1,419 @@
-/* ============================================================
- * tasun-core.js  (Tasun 全站共用核心模組)
- * - 版本同步 / withV
- * - Network Guard: offline/online + ping
- * - fetch timeout / retry
- * - utils: safeJsonParse, clamp, lerp, rafThrottle, $
- * - backup(可選): ring + patchLocalStorage（需手動 enable）
- *
- * 用法（每頁 head）：
- *   <script>window.TASUN_APP_VER="20260126_01";</script>
- *   <script src="./tasun-core.js?v=20260126_01"></script>
- *   <script>TasunCore.init({ forceVersionSync:true, networkGuard:true });</script>
- * ============================================================ */
-(function (global) {
+/*! Tasun Core - shared utilities for all pages (version sync / withV / network guard / backup ring)
+ *  Put this file in the SAME folder as all html pages.
+ *  Usage (in HTML head):
+ *    <script>window.TASUN_APP_VER="20260126_01";</script>
+ *    <script src="./tasun-core.js"></script>
+ *    <script>TasunCore.forceVersionSync({ verKey:"tasun_app_ver_index_v1" });</script>
+ */
+(function (w) {
   "use strict";
 
-  const TasunCore = {};
-  const DEF = {
-    appName: "Tasun",
-    // version sync
-    forceVersionSync: true,
-    versionStorageKey: "tasun_app_ver_global_v1",
-    tabGuardKey: "tasun_tab_replaced_once_v1",
+  if (w.TasunCore && w.TasunCore.__isLoaded) return;
 
-    // network guard
-    networkGuard: true,
-    toast: true,
-    pingIntervalMs: 15000,
-    pingTimeoutMs: 4500,
-    pingUrl: "/favicon.ico", // 同源測試用
+  const Core = {};
+  Core.__isLoaded = true;
+  Core.VERSION = "20260126_01_core";
 
-    // behavior
-    autoInitToastMount: true
-  };
-
-  // ---------------- utils ----------------
-  TasunCore.utils = {};
-
-  TasunCore.utils.$ = function (sel, root) {
-    return (root || document).querySelector(sel);
-  };
-
-  TasunCore.utils.safeJsonParse = function (s, fallback) {
+  // ---------- small utils ----------
+  function safeJsonParse(s, fallback) {
     try { return JSON.parse(s); } catch (e) { return fallback; }
-  };
+  }
+  function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
 
-  TasunCore.utils.clamp = function (n, a, b) {
-    return Math.max(a, Math.min(b, n));
-  };
+  function getAppVer() {
+    return (w.TASUN_APP_VER || w.__TASUN_APP_VER || "").toString().trim();
+  }
 
-  TasunCore.utils.lerp = function (a, b, t) {
-    return a + (b - a) * t;
-  };
+  function setCacheV(v) {
+    w.__CACHE_V = String(v || "").trim();
+    if (!w.__CACHE_V) return;
+    // also keep a stable alias for debugging
+    w.__TASUN_APP_VER = w.__CACHE_V;
+  }
 
-  TasunCore.utils.rafThrottle = function (fn) {
-    let raf = 0;
-    return function (...args) {
-      if (raf) cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        fn.apply(this, args);
-      });
-    };
-  };
-
-  function safeGetAppVer() {
-    const v1 = (global.TASUN_APP_VER || "").toString().trim();
-    if (v1) return v1;
-
-    const m = document.querySelector('meta[name="tasun-app-ver"]');
-    const v2 = (m && (m.getAttribute("content") || "").trim()) || "";
-    if (v2) return v2;
-
+  function withV(url) {
+    const vv = (w.__CACHE_V || getAppVer() || "").toString().trim();
+    if (!vv) return url;
     try {
-      const u = new URL(location.href);
-      const v3 = (u.searchParams.get("v") || "").trim();
-      if (v3) return v3;
-    } catch (e) {}
-
-    return "";
-  }
-
-  // ---------------- withV ----------------
-  function setWithV(ver) {
-    global.__CACHE_V = ver || "";
-    global.__withV = function (url) {
-      const vv = (global.__CACHE_V || "").trim();
-      if (!vv) return url;
-      try {
-        const uu = new URL(url, document.baseURI);
-        if (uu.origin === location.origin) uu.searchParams.set("v", vv);
-        return uu.toString();
-      } catch (e) {
-        const s = String(url || "");
-        return s + (s.includes("?") ? "&" : "?") + "v=" + encodeURIComponent(vv);
-      }
-    };
-    TasunCore.withV = global.__withV;
-    return TasunCore.withV;
-  }
-
-  // ---------------- toast ----------------
-  let _toastEl = null;
-  let _toastTimer = 0;
-
-  function ensureToastEl() {
-    if (_toastEl) return _toastEl;
-    const el = document.createElement("div");
-    el.id = "tasunToast_v1";
-    el.style.cssText = `
-      position:fixed; right:14px; bottom:14px; z-index:99999;
-      padding:10px 12px; border-radius:12px;
-      font: 14px/1.2 system-ui, -apple-system, "Noto Sans TC", sans-serif;
-      background: rgba(18,18,18,.78); color:#fff;
-      border:1px solid rgba(255,255,255,.12);
-      box-shadow: 0 10px 28px rgba(0,0,0,.35);
-      display:none; backdrop-filter: blur(8px);
-      max-width:min(360px, calc(100vw - 28px));
-      word-break:break-word; pointer-events:none;
-    `;
-    const mount = () => {
-      if (document.body && !document.body.contains(el)) document.body.appendChild(el);
-    };
-    if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", mount, { once: true });
-    } else {
-      mount();
-    }
-    _toastEl = el;
-    return el;
-  }
-
-  function toastShow(msg, autoHideMs) {
-    clearTimeout(_toastTimer);
-    const el = ensureToastEl();
-    el.textContent = msg;
-    el.style.display = "block";
-    if (autoHideMs && autoHideMs > 0) _toastTimer = setTimeout(toastHide, autoHideMs);
-  }
-
-  function toastHide() {
-    clearTimeout(_toastTimer);
-    const el = ensureToastEl();
-    el.style.display = "none";
-  }
-
-  TasunCore.toast = { show: toastShow, hide: toastHide };
-
-  // ---------------- version sync ----------------
-  function ensureVersionSync(cfg) {
-    const APP_VER = safeGetAppVer();
-    setWithV(APP_VER || "");
-
-    if (!APP_VER) return { appVer: "", redirected: false };
-
-    if (!cfg.forceVersionSync) return { appVer: APP_VER, redirected: false };
-
-    try {
-      const VER_KEY = cfg.versionStorageKey;
-      const TAB_GUARD = cfg.tabGuardKey;
-
-      const last = localStorage.getItem(VER_KEY) || "";
-      if (last !== APP_VER) {
-        localStorage.setItem(VER_KEY, APP_VER);
-        try { sessionStorage.removeItem(TAB_GUARD); } catch (e) {}
-      }
-
-      const u = new URL(location.href);
-      const curV = (u.searchParams.get("v") || "").trim();
-
-      const already = (() => {
-        try { return sessionStorage.getItem(TAB_GUARD) === "1"; } catch (e) { return false; }
-      })();
-
-      if (curV !== APP_VER && !already) {
-        try { sessionStorage.setItem(TAB_GUARD, "1"); } catch (e) {}
-        u.searchParams.set("v", APP_VER);
-        location.replace(u.toString());
-        return { appVer: APP_VER, redirected: true };
-      }
+      const uu = new URL(url, document.baseURI);
+      if (uu.origin === location.origin) uu.searchParams.set("v", vv);
+      return uu.toString();
     } catch (e) {
-      // storage 被阻擋就略過
+      const s = String(url || "");
+      return s + (s.includes("?") ? "&" : "?") + "v=" + encodeURIComponent(vv);
     }
-
-    return { appVer: APP_VER, redirected: false };
   }
 
-  // ---------------- network guard ----------------
-  let _pingTimer = 0;
+  function hrefToDom(href) {
+    const h = String(href || "").trim();
+    if (!h) return "#";
+    if (/^https?:\/\//i.test(h)) return h;
+    if (/^mailto:/i.test(h)) return h;
+    return withV(encodeURI(h));
+  }
 
-  async function pingOnce(cfg) {
-    const v = encodeURIComponent((global.__CACHE_V || Date.now()).toString());
-    const url = location.origin + (cfg.pingUrl || "/favicon.ico") + "?v=" + v + "&t=" + Date.now();
+  function labelToFile(label) {
+    let s = String(label || "").trim();
+    if (!s) return "#";
+    if (s.endsWith(".html")) return s;
+    s = s.replace(/[\\\/:*?"<>|]/g, "").trim();
+    s = s.replace(/\s+/g, "");
+    return s + ".html";
+  }
 
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), cfg.pingTimeoutMs);
+  Core.util = { safeJsonParse, clamp, lerp, hrefToDom, labelToFile };
 
+  // export globally (compat)
+  w.__withV = w.__withV || withV;
+
+  Core.getAppVer = getAppVer;
+  Core.setCacheV = setCacheV;
+  Core.withV = withV;
+  Core.hrefToDom = hrefToDom;
+  Core.labelToFile = labelToFile;
+
+  // ---------- Version Sync ----------
+  Core.forceVersionSync = function (opts) {
+    const o = opts || {};
+    const appVer = (o.appVer ? String(o.appVer) : getAppVer()).trim();
+    if (!appVer) return { ok: false, reason: "no_app_ver" };
+
+    const verKey = o.verKey || "tasun_app_ver_global_v1";
+    const tabGuardKey = o.tabGuardKey || "tasun_tab_replaced_once_v1";
+
+    // make withV consistent first
+    setCacheV(appVer);
+
+    let u;
+    try { u = new URL(location.href); } catch (e) { return { ok: false, reason: "bad_url" }; }
+
+    // track seen version
     try {
-      await fetch(url, { cache: "no-store", signal: ctrl.signal });
-      clearTimeout(t);
-      if (navigator.onLine && cfg.toast) toastHide();
+      const last = localStorage.getItem(verKey) || "";
+      if (last !== appVer) {
+        localStorage.setItem(verKey, appVer);
+        try { sessionStorage.removeItem(tabGuardKey); } catch (e) { }
+      }
+    } catch (e) { }
+
+    const curV = (u.searchParams.get("v") || "").trim();
+    const alreadyReplaced = (() => {
+      try { return sessionStorage.getItem(tabGuardKey) === "1"; } catch (e) { return false; }
+    })();
+
+    if (curV !== appVer && !alreadyReplaced) {
+      try { sessionStorage.setItem(tabGuardKey, "1"); } catch (e) { }
+      u.searchParams.set("v", appVer);
+      location.replace(u.toString());
+      return { ok: true, replaced: true };
+    }
+    return { ok: true, replaced: false };
+  };
+
+  // ---------- Preload helpers ----------
+  Core.fixPreloadLink = function (linkId) {
+    try {
+      const el = document.getElementById(linkId);
+      if (!el) return false;
+      const href = el.getAttribute("href") || el.href;
+      el.href = withV(href);
       return true;
-    } catch (e) {
-      clearTimeout(t);
-      if (navigator.onLine && cfg.toast) toastShow("連線不穩：Network connection lost. Attempting to reconnect…", 0);
-      return false;
-    }
-  }
+    } catch (e) { return false; }
+  };
 
-  function startNetworkGuard(cfg) {
-    if (!cfg.networkGuard) return;
-
-    window.addEventListener("offline", () => {
-      if (cfg.toast) toastShow("網路中斷：Network connection lost. Attempting to reconnect…", 0);
-    }, { passive: true });
-
-    window.addEventListener("online", () => {
-      if (cfg.toast) toastShow("網路已恢復：已重新連線 ✅", 1200);
-      try { global.onTasunOnline && global.onTasunOnline(); } catch (e) {}
-    }, { passive: true });
-
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") pingOnce(cfg);
-    }, { passive: true });
-
-    clearInterval(_pingTimer);
-    _pingTimer = setInterval(() => pingOnce(cfg), cfg.pingIntervalMs);
-    setTimeout(() => pingOnce(cfg), 1200);
-  }
-
-  TasunCore.net = { pingOnce: () => pingOnce(TasunCore._cfg || DEF) };
-
-  // ---------------- fetch tools ----------------
-  TasunCore.fetchWithTimeout = async function (url, ms = 8000, opt = {}) {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), ms);
+  Core.fixImgSrc = function (imgId) {
     try {
-      return await fetch(url, { ...opt, cache: "no-store", signal: ctrl.signal });
-    } finally {
-      clearTimeout(t);
-    }
+      const img = document.getElementById(imgId);
+      if (!img) return false;
+      const src = img.getAttribute("src") || img.src;
+      img.src = withV(src);
+      return true;
+    } catch (e) { return false; }
   };
 
-  TasunCore.fetchRetry = async function (url, { tries = 3, timeoutMs = 8000, delayMs = 600, opt = {} } = {}) {
-    let lastErr;
-    for (let i = 1; i <= tries; i++) {
+  // ---------- Network Guard (avoid "offline confusion" on pages) ----------
+  // Note: This is for your own pages (not ChatGPT UI). It shows a small toast when offline.
+  Core.netGuard = (function () {
+    const NG = {};
+    let inited = false;
+    let node = null;
+    let timer = 0;
+
+    function ensureNode() {
+      if (node) return node;
+      node = document.createElement("div");
+      node.id = "tasunNetToast";
+      node.style.cssText = [
+        "position:fixed",
+        "right:14px",
+        "bottom:14px",
+        "z-index:2147483647",
+        "padding:10px 14px",
+        "border-radius:999px",
+        "border:1px solid rgba(246,211,122,.55)",
+        "background:rgba(0,0,0,.40)",
+        "backdrop-filter:blur(10px) saturate(1.1)",
+        "-webkit-backdrop-filter:blur(10px) saturate(1.1)",
+        "color:rgba(255,226,160,.98)",
+        "font:700 13px/1.2 system-ui, -apple-system, Segoe UI, Arial",
+        "letter-spacing:.06em",
+        "display:none",
+        "box-shadow:0 16px 32px rgba(0,0,0,.35), 0 0 18px rgba(246,211,122,.18)"
+      ].join(";");
+      document.documentElement.appendChild(node);
+      return node;
+    }
+
+    function show(msg, persist) {
       try {
-        return await TasunCore.fetchWithTimeout(url, timeoutMs, opt);
-      } catch (e) {
-        lastErr = e;
-        if (i === tries) break;
-        await new Promise(res => setTimeout(res, delayMs * i));
+        const el = ensureNode();
+        el.textContent = msg;
+        el.style.display = "block";
+        clearTimeout(timer);
+        if (!persist) timer = setTimeout(hide, 2500);
+      } catch (e) { }
+    }
+
+    function hide() {
+      try {
+        if (!node) return;
+        node.style.display = "none";
+      } catch (e) { }
+    }
+
+    function onOnline() {
+      show("網路已恢復 ✓", false);
+      setTimeout(hide, 900);
+    }
+
+    function onOffline() {
+      show("目前離線…請檢查網路", true);
+    }
+
+    NG.init = function () {
+      if (inited) return;
+      inited = true;
+
+      // delay to DOM ready for safety
+      const run = () => {
+        try {
+          window.addEventListener("online", onOnline, { passive: true });
+          window.addEventListener("offline", onOffline, { passive: true });
+          if (!navigator.onLine) onOffline();
+        } catch (e) { }
+      };
+
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", run, { once: true });
+      } else {
+        run();
       }
-    }
-    throw lastErr;
-  };
-
-  // ---------------- backup (opt-in) ----------------
-  TasunCore.backup = (function () {
-    const api = {};
-
-    api.collectKeys = function (includeKeyFn) {
-      const keys = [];
-      try {
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (!k) continue;
-          if (!includeKeyFn || includeKeyFn(k)) keys.push(k);
-        }
-      } catch (e) {}
-      keys.sort((a, b) => a.localeCompare(b, "zh-Hant"));
-      return keys;
     };
 
-    api.snapshot = function ({ reason = "manual", includeKeyFn, sessionStorageKey, app = "Tasun" } = {}) {
+    NG.show = show;
+    NG.hide = hide;
+    return NG;
+  })();
+
+  // ---------- Backup Ring (auto save to localStorage, manual download only) ----------
+  Core.backup = (function () {
+    const BK = {};
+    let inited = false;
+
+    // internal state (shared across pages)
+    const S = {
+      exportTimer: 0,
+      pendingReason: "",
+      onceExit: false,
+      patched: false,
+
+      shouldIncludeKey: null,
+
+      sessionKey: "tasunSessionLogin_v1",
+      ringKey: "tasunBackupRing_v1",
+      ringMax: 10,
+
+      // optional: include extra session JSON from sessionStorage[sessionKey]
+      includeSession: true
+    };
+
+    function defaultShouldIncludeKey(k) {
+      const key = String(k || "");
+      return (
+        key.startsWith("tasun") ||
+        key.includes("汐東") ||
+        key.includes("捷運") ||
+        key.includes("水環") ||
+        key.includes("審查") ||
+        key.includes("文件") ||
+        key.includes("資料庫")
+      );
+    }
+
+    function collectPayload(reason) {
       const now = new Date();
-      const keys = api.collectKeys(includeKeyFn);
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        const ok = (S.shouldIncludeKey || defaultShouldIncludeKey)(k);
+        if (ok) keys.push(k);
+      }
+      keys.sort((a, b) => a.localeCompare(b, "zh-Hant"));
+
       const data = {};
       keys.forEach(k => {
         const raw = localStorage.getItem(k);
-        const parsed = TasunCore.utils.safeJsonParse(raw, null);
+        const parsed = safeJsonParse(raw, null);
         data[k] = (parsed === null && raw !== "null" && raw !== null) ? raw : parsed;
       });
 
-      const sess = sessionStorageKey
-        ? TasunCore.utils.safeJsonParse(sessionStorage.getItem(sessionStorageKey) || "null", null)
-        : null;
+      let sess = null;
+      if (S.includeSession && S.sessionKey) {
+        sess = safeJsonParse(sessionStorage.getItem(S.sessionKey) || "null", null);
+      }
 
       return {
         meta: {
-          app,
+          app: "Tasun Backup",
           reason: String(reason || "manual"),
           ts: now.toISOString(),
           href: location.href,
-          cacheV: (global.__CACHE_V || "")
+          cacheV: (w.__CACHE_V || "")
         },
         session: sess,
         data
       };
-    };
+    }
 
-    api.ringStore = function ({ ringKey, max = 10, payload }) {
+    function storeRing(payload) {
       try {
-        const arr = TasunCore.utils.safeJsonParse(localStorage.getItem(ringKey) || "[]", []);
+        const arr = safeJsonParse(localStorage.getItem(S.ringKey) || "[]", []);
         const next = Array.isArray(arr) ? arr : [];
         next.unshift(payload);
-        next.length = Math.min(next.length, max);
-        localStorage.setItem(ringKey, JSON.stringify(next));
-      } catch (e) {}
-    };
+        next.length = Math.min(next.length, S.ringMax);
+        localStorage.setItem(S.ringKey, JSON.stringify(next));
+      } catch (e) { }
+    }
 
-    api.patchLocalStorage = function ({ includeKeyFn, onChange } = {}) {
+    function downloadJson(payload) {
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = `Tasun備份_${ts}.json`;
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+        a.remove();
+      }, 0);
+    }
+
+    function exportNow(reason, opts) {
+      const o = opts || {};
+      const payload = collectPayload(reason);
+      storeRing(payload);
+      if (o.download) {
+        try { downloadJson(payload); } catch (e) { }
+      }
+      return payload;
+    }
+
+    function schedule(reason) {
+      const r = String(reason || "auto");
+      S.pendingReason = S.pendingReason ? (S.pendingReason + " | " + r) : r;
+      clearTimeout(S.exportTimer);
+      S.exportTimer = setTimeout(() => {
+        const rr = S.pendingReason || "auto";
+        S.pendingReason = "";
+        exportNow(rr, { download: false });
+      }, 350);
+    }
+
+    function tryOnExit() {
+      if (S.onceExit) return;
+      S.onceExit = true;
+      exportNow("exit/pagehide", { download: false });
+    }
+
+    function patchLocalStorage() {
+      if (S.patched) return;
+      S.patched = true;
+
       try {
         const _set = localStorage.setItem.bind(localStorage);
         const _remove = localStorage.removeItem.bind(localStorage);
 
-        if (localStorage.__tasun_patched) return;
-        localStorage.__tasun_patched = true;
-
         localStorage.setItem = function (k, v) {
           _set(k, v);
-          try {
-            if (!includeKeyFn || includeKeyFn(k)) onChange && onChange("setItem", k);
-          } catch (e) {}
+          const ok = (S.shouldIncludeKey || defaultShouldIncludeKey)(k);
+          if (ok) schedule("save:setItem:" + k);
         };
-
         localStorage.removeItem = function (k) {
           _remove(k);
-          try {
-            if (!includeKeyFn || includeKeyFn(k)) onChange && onChange("removeItem", k);
-          } catch (e) {}
+          const ok = (S.shouldIncludeKey || defaultShouldIncludeKey)(k);
+          if (ok) schedule("save:removeItem:" + k);
         };
-      } catch (e) {}
-    };
+      } catch (e) { }
 
-    api.enable = function ({
-      ringKey,
-      ringMax = 10,
-      sessionStorageKey,
-      includeKeyFn,
-      debounceMs = 350,
-      app = "Tasun",
-      enableStorageListener = true,
-      enableExitSnapshot = true
-    } = {}) {
-      let timer = 0;
-      let pending = "";
-      let onceExit = false;
-
-      function schedule(reason) {
-        const r = String(reason || "auto");
-        pending = pending ? (pending + " | " + r) : r;
-        clearTimeout(timer);
-        timer = setTimeout(() => {
-          const rr = pending || "auto";
-          pending = "";
-          const payload = api.snapshot({ reason: rr, includeKeyFn, sessionStorageKey, app });
-          api.ringStore({ ringKey, max: ringMax, payload });
-        }, debounceMs);
-      }
-
-      function onExit() {
-        if (!enableExitSnapshot) return;
-        if (onceExit) return;
-        onceExit = true;
-        const payload = api.snapshot({ reason: "exit/pagehide", includeKeyFn, sessionStorageKey, app });
-        api.ringStore({ ringKey, max: ringMax, payload });
-      }
-
-      api.patchLocalStorage({
-        includeKeyFn,
-        onChange: (op, k) => schedule("save:" + op + ":" + k)
-      });
-
-      if (enableStorageListener) {
+      // cross-tab changes
+      try {
         window.addEventListener("storage", (e) => {
           if (!e || !e.key) return;
-          if (!includeKeyFn || includeKeyFn(e.key)) schedule("storage:" + e.key);
+          const ok = (S.shouldIncludeKey || defaultShouldIncludeKey)(e.key);
+          if (ok) schedule("storage:" + e.key);
         });
-      }
+      } catch (e) { }
 
-      if (enableExitSnapshot) {
-        window.addEventListener("pagehide", onExit, { passive: true });
+      // exit/visibility
+      try {
+        window.addEventListener("pagehide", tryOnExit, { passive: true });
         document.addEventListener("visibilitychange", () => {
-          if (document.visibilityState === "hidden") onExit();
+          if (document.visibilityState === "hidden") tryOnExit();
         }, { passive: true });
-      }
+      } catch (e) { }
+    }
 
-      return { schedule };
+    BK.init = function (opts) {
+      if (inited) return;
+      inited = true;
+
+      const o = opts || {};
+      S.sessionKey = o.sessionKey || S.sessionKey;
+      S.ringKey = o.ringKey || S.ringKey;
+      S.ringMax = Number(o.ringMax || S.ringMax) || 10;
+      S.shouldIncludeKey = (typeof o.shouldIncludeKey === "function") ? o.shouldIncludeKey : null;
+      S.includeSession = (o.includeSession === false) ? false : true;
+
+      patchLocalStorage();
     };
 
-    return api;
+    BK.exportNow = exportNow;
+    BK.schedule = schedule;
+    BK.tryOnExit = tryOnExit;
+    return BK;
   })();
 
-  // ---------------- init ----------------
-  TasunCore.init = function (options) {
-    const cfg = { ...DEF, ...(options || {}) };
-    TasunCore._cfg = cfg;
-
-    const sync = ensureVersionSync(cfg);
-    if (sync.redirected) return sync;
-
-    if (cfg.autoInitToastMount && cfg.toast) ensureToastEl();
-    startNetworkGuard(cfg);
-
-    return sync;
+  // ---------- Minimal init helper ----------
+  Core.init = function (opts) {
+    const o = opts || {};
+    if (o.forceVersionSync !== false) {
+      Core.forceVersionSync({
+        verKey: o.verKey || "tasun_app_ver_global_v1",
+        tabGuardKey: o.tabGuardKey || "tasun_tab_replaced_once_v1",
+        appVer: o.appVer
+      });
+    }
+    if (o.networkGuard) Core.netGuard.init();
+    if (o.backup) {
+      Core.backup.init(o.backup === true ? {} : o.backup);
+    }
   };
 
-  // export
-  global.TasunCore = TasunCore;
+  w.TasunCore = Core;
 
 })(window);
