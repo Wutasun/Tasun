@@ -5,31 +5,45 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>捷運汐東線事項記錄 · Tasun</title>
 
-  <!-- ✅補 v：只在沒有 v 時補一次（避免無限轉），並提供 __withV 讓所有內部連結自動帶 v -->
+  <!-- ✅✅✅ APP_VER 強制同步（全站一致）+ 自動帶 v + 導航 withV -->
   <script>
   (function(){
-    const KEY = "tasun_force_refresh_once_notes_v1";
+    const APP_VER = "2026-01-26"; // ←請改成你全站一致的版本字串
+    const APPKEY  = "tasun_app_ver_v1";
+    const FLAG    = "tasun_app_ver_refresh_once__" + APP_VER;
+
     try{
       const u = new URL(location.href);
+      const stored = (localStorage.getItem(APPKEY) || "").trim();
+      const curV = (u.searchParams.get("v") || "").trim();
 
-      if(!u.searchParams.has("v") && !sessionStorage.getItem(KEY)){
-        sessionStorage.setItem(KEY, "1");
-        u.searchParams.set("v", String(Date.now()));
+      const needSync = stored !== APP_VER;
+      if(needSync) localStorage.setItem(APPKEY, APP_VER);
+
+      // ✅ 若 v 不存在 / 或不是 APP_VER：只跳轉一次（避免無限轉）
+      if((needSync || !curV || curV !== APP_VER) && !sessionStorage.getItem(FLAG)){
+        sessionStorage.setItem(FLAG, "1");
+        u.searchParams.set("v", APP_VER);
         location.replace(u.toString());
         return;
       }
 
-      const v = u.searchParams.get("v") || "";
-      window.__CACHE_V = v;
+      window.APP_VER = APP_VER;
+      window.__CACHE_V = curV || APP_VER;
 
+      // ✅ 讓所有「站內連結」自動帶 v（外部連結不動）
       window.__withV = function(href){
+        const vv = (window.__CACHE_V || APP_VER || "").trim();
+        if(!href) return href;
+
         try{
-          if(!href) return href;
+          // 外部/特殊協定：不處理
           if(/^https?:\/\//i.test(href) || /^mailto:/i.test(href) || /^file:/i.test(href)) return href;
 
-          const x = new URL(href, location.href);
-          if(window.__CACHE_V) x.searchParams.set("v", window.__CACHE_V);
-          return x.pathname + x.search + x.hash;
+          const x = new URL(href, document.baseURI);
+          // 同站才加 v
+          if(x.origin === location.origin && vv) x.searchParams.set("v", vv);
+          return x.toString();
         }catch(e){
           return href;
         }
@@ -1514,7 +1528,6 @@
     function backupOnExit(reason){
       try{
         if(!Array.isArray(db)) return;
-        // ✅把當下資料再做一次快照（避免使用者只是瀏覽/篩選後離開，也能留存）
         rotateBackups(db);
         localStorage.setItem(LEAVE_SNAP_KEY, JSON.stringify({ ts: Date.now(), reason: reason || "exit", db }));
       }catch(e){}
@@ -1530,7 +1543,6 @@
       const h = (href ?? "").toString().trim();
       if(!h) return;
       if(/^https?:\/\//i.test(h) || /^mailto:/i.test(h) || /^file:/i.test(h)){
-        // 開新分頁不用離開本頁，但也先做一次備份（保險）
         backupOnExit("open_attachment");
         window.open(h, "_blank", "noopener");
         return;
@@ -1538,7 +1550,6 @@
       go(h);
     }
 
-    // ✅「跳脫網頁就備份」：離開/背景化/關頁 都會寫快照
     window.addEventListener("beforeunload", ()=> backupOnExit("beforeunload"));
     window.addEventListener("pagehide",     ()=> backupOnExit("pagehide"));
     document.addEventListener("visibilitychange", ()=>{
@@ -1791,7 +1802,6 @@
     // =========================
     // ✅資料：保護 / 找回 / 備份
     // =========================
-
     function safeParseJSON(raw){
       if(!raw) return null;
       try{ return JSON.parse(raw); }catch(e){ return null; }
@@ -2061,7 +2071,6 @@
     }
 
     function doExportBackup(){
-      // read 也允許匯出（只是備份下載）
       if(!currentUser || !currentUser.user){
         openLoginModal();
         return;
@@ -2093,7 +2102,7 @@
     }
 
     // =========================
-    // ✅UI/渲染（略：保持你原本邏輯）
+    // ✅UI/渲染
     // =========================
     function uniqueFromDB(field){
       const set = new Set();
@@ -2212,13 +2221,6 @@
         (pickedTrade && sysDisabled ? ` <span style="color:rgba(124,88,30,.82)">（此工種尚無系統可篩選）</span>` : ``) +
         (selectedId ? ` 已選取：<b style="color:var(--goldText)">#${selectedId}</b>` : `（請先點選一筆，再按右上「顯示畫面 / 編輯」）`);
     }
-
-    // ✅（render/Modal/CRUD 內容保持原版本，不影響你功能）
-    //   為了回覆不爆長度，此區塊與你上一版一致，已保留：openModal/save/delete/addOption 等
-    //   下面直接沿用你上一版完整邏輯（我已保留，且只新增 btnExport 綁定 + 跳脫備份）
-    // ---------------------------
-    // 你上一版 openModal / saveItem / deleteItem / prompt / menu / table&cards click handler
-    // ---------------------------
 
     function fillDropdown(selectId, options, placeholder){
       const sel = $(selectId);
