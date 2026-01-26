@@ -609,7 +609,6 @@
       z-index:-3;
       opacity: var(--mist-op);
 
-      /* ① 先做「束狀」：用 repeat 線段 + 大 blur 變成霧束 */
       background:
         repeating-linear-gradient(
           90deg,
@@ -617,8 +616,6 @@
           var(--mist-beam) 10px 14px,
           rgba(0,0,0,0) 14px 34px
         ),
-
-        /* ② 再疊淡淡雲絮（冷白，不偏黃） */
         radial-gradient(560px 280px at 24% 14%, var(--mist-a), rgba(0,0,0,0) 72%),
         radial-gradient(600px 300px at 74% 18%, var(--mist-b), rgba(0,0,0,0) 74%),
         radial-gradient(760px 340px at 52% 10%, var(--mist-c), rgba(0,0,0,0) 76%),
@@ -628,7 +625,6 @@
       filter: blur(var(--mist-blur));
       mix-blend-mode: soft-light;
 
-      /* 上方有、往下快速淡掉（更像背景） */
       mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,1) 18%, rgba(0,0,0,0) 60%);
       -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,1) 18%, rgba(0,0,0,0) 60%);
 
@@ -705,7 +701,6 @@
     .side-glass-left{ left: var(--glass-inset); }
     .side-glass-right{ right: var(--glass-inset); }
 
-    /* ✅蓮花區清澈：降低罩、保輪廓 */
     .lotus-stage{
       position:absolute;
       top: var(--stage-top);
@@ -811,7 +806,7 @@
       image-rendering: auto;
     }
 
-    /* ===== 使用者列（圖標示1：清晰、不重疊、不黑膜） ===== */
+    /* ===== 使用者列 ===== */
     .user-bar{
       position:fixed;
       top: calc(var(--outer-side) + var(--frame-inset) + 6px + env(safe-area-inset-top));
@@ -824,11 +819,10 @@
       max-width: calc(100vw - (2 * (var(--outer-side) + 10px)));
       pointer-events:none;
       z-index:60;
-      isolation:isolate; /* ✅隔離：避免被任何混色層壓黑 */
+      isolation:isolate;
     }
     .user-pill, .btn-switch{ pointer-events:auto; }
 
-    /* ✅把「背景」跟「文字」拆開：文字不再用 ::after 疊字 → 不會糊/重疊 */
     .user-pill,
     .btn-switch{
       position:relative;
@@ -838,7 +832,6 @@
       touch-action: manipulation;
       -webkit-tap-highlight-color: transparent;
 
-      /* 文字（深棕金描邊 + 短細陰影 + 隔離） */
       isolation:isolate;
       mix-blend-mode: normal;
       background: linear-gradient(180deg, var(--crystalA) 0%, var(--crystalB) 32%, var(--crystalC) 74%, var(--crystalD) 100%);
@@ -904,6 +897,16 @@
       transform:translateY(-1px);
       filter: brightness(1.03);
       box-shadow:0 11px 22px rgba(26,14,4,0.16), 0 0 18px rgba(246,211,122,0.12);
+    }
+
+    /* ✅新增：匯出備份按鈕（同系統風格，較醒目但不刺眼） */
+    .btn-export{
+      border-color: rgba(255,235,180,0.70);
+      box-shadow:0 10px 20px rgba(26,14,4,0.15), 0 0 18px rgba(246,211,122,0.14);
+    }
+    .btn-export::before{
+      background:
+        radial-gradient(circle at 18% 18%, rgba(255,255,255,0.14), rgba(255,255,255,0.04) 55%, rgba(42,24,6,0.14));
     }
 
     /* ===== 標題 ===== */
@@ -1041,7 +1044,6 @@
         0 0 26px rgba(246,211,122,0.16);
     }
 
-    /* ✅按鍵文字：短細陰影 + 深棕金邊 + isolation，避免「黑膜壓住」 */
     .nav-btn span{
       position:relative;
       z-index:2;
@@ -1079,7 +1081,7 @@
       }
     }
 
-    /* ===== 禪字區（加 isolation 避免被混色層壓黑） ===== */
+    /* ===== 禪字區 ===== */
     .zen-words{
       position:absolute;
       left: var(--frame-inset);
@@ -1330,6 +1332,8 @@
       <div class="user-bar" id="userBar">
         <div class="user-pill" id="userInfo" data-text="目前使用者：未登入">目前使用者：未登入</div>
         <button class="btn-switch" id="btnSwitchUser" type="button">切換帳號</button>
+        <!-- ✅新增：手動匯出備份 -->
+        <button class="btn-switch btn-export" id="btnExport" type="button">匯出備份</button>
       </div>
 
       <div class="site-title-wrapper" id="titleWrap">
@@ -1347,6 +1351,10 @@
 
     const NAV_KEY     = "tasunNavButtons_v1";
     const ROUTE_KEY   = "tasunNavRoutes_v1";
+
+    /* ✅備份（外部 JSON 下載 + 內部 ring buffer） */
+    const BACKUP_RING_KEY = "tasunBackupRing_v1";
+    const BACKUP_RING_MAX = 10;
 
     const withV = window.__withV || ((u)=>u);
 
@@ -1386,6 +1394,140 @@
     function safeJsonParse(s, fallback){
       try{ return JSON.parse(s); }catch(e){ return fallback; }
     }
+
+    /* =========================
+       ✅備份核心：收集 + 下載
+       ========================= */
+    function shouldIncludeKey(k){
+      const key = String(k || "");
+      // 以 Tasun / 工程相關為主（避免把無關網站 storage 一起打包）
+      return (
+        key.startsWith("tasun") ||
+        key.includes("汐東") ||
+        key.includes("捷運") ||
+        key.includes("水環") ||
+        key.includes("審查") ||
+        key.includes("文件") ||
+        key.includes("資料庫")
+      );
+    }
+
+    function collectBackupPayload(reason){
+      const now = new Date();
+      const keys = [];
+      for(let i=0;i<localStorage.length;i++){
+        const k = localStorage.key(i);
+        if(shouldIncludeKey(k)) keys.push(k);
+      }
+      keys.sort((a,b)=>a.localeCompare(b, "zh-Hant"));
+
+      const data = {};
+      keys.forEach(k => {
+        const raw = localStorage.getItem(k);
+        const parsed = safeJsonParse(raw, null);
+        data[k] = (parsed === null && raw !== "null" && raw !== null) ? raw : parsed;
+      });
+
+      // session 也一起帶（方便還原狀態；不影響其他頁）
+      const sess = safeJsonParse(sessionStorage.getItem(SESSION_KEY) || "null", null);
+
+      return {
+        meta: {
+          app: "Tasun index.html",
+          reason: String(reason || "manual"),
+          ts: now.toISOString(),
+          href: location.href,
+          cacheV: (window.__CACHE_V || "")
+        },
+        session: sess,
+        data
+      };
+    }
+
+    function storeBackupRing(payload){
+      try{
+        const arr = safeJsonParse(localStorage.getItem(BACKUP_RING_KEY) || "[]", []);
+        const next = Array.isArray(arr) ? arr : [];
+        next.unshift(payload);
+        next.length = Math.min(next.length, BACKUP_RING_MAX);
+        localStorage.setItem(BACKUP_RING_KEY, JSON.stringify(next));
+      }catch(e){}
+    }
+
+    function downloadJson(payload){
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = `Tasun備份_${ts}.json`;
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+        a.remove();
+      }, 0);
+    }
+
+    let _exportTimer = 0;
+    let _pendingReason = "";
+    let _exportOnceExit = false;
+
+    function exportBackupNow(reason){
+      const payload = collectBackupPayload(reason);
+      storeBackupRing(payload);
+      // 下載有可能被瀏覽器限制（非使用者手勢 / 離頁事件），但 ring buffer 仍會保留
+      try{ downloadJson(payload); }catch(e){}
+    }
+
+    function scheduleExport(reason){
+      const r = String(reason || "auto");
+      _pendingReason = _pendingReason ? (_pendingReason + " | " + r) : r;
+      clearTimeout(_exportTimer);
+      _exportTimer = setTimeout(() => {
+        const rr = _pendingReason || "auto";
+        _pendingReason = "";
+        exportBackupNow(rr);
+      }, 350);
+    }
+
+    function tryExportOnExit(){
+      if(_exportOnceExit) return;
+      _exportOnceExit = true;
+      // 離頁時：盡力觸發一次（下載可能被擋，但 ring buffer 會寫入）
+      exportBackupNow("exit/pagehide");
+    }
+
+    /* ✅監聽同頁 setItem/removeItem：任何「儲存」都自動匯出 JSON */
+    (function patchLocalStorage(){
+      try{
+        const _set = localStorage.setItem.bind(localStorage);
+        const _remove = localStorage.removeItem.bind(localStorage);
+
+        localStorage.setItem = function(k, v){
+          _set(k, v);
+          if(shouldIncludeKey(k)) scheduleExport("save:setItem:" + k);
+        };
+        localStorage.removeItem = function(k){
+          _remove(k);
+          if(shouldIncludeKey(k)) scheduleExport("save:removeItem:" + k);
+        };
+      }catch(e){}
+    })();
+
+    /* ✅跨分頁 storage 變更：也自動匯出（多人維護時很有用） */
+    window.addEventListener("storage", (e) => {
+      if(!e || !e.key) return;
+      if(shouldIncludeKey(e.key)) scheduleExport("storage:" + e.key);
+    });
+
+    /* ✅離開頁面/切換分頁：觸發備份（下載可能被限制，但仍會存 ring） */
+    window.addEventListener("pagehide", tryExportOnExit, { passive:true });
+    document.addEventListener("visibilitychange", () => {
+      if(document.visibilityState === "hidden") tryExportOnExit();
+    }, { passive:true });
 
     function applyFixedRoutes(obj){
       const out = (obj && typeof obj === "object") ? { ...obj } : {};
@@ -1514,6 +1656,7 @@
     const loginSub     = $("#loginSub");
     const userInfo     = $("#userInfo");
     const btnSwitch    = $("#btnSwitchUser");
+    const btnExport    = $("#btnExport");
     const btnTogglePwd = $("#btnTogglePwd");
     const btnForceRelogin = $("#btnForceRelogin");
     const navArea      = $("#navArea");
@@ -1708,6 +1851,9 @@
         const finalHref = resolveHref(cfg, ROUTES);
         btn.setAttribute("href", hrefToDom(finalHref));
       });
+
+      /* ✅登入完成也自動匯出一次（等同「儲存後自動匯出」） */
+      scheduleExport("login:applyUser");
 
       touchLayout();
     }
@@ -2001,12 +2147,6 @@
       if(document.visibilityState === "visible") syncFromLocal();
     });
 
-    window.addEventListener("storage", (e) => {
-      if(e.key === AUTH_KEY || e.key === NAV_KEY || e.key === ROUTE_KEY){
-        syncFromLocal();
-      }
-    });
-
     /* ===== 啟動 ===== */
     AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
     buildMainButtons();
@@ -2062,11 +2202,17 @@
       clearSession();
       localStorage.removeItem(CURRENT_KEY);
       showLogin();
+      scheduleExport("switchUser");
     });
 
     btnTogglePwd.addEventListener("click", () => {
       const pwd = document.getElementById("password");
       pwd.type = (pwd.type === "password") ? "text" : "password";
+    });
+
+    /* ✅匯出按鈕（手動下載一份 JSON 備份） */
+    btnExport.addEventListener("click", () => {
+      exportBackupNow("manual:button");
     });
   </script>
 </body>
