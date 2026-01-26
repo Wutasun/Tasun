@@ -6,6 +6,78 @@
   <title>捷運汐東線審查文件管制表-水環組 · Tasun</title>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet">
 
+  <!-- ✅✅✅ APP_VER 強制同步（跨頁一致 v；自動 replace 強制刷新） -->
+  <script>
+  (function(){
+    /* 只要改這個版本字串即可（建議用日期時間或流水號） */
+    const APP_VER = "2026-01-26.v1";
+
+    const KEY_VER  = "tasun_app_ver_v1";
+    const ONCE_KEY = "tasun_app_ver_sync_once_v1";
+
+    const norm = (s)=>(s??"").toString().trim();
+
+    function chooseUseVer(){
+      const stored = norm(localStorage.getItem(KEY_VER));
+      if(!stored){
+        localStorage.setItem(KEY_VER, APP_VER);
+        return APP_VER;
+      }
+      // 優先嘗試用「抽數字」比較，否則用字串比較
+      const a = Number(stored.replace(/[^\d.]/g,""));
+      const b = Number(APP_VER.replace(/[^\d.]/g,""));
+      let use = APP_VER;
+      if(Number.isFinite(a) && Number.isFinite(b) && (a||b)){
+        use = (a > b) ? stored : APP_VER;
+      }else{
+        use = (stored > APP_VER) ? stored : APP_VER;
+      }
+      if(use !== stored) localStorage.setItem(KEY_VER, use);
+      return use;
+    }
+
+    const useVer = chooseUseVer();
+    const u = new URL(location.href);
+    const cur = u.searchParams.get("v") || "";
+
+    if(cur !== useVer){
+      u.searchParams.set("v", useVer);
+      const once = sessionStorage.getItem(ONCE_KEY);
+      if(once !== useVer){
+        sessionStorage.setItem(ONCE_KEY, useVer);
+        location.replace(u.toString());
+        return;
+      }
+    }
+
+    window.__CACHE_V = useVer;
+
+    window.__withV = function(url){
+      const vv = norm(window.__CACHE_V);
+      if(!vv) return url;
+      try{
+        const uu = new URL(url, document.baseURI);
+        if(!uu.searchParams.has("v")) uu.searchParams.set("v", vv);
+        return uu.toString();
+      }catch(e){
+        return url + (url.includes("?") ? "&" : "?") + "v=" + encodeURIComponent(vv);
+      }
+    };
+
+    // ✅ 跨分頁同步：別頁更新 APP_VER 時，本頁也跟著跳轉到同一個 v
+    window.addEventListener("storage",(e)=>{
+      if(e.key === KEY_VER){
+        const nv = norm(e.newValue);
+        if(nv && nv !== norm(window.__CACHE_V)){
+          const uu = new URL(location.href);
+          uu.searchParams.set("v", nv);
+          location.replace(uu.toString());
+        }
+      }
+    });
+  })();
+  </script>
+
   <style>
     :root{
       --bg0:#070809;
@@ -857,10 +929,8 @@ function normalizeRow(r){
   row.duty = norm(row.duty);
   row.placeNo = norm(row.placeNo);
 
-  // dutyItem 只供登錄表抓期限/權責用；管制表不額外顯示
   row.dutyItem = norm(row.dutyItem);
 
-  // 自動算：到期日、到期日距今（完成不算）
   if(row.submitDate && Number.isFinite(row.termDays)){
     if(!row.dueDate || norm(row.dueDate).length!==10){
       row.dueDate = addDays(row.submitDate, row.termDays);
@@ -919,23 +989,6 @@ function inputCell(name, value, disabled, type="text", extraAttr=""){
   const v = escHtml(value ?? "");
   return `<input class="cellInput" data-k="${escHtml(name)}" type="${escHtml(type)}" value="${v}" ${disabled?"disabled":""} ${extraAttr}>`;
 }
-function selectCell(name, value, disabled, options){
-  const cur = norm(value);
-  const opts = (options||[]).slice();
-  if(cur && !opts.includes(cur)) opts.unshift(cur);
-
-  const html = opts.map(o=>{
-    const s = (o===cur) ? "selected" : "";
-    return `<option value="${escHtml(o)}" ${s}>${escHtml(o)}</option>`;
-  }).join("");
-
-  return `
-    <select class="cellSelect" data-k="${escHtml(name)}" ${disabled?"disabled":""}>
-      <option value="">—</option>
-      ${html}
-    </select>
-  `;
-}
 
 function render(){
   const canWrite = TasunAuth.canWrite();
@@ -991,7 +1044,6 @@ function render(){
         </td>
 
         <td>${inputCell("submitDate", r.submitDate, !canWrite, "date")}</td>
-
         <td>${inputCell("dueDate", r.dueDate, !canWrite, "date")}</td>
 
         <td>
@@ -1001,7 +1053,8 @@ function render(){
           }
         </td>
 
-        <td>${inputCell("termDays", (Number.isFinite(Number(r.termDays))? String(Number(r.termDays)) : ""), !canWrite, "number", `min="0" step="1"`)}</td>
+        <td>${inputCell("termDays", (Number.isFinite(Number(r.termDays))? String(Number(r.termDays)) : ""), !canWrite, "number", `min="0" step="1"`)}
+        </td>
 
         <td>${inputCell("status", r.status, !canWrite, "text", `list="dl_status_${rid}"`)}
             <datalist id="dl_status_${rid}">${optsStatus.map(v=>`<option value="${escHtml(v)}"></option>`).join("")}</datalist>
@@ -1028,7 +1081,6 @@ function render(){
     `;
   }).join("") || `<tr><td colspan="16" class="muted" style="padding:18px;">尚無資料（請到「登錄表」新增）</td></tr>`;
 
-  // read 權限提示
   if(!canWrite){
     $("permHint").innerHTML = `<span class="warn">你目前是 read 權限：只能閱讀，不能修改/儲存。</span>`;
   }else{
@@ -1053,7 +1105,6 @@ function collectFromUI(){
       patch[k] = (el.value ?? "").toString();
     });
 
-    // 合併
     const next = {...base};
 
     next.docCode = norm(patch.docCode);
@@ -1074,16 +1125,13 @@ function collectFromUI(){
     next.duty = norm(patch.duty);
     next.placeNo = norm(patch.placeNo);
 
-    // 如果送審日期/期限變了：優先自動重算到期日（但若使用者手動改到期日也允許）
     if(next.submitDate && Number.isFinite(next.termDays)){
       const autoDue = addDays(next.submitDate, next.termDays);
-      // 若使用者沒有手動改到期日（空白或與舊值相同），就跟著自動算
       if(!next.dueDate || next.dueDate === base.dueDate){
         next.dueDate = autoDue;
       }
     }
 
-    // 到期日距今：完成不算
     if(next.status === "完成"){
       next.dueInDays = "";
     }else{
@@ -1091,7 +1139,6 @@ function collectFromUI(){
       else next.dueInDays = "";
     }
 
-    // 回寫
     const idx = db.findIndex(x=>(Number(x.id)||0)===id);
     if(idx>=0) db[idx] = next;
   }
@@ -1161,7 +1208,6 @@ function start(){
 
   $("btnReLogin").onclick = ()=> TasunAuth.open("請重新登入或切換帳號");
 
-  // 每次開啟：自動更新一次（到期日距今）
   recalcAllAndPersist();
 
   loadDB();
@@ -1189,24 +1235,20 @@ function start(){
     toast("已儲存");
   };
 
-  // 刪除（admin）
   $("tbody").addEventListener("click",(e)=>{
     const btn = e.target.closest("button[data-act='del'][data-id]");
     if(!btn) return;
     handleDelete(btn.getAttribute("data-id"));
   });
 
-  // 任何欄位變動：即時計算到期日/距今（不直接存檔，等按儲存）
   $("tbody").addEventListener("change",(e)=>{
     const el = e.target.closest("input[data-k], select[data-k]");
     if(!el) return;
     if(!TasunAuth.canWrite()) return;
-    // 做一次即時 UI 內重算（用 collectFromUI 會把所有列都抓，成本可接受）
     collectFromUI();
     render();
   });
 
-  // 監聽 storage：跨頁更新即時刷新
   window.addEventListener("storage",(e)=>{
     if(e.key === DB_KEY){
       loadDB(); db = db.map(normalizeRow);
