@@ -5,217 +5,46 @@
   <title>Tasun 資料首頁 · 空無明</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 
-  <!-- ✅✅✅ 強制「最新版一致」：改 APP_VER 就會讓所有裝置立刻更新到新版本 -->
+  <!-- ✅✅✅ 強制「最新版一致」：伺服器/瀏覽器端避免快取（仍保留） -->
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
 
+  <!-- ✅ 只要改這個版本號，全站同步 -->
   <script>
-  (function () {
-    /**
-     * ✅你每次更新 index.html（或想強制所有人同步）只要改這個字串即可。
-     * 建議格式：YYYYMMDDHHmm 或 YYYY-MM-DD-序號
-     */
-    const APP_VER = "20260126_01";   // ←←← 每次改版請改這裡（非常重要）
-    const VER_KEY = "tasun_app_ver_index_v1";
-    const TAB_GUARD = "tasun_tab_replaced_once_v1";
-
-    const u = new URL(location.href);
-
-    // 記錄目前看過的版本（方便判斷是否升版）
-    const last = localStorage.getItem(VER_KEY) || "";
-    if (last !== APP_VER) {
-      localStorage.setItem(VER_KEY, APP_VER);
-      // 升版時，允許本分頁重新 replace 一次
-      try { sessionStorage.removeItem(TAB_GUARD); } catch(e){}
-    }
-
-    // 讓全站資源一律跟著 APP_VER（同版本的人一定拿到同一批檔案）
-    window.__CACHE_V = APP_VER;
-
-    window.__withV = function(url){
-      const vv = (window.__CACHE_V || "").trim();
-      if(!vv) return url;
-      try{
-        const uu = new URL(url, document.baseURI);
-        if (uu.origin === location.origin) uu.searchParams.set("v", vv);
-        return uu.toString();
-      }catch(e){ return url; }
-    };
-
-    // ✅若網址 v 不是 APP_VER → 強制導向同版本 URL（避免吃到舊快取）
-    const curV = (u.searchParams.get("v") || "").trim();
-    const alreadyReplaced = (() => {
-      try { return sessionStorage.getItem(TAB_GUARD) === "1"; } catch(e){ return false; }
-    })();
-
-    if (curV !== APP_VER && !alreadyReplaced) {
-      try { sessionStorage.setItem(TAB_GUARD, "1"); } catch(e){}
-      u.searchParams.set("v", APP_VER);
-      location.replace(u.toString());
-      return;
-    }
-  })();
+    window.TASUN_APP_VER = "20260126_01";   // ←←← 每次改版請改這裡（非常重要）
   </script>
 
-  <!-- =========================================================
-       ✅✅✅ Network Guard：避免「Network connection lost...」
-       - offline/online 提示
-       - 週期 ping：偵測「顯示在線但實際斷線」
-       - 提供 fetchWithTimeout / fetchRetry（未來抓資料用）
-       ※ 不破壞你的 UI，只在右下角顯示小提示
-     ========================================================= -->
+  <!-- ✅ 共用模組（與本頁同資料夾） -->
+  <script src="./tasun-core.js?v=20260126_01"></script>
+
+  <!-- ✅ 立刻啟動：版本同步 + 網路守護 -->
   <script>
-  (function(){
-    "use strict";
-
-    let toast, hideTimer = 0, pingTimer = 0;
-    const TOAST_ID = "tasunNetToast_v1";
-
-    function ensureToast(){
-      if(toast) return toast;
-      toast = document.createElement("div");
-      toast.id = TOAST_ID;
-      toast.style.cssText = `
-        position:fixed; right:14px; bottom:14px; z-index:99999;
-        padding:10px 12px; border-radius:12px;
-        font: 14px/1.2 system-ui, -apple-system, "Noto Sans TC", sans-serif;
-        background: rgba(18,18,18,.78); color:#fff;
-        border:1px solid rgba(255,255,255,.12);
-        box-shadow: 0 10px 28px rgba(0,0,0,.35);
-        display:none; backdrop-filter: blur(8px);
-        max-width:min(360px, calc(100vw - 28px));
-        word-break:break-word; pointer-events:none;
-      `;
-      const mount = () => {
-        if(document.body && !document.body.contains(toast)) document.body.appendChild(toast);
-      };
-      if(document.readyState === "loading"){
-        document.addEventListener("DOMContentLoaded", mount, { once:true });
-      }else{
-        mount();
-      }
-      return toast;
-    }
-
-    function show(msg, autoHideMs){
-      clearTimeout(hideTimer);
-      const t = ensureToast();
-      t.textContent = msg;
-      t.style.display = "block";
-      if(autoHideMs && autoHideMs > 0){
-        hideTimer = setTimeout(hide, autoHideMs);
-      }
-    }
-
-    function hide(){
-      clearTimeout(hideTimer);
-      const t = ensureToast();
-      t.style.display = "none";
-    }
-
-    // 斷線/回線事件
-    window.addEventListener("offline", () => {
-      show("網路中斷：Network connection lost. Attempting to reconnect…", 0);
-    }, { passive:true });
-
-    window.addEventListener("online", () => {
-      show("網路已恢復：已重新連線 ✅", 1200);
-      // 若你未來有資料同步函式，可放這裡：
-      // window.reloadData?.();
-    }, { passive:true });
-
-    // ping：偵測「navigator.onLine = true 但實際連不到」
-    async function pingOnce(){
-      // 用同源測試，404 也算「連得上」（重點是 fetch 能完成）
-      const v = encodeURIComponent((window.__CACHE_V || Date.now()).toString());
-      const url = location.origin + "/favicon.ico?v=" + v + "&t=" + Date.now();
-
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 4500);
-
-      try{
-        await fetch(url, { cache:"no-store", signal: ctrl.signal });
-        clearTimeout(t);
-        // 若目前是在線狀態且 ping 成功，就把提示收起來
-        if(navigator.onLine) hide();
-        return true;
-      }catch(e){
-        clearTimeout(t);
-        // 只有在「看似在線」時才顯示「連線不穩」提示（避免離線狀態重複）
-        if(navigator.onLine){
-          show("連線不穩：Network connection lost. Attempting to reconnect…", 0);
-        }
-        return false;
-      }
-    }
-
-    function startPing(){
-      clearInterval(pingTimer);
-      pingTimer = setInterval(pingOnce, 15000);
-      // 先立即測一次
-      setTimeout(pingOnce, 1200);
-    }
-
-    // 分頁回到前景也測一次
-    document.addEventListener("visibilitychange", () => {
-      if(document.visibilityState === "visible"){
-        pingOnce();
-      }
-    }, { passive:true });
-
-    startPing();
-
-    // 提供給其他腳本（可選）
-    window.__netGuard = { show, hide, pingOnce };
-
-    // 提供 fetch 逾時 + 重試工具（你以後抓資料用）
-    window.fetchWithTimeout = async function(url, ms=8000, opt={}){
-      const ctrl = new AbortController();
-      const t = setTimeout(()=>ctrl.abort(), ms);
-      try{
-        const r = await fetch(url, { ...opt, cache:"no-store", signal: ctrl.signal });
-        return r;
-      } finally {
-        clearTimeout(t);
-      }
-    };
-
-    window.fetchRetry = async function(url, {
-      tries=3,
-      timeoutMs=8000,
-      delayMs=600,
-      opt={}
-    } = {}){
-      let lastErr;
-      for(let i=1;i<=tries;i++){
-        try{
-          const r = await window.fetchWithTimeout(url, timeoutMs, opt);
-          // r.ok 不一定要 true（404 也代表通）
-          return r;
-        }catch(e){
-          lastErr = e;
-          if(i === tries) break;
-          await new Promise(res=>setTimeout(res, delayMs * i));
-        }
-      }
-      throw lastErr;
-    };
-  })();
+    TasunCore.init({
+      forceVersionSync: true,
+      networkGuard: true,
+      toast: true
+    });
   </script>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link id="preloadZen" rel="preload" as="image" href="佛教禪意主視覺.png">
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet">
 
+  <!-- ✅ preload 圖（用 withV，確保同版本資源） -->
   <script>
-  (function(){
-    const pre = document.getElementById("preloadZen");
-    if(!pre || !window.__withV) return;
-    pre.href = window.__withV(pre.getAttribute("href") || pre.href);
-  })();
+    (function(){
+      try{
+        const link = document.createElement("link");
+        link.rel = "preload";
+        link.as = "image";
+        link.id = "preloadZen";
+        link.href = (TasunCore.withV ? TasunCore.withV("佛教禪意主視覺.png") : "佛教禪意主視覺.png");
+        document.head.appendChild(link);
+      }catch(e){}
+    })();
   </script>
+
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet">
 
   <style>
     :root{
@@ -909,22 +738,6 @@
       z-index:3;
     }
 
-    .lotus-stage .zen-visual::after{
-      content:"";
-      position:absolute; inset:0;
-      background:
-        radial-gradient(920px 540px at 50% 58%,
-          rgba(255,255,255,0.08) 0%,
-          rgba(255,255,255,0.04) 24%,
-          rgba(0,0,0,0.00) 62%),
-        radial-gradient(1100px 680px at 50% 56%,
-          rgba(255,244,210,0.030) 0%,
-          rgba(0,0,0,0.00) 76%);
-      mix-blend-mode: soft-light;
-      opacity: .12;
-      pointer-events:none;
-    }
-
     .spotlight{
       position:absolute;
       inset:-2px;
@@ -1082,29 +895,6 @@
       isolation:isolate;
       mix-blend-mode: normal;
     }
-    .site-title-wrapper::after{
-      content:"";
-      position:absolute;
-      left:50%;
-      top: calc(100% - .20rem);
-      transform: translateX(-50%);
-      width: min(46vw, 560px);
-      height: clamp(34px, 5.4vh, 62px);
-      background:
-        radial-gradient(closest-side at 50% 0%,
-          rgba(255,255,255,0.14),
-          rgba(235,240,245,0.06) 42%,
-          rgba(0,0,0,0.00) 74%),
-        linear-gradient(to bottom,
-          rgba(255,255,255,0.04),
-          rgba(0,0,0,0.00));
-      clip-path: polygon(50% 0%, 18% 100%, 82% 100%);
-      filter: blur(.90px);
-      opacity: .30;
-      mix-blend-mode: screen;
-      pointer-events:none;
-    }
-
     .site-title{
       font-family:"DFKai-SB","標楷體","BiauKai","KaiTi","STKaiti","Kaiti TC","Noto Serif TC",serif;
       font-size: var(--title-size);
@@ -1163,43 +953,6 @@
       contain: paint;
       isolation:isolate;
       mix-blend-mode: normal;
-    }
-
-    .nav-btn::after{
-      content:"";
-      position:absolute;
-      inset:-2px;
-      background:
-        radial-gradient(62% 120% at 50% 34%, var(--btn-spotA), rgba(0,0,0,0) 62%),
-        radial-gradient(58% 140% at 50% 62%, var(--btn-spotB), rgba(0,0,0,0) 74%);
-      opacity: var(--btn-spot-op);
-      pointer-events:none;
-      mix-blend-mode: screen;
-      filter: blur(.90px);
-    }
-
-    .nav-btn::before{
-      content:"";
-      position:absolute;
-      left: 18%;
-      top: -72%;
-      width: 20%;
-      height: 150%;
-      background: radial-gradient(circle at 30% 42%, rgba(255,255,255,0.10), rgba(255,255,255,0.00) 78%);
-      transform: rotate(10deg);
-      opacity: .08;
-      filter: blur(.95px);
-      pointer-events:none;
-      mix-blend-mode: screen;
-    }
-
-    .nav-btn:hover{
-      transform: translateY(-3px) translateZ(0);
-      border-color: rgba(255,235,180,0.72);
-      filter: brightness(1.05);
-      box-shadow:
-        0 20px 38px rgba(26,14,4,0.15),
-        0 0 26px rgba(246,211,122,0.16);
     }
 
     .nav-btn span{
@@ -1396,15 +1149,6 @@
         font-size: clamp(16px, 5.2vw, 24px);
         letter-spacing: .14em;
       }
-
-      .login-box{
-        width: min(640px, 96vw);
-        border-radius: 22px;
-        transform: translateY(-7px);
-      }
-      .login-box::before{
-        border-radius: calc(22px - var(--login-inner-inset));
-      }
     }
 
     body.compact .nav-area{ gap: .56rem; }
@@ -1512,7 +1256,8 @@
     const BACKUP_RING_KEY = "tasunBackupRing_v1";
     const BACKUP_RING_MAX = 10;
 
-    const withV = window.__withV || ((u)=>u);
+    const U = TasunCore.utils;
+    const withV = TasunCore.withV || ((u)=>u);
 
     const METRO_ID    = "btn2";
     const METRO_HREF  = "汐東工程管理表.html";
@@ -1529,28 +1274,14 @@
     const LEGACY_BUTTON_KEYS = ["btn1","btn2","btn3","btn4","btn5"];
     const $ = (sel) => document.querySelector(sel);
 
-    function hrefToDom(href){
-      const h = String(href || "").trim();
-      if(!h) return "#";
-      if(/^https?:\/\//i.test(h)) return h;
-      if(/^mailto:/i.test(h)) return h;
-      return withV(encodeURI(h));
-    }
-
-    function labelToFile(label){
-      let s = String(label || "").trim();
-      if(!s) return "#";
-      if(s.endsWith(".html")) return s;
-      s = s.replace(/[\\\/:*?"<>|]/g, "").trim();
-      s = s.replace(/\s+/g, "");
-      return s + ".html";
-    }
-
-    function safeJsonParse(s, fallback){
-      try{ return JSON.parse(s); }catch(e){ return fallback; }
-    }
+    function hrefToDom(href){ return U.hrefToDom(href, withV); }
+    function labelToFile(label){ return U.labelToFile(label); }
+    function safeJsonParse(s, fallback){ return U.safeJsonParse(s, fallback); }
+    function clamp(n,a,b){ return U.clamp(n,a,b); }
+    function lerp(a,b,t){ return U.lerp(a,b,t); }
 
     function shouldIncludeKey(k){
+      // 你可自行加/減條件（共用版也有 default）
       const key = String(k || "");
       return (
         key.startsWith("tasun") ||
@@ -1563,126 +1294,16 @@
       );
     }
 
-    function collectBackupPayload(reason){
-      const now = new Date();
-      const keys = [];
-      for(let i=0;i<localStorage.length;i++){
-        const k = localStorage.key(i);
-        if(shouldIncludeKey(k)) keys.push(k);
-      }
-      keys.sort((a,b)=>a.localeCompare(b, "zh-Hant"));
-
-      const data = {};
-      keys.forEach(k => {
-        const raw = localStorage.getItem(k);
-        const parsed = safeJsonParse(raw, null);
-        data[k] = (parsed === null && raw !== "null" && raw !== null) ? raw : parsed;
-      });
-
-      const sess = safeJsonParse(sessionStorage.getItem(SESSION_KEY) || "null", null);
-
-      return {
-        meta: {
-          app: "Tasun index.html",
-          reason: String(reason || "manual"),
-          ts: now.toISOString(),
-          href: location.href,
-          cacheV: (window.__CACHE_V || "")
-        },
-        session: sess,
-        data
-      };
-    }
-
-    function storeBackupRing(payload){
-      try{
-        const arr = safeJsonParse(localStorage.getItem(BACKUP_RING_KEY) || "[]", []);
-        const next = Array.isArray(arr) ? arr : [];
-        next.unshift(payload);
-        next.length = Math.min(next.length, BACKUP_RING_MAX);
-        localStorage.setItem(BACKUP_RING_KEY, JSON.stringify(next));
-      }catch(e){}
-    }
-
-    function downloadJson(payload){
-      const ts = new Date().toISOString().replace(/[:.]/g, "-");
-      const filename = `Tasun備份_${ts}.json`;
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      a.style.display = "none";
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => {
-        URL.revokeObjectURL(url);
-        a.remove();
-      }, 0);
-    }
-
-    /* =========================================================
-       ✅✅✅ 修正重點：自動備份不再下載（避免一直跳「另存新檔」）
-       - 自動：只寫入 BACKUP_RING（localStorage）
-       - 手動（按「匯出備份」）：才下載 JSON
-       ========================================================= */
-    let _exportTimer = 0;
-    let _pendingReason = "";
-    let _exportOnceExit = false;
-
-    function exportBackupNow(reason, opts){
-      const o = opts || {};
-      const payload = collectBackupPayload(reason);
-      storeBackupRing(payload);
-      if(o.download){
-        try{ downloadJson(payload); }catch(e){}
-      }
-    }
-
-    function scheduleExport(reason){
-      const r = String(reason || "auto");
-      _pendingReason = _pendingReason ? (_pendingReason + " | " + r) : r;
-      clearTimeout(_exportTimer);
-      _exportTimer = setTimeout(() => {
-        const rr = _pendingReason || "auto";
-        _pendingReason = "";
-        // ✅ 自動備份：不下載，只存環狀備份
-        exportBackupNow(rr, { download:false });
-      }, 350);
-    }
-
-    function tryExportOnExit(){
-      if(_exportOnceExit) return;
-      _exportOnceExit = true;
-      // ✅ 離開/切換：只存，不下載（避免跳窗）
-      exportBackupNow("exit/pagehide", { download:false });
-    }
-
-    (function patchLocalStorage(){
-      try{
-        const _set = localStorage.setItem.bind(localStorage);
-        const _remove = localStorage.removeItem.bind(localStorage);
-
-        localStorage.setItem = function(k, v){
-          _set(k, v);
-          if(shouldIncludeKey(k)) scheduleExport("save:setItem:" + k);
-        };
-        localStorage.removeItem = function(k){
-          _remove(k);
-          if(shouldIncludeKey(k)) scheduleExport("save:removeItem:" + k);
-        };
-      }catch(e){}
-    })();
-
-    window.addEventListener("storage", (e) => {
-      if(!e || !e.key) return;
-      if(shouldIncludeKey(e.key)) scheduleExport("storage:" + e.key);
+    // ✅ 共用備份管理器（自動只存環狀備份；手動才下載）
+    const backupMgr = TasunCore.backup.createManager({
+      appName: "Tasun index.html",
+      ringKey: BACKUP_RING_KEY,
+      ringMax: BACKUP_RING_MAX,
+      sessionKey: SESSION_KEY,
+      shouldIncludeKey
     });
-
-    window.addEventListener("pagehide", tryExportOnExit, { passive:true });
-    document.addEventListener("visibilitychange", () => {
-      if(document.visibilityState === "hidden") tryExportOnExit();
-    }, { passive:true });
+    backupMgr.patchLocalStorage();
+    backupMgr.bindEvents();
 
     function applyFixedRoutes(obj){
       const out = (obj && typeof obj === "object") ? { ...obj } : {};
@@ -2008,7 +1629,7 @@
       });
 
       // ✅ 自動備份：只存環狀備份，不下載
-      scheduleExport("login:applyUser");
+      backupMgr.schedule("login:applyUser");
       touchLayout();
     }
 
@@ -2016,9 +1637,6 @@
       const img = document.getElementById("zenImg");
       if(img) img.src = withV(img.getAttribute("src") || img.src);
     })();
-
-    function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
-    function lerp(a,b,t){ return a + (b-a)*t; }
 
     function fitButtonHeights(btns, baseH){
       btns.forEach(btn => {
@@ -2354,7 +1972,7 @@
       clearSession();
       localStorage.removeItem(CURRENT_KEY);
       showLogin();
-      scheduleExport("switchUser");
+      backupMgr.schedule("switchUser");
     });
 
     btnTogglePwd.addEventListener("click", () => {
@@ -2362,9 +1980,9 @@
       pwd.type = (pwd.type === "password") ? "text" : "password";
     });
 
-    // ✅ 手動匯出：才下載 JSON（不會再自動跳視窗）
+    // ✅ 手動匯出：才下載 JSON
     btnExport.addEventListener("click", () => {
-      exportBackupNow("manual:button", { download:true });
+      backupMgr.exportNow("manual:button", { download:true });
     });
   </script>
 </body>
