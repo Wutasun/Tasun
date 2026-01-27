@@ -2,53 +2,56 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>捷運汐東線事項記錄 · Tasun</title>
 
-  <!-- ✅✅✅ APP_VER 強制同步（全站一致）+ 自動帶 v + 導航 withV -->
+  <!-- ✅ 通用 Head 範本 -->
+  <link rel="icon" href="data:,">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+
+  <!-- ✅ 全站版本：只改這一行（要與 tasun-core.js 的版本一致） -->
+  <script>window.TASUN_APP_VER="20260127_06";</script>
+
+  <!-- ✅ 進站必鎖定最新版 ?v=APP_VER（舊書籤也會跳轉成最新；避免無限轉） -->
   <script>
   (function(){
-    const APP_VER = "2026-01-26"; // ←請改成你全站一致的版本字串
-    const APPKEY  = "tasun_app_ver_v1";
-    const FLAG    = "tasun_app_ver_refresh_once__" + APP_VER;
-
     try{
-      const u = new URL(location.href);
-      const stored = (localStorage.getItem(APPKEY) || "").trim();
-      const curV = (u.searchParams.get("v") || "").trim();
-
-      const needSync = stored !== APP_VER;
-      if(needSync) localStorage.setItem(APPKEY, APP_VER);
-
-      // ✅ 若 v 不存在 / 或不是 APP_VER：只跳轉一次（避免無限轉）
-      if((needSync || !curV || curV !== APP_VER) && !sessionStorage.getItem(FLAG)){
-        sessionStorage.setItem(FLAG, "1");
-        u.searchParams.set("v", APP_VER);
+      var APP = (window.TASUN_APP_VER||"").toString().trim();
+      if(!APP) return;
+      var u = new URL(location.href);
+      var cur = (u.searchParams.get("v")||"").toString().trim();
+      var KEY = "tasun_force_v_once__sxdh_notes__" + (cur||"none") + "_to_" + APP;
+      if(cur !== APP && !sessionStorage.getItem(KEY)){
+        sessionStorage.setItem(KEY, "1");
+        u.searchParams.set("v", APP);
         location.replace(u.toString());
         return;
       }
-
-      window.APP_VER = APP_VER;
-      window.__CACHE_V = curV || APP_VER;
-
-      // ✅ 讓所有「站內連結」自動帶 v（外部連結不動）
-      window.__withV = function(href){
-        const vv = (window.__CACHE_V || APP_VER || "").trim();
-        if(!href) return href;
-
-        try{
-          // 外部/特殊協定：不處理
-          if(/^https?:\/\//i.test(href) || /^mailto:/i.test(href) || /^file:/i.test(href)) return href;
-
-          const x = new URL(href, document.baseURI);
-          // 同站才加 v
-          if(x.origin === location.origin && vv) x.searchParams.set("v", vv);
-          return x.toString();
-        }catch(e){
-          return href;
-        }
-      };
     }catch(e){}
+  })();
+  </script>
+
+  <!-- ✅ 先 core → 再 boot（都帶 v=APP_VER），最後才跑本頁 -->
+  <script>
+  (function(){
+    var APP = (window.TASUN_APP_VER||"").toString().trim();
+    function addScript(src){
+      return new Promise(function(resolve){
+        var s=document.createElement("script");
+        s.src = src + (src.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(APP);
+        s.async = false;
+        s.onload = function(){ resolve(true); };
+        s.onerror= function(){ resolve(false); };
+        document.head.appendChild(s);
+      });
+    }
+    window.__TASUN_READY__ = (async function(){
+      await addScript("tasun-core.js");
+      await addScript("tasun-boot.js");
+      return true;
+    })();
   })();
   </script>
 
@@ -1264,10 +1267,7 @@
 
           <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
             <button class="btn ghost" id="btnCloud" type="button"><span class="t">雲端檔案</span></button>
-
-            <!-- ✅✅新增：匯出備份 -->
             <button class="btn ghost" id="btnExport" type="button"><span class="t">匯出備份</span></button>
-
             <button class="btn ghost" id="btnRead"><span class="t">閱讀模式：關</span></button>
             <button class="btn ghost" id="btnClear"><span class="t">清除條件</span></button>
           </div>
@@ -1386,7 +1386,7 @@
     </div>
   </div>
 
-  <!-- Login Modal -->
+  <!-- Login Modal（DOM 保留；登入邏輯由 tasun-core.js 的 TasunCore.Auth 接管） -->
   <div class="loginMask" id="loginMask" aria-hidden="true">
     <div class="loginModal" role="dialog" aria-modal="true" aria-label="登入">
       <div class="loginHead">
@@ -1419,1292 +1419,1091 @@
   <div class="toast" id="toast"></div>
 
   <script>
-    const CURRENT_KEY = "tasunCurrentUser_v1";
-    const AUTH_KEY    = "tasunAuthTable_v1";
+  (function(){
+    "use strict";
 
-    // ✅本頁主庫（統一）
-    const DB_KEY      = "tasunSxdhNotes_v1";
-    const COUNTER_KEY = "tasunSxdhNotes_counter_v1";
-
-    // ✅備份（防資料不見）
-    const BACKUP_KEY  = DB_KEY + "__backup_v1";
-    const BK1_KEY     = DB_KEY + "__backup_1";
-    const BK2_KEY     = DB_KEY + "__backup_2";
-    const BK3_KEY     = DB_KEY + "__backup_3";
-
-    // ✅新增：匯出/離開快照
-    const EXPORT_LAST_KEY = DB_KEY + "__export_last_v1";
-    const LEAVE_SNAP_KEY  = DB_KEY + "__leave_snapshot_v1";
-
-    // ✅可能的舊版 key（自動找回既有資料）
-    const LEGACY_DB_KEYS = [
-      "tasunSxdhNotes_v1",
-      "tasunSxdhNotes_v0",
-      "tasunSxdhNotes",
-      "tasunXidongNotes_v1",
-      "tasunXidongNotes_v0",
-      "tasunXidongNotes",
-      "tasunNotes_sxdh_v1",
-      "tasunNotes_xidong_v1"
-    ];
-    const LEGACY_COUNTER_KEYS = [
-      COUNTER_KEY,
-      "tasunSxdhNotes_counter_v0",
-      "tasunXidongNotes_counter_v1",
-      "tasunXidongNotes_counter_v0",
-      "tasunNotes_sxdh_counter_v1",
-      "tasunNotes_xidong_counter_v1"
-    ];
-
-    const TRADE_DICT_KEY = "tasunSxdhNotes_tradeDict_v1";
-    const SYS_DICT_KEY   = "tasunSxdhNotes_sysDict_v1";
-
-    const READ_MODE_KEY  = "tasunSxdhNotes_readMode_v1";
-
-    const CLOUD_URL = "https://www.dropbox.com/scl/fo/glb4s65934h195bxuyuqm/AH5ClZ2u4MtPMvmgtfOUAa4?rlkey=tfxkpbpw8k9bctshx5xvuge8h&st=guo88r98&dl=0";
-
-    let currentUser = null;
-    let db = [];
-    let editingId = null;
-    let selectedId = null;
-    let promptMode = null;
-
-    const $ = (id) => document.getElementById(id);
-    const norm = (s) => (s ?? "").toString().trim();
-
-    function toast(msg){
-      const t = $("toast");
-      t.textContent = msg;
-      t.style.display = "block";
-      clearTimeout(toast._tm);
-      toast._tm = setTimeout(()=> t.style.display = "none", 2600);
-    }
-
-    function escHtml(s){
-      return (s ?? "").toString()
-        .replaceAll("&","&amp;")
-        .replaceAll("<","&lt;")
-        .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
-        .replaceAll("'","&#39;");
-    }
-
-    function mapRole(v){
-      const s=(v??"").toString().trim().toLowerCase();
-      if(!s) return "read";
-      if(s==="admin") return "admin";
-      if(s==="write"||s==="edit") return "write";
-      if(s==="read"||s==="view") return "read";
-      if(s==="0") return "admin";
-      if(s==="1") return "write";
-      if(s==="2") return "read";
-      return s;
-    }
-
-    function fnv1a(str){
-      let h = 0x811c9dc5;
-      for(let i=0;i<str.length;i++){
-        h ^= str.charCodeAt(i);
-        h = Math.imul(h, 0x01000193);
-      }
-      return (h >>> 0).toString(16).padStart(8, "0");
-    }
-
-    // =========================
-    // ✅離開/跳轉自動備份（localStorage 快照）
-    // =========================
-    function rotateBackups(snapshotArr){
-      const snap = { ts: Date.now(), db: snapshotArr };
-      try{
-        const b1 = localStorage.getItem(BK1_KEY);
-        const b2 = localStorage.getItem(BK2_KEY);
-        if(b2) localStorage.setItem(BK3_KEY, b2);
-        if(b1) localStorage.setItem(BK2_KEY, b1);
-        localStorage.setItem(BK1_KEY, JSON.stringify(snap));
-        localStorage.setItem(BACKUP_KEY, JSON.stringify(snap));
-      }catch(e){}
-    }
-
-    function backupOnExit(reason){
-      try{
-        if(!Array.isArray(db)) return;
-        rotateBackups(db);
-        localStorage.setItem(LEAVE_SNAP_KEY, JSON.stringify({ ts: Date.now(), reason: reason || "exit", db }));
-      }catch(e){}
-    }
-
-    // ✅任何頁面跳轉先備份再跳
-    function go(href){
-      backupOnExit("navigate");
-      location.href = (typeof window.__withV === "function") ? window.__withV(href) : href;
-    }
-
-    function openAttachment(href){
-      const h = (href ?? "").toString().trim();
-      if(!h) return;
-      if(/^https?:\/\//i.test(h) || /^mailto:/i.test(h) || /^file:/i.test(h)){
-        backupOnExit("open_attachment");
-        window.open(h, "_blank", "noopener");
-        return;
-      }
-      go(h);
-    }
-
-    window.addEventListener("beforeunload", ()=> backupOnExit("beforeunload"));
-    window.addEventListener("pagehide",     ()=> backupOnExit("pagehide"));
-    document.addEventListener("visibilitychange", ()=>{
-      if(document.visibilityState === "hidden") backupOnExit("visibility_hidden");
-    });
-
-    // =========================
-    // ✅登入/權限
-    // =========================
-    function loadAuthTable(){
-      try{
-        const raw = localStorage.getItem(AUTH_KEY);
-        if(!raw) return [];
-        const parsed = JSON.parse(raw);
-        if(Array.isArray(parsed)) return parsed;
-        if(parsed && Array.isArray(parsed.users)) return parsed.users;
-        return [];
-      }catch(e){ return []; }
-    }
-
-    function pickUsername(row){ return norm(row?.username ?? row?.user ?? row?.account ?? row?.name); }
-    function pickPassword(row){ return (row?.password ?? row?.pass ?? row?.pwd ?? "").toString(); }
-    function pickRole(row){ return mapRole(row?.role ?? row?.level ?? row?.perm ?? row?.permission); }
-
-    function findAuthUser(username){
-      const u = norm(username).toLowerCase();
-      if(!u) return null;
-      const rows = loadAuthTable();
-      for(const r of rows){
-        const ru = pickUsername(r).toLowerCase();
-        if(ru && ru===u){
-          return { user: pickUsername(r), pass: pickPassword(r), role: pickRole(r) || "read" };
-        }
-      }
-      return null;
-    }
-
-    function authStampFromAuth(auth){
-      return fnv1a(`${auth.user}|${auth.pass ?? ""}`);
-    }
-
-    function loadCurrentUser(){
-      try{ currentUser = JSON.parse(localStorage.getItem(CURRENT_KEY) || "null"); }
-      catch(e){ currentUser = null; }
-
-      if(currentUser && typeof currentUser==="object"){
-        const uname = norm(currentUser.user ?? currentUser.username ?? currentUser.account ?? currentUser.name);
-        if(uname){
-          currentUser.user = uname;
-          currentUser.username = uname;
-        }
-        currentUser.role = mapRole(currentUser.role ?? currentUser.level ?? "read");
-        currentUser.level = currentUser.role;
-        currentUser.authStamp = (currentUser.authStamp ?? "").toString();
-      }
-    }
-
-    function setCurrentUser(user, role, authStamp){
-      const obj = {
-        user,
-        username: user,
-        role: mapRole(role),
-        level: mapRole(role),
-        authStamp: (authStamp || "").toString()
-      };
-      localStorage.setItem(CURRENT_KEY, JSON.stringify(obj));
-      currentUser = obj;
-    }
-
-    function role(){ return mapRole(currentUser?.role ?? currentUser?.level ?? "read"); }
-    function canWrite(){ const r=role(); return r==="admin" || r==="write"; }
-    function isAdmin(){ return role()==="admin"; }
-
-    const SESSION_WATCH_MS = 3000;
-    let _watchStarted = false;
-
-    function rebuildUserDropdown(preselectUser){
-      const sel = $("loginUser");
-      const rows = loadAuthTable();
-      const users = rows.map(r => pickUsername(r)).filter(Boolean);
-
-      const seen = new Set();
-      const uniq = [];
-      for(const u of users){
-        const k = u.toLowerCase();
-        if(seen.has(k)) continue;
-        seen.add(k);
-        uniq.push(u);
-      }
-
-      sel.innerHTML = `<option value="">請選擇帳號</option>` + uniq.map(u=>{
-        const s = (preselectUser && u.toLowerCase() === preselectUser.toLowerCase()) ? "selected" : "";
-        return `<option value="${escHtml(u)}" ${s}>${escHtml(u)}</option>`;
-      }).join("");
-    }
-
-    function openLoginModal(msg){
-      $("loginErr").style.display="none";
-      if(msg){
-        $("loginErr").textContent = msg;
-        $("loginErr").style.display="block";
-      }
-      loadCurrentUser();
-      rebuildUserDropdown(currentUser?.user || "");
-
-      $("loginPass").value="";
-      $("loginMask").classList.add("show");
-      $("loginMask").setAttribute("aria-hidden","false");
-      setTimeout(()=>{
-        if($("loginUser").value) $("loginPass").focus();
-        else $("loginUser").focus();
-      },0);
-    }
-    function closeLoginModal(){
-      $("loginMask").classList.remove("show");
-      $("loginMask").setAttribute("aria-hidden","true");
-    }
-
-    function forceReLogin(msg){
-      try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
-      currentUser = null;
-      toast(msg || "權限表已更新，請重新登入");
-      openLoginModal(msg || "權限表已更新，請重新登入");
-      $("uName").textContent="—";
-      $("uRole").textContent="—";
-      scheduleRender();
-    }
-
-    function validateSession(){
-      const lm = $("loginMask");
-      if(lm && lm.classList.contains("show")) return;
-
-      loadCurrentUser();
-      if(!currentUser || !currentUser.user) return;
-
-      const auth = findAuthUser(currentUser.user);
-      if(!auth){ forceReLogin("帳號已被移除，請重新登入"); return; }
-
-      const stampNow = authStampFromAuth(auth);
-
-      if(!currentUser.authStamp){
-        setCurrentUser(auth.user, auth.role || "read", stampNow);
-        $("uName").textContent = auth.user;
-        $("uRole").textContent = role();
+    function run(){
+      var Core = window.TasunCore;
+      if(!Core || !Core.Auth){
+        console.error("TasunCore/Auth not ready.");
         return;
       }
 
-      if(currentUser.authStamp !== stampNow){
-        forceReLogin("密碼已更新，請重新登入");
-        return;
-      }
-
-      const r = auth.role || "read";
-      if(mapRole(currentUser.role) !== r){
-        setCurrentUser(auth.user, r, stampNow);
-        $("uRole").textContent = r;
-        scheduleRender();
-      }
-    }
-
-    function startSessionWatch(){
-      if(_watchStarted) return;
-      _watchStarted = true;
-
-      window.addEventListener("storage", (e)=>{
-        if(e.key === AUTH_KEY || e.key === CURRENT_KEY){
-          validateSession();
-        }
-        if(e.key === DB_KEY || LEGACY_DB_KEYS.includes(e.key)){
-          loadDB(true);
-          scheduleRender();
-        }
-        if(e.key === READ_MODE_KEY){
-          applyReadMode(isReadModeOn());
-        }
+      // ✅ 第二道保險：強制 v=APP_VER + 同步 + 資源補 v
+      Core.init({
+        pageKey: "sxdh-notes",
+        forceUrlV: true,
+        forceVersionSync: true,
+        patchResources: true,
+        networkToast: false,
+        appHeightVar: false
       });
 
-      setInterval(validateSession, SESSION_WATCH_MS);
-    }
+      var Auth = Core.Auth;
+      var withV = Core.withV;
 
-    function ensureLoggedIn(){
-      loadCurrentUser();
-      const rows = loadAuthTable();
-      if(!Array.isArray(rows) || rows.length === 0){
-        openLoginModal("尚未建立權限表：請先到「權限表.html」建立帳號。");
-        return false;
+      // ✅本頁主庫（統一）
+      var DB_KEY      = "tasunSxdhNotes_v1";
+      var COUNTER_KEY = "tasunSxdhNotes_counter_v1";
+
+      // ✅備份（防資料不見）
+      var BACKUP_KEY  = DB_KEY + "__backup_v1";
+      var BK1_KEY     = DB_KEY + "__backup_1";
+      var BK2_KEY     = DB_KEY + "__backup_2";
+      var BK3_KEY     = DB_KEY + "__backup_3";
+
+      // ✅新增：匯出/離開快照
+      var EXPORT_LAST_KEY = DB_KEY + "__export_last_v1";
+      var LEAVE_SNAP_KEY  = DB_KEY + "__leave_snapshot_v1";
+
+      // ✅可能的舊版 key（自動找回既有資料）
+      var LEGACY_DB_KEYS = [
+        "tasunSxdhNotes_v1",
+        "tasunSxdhNotes_v0",
+        "tasunSxdhNotes",
+        "tasunXidongNotes_v1",
+        "tasunXidongNotes_v0",
+        "tasunXidongNotes",
+        "tasunNotes_sxdh_v1",
+        "tasunNotes_xidong_v1"
+      ];
+      var LEGACY_COUNTER_KEYS = [
+        COUNTER_KEY,
+        "tasunSxdhNotes_counter_v0",
+        "tasunXidongNotes_counter_v1",
+        "tasunXidongNotes_counter_v0",
+        "tasunNotes_sxdh_counter_v1",
+        "tasunNotes_xidong_counter_v1"
+      ];
+
+      var TRADE_DICT_KEY = "tasunSxdhNotes_tradeDict_v1";
+      var SYS_DICT_KEY   = "tasunSxdhNotes_sysDict_v1";
+      var READ_MODE_KEY  = "tasunSxdhNotes_readMode_v1";
+
+      var CLOUD_URL = "https://www.dropbox.com/scl/fo/glb4s65934h195bxuyuqm/AH5ClZ2u4MtPMvmgtfOUAa4?rlkey=tfxkpbpw8k9bctshx5xvuge8h&st=guo88r98&dl=0";
+
+      var db = [];
+      var editingId = null;
+      var selectedId = null;
+      var promptMode = null;
+
+      var $ = function(id){ return document.getElementById(id); };
+      var norm = function(s){ return (s===undefined||s===null) ? "" : String(s).trim(); };
+
+      function toast(msg){
+        var t = $("toast");
+        t.textContent = msg;
+        t.style.display = "block";
+        clearTimeout(toast._tm);
+        toast._tm = setTimeout(function(){ t.style.display = "none"; }, 2600);
       }
 
-      if(!currentUser || !currentUser.user){
-        openLoginModal();
-        return false;
+      function escHtml(s){
+        return (s ?? "").toString()
+          .replaceAll("&","&amp;")
+          .replaceAll("<","&lt;")
+          .replaceAll(">","&gt;")
+          .replaceAll('"',"&quot;")
+          .replaceAll("'","&#39;");
       }
 
-      const auth = findAuthUser(currentUser.user);
-      if(!auth){ forceReLogin("帳號已被移除，請重新登入"); return false; }
-
-      const stampNow = authStampFromAuth(auth);
-      if(currentUser.authStamp && currentUser.authStamp !== stampNow){
-        forceReLogin("密碼已更新，請重新登入");
-        return false;
-      }
-
-      setCurrentUser(auth.user, auth.role || "read", stampNow);
-      $("uName").textContent = auth.user;
-      $("uRole").textContent = role();
-      return true;
-    }
-
-    function doLogin(){
-      const u = norm($("loginUser").value);
-      const p = ($("loginPass").value ?? "").toString();
-      const rows = loadAuthTable();
-
-      if(!Array.isArray(rows) || rows.length === 0){
-        $("loginErr").textContent = "尚未建立權限表：請先到「權限表.html」建立帳號。";
-        $("loginErr").style.display = "block";
-        return;
-      }
-      if(!u){
-        $("loginErr").textContent = "請先選擇帳號。";
-        $("loginErr").style.display = "block";
-        return;
-      }
-      if(!p){
-        $("loginErr").textContent = "請輸入密碼。";
-        $("loginErr").style.display = "block";
-        return;
-      }
-
-      const auth = findAuthUser(u);
-      if(!auth){
-        $("loginErr").textContent = "帳號不存在（以權限表為準）。";
-        $("loginErr").style.display = "block";
-        return;
-      }
-      if((auth.pass ?? "") !== p){
-        $("loginErr").textContent = "密碼錯誤（以權限表為準）。";
-        $("loginErr").style.display = "block";
-        return;
-      }
-
-      const stampNow = authStampFromAuth(auth);
-      setCurrentUser(auth.user, auth.role || "read", stampNow);
-
-      closeLoginModal();
-      toast("登入成功");
-      start();
-    }
-
-    // =========================
-    // ✅資料：保護 / 找回 / 備份
-    // =========================
-    function safeParseJSON(raw){
-      if(!raw) return null;
-      try{ return JSON.parse(raw); }catch(e){ return null; }
-    }
-
-    function normalizeRow(x){
-      if(!x || typeof x !== "object") return null;
-
-      const idRaw = (x.id ?? x.no ?? x.idx ?? x.key);
-      let id = Number(idRaw);
-      if(!Number.isFinite(id) || id <= 0) id = null;
-
-      const text   = (x.text ?? x.content ?? x.note ?? x.memo ?? "").toString();
-      const trade  = norm(x.trade ?? x.kind ?? x.type ?? x.work ?? "");
-      const system = norm(x.system ?? x.sys ?? x.category ?? "");
-      const attach = norm(x.attach ?? x.attachment ?? x.file ?? x.link ?? "");
-      const remark = (x.remark ?? x.note2 ?? x.desc ?? "").toString();
-      let date     = norm(x.date ?? x.day ?? x.created ?? x.createdAt ?? "");
-
-      if(date){
-        if(!/^\d{4}-\d{2}-\d{2}$/.test(date)){
-          const d = new Date(date);
-          if(!isNaN(d.getTime())) date = d.toISOString().slice(0,10);
-          else date = "";
+      function fnv1a(str){
+        var h = 0x811c9dc5;
+        for(var i=0;i<str.length;i++){
+          h ^= str.charCodeAt(i);
+          h = Math.imul(h, 0x01000193);
         }
+        return (h >>> 0).toString(16).padStart(8, "0");
       }
 
-      return { id, text, trade, system, attach, remark, date };
-    }
+      // =========================
+      // ✅離開/跳轉自動備份（localStorage 快照）
+      // =========================
+      function rotateBackups(snapshotArr){
+        var snap = { ts: Date.now(), db: snapshotArr };
+        try{
+          var b1 = localStorage.getItem(BK1_KEY);
+          var b2 = localStorage.getItem(BK2_KEY);
+          if(b2) localStorage.setItem(BK3_KEY, b2);
+          if(b1) localStorage.setItem(BK2_KEY, b1);
+          localStorage.setItem(BK1_KEY, JSON.stringify(snap));
+          localStorage.setItem(BACKUP_KEY, JSON.stringify(snap));
+        }catch(e){}
+      }
 
-    function rowKey(r){
-      const t = (r.text ?? "").toString().trim().replace(/\s+/g," ");
-      const a = (r.attach ?? "").toString().trim();
-      const rm = (r.remark ?? "").toString().trim().replace(/\s+/g," ");
-      return fnv1a(`${r.date||""}|${r.trade||""}|${r.system||""}|${t}|${a}|${rm}`);
-    }
+      function backupOnExit(reason){
+        try{
+          if(!Array.isArray(db)) return;
+          rotateBackups(db);
+          localStorage.setItem(LEAVE_SNAP_KEY, JSON.stringify({ ts: Date.now(), reason: reason || "exit", db: db }));
+        }catch(e){}
+      }
 
-    function readBackupCandidates(){
-      const keys = [BACKUP_KEY, BK1_KEY, BK2_KEY, BK3_KEY];
-      for(const k of keys){
-        const raw = localStorage.getItem(k);
-        const obj = safeParseJSON(raw);
-        if(obj && typeof obj === "object"){
-          if(Array.isArray(obj.db)) return obj.db;
-          if(Array.isArray(obj)) return obj;
+      function go(href){
+        backupOnExit("navigate");
+        location.href = withV(href);
+      }
+
+      function openAttachment(href){
+        var h = (href ?? "").toString().trim();
+        if(!h) return;
+        if(/^https?:\/\//i.test(h) || /^mailto:/i.test(h) || /^file:/i.test(h)){
+          backupOnExit("open_attachment");
+          window.open(h, "_blank", "noopener");
+          return;
         }
-      }
-      return null;
-    }
-
-    function mergeFromLegacyKeys(){
-      const collected = [];
-      for(const k of LEGACY_DB_KEYS){
-        const raw = localStorage.getItem(k);
-        const parsed = safeParseJSON(raw);
-        if(!parsed) continue;
-        const arr = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.db) ? parsed.db : null);
-        if(!Array.isArray(arr)) continue;
-        collected.push(...arr);
+        go(h);
       }
 
-      const backup = readBackupCandidates();
-      if(Array.isArray(backup)) collected.push(...backup);
+      window.addEventListener("beforeunload", function(){ backupOnExit("beforeunload"); });
+      window.addEventListener("pagehide", function(){ backupOnExit("pagehide"); });
+      document.addEventListener("visibilitychange", function(){
+        if(document.visibilityState === "hidden") backupOnExit("visibility_hidden");
+      });
 
-      const normed = collected.map(normalizeRow).filter(Boolean);
-      if(normed.length === 0) return { db: [], changed: false };
-
-      let maxId = 0;
-      for(const r of normed){
-        if(Number.isFinite(r.id) && r.id > maxId) maxId = r.id;
-      }
-      for(const r of normed){
-        if(!r.id){ maxId += 1; r.id = maxId; }
-      }
-
-      const seen = new Set();
-      const uniq = [];
-      for(const r of normed){
-        const k = rowKey(r);
-        if(seen.has(k)) continue;
-        seen.add(k);
-        uniq.push(r);
+      // =========================
+      // ✅資料：保護 / 找回 / 備份（保留你原本邏輯）
+      // =========================
+      function safeParseJSON(raw){
+        if(!raw) return null;
+        try{ return JSON.parse(raw); }catch(e){ return null; }
       }
 
-      uniq.sort((a,b)=> (a.id||0) - (b.id||0));
-      return { db: uniq, changed: true };
-    }
+      function normalizeRow(x){
+        if(!x || typeof x !== "object") return null;
 
-    function loadCounterFromLegacy(){
-      let best = 0;
-      for(const k of LEGACY_COUNTER_KEYS){
-        const n = Number(localStorage.getItem(k) || "0");
-        if(Number.isFinite(n) && n > best) best = n;
-      }
-      return best;
-    }
+        var idRaw = (x.id ?? x.no ?? x.idx ?? x.key);
+        var id = Number(idRaw);
+        if(!Number.isFinite(id) || id <= 0) id = null;
 
-    function ensureCounterAtLeast(n){
-      const cur = Number(localStorage.getItem(COUNTER_KEY) || "0");
-      const curOk = Number.isFinite(cur) ? cur : 0;
-      const v = Math.max(curOk, n);
-      localStorage.setItem(COUNTER_KEY, String(v));
-    }
+        var text   = (x.text ?? x.content ?? x.note ?? x.memo ?? "").toString();
+        var trade  = norm(x.trade ?? x.kind ?? x.type ?? x.work ?? "");
+        var system = norm(x.system ?? x.sys ?? x.category ?? "");
+        var attach = norm(x.attach ?? x.attachment ?? x.file ?? x.link ?? "");
+        var remark = (x.remark ?? x.note2 ?? x.desc ?? "").toString();
+        var date   = norm(x.date ?? x.day ?? x.created ?? x.createdAt ?? "");
 
-    function loadDB(quiet=false){
-      try{
-        const raw = localStorage.getItem(DB_KEY);
-        const parsed = safeParseJSON(raw);
-
-        if(Array.isArray(parsed)){
-          db = parsed.map(normalizeRow).filter(Boolean);
-        }else if(parsed && Array.isArray(parsed.db)){
-          db = parsed.db.map(normalizeRow).filter(Boolean);
-        }else{
-          db = [];
+        if(date){
+          if(!/^\d{4}-\d{2}-\d{2}$/.test(date)){
+            var d = new Date(date);
+            if(!isNaN(d.getTime())) date = d.toISOString().slice(0,10);
+            else date = "";
+          }
         }
 
-        if(db.length === 0){
-          const merged = mergeFromLegacyKeys();
-          if(merged.db.length > 0){
-            db = merged.db;
-            rotateBackups(db);
-            localStorage.setItem(DB_KEY, JSON.stringify(db));
-            if(!quiet) toast("已自動找回既有資料並合併到本頁");
+        return { id: id, text: text, trade: trade, system: system, attach: attach, remark: remark, date: date };
+      }
+
+      function rowKey(r){
+        var t = (r.text ?? "").toString().trim().replace(/\s+/g," ");
+        var a = (r.attach ?? "").toString().trim();
+        var rm = (r.remark ?? "").toString().trim().replace(/\s+/g," ");
+        return fnv1a((r.date||"") + "|" + (r.trade||"") + "|" + (r.system||"") + "|" + t + "|" + a + "|" + rm);
+      }
+
+      function readBackupCandidates(){
+        var keys = [BACKUP_KEY, BK1_KEY, BK2_KEY, BK3_KEY];
+        for(var i=0;i<keys.length;i++){
+          var raw = localStorage.getItem(keys[i]);
+          var obj = safeParseJSON(raw);
+          if(obj && typeof obj === "object"){
+            if(Array.isArray(obj.db)) return obj.db;
+            if(Array.isArray(obj)) return obj;
+          }
+        }
+        return null;
+      }
+
+      function mergeFromLegacyKeys(){
+        var collected = [];
+        for(var i=0;i<LEGACY_DB_KEYS.length;i++){
+          var raw = localStorage.getItem(LEGACY_DB_KEYS[i]);
+          var parsed = safeParseJSON(raw);
+          if(!parsed) continue;
+          var arr = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.db) ? parsed.db : null);
+          if(!Array.isArray(arr)) continue;
+          collected.push.apply(collected, arr);
+        }
+
+        var backup = readBackupCandidates();
+        if(Array.isArray(backup)) collected.push.apply(collected, backup);
+
+        var normed = collected.map(normalizeRow).filter(Boolean);
+        if(normed.length === 0) return { db: [], changed: false };
+
+        var maxId = 0;
+        for(var j=0;j<normed.length;j++){
+          if(Number.isFinite(normed[j].id) && normed[j].id > maxId) maxId = normed[j].id;
+        }
+        for(var k=0;k<normed.length;k++){
+          if(!normed[k].id){ maxId += 1; normed[k].id = maxId; }
+        }
+
+        var seen = new Set();
+        var uniq = [];
+        for(var m=0;m<normed.length;m++){
+          var key = rowKey(normed[m]);
+          if(seen.has(key)) continue;
+          seen.add(key);
+          uniq.push(normed[m]);
+        }
+
+        uniq.sort(function(a,b){ return (a.id||0) - (b.id||0); });
+        return { db: uniq, changed: true };
+      }
+
+      function loadCounterFromLegacy(){
+        var best = 0;
+        for(var i=0;i<LEGACY_COUNTER_KEYS.length;i++){
+          var n = Number(localStorage.getItem(LEGACY_COUNTER_KEYS[i]) || "0");
+          if(Number.isFinite(n) && n > best) best = n;
+        }
+        return best;
+      }
+
+      function ensureCounterAtLeast(n){
+        var cur = Number(localStorage.getItem(COUNTER_KEY) || "0");
+        var curOk = Number.isFinite(cur) ? cur : 0;
+        var v = Math.max(curOk, n);
+        localStorage.setItem(COUNTER_KEY, String(v));
+      }
+
+      function loadDB(quiet){
+        quiet = !!quiet;
+        try{
+          var raw = localStorage.getItem(DB_KEY);
+          var parsed = safeParseJSON(raw);
+
+          if(Array.isArray(parsed)){
+            db = parsed.map(normalizeRow).filter(Boolean);
+          }else if(parsed && Array.isArray(parsed.db)){
+            db = parsed.db.map(normalizeRow).filter(Boolean);
           }else{
-            const backup = readBackupCandidates();
-            if(Array.isArray(backup) && backup.length>0){
-              db = backup.map(normalizeRow).filter(Boolean);
+            db = [];
+          }
+
+          if(db.length === 0){
+            var merged = mergeFromLegacyKeys();
+            if(merged.db.length > 0){
+              db = merged.db;
               rotateBackups(db);
               localStorage.setItem(DB_KEY, JSON.stringify(db));
-              if(!quiet) toast("主資料異常，已由備份自動還原");
+              if(!quiet) toast("已自動找回既有資料並合併到本頁");
+            }else{
+              var backup = readBackupCandidates();
+              if(Array.isArray(backup) && backup.length>0){
+                db = backup.map(normalizeRow).filter(Boolean);
+                rotateBackups(db);
+                localStorage.setItem(DB_KEY, JSON.stringify(db));
+                if(!quiet) toast("主資料異常，已由備份自動還原");
+              }
             }
+          }else{
+            rotateBackups(db);
           }
-        }else{
-          rotateBackups(db);
+
+        }catch(e){
+          db = [];
+          var backup2 = readBackupCandidates();
+          if(Array.isArray(backup2) && backup2.length>0){
+            db = backup2.map(normalizeRow).filter(Boolean);
+            rotateBackups(db);
+            localStorage.setItem(DB_KEY, JSON.stringify(db));
+            if(!quiet) toast("主資料讀取失敗，已由備份自動還原");
+          }
         }
 
-      }catch(e){
-        db = [];
-        const backup = readBackupCandidates();
-        if(Array.isArray(backup) && backup.length>0){
-          db = backup.map(normalizeRow).filter(Boolean);
+        var maxId = 0;
+        for(var r=0;r<db.length;r++){
+          if(Number.isFinite(db[r].id) && db[r].id > maxId) maxId = db[r].id;
+        }
+        var legacyCounter = loadCounterFromLegacy();
+        ensureCounterAtLeast(Math.max(maxId, legacyCounter));
+
+        repairDBIfNeeded();
+      }
+
+      function repairDBIfNeeded(){
+        if(!Array.isArray(db)) db = [];
+        var cleaned = [];
+        var usedId = new Set();
+        var maxId = 0;
+
+        for(var i=0;i<db.length;i++){
+          var r = normalizeRow(db[i]);
+          if(!r) continue;
+          if(!r.text || !r.text.toString().trim()) continue;
+          if(Number.isFinite(r.id) && r.id > maxId) maxId = r.id;
+          cleaned.push(r);
+        }
+
+        var needNewId = [];
+        for(var j=0;j<cleaned.length;j++){
+          if(!cleaned[j].id || usedId.has(cleaned[j].id)){
+            needNewId.push(cleaned[j]);
+            continue;
+          }
+          usedId.add(cleaned[j].id);
+        }
+        for(var k=0;k<needNewId.length;k++){
+          maxId += 1;
+          while(usedId.has(maxId)) maxId += 1;
+          needNewId[k].id = maxId;
+          usedId.add(maxId);
+        }
+
+        cleaned.sort(function(a,b){ return (a.id||0) - (b.id||0); });
+        db = cleaned;
+
+        try{
           rotateBackups(db);
           localStorage.setItem(DB_KEY, JSON.stringify(db));
-          if(!quiet) toast("主資料讀取失敗，已由備份自動還原");
+          ensureCounterAtLeast(maxId);
+        }catch(e){}
+      }
+
+      function saveDB(){
+        try{
+          rotateBackups(db);
+          localStorage.setItem(DB_KEY, JSON.stringify(db));
+        }catch(e){
+          toast("儲存失敗：可能瀏覽器儲存空間不足");
         }
       }
 
-      let maxId = 0;
-      for(const r of db){
-        if(Number.isFinite(r.id) && r.id > maxId) maxId = r.id;
+      function getCounter(){
+        var n = Number(localStorage.getItem(COUNTER_KEY) || "0");
+        return Number.isFinite(n) ? n : 0;
       }
-      const legacyCounter = loadCounterFromLegacy();
-      ensureCounterAtLeast(Math.max(maxId, legacyCounter));
-
-      repairDBIfNeeded();
-    }
-
-    function repairDBIfNeeded(){
-      if(!Array.isArray(db)) db = [];
-      const cleaned = [];
-      const usedId = new Set();
-      let maxId = 0;
-
-      for(const r0 of db){
-        const r = normalizeRow(r0);
-        if(!r) continue;
-        if(!r.text || !r.text.toString().trim()) continue;
-        if(Number.isFinite(r.id) && r.id > maxId) maxId = r.id;
-        cleaned.push(r);
+      function nextCounter(){
+        var n = getCounter() + 1;
+        localStorage.setItem(COUNTER_KEY, String(n));
+        return n;
       }
 
-      const needNewId = [];
-      for(const r of cleaned){
-        if(!r.id || usedId.has(r.id)){
-          needNewId.push(r);
-          continue;
+      function loadDict(key){
+        try{
+          var raw = localStorage.getItem(key);
+          var arr = raw ? JSON.parse(raw) : [];
+          return Array.isArray(arr) ? arr.map(norm).filter(Boolean) : [];
+        }catch(e){ return []; }
+      }
+      function saveDict(key, arr){ localStorage.setItem(key, JSON.stringify(arr)); }
+
+      function ensureSeedDict(){
+        if(!localStorage.getItem(TRADE_DICT_KEY)){
+          saveDict(TRADE_DICT_KEY, ["土建","機電","水電","消防","裝修","其他"]);
         }
-        usedId.add(r.id);
-      }
-      for(const r of needNewId){
-        maxId += 1;
-        while(usedId.has(maxId)) maxId += 1;
-        r.id = maxId;
-        usedId.add(r.id);
+        if(!localStorage.getItem(SYS_DICT_KEY)){
+          saveDict(SYS_DICT_KEY, ["電氣","給排水","消防","空調","弱電","土建","其他"]);
+        }
       }
 
-      cleaned.sort((a,b)=> (a.id||0) - (b.id||0));
-      db = cleaned;
-
-      try{
-        rotateBackups(db);
-        localStorage.setItem(DB_KEY, JSON.stringify(db));
-        ensureCounterAtLeast(maxId);
-      }catch(e){}
-    }
-
-    function saveDB(){
-      try{
-        rotateBackups(db);
-        localStorage.setItem(DB_KEY, JSON.stringify(db));
-      }catch(e){
-        toast("儲存失敗：可能瀏覽器儲存空間不足");
-      }
-    }
-
-    function getCounter(){
-      const n = Number(localStorage.getItem(COUNTER_KEY) || "0");
-      return Number.isFinite(n) ? n : 0;
-    }
-    function nextCounter(){
-      const n = getCounter() + 1;
-      localStorage.setItem(COUNTER_KEY, String(n));
-      return n;
-    }
-
-    function loadDict(key){
-      try{
-        const raw = localStorage.getItem(key);
-        const arr = raw ? JSON.parse(raw) : [];
-        return Array.isArray(arr) ? arr.map(norm).filter(Boolean) : [];
-      }catch(e){ return []; }
-    }
-    function saveDict(key, arr){ localStorage.setItem(key, JSON.stringify(arr)); }
-
-    function ensureSeedDict(){
-      if(!localStorage.getItem(TRADE_DICT_KEY)){
-        saveDict(TRADE_DICT_KEY, ["土建","機電","水電","消防","裝修","其他"]);
-      }
-      if(!localStorage.getItem(SYS_DICT_KEY)){
-        saveDict(SYS_DICT_KEY, ["電氣","給排水","消防","空調","弱電","土建","其他"]);
-      }
-    }
-
-    // =========================
-    // ✅匯出備份（下載 JSON）+ 同步存一份到 localStorage
-    // =========================
-    function makeExportPayload(){
-      return {
-        meta: {
-          app: "捷運汐東線事項記錄",
-          dbKey: DB_KEY,
-          exportedAt: new Date().toISOString(),
-          ver: 1
-        },
-        counter: getCounter(),
-        tradeDict: loadDict(TRADE_DICT_KEY),
-        sysDict: loadDict(SYS_DICT_KEY),
-        db: Array.isArray(db) ? db : []
-      };
-    }
-
-    function safeFileStamp(){
-      const s = new Date().toISOString().slice(0,19);
-      return s.replaceAll(":", "-").replace("T","_");
-    }
-
-    function downloadJSON(filename, obj){
-      const blob = new Blob([JSON.stringify(obj, null, 2)], { type:"application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 0);
-    }
-
-    function doExportBackup(){
-      if(!currentUser || !currentUser.user){
-        openLoginModal();
-        return;
-      }
-      const payload = makeExportPayload();
-      try{ localStorage.setItem(EXPORT_LAST_KEY, JSON.stringify(payload)); }catch(e){}
-      downloadJSON(`捷運汐東線事項記錄_備份_${safeFileStamp()}.json`, payload);
-      toast("已匯出備份（並寫入本機備份快照）");
-      backupOnExit("export");
-    }
-
-    // =========================
-    // ✅閱讀模式
-    // =========================
-    function isReadModeOn(){ return localStorage.getItem(READ_MODE_KEY) === "1"; }
-    function applyReadMode(on){
-      document.body.classList.toggle("readMode", !!on);
-      const b = $("btnRead");
-      if(b) b.textContent = on ? "閱讀模式：開" : "閱讀模式：關";
-      const t = b?.querySelector?.(".t");
-      if(t) t.textContent = on ? "閱讀模式：開" : "閱讀模式：關";
-      scheduleRender();
-    }
-    function toggleReadMode(){
-      const on = !document.body.classList.contains("readMode");
-      localStorage.setItem(READ_MODE_KEY, on ? "1" : "0");
-      applyReadMode(on);
-      toast(on ? "已切換為閱讀模式（摘要點一下展開）" : "已切換為表格模式");
-    }
-
-    // =========================
-    // ✅UI/渲染
-    // =========================
-    function uniqueFromDB(field){
-      const set = new Set();
-      for(const r of db){
-        const v = norm(r[field]);
-        if(v) set.add(v);
-      }
-      return set;
-    }
-
-    function unionOptions(field, dictKey){
-      const set = uniqueFromDB(field);
-      for(const v of loadDict(dictKey)) set.add(v);
-      const arr = Array.from(set);
-      arr.sort((a,b)=> a.localeCompare(b, "zh-Hant"));
-      return arr;
-    }
-
-    function systemsByTradeFromDB(trade){
-      const t = norm(trade);
-      const set = new Set();
-      if(!t) return [];
-      for(const r of db){
-        if(norm(r.trade) !== t) continue;
-        const s = norm(r.system);
-        if(s) set.add(s);
-      }
-      const arr = Array.from(set);
-      arr.sort((a,b)=> a.localeCompare(b, "zh-Hant"));
-      return arr;
-    }
-
-    function rebuildFilters(){
-      const tSel = $("fTrade");
-      const sSel = $("fSys");
-
-      const keepT = norm(tSel.value);
-      const keepS = norm(sSel.value);
-
-      const trades = unionOptions("trade", TRADE_DICT_KEY);
-      tSel.innerHTML = `<option value="">全部</option>` + trades.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
-      tSel.value = trades.includes(keepT) ? keepT : "";
-
-      const pickedTrade = norm(tSel.value);
-
-      let systems = [];
-      if(pickedTrade){
-        systems = systemsByTradeFromDB(pickedTrade);
-      }else{
-        systems = unionOptions("system", SYS_DICT_KEY);
+      // =========================
+      // ✅匯出備份（下載 JSON）+ 同步存一份到 localStorage
+      // =========================
+      function makeExportPayload(){
+        return {
+          meta: {
+            app: "捷運汐東線事項記錄",
+            dbKey: DB_KEY,
+            exportedAt: new Date().toISOString(),
+            ver: 1
+          },
+          counter: getCounter(),
+          tradeDict: loadDict(TRADE_DICT_KEY),
+          sysDict: loadDict(SYS_DICT_KEY),
+          db: Array.isArray(db) ? db : []
+        };
       }
 
-      sSel.innerHTML = `<option value="">全部</option>` + systems.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
-
-      if(pickedTrade && systems.length === 0){
-        sSel.value = "";
-        sSel.disabled = true;
-      }else{
-        sSel.disabled = false;
-        sSel.value = systems.includes(keepS) ? keepS : "";
-      }
-    }
-
-    function filteredRows(){
-      const q = norm($("qText").value).toLowerCase();
-      const t = norm($("fTrade").value);
-      const s = norm($("fSys").value);
-
-      let rows = db.slice();
-
-      if(t) rows = rows.filter(r => norm(r.trade) === t);
-      if(s) rows = rows.filter(r => norm(r.system) === s);
-
-      if(q){
-        rows = rows.filter(r => (r.text ?? "").toString().toLowerCase().includes(q));
+      function safeFileStamp(){
+        var s = new Date().toISOString().slice(0,19);
+        return s.replaceAll(":", "-").replace("T","_");
       }
 
-      rows.sort((a,b)=> (a.id||0) - (b.id||0));
-      return rows;
-    }
-
-    let _renderPending = false;
-    function scheduleRender(){
-      if(_renderPending) return;
-      _renderPending = true;
-      requestAnimationFrame(()=>{
-        _renderPending = false;
-        render();
-      });
-    }
-
-    function applySelectionToDOM(){
-      document.querySelectorAll("tr.sel").forEach(el=>el.classList.remove("sel"));
-      document.querySelectorAll(".card.sel").forEach(el=>el.classList.remove("sel"));
-      if(selectedId == null) return;
-      const tr = document.querySelector(`tr[data-id="${selectedId}"]`);
-      if(tr) tr.classList.add("sel");
-      const card = document.querySelector(`.card[data-id="${selectedId}"]`);
-      if(card) card.classList.add("sel");
-    }
-
-    function renderHint(rowsCount){
-      const pickedTrade = norm($("fTrade").value);
-      const sysDisabled = $("fSys").disabled;
-      const rm = document.body.classList.contains("readMode");
-      const modeText = canWrite() ? "可維護模式" : "唯讀模式";
-
-      $("btnAdd").style.display  = canWrite() ? "inline-block" : "none";
-      $("btnEdit").style.display = canWrite() ? "inline-block" : "none";
-      $("btnView").disabled = !selectedId;
-
-      $("hint").innerHTML =
-        `目前為 <b style="color:var(--goldText)">${modeText}</b>（role: ${escHtml(role())}）。` +
-        ` 模式：<b style="color:var(--goldText)">${rm ? "閱讀模式（摘要點一下展開/收合）" : "表格模式"}</b>。` +
-        ` 筆數：<b style="color:var(--goldText)">${rowsCount}</b>。` +
-        (pickedTrade && sysDisabled ? ` <span style="color:rgba(124,88,30,.82)">（此工種尚無系統可篩選）</span>` : ``) +
-        (selectedId ? ` 已選取：<b style="color:var(--goldText)">#${selectedId}</b>` : `（請先點選一筆，再按右上「顯示畫面 / 編輯」）`);
-    }
-
-    function fillDropdown(selectId, options, placeholder){
-      const sel = $(selectId);
-      if(options.length === 0){
-        sel.innerHTML = `<option value="" disabled selected>${escHtml(placeholder)}</option>`;
-      }else{
-        sel.innerHTML = options.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
-      }
-    }
-
-    function modalSystemsForTrade(trade){
-      const t = norm(trade);
-      const byDB = t ? systemsByTradeFromDB(t) : [];
-      if(byDB.length > 0) return byDB;
-
-      const set = new Set();
-      for(const v of loadDict(SYS_DICT_KEY)) set.add(norm(v));
-      const arr = Array.from(set).filter(Boolean);
-      arr.sort((a,b)=> a.localeCompare(b, "zh-Hant"));
-      return arr;
-    }
-
-    function rebuildModalTradeOptions(selected){
-      const trades = unionOptions("trade", TRADE_DICT_KEY);
-      fillDropdown("mTradeSel", trades, "（請先新增工種）");
-      const v = norm(selected);
-      if(v && trades.includes(v)) $("mTradeSel").value = v;
-    }
-
-    function rebuildModalSystemOptions(trade, selected){
-      const systems = modalSystemsForTrade(trade);
-      fillDropdown("mSysSel", systems, "（請先新增系統）");
-      const v = norm(selected);
-      if(v && systems.includes(v)) $("mSysSel").value = v;
-    }
-
-    function setModalEditable(editable){
-      $("btnSave").style.display = editable ? "inline-block" : "none";
-      $("btnDelete").style.display = (editable && isAdmin() && editingId != null) ? "inline-block" : "none";
-      ["mText","mTradeSel","mSysSel","mAttach","mRemark","mDate"].forEach(id=> $(id).disabled = !editable);
-      const allowAddOpt = editable && canWrite();
-      $("btnAddTrade").style.display = allowAddOpt ? "inline-block" : "none";
-      $("btnAddSys").style.display   = allowAddOpt ? "inline-block" : "none";
-      $("btnAddTrade").disabled = !allowAddOpt;
-      $("btnAddSys").disabled   = !allowAddOpt;
-    }
-
-    function openModal(id, editable){
-      validateSession();
-      if(!currentUser || !currentUser.user){
-        openLoginModal();
-        return;
+      function downloadJSON(filename, obj){
+        var blob = new Blob([JSON.stringify(obj, null, 2)], { type:"application/json" });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); }, 0);
       }
 
-      const item = (id == null) ? null : (db.find(x => x.id === id) || null);
-      editingId = item ? item.id : null;
-
-      rebuildModalTradeOptions(item?.trade || "");
-      rebuildModalSystemOptions(norm($("mTradeSel").value) || item?.trade || "", item?.system || "");
-
-      $("mTitle").textContent = editable ? (item ? "編輯" : "新增") : "顯示畫面";
-      setModalEditable(editable);
-
-      $("mNo").value = item?.id ?? (getCounter() + 1);
-      $("mText").value = item?.text || "";
-      $("mRemark").value = item?.remark || "";
-      $("mDate").value = (item?.date || new Date().toISOString().slice(0,10));
-      $("mAttach").value = item?.attach || "";
-
-      $("mask").style.display = "flex";
-    }
-
-    function closeModal(){ $("mask").style.display = "none"; }
-
-    function saveItem(){
-      validateSession();
-      if(!currentUser || !currentUser.user){ openLoginModal(); return; }
-      if(!canWrite()){ toast("唯讀權限不可儲存"); return; }
-
-      const text = norm($("mText").value);
-      if(!text){ toast("記事內容不可空白"); $("mText").focus(); return; }
-
-      const trade  = norm($("mTradeSel").value);
-      const system = norm($("mSysSel").value);
-      if(!trade){ toast("工種尚未建立：請先按「新增工種」"); return; }
-      if(!system){ toast("系統尚未建立：請先按「新增系統」"); return; }
-
-      const attach = norm($("mAttach").value);
-      const remark = norm($("mRemark").value);
-      const date   = norm($("mDate").value) || new Date().toISOString().slice(0,10);
-
-      if(editingId != null){
-        const idx = db.findIndex(x => x.id === editingId);
-        if(idx >= 0) db[idx] = { id: editingId, text, trade, system, attach, remark, date };
-      }else{
-        const id = nextCounter();
-        db.push({ id, text, trade, system, attach, remark, date });
-        selectedId = id;
+      function doExportBackup(){
+        if(!Auth.ensureLoggedIn()) return;
+        var payload = makeExportPayload();
+        try{ localStorage.setItem(EXPORT_LAST_KEY, JSON.stringify(payload)); }catch(e){}
+        downloadJSON("捷運汐東線事項記錄_備份_" + safeFileStamp() + ".json", payload);
+        toast("已匯出備份（並寫入本機備份快照）");
+        backupOnExit("export");
       }
 
-      saveDB();
-      closeModal();
-      scheduleRender();
-      toast("已儲存");
-      backupOnExit("save");
-    }
-
-    function deleteItem(){
-      validateSession();
-      if(!currentUser || !currentUser.user){ openLoginModal(); return; }
-      if(!isAdmin()){ toast("僅 admin 可刪除"); return; }
-      if(editingId == null) return;
-      if(!confirm("確定刪除這筆記事？")) return;
-
-      db = db.filter(x => x.id !== editingId);
-      if(selectedId === editingId) selectedId = null;
-      saveDB();
-
-      closeModal();
-      scheduleRender();
-      toast("已刪除");
-      backupOnExit("delete");
-    }
-
-    function openPrompt(mode){
-      validateSession();
-      if(!currentUser || !currentUser.user){ openLoginModal(); return; }
-      if(!canWrite()){ toast("read 權限不可新增選單"); return; }
-
-      promptMode = mode;
-      $("pInput").value = "";
-
-      if(mode === "trade"){
-        $("pTitle").textContent = "新增工種";
-        $("pLabel").textContent = "請輸入新的工種";
-        $("pInput").placeholder = "例如：土建 / 機電 / 水電...";
-      }else{
-        $("pTitle").textContent = "新增系統";
-        $("pLabel").textContent = "請輸入新的系統";
-        $("pInput").placeholder = "例如：電氣 / 給排水 / 消防...";
+      // =========================
+      // ✅閱讀模式
+      // =========================
+      function isReadModeOn(){ return localStorage.getItem(READ_MODE_KEY) === "1"; }
+      function applyReadMode(on){
+        document.body.classList.toggle("readMode", !!on);
+        var b = $("btnRead");
+        var t = b && b.querySelector ? b.querySelector(".t") : null;
+        if(t) t.textContent = on ? "閱讀模式：開" : "閱讀模式：關";
+        scheduleRender();
+      }
+      function toggleReadMode(){
+        var on = !document.body.classList.contains("readMode");
+        localStorage.setItem(READ_MODE_KEY, on ? "1" : "0");
+        applyReadMode(on);
+        toast(on ? "已切換為閱讀模式（摘要點一下展開/收合）" : "已切換為表格模式");
       }
 
-      $("pMask").style.display = "flex";
-      setTimeout(()=> $("pInput").focus(), 0);
-    }
-
-    function closePrompt(){
-      $("pMask").style.display = "none";
-      promptMode = null;
-    }
-
-    function addOption(){
-      if(!canWrite()) return;
-
-      const v = norm($("pInput").value);
-      if(!v){ toast("不可空白"); $("pInput").focus(); return; }
-
-      const key   = (promptMode === "trade") ? TRADE_DICT_KEY : SYS_DICT_KEY;
-      const field = (promptMode === "trade") ? "trade" : "system";
-
-      const exists = unionOptions(field, key).map(x=>x.toLowerCase());
-      if(exists.includes(v.toLowerCase())){ toast("已存在相同選項"); return; }
-
-      const dict = loadDict(key);
-      dict.push(v);
-      dict.sort((a,b)=> a.localeCompare(b, "zh-Hant"));
-      saveDict(key, dict);
-
-      if(promptMode === "trade"){
-        rebuildModalTradeOptions(v);
-        rebuildModalSystemOptions(norm($("mTradeSel").value), norm($("mSysSel").value));
-        $("mTradeSel").value = v;
-      }else{
-        rebuildModalSystemOptions(norm($("mTradeSel").value), v);
-        $("mSysSel").value = v;
+      // =========================
+      // ✅UI/渲染
+      // =========================
+      function uniqueFromDB(field){
+        var set = new Set();
+        for(var i=0;i<db.length;i++){
+          var v = norm(db[i] && db[i][field]);
+          if(v) set.add(v);
+        }
+        return set;
       }
 
-      scheduleRender();
-      closePrompt();
-      toast("已新增選項");
-      backupOnExit("add_option");
-    }
+      function unionOptions(field, dictKey){
+        var set = uniqueFromDB(field);
+        var dict = loadDict(dictKey);
+        for(var i=0;i<dict.length;i++) set.add(dict[i]);
+        var arr = Array.from(set);
+        arr.sort(function(a,b){ return a.localeCompare(b, "zh-Hant"); });
+        return arr;
+      }
 
-    function setupMoreMenu(backHref){
-      const backBtn = $("mBack");
-      const moreBtn = $("mMoreBtn");
-      const menu = $("mMoreMenu");
+      function systemsByTradeFromDB(trade){
+        var t = norm(trade);
+        var set = new Set();
+        if(!t) return [];
+        for(var i=0;i<db.length;i++){
+          if(norm(db[i].trade) !== t) continue;
+          var s = norm(db[i].system);
+          if(s) set.add(s);
+        }
+        var arr = Array.from(set);
+        arr.sort(function(a,b){ return a.localeCompare(b, "zh-Hant"); });
+        return arr;
+      }
 
-      const close = ()=> menu.classList.remove("open");
-      const toggle = (e)=>{
-        e.preventDefault();
-        e.stopPropagation();
-        menu.classList.toggle("open");
-      };
+      function rebuildFilters(){
+        var tSel = $("fTrade");
+        var sSel = $("fSys");
 
-      backBtn.onclick = ()=> go(backHref);
-      moreBtn.addEventListener("click", toggle);
+        var keepT = norm(tSel.value);
+        var keepS = norm(sSel.value);
 
-      menu.addEventListener("click", (e)=>{
-        e.stopPropagation();
-        const item = e.target.closest("button.menuItem[data-href]");
-        if(!item) return;
-        const href = item.getAttribute("data-href");
-        if(href) go(href);
-      });
+        var trades = unionOptions("trade", TRADE_DICT_KEY);
+        tSel.innerHTML = '<option value="">全部</option>' + trades.map(function(v){
+          return '<option value="'+escHtml(v)+'">'+escHtml(v)+'</option>';
+        }).join("");
+        tSel.value = trades.includes(keepT) ? keepT : "";
 
-      document.addEventListener("click", close);
-      window.addEventListener("keydown", (e)=>{ if(e.key === "Escape") close(); });
-    }
+        var pickedTrade = norm(tSel.value);
 
-    function render(){
-      rebuildFilters();
+        var systems = [];
+        if(pickedTrade){
+          systems = systemsByTradeFromDB(pickedTrade);
+        }else{
+          systems = unionOptions("system", SYS_DICT_KEY);
+        }
 
-      const rows = filteredRows();
-      if(selectedId != null && !rows.some(r=>r.id===selectedId)) selectedId = null;
+        sSel.innerHTML = '<option value="">全部</option>' + systems.map(function(v){
+          return '<option value="'+escHtml(v)+'">'+escHtml(v)+'</option>';
+        }).join("");
 
-      const rm = document.body.classList.contains("readMode");
-      const tbody = $("tbody");
-      const cards = $("cards");
+        if(pickedTrade && systems.length === 0){
+          sSel.value = "";
+          sSel.disabled = true;
+        }else{
+          sSel.disabled = false;
+          sSel.value = systems.includes(keepS) ? keepS : "";
+        }
+      }
 
-      if(rm){
-        tbody.innerHTML = "";
-        cards.innerHTML = rows.map(r=>{
-          const isSel = (selectedId === r.id);
-          const att = norm(r.attach || "");
-          const remark = (r.remark ?? "").toString().trim();
-          const remarkShort = remark.length > 28 ? remark.slice(0, 28) + "…" : remark;
+      function filteredRows(){
+        var q = norm($("qText").value).toLowerCase();
+        var t = norm($("fTrade").value);
+        var s = norm($("fSys").value);
 
-          const hasAtt = !!att;
-          const trade = norm(r.trade) || "—";
-          const system = norm(r.system) || "—";
-          const date = norm(r.date) || "—";
+        var rows = db.slice();
 
-          return `
-            <div class="card ${isSel ? "sel" : ""}" data-id="${r.id}">
-              <div class="cardTop">
-                <div class="badge">
-                  <span class="no">#${r.id ?? ""}</span>
-                  <span>${escHtml(trade)} · ${escHtml(system)}</span>
-                </div>
-                <div style="display:flex; gap:10px; align-items:center;">
-                  ${hasAtt ? `<button class="attBtn" data-act="att" data-id="${r.id}"><span class="t">開啟附件</span></button>` : ``}
-                  <button class="btn ghost opBtn" data-act="view" data-id="${r.id}"><span class="t">顯示畫面</span></button>
-                </div>
-              </div>
+        if(t) rows = rows.filter(function(r){ return norm(r.trade) === t; });
+        if(s) rows = rows.filter(function(r){ return norm(r.system) === s; });
 
-              <div class="cardNote">${escHtml((r.text ?? "").toString()).replaceAll("\n","<br>")}</div>
+        if(q){
+          rows = rows.filter(function(r){
+            return (r.text ?? "").toString().toLowerCase().includes(q);
+          });
+        }
 
-              <div class="cardSummary" data-act="toggle" data-id="${r.id}">
-                <div class="sumLeft">
-                  <span class="chip">登錄：<span class="val">${escHtml(date)}</span></span>
-                  <span class="chip">工種：<span class="val">${escHtml(trade)}</span></span>
-                  <span class="chip">系統：<span class="val">${escHtml(system)}</span></span>
-                  <span class="chip">附件：<span class="val">${hasAtt ? "有" : "無"}</span></span>
-                  <span class="chip">備註：<span class="val">${remarkShort ? escHtml(remarkShort) : "—"}</span></span>
-                </div>
-                <div class="sumRight">展開 <span class="chev"></span></div>
-              </div>
+        rows.sort(function(a,b){ return (a.id||0) - (b.id||0); });
+        return rows;
+      }
 
-              <div class="cardDetails">
-                <div class="dRow"><div class="dLab">工種</div><div class="dVal">${escHtml(trade)}</div></div>
-                <div class="dRow"><div class="dLab">系統</div><div class="dVal">${escHtml(system)}</div></div>
-                <div class="dRow"><div class="dLab">登錄日</div><div class="dVal">${escHtml(date)}</div></div>
-                <div class="dRow"><div class="dLab">附件</div><div class="dVal">${hasAtt ? escHtml(att) : "—"}</div></div>
-                <div class="dRow"><div class="dLab">備註</div><div class="dVal">${remark ? escHtml(remark) : "—"}</div></div>
-                <div class="dRow">
-                  <div class="dLab">操作</div>
-                  <div class="dVal">
-                    <button class="btn ghost opBtn" data-act="view" data-id="${r.id}"><span class="t">顯示畫面</span></button>
+      var _renderPending = false;
+      function scheduleRender(){
+        if(_renderPending) return;
+        _renderPending = true;
+        requestAnimationFrame(function(){
+          _renderPending = false;
+          render();
+        });
+      }
+
+      function applySelectionToDOM(){
+        document.querySelectorAll("tr.sel").forEach(function(el){ el.classList.remove("sel"); });
+        document.querySelectorAll(".card.sel").forEach(function(el){ el.classList.remove("sel"); });
+        if(selectedId == null) return;
+        var tr = document.querySelector('tr[data-id="'+selectedId+'"]');
+        if(tr) tr.classList.add("sel");
+        var card = document.querySelector('.card[data-id="'+selectedId+'"]');
+        if(card) card.classList.add("sel");
+      }
+
+      function renderHint(rowsCount){
+        var pickedTrade = norm($("fTrade").value);
+        var sysDisabled = $("fSys").disabled;
+        var rm = document.body.classList.contains("readMode");
+        var modeText = Auth.canWrite() ? "可維護模式" : "唯讀模式";
+
+        $("btnAdd").style.display  = Auth.canWrite() ? "inline-block" : "none";
+        $("btnEdit").style.display = Auth.canWrite() ? "inline-block" : "none";
+        $("btnView").disabled = !selectedId;
+
+        $("hint").innerHTML =
+          '目前為 <b style="color:var(--goldText)">'+modeText+'</b>（role: '+escHtml(Auth.role())+'）。' +
+          ' 模式：<b style="color:var(--goldText)">'+(rm ? "閱讀模式（摘要點一下展開/收合）" : "表格模式")+'</b>。' +
+          ' 筆數：<b style="color:var(--goldText)">'+rowsCount+'</b>。' +
+          (pickedTrade && sysDisabled ? ' <span style="color:rgba(124,88,30,.82)">（此工種尚無系統可篩選）</span>' : '') +
+          (selectedId ? ' 已選取：<b style="color:var(--goldText)">#'+selectedId+'</b>' : '（請先點選一筆，再按右上「顯示畫面 / 編輯」）');
+      }
+
+      function fillDropdown(selectId, options, placeholder){
+        var sel = $(selectId);
+        if(options.length === 0){
+          sel.innerHTML = '<option value="" disabled selected>'+escHtml(placeholder)+'</option>';
+        }else{
+          sel.innerHTML = options.map(function(v){
+            return '<option value="'+escHtml(v)+'">'+escHtml(v)+'</option>';
+          }).join("");
+        }
+      }
+
+      function modalSystemsForTrade(trade){
+        var t = norm(trade);
+        var byDB = t ? systemsByTradeFromDB(t) : [];
+        if(byDB.length > 0) return byDB;
+
+        var set = new Set();
+        var dict = loadDict(SYS_DICT_KEY);
+        for(var i=0;i<dict.length;i++) set.add(norm(dict[i]));
+        var arr = Array.from(set).filter(Boolean);
+        arr.sort(function(a,b){ return a.localeCompare(b,"zh-Hant"); });
+        return arr;
+      }
+
+      function rebuildModalTradeOptions(selected){
+        var trades = unionOptions("trade", TRADE_DICT_KEY);
+        fillDropdown("mTradeSel", trades, "（請先新增工種）");
+        var v = norm(selected);
+        if(v && trades.includes(v)) $("mTradeSel").value = v;
+      }
+
+      function rebuildModalSystemOptions(trade, selected){
+        var systems = modalSystemsForTrade(trade);
+        fillDropdown("mSysSel", systems, "（請先新增系統）");
+        var v = norm(selected);
+        if(v && systems.includes(v)) $("mSysSel").value = v;
+      }
+
+      function setModalEditable(editable){
+        $("btnSave").style.display = editable ? "inline-block" : "none";
+        $("btnDelete").style.display = (editable && Auth.isAdmin() && editingId != null) ? "inline-block" : "none";
+        ["mText","mTradeSel","mSysSel","mAttach","mRemark","mDate"].forEach(function(id){
+          $(id).disabled = !editable;
+        });
+        var allowAddOpt = editable && Auth.canWrite();
+        $("btnAddTrade").style.display = allowAddOpt ? "inline-block" : "none";
+        $("btnAddSys").style.display   = allowAddOpt ? "inline-block" : "none";
+        $("btnAddTrade").disabled = !allowAddOpt;
+        $("btnAddSys").disabled   = !allowAddOpt;
+      }
+
+      function openModal(id, editable){
+        Auth.validateSession();
+        if(!Auth.ensureLoggedIn()) return;
+
+        var item = (id == null) ? null : (db.find(function(x){ return x.id === id; }) || null);
+        editingId = item ? item.id : null;
+
+        rebuildModalTradeOptions(item ? item.trade : "");
+        rebuildModalSystemOptions(norm($("mTradeSel").value) || (item ? item.trade : ""), item ? item.system : "");
+
+        $("mTitle").textContent = editable ? (item ? "編輯" : "新增") : "顯示畫面";
+        setModalEditable(editable);
+
+        $("mNo").value = item ? (item.id ?? (getCounter() + 1)) : (getCounter() + 1);
+        $("mText").value = item ? (item.text || "") : "";
+        $("mRemark").value = item ? (item.remark || "") : "";
+        $("mDate").value = item ? (item.date || new Date().toISOString().slice(0,10)) : new Date().toISOString().slice(0,10);
+        $("mAttach").value = item ? (item.attach || "") : "";
+
+        $("mask").style.display = "flex";
+      }
+
+      function closeModal(){ $("mask").style.display = "none"; }
+
+      function saveItem(){
+        Auth.validateSession();
+        if(!Auth.ensureLoggedIn()) return;
+        if(!Auth.canWrite()){ toast("唯讀權限不可儲存"); return; }
+
+        var text = norm($("mText").value);
+        if(!text){ toast("記事內容不可空白"); $("mText").focus(); return; }
+
+        var trade  = norm($("mTradeSel").value);
+        var system = norm($("mSysSel").value);
+        if(!trade){ toast("工種尚未建立：請先按「新增工種」"); return; }
+        if(!system){ toast("系統尚未建立：請先按「新增系統」"); return; }
+
+        var attach = norm($("mAttach").value);
+        var remark = norm($("mRemark").value);
+        var date   = norm($("mDate").value) || new Date().toISOString().slice(0,10);
+
+        if(editingId != null){
+          var idx = db.findIndex(function(x){ return x.id === editingId; });
+          if(idx >= 0) db[idx] = { id: editingId, text: text, trade: trade, system: system, attach: attach, remark: remark, date: date };
+        }else{
+          var nid = nextCounter();
+          db.push({ id: nid, text: text, trade: trade, system: system, attach: attach, remark: remark, date: date });
+          selectedId = nid;
+        }
+
+        saveDB();
+        closeModal();
+        scheduleRender();
+        toast("已儲存");
+        backupOnExit("save");
+      }
+
+      function deleteItem(){
+        Auth.validateSession();
+        if(!Auth.ensureLoggedIn()) return;
+        if(!Auth.isAdmin()){ toast("僅 admin 可刪除"); return; }
+        if(editingId == null) return;
+        if(!confirm("確定刪除這筆記事？")) return;
+
+        db = db.filter(function(x){ return x.id !== editingId; });
+        if(selectedId === editingId) selectedId = null;
+        saveDB();
+
+        closeModal();
+        scheduleRender();
+        toast("已刪除");
+        backupOnExit("delete");
+      }
+
+      function openPrompt(mode){
+        Auth.validateSession();
+        if(!Auth.ensureLoggedIn()) return;
+        if(!Auth.canWrite()){ toast("read 權限不可新增選單"); return; }
+
+        promptMode = mode;
+        $("pInput").value = "";
+
+        if(mode === "trade"){
+          $("pTitle").textContent = "新增工種";
+          $("pLabel").textContent = "請輸入新的工種";
+          $("pInput").placeholder = "例如：土建 / 機電 / 水電...";
+        }else{
+          $("pTitle").textContent = "新增系統";
+          $("pLabel").textContent = "請輸入新的系統";
+          $("pInput").placeholder = "例如：電氣 / 給排水 / 消防...";
+        }
+
+        $("pMask").style.display = "flex";
+        setTimeout(function(){ $("pInput").focus(); }, 0);
+      }
+
+      function closePrompt(){
+        $("pMask").style.display = "none";
+        promptMode = null;
+      }
+
+      function addOption(){
+        if(!Auth.canWrite()) return;
+
+        var v = norm($("pInput").value);
+        if(!v){ toast("不可空白"); $("pInput").focus(); return; }
+
+        var key   = (promptMode === "trade") ? TRADE_DICT_KEY : SYS_DICT_KEY;
+        var field = (promptMode === "trade") ? "trade" : "system";
+
+        var exists = unionOptions(field, key).map(function(x){ return x.toLowerCase(); });
+        if(exists.includes(v.toLowerCase())){ toast("已存在相同選項"); return; }
+
+        var dict = loadDict(key);
+        dict.push(v);
+        dict.sort(function(a,b){ return a.localeCompare(b, "zh-Hant"); });
+        saveDict(key, dict);
+
+        if(promptMode === "trade"){
+          rebuildModalTradeOptions(v);
+          rebuildModalSystemOptions(norm($("mTradeSel").value), norm($("mSysSel").value));
+          $("mTradeSel").value = v;
+        }else{
+          rebuildModalSystemOptions(norm($("mTradeSel").value), v);
+          $("mSysSel").value = v;
+        }
+
+        scheduleRender();
+        closePrompt();
+        toast("已新增選項");
+        backupOnExit("add_option");
+      }
+
+      function setupMoreMenu(backHref){
+        var backBtn = $("mBack");
+        var moreBtn = $("mMoreBtn");
+        var menu = $("mMoreMenu");
+
+        var close = function(){ menu.classList.remove("open"); };
+        var toggle = function(e){
+          e.preventDefault();
+          e.stopPropagation();
+          menu.classList.toggle("open");
+        };
+
+        backBtn.onclick = function(){ go(backHref); };
+        moreBtn.addEventListener("click", toggle);
+
+        menu.addEventListener("click", function(e){
+          e.stopPropagation();
+          var item = e.target.closest("button.menuItem[data-href]");
+          if(!item) return;
+          var href = item.getAttribute("data-href");
+          if(href) go(href);
+        });
+
+        document.addEventListener("click", close);
+        window.addEventListener("keydown", function(e){ if(e.key === "Escape") close(); });
+      }
+
+      /* ==========================================================
+         ✅✅✅ render() 完整補回（原版完整 cards/table 渲染）
+         ========================================================== */
+      function render(){
+        rebuildFilters();
+
+        var rows = filteredRows();
+        if(selectedId != null && !rows.some(function(r){ return r.id===selectedId; })) selectedId = null;
+
+        var rm = document.body.classList.contains("readMode");
+        var tbody = $("tbody");
+        var cards = $("cards");
+
+        if(rm){
+          tbody.innerHTML = "";
+          cards.innerHTML = rows.map(function(r){
+            var isSel = (selectedId === r.id);
+            var att = norm(r.attach || "");
+            var remark = (r.remark ?? "").toString().trim();
+            var remarkShort = remark.length > 28 ? remark.slice(0, 28) + "…" : remark;
+
+            var hasAtt = !!att;
+            var trade = norm(r.trade) || "—";
+            var system = norm(r.system) || "—";
+            var date = norm(r.date) || "—";
+
+            return `
+              <div class="card ${isSel ? "sel" : ""}" data-id="${r.id}">
+                <div class="cardTop">
+                  <div class="badge">
+                    <span class="no">#${r.id ?? ""}</span>
+                    <span>${escHtml(trade)} · ${escHtml(system)}</span>
+                  </div>
+                  <div style="display:flex; gap:10px; align-items:center;">
                     ${hasAtt ? `<button class="attBtn" data-act="att" data-id="${r.id}"><span class="t">開啟附件</span></button>` : ``}
+                    <button class="btn ghost opBtn" data-act="view" data-id="${r.id}"><span class="t">顯示畫面</span></button>
+                  </div>
+                </div>
+
+                <div class="cardNote">${escHtml((r.text ?? "").toString()).replaceAll("\n","<br>")}</div>
+
+                <div class="cardSummary" data-act="toggle" data-id="${r.id}">
+                  <div class="sumLeft">
+                    <span class="chip">登錄：<span class="val">${escHtml(date)}</span></span>
+                    <span class="chip">工種：<span class="val">${escHtml(trade)}</span></span>
+                    <span class="chip">系統：<span class="val">${escHtml(system)}</span></span>
+                    <span class="chip">附件：<span class="val">${hasAtt ? "有" : "無"}</span></span>
+                    <span class="chip">備註：<span class="val">${remarkShort ? escHtml(remarkShort) : "—"}</span></span>
+                  </div>
+                  <div class="sumRight">展開 <span class="chev"></span></div>
+                </div>
+
+                <div class="cardDetails">
+                  <div class="dRow"><div class="dLab">工種</div><div class="dVal">${escHtml(trade)}</div></div>
+                  <div class="dRow"><div class="dLab">系統</div><div class="dVal">${escHtml(system)}</div></div>
+                  <div class="dRow"><div class="dLab">登錄日</div><div class="dVal">${escHtml(date)}</div></div>
+                  <div class="dRow"><div class="dLab">附件</div><div class="dVal">${hasAtt ? escHtml(att) : "—"}</div></div>
+                  <div class="dRow"><div class="dLab">備註</div><div class="dVal">${remark ? escHtml(remark) : "—"}</div></div>
+                  <div class="dRow">
+                    <div class="dLab">操作</div>
+                    <div class="dVal">
+                      <button class="btn ghost opBtn" data-act="view" data-id="${r.id}"><span class="t">顯示畫面</span></button>
+                      ${hasAtt ? `<button class="attBtn" data-act="att" data-id="${r.id}"><span class="t">開啟附件</span></button>` : ``}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          `;
-        }).join("") || `<div class="muted" style="padding:18px;">尚無資料（write/admin 可用右上「新增」建立第一筆）</div>`;
-      }else{
-        cards.innerHTML = "";
-        tbody.innerHTML = rows.map(r=>{
-          const isSel = (selectedId === r.id);
-          const att = norm(r.attach || "");
-          const attCell = att
-            ? `<button class="attBtn" data-act="att" data-id="${r.id}"><span class="t">開啟</span></button>`
-            : `<span class="muted">—</span>`;
+            `;
+          }).join("") || `<div class="muted" style="padding:18px;">尚無資料（write/admin 可用右上「新增」建立第一筆）</div>`;
+        }else{
+          cards.innerHTML = "";
+          tbody.innerHTML = rows.map(function(r){
+            var isSel = (selectedId === r.id);
+            var att = norm(r.attach || "");
+            var attCell = att
+              ? `<button class="attBtn" data-act="att" data-id="${r.id}"><span class="t">開啟</span></button>`
+              : `<span class="muted">—</span>`;
 
-          const textHtml = escHtml((r.text ?? "").toString()).replaceAll("\n","<br>");
-          const remarkHtml = escHtml((r.remark ?? "").toString()).replaceAll("\n","<br>");
+            var textHtml = escHtml((r.text ?? "").toString()).replaceAll("\n","<br>");
+            var remarkHtml = escHtml((r.remark ?? "").toString()).replaceAll("\n","<br>");
 
-          return `
-            <tr data-id="${r.id}" class="${isSel ? "sel" : ""}">
-              <td style="text-align:center;">${r.id ?? ""}</td>
-              <td>${textHtml ? textHtml : `<span class="muted">—</span>`}</td>
-              <td style="text-align:center;">${escHtml(r.trade) || `<span class="muted">—</span>`}</td>
-              <td style="text-align:center;">${escHtml(r.system) || `<span class="muted">—</span>`}</td>
-              <td style="text-align:center;">${attCell}</td>
-              <td>${remarkHtml ? remarkHtml : `<span class="muted">—</span>`}</td>
-              <td style="text-align:center;">${escHtml(r.date) || `<span class="muted">—</span>`}</td>
-              <td style="text-align:center;">
-                <button class="btn ghost opBtn" data-act="view" data-id="${r.id}"><span class="t">顯示畫面</span></button>
-              </td>
+            return `
+              <tr data-id="${r.id}" class="${isSel ? "sel" : ""}">
+                <td style="text-align:center;">${r.id ?? ""}</td>
+                <td>${textHtml ? textHtml : `<span class="muted">—</span>`}</td>
+                <td style="text-align:center;">${escHtml(r.trade) || `<span class="muted">—</span>`}</td>
+                <td style="text-align:center;">${escHtml(r.system) || `<span class="muted">—</span>`}</td>
+                <td style="text-align:center;">${attCell}</td>
+                <td>${remarkHtml ? remarkHtml : `<span class="muted">—</span>`}</td>
+                <td style="text-align:center;">${escHtml(r.date) || `<span class="muted">—</span>`}</td>
+                <td style="text-align:center;">
+                  <button class="btn ghost opBtn" data-act="view" data-id="${r.id}"><span class="t">顯示畫面</span></button>
+                </td>
+              </tr>
+            `;
+          }).join("") || `
+            <tr>
+              <td colspan="8" class="muted" style="padding:18px;">尚無資料（write/admin 可用右上「新增」建立第一筆）</td>
             </tr>
           `;
-        }).join("") || `
-          <tr>
-            <td colspan="8" class="muted" style="padding:18px;">尚無資料（write/admin 可用右上「新增」建立第一筆）</td>
-          </tr>
-        `;
+        }
+
+        applySelectionToDOM();
+        renderHint(rows.length);
       }
 
-      applySelectionToDOM();
-      renderHint(rows.length);
-    }
+      function syncUserUI(){
+        var u = Auth.current();
+        $("uName").textContent = u && u.username ? u.username : "—";
+        $("uRole").textContent = Auth.role();
+      }
 
-    function start(){
-      if(!ensureLoggedIn()) return;
+      var _uiBound = false;
+      function bindUIOnce(){
+        if(_uiBound) return;
+        _uiBound = true;
 
-      ensureSeedDict();
-      loadDB();
+        $("navBack").onclick = function(){ go("汐東工程管理表.html"); };
+        setupMoreMenu("汐東工程管理表.html");
 
-      $("navBack").onclick = () => go("汐東工程管理表.html");
-      setupMoreMenu("汐東工程管理表.html");
+        $("btnRead").onclick = toggleReadMode;
+        $("btnCloud").onclick = function(){ openAttachment(CLOUD_URL); };
+        $("btnExport").onclick = function(){
+          Auth.validateSession();
+          if(!Auth.ensureLoggedIn()) return;
+          doExportBackup();
+        };
 
-      applyReadMode(isReadModeOn());
-      $("btnRead").onclick = toggleReadMode;
+        $("btnView").onclick = function(){
+          if(!selectedId){ toast("請先點選一筆，再按顯示畫面"); return; }
+          openModal(selectedId, false);
+        };
 
-      $("btnCloud").onclick = ()=> openAttachment(CLOUD_URL);
+        $("qText").addEventListener("input", scheduleRender);
+        $("fTrade").addEventListener("change", scheduleRender);
+        $("fSys").addEventListener("change", scheduleRender);
 
-      // ✅✅新增：匯出備份按鈕
-      $("btnExport").onclick = ()=>{
-        validateSession();
-        if(!currentUser || !currentUser.user){ openLoginModal(); return; }
-        doExportBackup();
-      };
+        $("btnClear").onclick = function(){
+          $("qText").value = "";
+          $("fTrade").value = "";
+          $("fSys").value = "";
+          scheduleRender();
+        };
 
-      $("btnView").onclick = ()=>{
-        if(!selectedId){ toast("請先點選一筆，再按顯示畫面"); return; }
-        openModal(selectedId, false);
-      };
+        $("btnAdd").onclick = function(){
+          if(!Auth.canWrite()){ toast("唯讀不可新增"); return; }
+          editingId = null;
+          openModal(null, true);
+        };
 
-      $("qText").addEventListener("input", scheduleRender);
-      $("fTrade").addEventListener("change", scheduleRender);
-      $("fSys").addEventListener("change", scheduleRender);
+        $("btnEdit").onclick = function(){
+          if(!Auth.canWrite()){ toast("唯讀不可編輯"); return; }
+          if(!selectedId){ toast("請先點選項目再按編輯"); return; }
+          openModal(selectedId, true);
+        };
 
-      $("btnClear").onclick = () => {
-        $("qText").value = "";
-        $("fTrade").value = "";
-        $("fSys").value = "";
-        scheduleRender();
-      };
+        $("btnClose").onclick = closeModal;
+        $("btnCancel").onclick = closeModal;
+        $("mask").addEventListener("click", function(e){ if(e.target === $("mask")) closeModal(); });
 
-      $("btnAdd").onclick = ()=>{
-        if(!canWrite()){ toast("唯讀不可新增"); return; }
-        editingId = null;
-        openModal(null, true);
-      };
+        $("btnSave").onclick = saveItem;
+        $("btnDelete").onclick = deleteItem;
 
-      $("btnEdit").onclick = ()=>{
-        if(!canWrite()){ toast("唯讀不可編輯"); return; }
-        if(!selectedId){ toast("請先點選項目再按編輯"); return; }
-        openModal(selectedId, true);
-      };
+        $("btnAddTrade").onclick = function(){ openPrompt("trade"); };
+        $("btnAddSys").onclick   = function(){ openPrompt("sys"); };
 
-      $("btnClose").onclick = closeModal;
-      $("btnCancel").onclick = closeModal;
-      $("mask").addEventListener("click", (e)=>{ if(e.target === $("mask")) closeModal(); });
+        $("pClose").onclick = closePrompt;
+        $("pCancel").onclick = closePrompt;
+        $("pOk").onclick = addOption;
+        $("pMask").addEventListener("click", function(e){ if(e.target === $("pMask")) closePrompt(); });
 
-      $("btnSave").onclick = saveItem;
-      $("btnDelete").onclick = deleteItem;
+        $("mTradeSel").addEventListener("change", function(){
+          var t = norm($("mTradeSel").value);
+          var keepSys = norm($("mSysSel").value);
+          rebuildModalSystemOptions(t, keepSys);
+        });
 
-      $("btnAddTrade").onclick = () => openPrompt("trade");
-      $("btnAddSys").onclick   = () => openPrompt("sys");
-
-      $("pClose").onclick = closePrompt;
-      $("pCancel").onclick = closePrompt;
-      $("pOk").onclick = addOption;
-      $("pMask").addEventListener("click", (e)=>{ if(e.target === $("pMask")) closePrompt(); });
-
-      $("mTradeSel").addEventListener("change", ()=>{
-        const t = norm($("mTradeSel").value);
-        const keepSys = norm($("mSysSel").value);
-        rebuildModalSystemOptions(t, keepSys);
-      });
-
-      $("tbody").addEventListener("click", (e)=>{
-        const viewBtn = e.target.closest("button[data-act='view']");
-        if(viewBtn){
-          const id = Number(viewBtn.getAttribute("data-id"));
-          if(Number.isFinite(id)) openModal(id, false);
-          return;
-        }
-        const attBtn = e.target.closest("button[data-act='att']");
-        if(attBtn){
-          const id = Number(attBtn.getAttribute("data-id"));
-          const item = db.find(x => x.id === id);
-          const href = norm(item?.attach || "");
-          if(!href){ toast("此筆尚未設定附件"); return; }
-          openAttachment(href);
-          return;
-        }
-        const tr = e.target.closest("tr[data-id]");
-        if(!tr) return;
-        const id = Number(tr.getAttribute("data-id"));
-        if(!Number.isFinite(id)) return;
-        selectedId = id;
-        applySelectionToDOM();
-        renderHint(filteredRows().length);
-      });
-
-      $("cards").addEventListener("click", (e)=>{
-        const viewBtn = e.target.closest("button[data-act='view']");
-        if(viewBtn){
-          const id = Number(viewBtn.getAttribute("data-id"));
-          if(Number.isFinite(id)) openModal(id, false);
-          return;
-        }
-
-        const attBtn = e.target.closest("button[data-act='att']");
-        if(attBtn){
-          const id = Number(attBtn.getAttribute("data-id"));
-          const item = db.find(x => x.id === id);
-          const href = norm(item?.attach || "");
-          if(!href){ toast("此筆尚未設定附件"); return; }
-          openAttachment(href);
-          return;
-        }
-
-        const toggle = e.target.closest("[data-act='toggle']");
-        if(toggle){
-          const card = toggle.closest(".card");
-          if(!card) return;
-
-          card.classList.toggle("expanded");
-          const sr = card.querySelector(".sumRight");
-          if(sr) sr.firstChild && (sr.firstChild.textContent = card.classList.contains("expanded") ? "收合 " : "展開 ");
-
-          const id = Number(card.getAttribute("data-id"));
-          if(Number.isFinite(id)) selectedId = id;
-
+        $("tbody").addEventListener("click", function(e){
+          var viewBtn = e.target.closest("button[data-act='view']");
+          if(viewBtn){
+            var id = Number(viewBtn.getAttribute("data-id"));
+            if(Number.isFinite(id)) openModal(id, false);
+            return;
+          }
+          var attBtn = e.target.closest("button[data-act='att']");
+          if(attBtn){
+            var id2 = Number(attBtn.getAttribute("data-id"));
+            var item2 = db.find(function(x){ return x.id === id2; });
+            var href2 = norm(item2 && item2.attach ? item2.attach : "");
+            if(!href2){ toast("此筆尚未設定附件"); return; }
+            openAttachment(href2);
+            return;
+          }
+          var tr = e.target.closest("tr[data-id]");
+          if(!tr) return;
+          var id3 = Number(tr.getAttribute("data-id"));
+          if(!Number.isFinite(id3)) return;
+          selectedId = id3;
           applySelectionToDOM();
           renderHint(filteredRows().length);
-          return;
-        }
+        });
 
-        const card = e.target.closest(".card[data-id]");
-        if(!card) return;
-        const id = Number(card.getAttribute("data-id"));
-        if(!Number.isFinite(id)) return;
-        selectedId = id;
-        applySelectionToDOM();
-        renderHint(filteredRows().length);
+        $("cards").addEventListener("click", function(e){
+          var viewBtn = e.target.closest("button[data-act='view']");
+          if(viewBtn){
+            var id = Number(viewBtn.getAttribute("data-id"));
+            if(Number.isFinite(id)) openModal(id, false);
+            return;
+          }
+
+          var attBtn = e.target.closest("button[data-act='att']");
+          if(attBtn){
+            var id2 = Number(attBtn.getAttribute("data-id"));
+            var item = db.find(function(x){ return x.id === id2; });
+            var href = norm(item && item.attach ? item.attach : "");
+            if(!href){ toast("此筆尚未設定附件"); return; }
+            openAttachment(href);
+            return;
+          }
+
+          var toggle = e.target.closest("[data-act='toggle']");
+          if(toggle){
+            var card = toggle.closest(".card");
+            if(!card) return;
+
+            card.classList.toggle("expanded");
+            var sr = card.querySelector(".sumRight");
+            if(sr) sr.firstChild && (sr.firstChild.textContent = card.classList.contains("expanded") ? "收合 " : "展開 ");
+
+            var id4 = Number(card.getAttribute("data-id"));
+            if(Number.isFinite(id4)) selectedId = id4;
+
+            applySelectionToDOM();
+            renderHint(filteredRows().length);
+            return;
+          }
+
+          var card2 = e.target.closest(".card[data-id]");
+          if(!card2) return;
+          var id5 = Number(card2.getAttribute("data-id"));
+          if(!Number.isFinite(id5)) return;
+          selectedId = id5;
+          applySelectionToDOM();
+          renderHint(filteredRows().length);
+        });
+
+        window.addEventListener("keydown", function(e){
+          if(e.key === "Escape"){
+            if($("pMask").style.display === "flex") closePrompt();
+            else if($("mask").style.display === "flex") closeModal();
+          }
+          if(e.key === "Enter" && $("pMask").style.display === "flex") addOption();
+        });
+
+        // ✅跨分頁同步（資料/閱讀模式）
+        window.addEventListener("storage", function(e){
+          if(e.key === DB_KEY || LEGACY_DB_KEYS.includes(e.key)){
+            loadDB(true);
+            scheduleRender();
+          }
+          if(e.key === READ_MODE_KEY){
+            applyReadMode(isReadModeOn());
+          }
+        });
+      }
+
+      function start(){
+        if(!Auth.ensureLoggedIn()) return;
+
+        ensureSeedDict();
+        loadDB();
+        bindUIOnce();
+
+        syncUserUI();
+        applyReadMode(isReadModeOn());
+
+        scheduleRender();
+      }
+
+      // ✅ Auth 由 core 接管（不破壞既有 DOM）
+      Auth.init({
+        onAuthed: function(){ toast("登入成功"); start(); },
+        onSessionChange: function(){
+          syncUserUI();
+          scheduleRender();
+        },
+        onForceRelogin: function(msg){
+          toast(msg || "請重新登入");
+          syncUserUI();
+          // 若正在編輯，直接關閉避免殘留可編輯狀態
+          try{ closeModal(); closePrompt(); }catch(e){}
+          scheduleRender();
+        }
       });
 
-      window.addEventListener("keydown", (e)=>{
-        if(e.key === "Escape"){
-          if($("pMask").style.display === "flex") closePrompt();
-          else if($("mask").style.display === "flex") closeModal();
-        }
-        if(e.key === "Enter" && $("pMask").style.display === "flex") addOption();
-      });
+      // ✅「前往權限表」要先備份再跳（覆蓋 core 預設）
+      var toAuth = $("loginToAuth");
+      if(toAuth) toAuth.onclick = function(){ go("權限表.html"); };
 
-      scheduleRender();
+      start();
     }
 
-    (function bindLogin(){
-      $("loginClose").onclick = closeLoginModal;
-      $("loginToAuth").onclick = ()=> go("權限表.html");
-      $("loginBtn").onclick = doLogin;
-
-      $("loginMask").addEventListener("click",(e)=>{
-        if(e.target === $("loginMask")) closeLoginModal();
-      });
-
-      window.addEventListener("keydown",(e)=>{
-        if(e.key === "Escape" && $("loginMask").classList.contains("show")) closeLoginModal();
-        if(e.key === "Enter" && $("loginMask").classList.contains("show")) doLogin();
-      });
-
-      $("loginUser").addEventListener("change", ()=>{
-        if($("loginUser").value) $("loginPass").focus();
-      });
-    })();
-
-    startSessionWatch();
-    start();
+    var p = window.__TASUN_READY__ || Promise.resolve(true);
+    p.then(run);
+  })();
   </script>
 </body>
 </html>
