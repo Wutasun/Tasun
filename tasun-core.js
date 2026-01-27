@@ -3,13 +3,10 @@
   "use strict";
 
   var TasunCore = window.TasunCore || {};
-  var CORE_VER = "20260127_02";
+  var CORE_VER = "20260127_05";
 
   function str(v) { return (v === undefined || v === null) ? "" : String(v); }
-
-  function jsonParse(s, fallback) {
-    try { return JSON.parse(s); } catch (e) { return fallback; }
-  }
+  function jsonParse(s, fallback) { try { return JSON.parse(s); } catch (e) { return fallback; } }
 
   function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
   function lerp(a, b, t) { return a + (b - a) * t; }
@@ -27,11 +24,8 @@
   function onFontsReady(cb) {
     cb = cb || function(){};
     try{
-      if (document.fonts && document.fonts.ready) {
-        document.fonts.ready.then(cb);
-      } else {
-        setTimeout(cb, 180);
-      }
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(cb);
+      else setTimeout(cb, 180);
     }catch(e){
       setTimeout(cb, 180);
     }
@@ -89,44 +83,49 @@
     for (var m = 0; m < imgs.length; m++) patchAttr(imgs[m], "src");
   }
 
-  /* ✅✅✅ 可全站共用：URL v 強制等於 appVer（比 forceVersionSync 更單純） */
+  /* ✅✅✅ 新增：強制 URL v = appVer（舊書籤也會更新） */
   function forceUrlV(appVer, pageKey) {
     var v = str(appVer || "").trim();
     if (!v) return false;
 
-    var TAB_GUARD = "tasun_force_url_v_once_v1" + (pageKey ? ("_" + pageKey) : "") + "_" + v;
-    try{
+    try {
       var u = new URL(window.location.href);
       var curV = str(u.searchParams.get("v") || "").trim();
+
+      // guard 跟「當前v + 目標v + pageKey」綁定，避免無限 replace
+      var gk = "tasun_force_url_guard_v2_" + (pageKey || "p") + "_" + (curV || "none") + "_to_" + v;
       var already = false;
-      try { already = (sessionStorage.getItem(TAB_GUARD) === "1"); } catch (e) { already = false; }
+      try { already = (sessionStorage.getItem(gk) === "1"); } catch (e) { already = false; }
 
       if (curV !== v && !already) {
-        try { sessionStorage.setItem(TAB_GUARD, "1"); } catch (e) {}
+        try { sessionStorage.setItem(gk, "1"); } catch (e) {}
         u.searchParams.set("v", v);
         window.location.replace(u.toString());
         return true;
       }
-    }catch(e){}
+    } catch (e) {}
+
     return false;
   }
 
+  /* ✅ 既有：版本同步（保留，但 guard 更穩） */
   function forceVersionSync(appVer, pageKey) {
     var v = str(appVer || "").trim();
-    if (!v) return;
+    if (!v) return false;
 
     var KEY = "tasun_app_ver_global_v1" + (pageKey ? ("_" + pageKey) : "");
-    var TAB_GUARD = "tasun_tab_replaced_once_v1" + (pageKey ? ("_" + pageKey) : "");
 
     try {
       var last = str(localStorage.getItem(KEY) || "");
       if (last !== v) {
         localStorage.setItem(KEY, v);
-        try { sessionStorage.removeItem(TAB_GUARD); } catch (e) {}
       }
 
       var u = new URL(window.location.href);
       var curV = str(u.searchParams.get("v") || "").trim();
+
+      // guard 跟「當前v->目標v」綁定
+      var TAB_GUARD = "tasun_tab_replaced_once_v2" + (pageKey ? ("_" + pageKey) : "") + "_" + (curV || "none") + "_to_" + v;
 
       var already = false;
       try { already = (sessionStorage.getItem(TAB_GUARD) === "1"); } catch (e) { already = false; }
@@ -200,15 +199,16 @@
     if (appVer) {
       ensureCacheV(appVer);
 
-      /* ✅（新增）如果開啟 forceUrlV：先做一次最單純的 v 鎖定 */
+      // ✅先做 forceUrlV（更直覺：進站就鎖網址）
       if (opts.forceUrlV) {
-        var r0 = forceUrlV(appVer, pageKey);
-        if (r0) return;
+        var replaced1 = forceUrlV(appVer, pageKey);
+        if (replaced1) return;
       }
 
+      // ✅再做既有 forceVersionSync（保險）
       if (opts.forceVersionSync !== false) {
-        var replaced = forceVersionSync(appVer, pageKey);
-        if (replaced) return;
+        var replaced2 = forceVersionSync(appVer, pageKey);
+        if (replaced2) return;
       }
 
       var doPatch = function () { try { patchResourceUrls(); } catch (e) {} };
@@ -243,7 +243,7 @@
   TasunCore.setAppHeightVar = setAppHeightVar;
 
   TasunCore.withV = function (url) { return withV(url); };
-  TasunCore.forceUrlV = function(appVer, pageKey){ return forceUrlV(appVer, pageKey); };
+  TasunCore.forceUrlV = function (appVer, pageKey) { return forceUrlV(appVer, pageKey); };
   TasunCore.forceVersionSync = function (appVer, pageKey) { return forceVersionSync(appVer, pageKey); };
   TasunCore.patchResourceUrls = function () { return patchResourceUrls(); };
   TasunCore.installNetToast = function () { return installNetToast(); };
