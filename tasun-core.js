@@ -3,7 +3,7 @@
   "use strict";
 
   var TasunCore = window.TasunCore || {};
-  var CORE_VER = "20260126_02";
+  var CORE_VER = "20260127_01";
 
   function str(v) { return (v === undefined || v === null) ? "" : String(v); }
 
@@ -14,46 +14,28 @@
   function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
   function lerp(a, b, t) { return a + (b - a) * t; }
 
-  /* ========= raf helpers ========= */
+  // ✅ raf debounce（避免 resize/scroll 過度計算）
   function rafDebounce(fn) {
-    var rafId = 0;
+    var r = 0;
     return function () {
-      if (rafId) cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(function () {
-        rafId = 0;
+      try { window.cancelAnimationFrame(r); } catch (e) {}
+      r = window.requestAnimationFrame(function () {
         try { fn(); } catch (e) {}
       });
     };
   }
 
+  // ✅ fonts ready helper
   function onFontsReady(cb) {
-    try {
+    cb = cb || function(){};
+    try{
       if (document.fonts && document.fonts.ready) {
-        document.fonts.ready.then(function () { try { cb(); } catch (e) {} });
+        document.fonts.ready.then(cb);
       } else {
-        setTimeout(function () { try { cb(); } catch (e) {} }, 180);
+        setTimeout(cb, 180);
       }
-    } catch (e) {
-      setTimeout(function () { try { cb(); } catch (e2) {} }, 180);
-    }
-  }
-
-  /* ========= APP height var ========= */
-  function setAppHeightVar() {
-    try {
-      var h = (window.visualViewport && window.visualViewport.height) ? window.visualViewport.height : window.innerHeight;
-      document.documentElement.style.setProperty("--appH", String(h) + "px");
-    } catch (e) {}
-  }
-
-  function installAppHeightVar() {
-    setAppHeightVar();
-    var deb = rafDebounce(setAppHeightVar);
-
-    window.addEventListener("resize", deb, { passive: true });
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener("resize", deb, { passive: true });
-      window.visualViewport.addEventListener("scroll", deb, { passive: true });
+    }catch(e){
+      setTimeout(cb, 180);
     }
   }
 
@@ -98,25 +80,23 @@
       } catch (e) {}
     }
 
-    try {
-      var preload = document.querySelectorAll('link[rel="preload"][as="image"]');
-      for (var i = 0; i < preload.length; i++) patchAttr(preload[i], "href");
+    var preload = document.querySelectorAll('link[rel="preload"][as="image"]');
+    for (var i = 0; i < preload.length; i++) patchAttr(preload[i], "href");
 
-      var links = document.querySelectorAll('link[rel="stylesheet"]');
-      for (var j = 0; j < links.length; j++) patchAttr(links[j], "href");
+    var links = document.querySelectorAll('link[rel="stylesheet"]');
+    for (var j = 0; j < links.length; j++) patchAttr(links[j], "href");
 
-      var scripts = document.querySelectorAll("script[src]");
-      for (var k = 0; k < scripts.length; k++) patchAttr(scripts[k], "src");
+    var scripts = document.querySelectorAll("script[src]");
+    for (var k = 0; k < scripts.length; k++) patchAttr(scripts[k], "src");
 
-      var imgs = document.querySelectorAll("img[src]");
-      for (var m = 0; m < imgs.length; m++) patchAttr(imgs[m], "src");
-    } catch (e) {}
+    var imgs = document.querySelectorAll("img[src]");
+    for (var m = 0; m < imgs.length; m++) patchAttr(imgs[m], "src");
   }
 
   // ===== 版本同步（避免不同裝置顯示不同版本）=====
   function forceVersionSync(appVer, pageKey) {
     var v = str(appVer || "").trim();
-    if (!v) return false;
+    if (!v) return;
 
     var KEY = "tasun_app_ver_global_v1" + (pageKey ? ("_" + pageKey) : "");
     var TAB_GUARD = "tasun_tab_replaced_once_v1" + (pageKey ? ("_" + pageKey) : "");
@@ -176,6 +156,23 @@
     sync();
   }
 
+  // ✅ appHeightVar：統一用 visualViewport 設定 --appH（加快/更穩定）
+  function setAppHeightVar() {
+    var apply = rafDebounce(function(){
+      try{
+        var h = (window.visualViewport && window.visualViewport.height) ? window.visualViewport.height : window.innerHeight;
+        document.documentElement.style.setProperty("--appH", h + "px");
+      }catch(e){}
+    });
+
+    apply();
+    window.addEventListener("resize", apply, { passive:true });
+    if(window.visualViewport){
+      window.visualViewport.addEventListener("resize", apply, { passive:true });
+      window.visualViewport.addEventListener("scroll", apply, { passive:true });
+    }
+  }
+
   // ===== init =====
   function init(opts) {
     opts = opts || {};
@@ -183,8 +180,7 @@
     var appVer = getAppVer(opts.appVer);
 
     if (opts.appHeightVar) {
-      // 越早越好：先把 --appH 設好，首屏更穩
-      try { installAppHeightVar(); } catch (e) {}
+      try { setAppHeightVar(); } catch (e) {}
     }
 
     if (appVer) {
@@ -195,8 +191,10 @@
         if (replaced) return;
       }
 
-      if (opts.patchResources !== false && opts.patchResources !== undefined ? opts.patchResources : true) {
-        var doPatch = function () { try { patchResourceUrls(); } catch (e) {} };
+      var doPatch = function () { try { patchResourceUrls(); } catch (e) {} };
+      var wantPatch = (opts.patchResources !== false);
+
+      if (wantPatch) {
         if (document.readyState === "loading") {
           document.addEventListener("DOMContentLoaded", doPatch, { once: true });
         } else {
@@ -223,19 +221,15 @@
 
   TasunCore.rafDebounce = rafDebounce;
   TasunCore.onFontsReady = onFontsReady;
+  TasunCore.setAppHeightVar = setAppHeightVar;
 
   TasunCore.withV = function (url) { return withV(url); };
   TasunCore.forceVersionSync = function (appVer, pageKey) { return forceVersionSync(appVer, pageKey); };
   TasunCore.patchResourceUrls = function () { return patchResourceUrls(); };
   TasunCore.installNetToast = function () { return installNetToast(); };
-  TasunCore.setAppHeightVar = function(){ return setAppHeightVar(); };
-  TasunCore.installAppHeightVar = function(){ return installAppHeightVar(); };
-
   TasunCore.init = init;
 
-  // 向下相容：保留你原本會用到的全域
   window.__withV = window.__withV || TasunCore.withV;
-
   window.TasunCore = TasunCore;
 
 })(window, document);
