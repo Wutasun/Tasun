@@ -3,7 +3,7 @@
   "use strict";
 
   var TasunCore = window.TasunCore || {};
-  var CORE_VER = "20260126_01"; // core 自己的版本（不等於 APP_VER，可不改）
+  var CORE_VER = "20260126_02";
 
   function str(v) { return (v === undefined || v === null) ? "" : String(v); }
 
@@ -13,6 +13,49 @@
 
   function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
   function lerp(a, b, t) { return a + (b - a) * t; }
+
+  /* ========= raf helpers ========= */
+  function rafDebounce(fn) {
+    var rafId = 0;
+    return function () {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(function () {
+        rafId = 0;
+        try { fn(); } catch (e) {}
+      });
+    };
+  }
+
+  function onFontsReady(cb) {
+    try {
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(function () { try { cb(); } catch (e) {} });
+      } else {
+        setTimeout(function () { try { cb(); } catch (e) {} }, 180);
+      }
+    } catch (e) {
+      setTimeout(function () { try { cb(); } catch (e2) {} }, 180);
+    }
+  }
+
+  /* ========= APP height var ========= */
+  function setAppHeightVar() {
+    try {
+      var h = (window.visualViewport && window.visualViewport.height) ? window.visualViewport.height : window.innerHeight;
+      document.documentElement.style.setProperty("--appH", String(h) + "px");
+    } catch (e) {}
+  }
+
+  function installAppHeightVar() {
+    setAppHeightVar();
+    var deb = rafDebounce(setAppHeightVar);
+
+    window.addEventListener("resize", deb, { passive: true });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", deb, { passive: true });
+      window.visualViewport.addEventListener("scroll", deb, { passive: true });
+    }
+  }
 
   // ===== 版本 withV =====
   function getAppVer(optVer) {
@@ -33,14 +76,13 @@
       if (uu.origin === window.location.origin) uu.searchParams.set("v", vv);
       return uu.toString();
     } catch (e) {
-      // fallback for odd strings
       var s = str(url || "");
       if (!s) return s;
       return s + (s.indexOf("?") >= 0 ? "&" : "?") + "v=" + encodeURIComponent(vv);
     }
   }
 
-  // 替同源資源補 v（img/link/script），避免不同電腦吃到不同快取
+  // 替同源資源補 v（img/link/script）
   function patchResourceUrls() {
     var vv = str(window.__CACHE_V || "").trim();
     if (!vv) return;
@@ -49,7 +91,6 @@
       try {
         var val = el.getAttribute(attr);
         if (!val) return;
-        // 不動 data:, blob:, mailto:
         if (/^(data:|blob:|mailto:)/i.test(val)) return;
 
         var next = withV(val);
@@ -57,25 +98,25 @@
       } catch (e) {}
     }
 
-    // preload image
-    var preload = document.querySelectorAll('link[rel="preload"][as="image"]');
-    for (var i = 0; i < preload.length; i++) patchAttr(preload[i], "href");
+    try {
+      var preload = document.querySelectorAll('link[rel="preload"][as="image"]');
+      for (var i = 0; i < preload.length; i++) patchAttr(preload[i], "href");
 
-    // stylesheet/script/img
-    var links = document.querySelectorAll('link[rel="stylesheet"]');
-    for (var j = 0; j < links.length; j++) patchAttr(links[j], "href");
+      var links = document.querySelectorAll('link[rel="stylesheet"]');
+      for (var j = 0; j < links.length; j++) patchAttr(links[j], "href");
 
-    var scripts = document.querySelectorAll("script[src]");
-    for (var k = 0; k < scripts.length; k++) patchAttr(scripts[k], "src");
+      var scripts = document.querySelectorAll("script[src]");
+      for (var k = 0; k < scripts.length; k++) patchAttr(scripts[k], "src");
 
-    var imgs = document.querySelectorAll("img[src]");
-    for (var m = 0; m < imgs.length; m++) patchAttr(imgs[m], "src");
+      var imgs = document.querySelectorAll("img[src]");
+      for (var m = 0; m < imgs.length; m++) patchAttr(imgs[m], "src");
+    } catch (e) {}
   }
 
   // ===== 版本同步（避免不同裝置顯示不同版本）=====
   function forceVersionSync(appVer, pageKey) {
     var v = str(appVer || "").trim();
-    if (!v) return;
+    if (!v) return false;
 
     var KEY = "tasun_app_ver_global_v1" + (pageKey ? ("_" + pageKey) : "");
     var TAB_GUARD = "tasun_tab_replaced_once_v1" + (pageKey ? ("_" + pageKey) : "");
@@ -93,20 +134,18 @@
       var already = false;
       try { already = (sessionStorage.getItem(TAB_GUARD) === "1"); } catch (e) { already = false; }
 
-      // 若網址 v 不等於 APP_VER → replace 一次，避免無限迴圈
       if (curV !== v && !already) {
         try { sessionStorage.setItem(TAB_GUARD, "1"); } catch (e) {}
         u.searchParams.set("v", v);
         window.location.replace(u.toString());
-        return true; // replaced
+        return true;
       }
     } catch (e) {}
 
     return false;
   }
 
-  // ===== 網路狀態提示（你看到的 "Network connection lost..." 無法「完全避免」，
-  // 但可以用更穩定的提示 + 避免離線時做重操作）=====
+  // ===== 網路狀態提示 =====
   function installNetToast() {
     if (document.getElementById("tasunNetToast")) return;
 
@@ -140,24 +179,29 @@
   // ===== init =====
   function init(opts) {
     opts = opts || {};
-    var pageKey = str(opts.pageKey || "").trim(); // e.g. "index"
+    var pageKey = str(opts.pageKey || "").trim();
     var appVer = getAppVer(opts.appVer);
+
+    if (opts.appHeightVar) {
+      // 越早越好：先把 --appH 設好，首屏更穩
+      try { installAppHeightVar(); } catch (e) {}
+    }
 
     if (appVer) {
       ensureCacheV(appVer);
 
-      // 越早越好：若這裡 replace 了，就停止後續 init（避免多跑）
       if (opts.forceVersionSync !== false) {
         var replaced = forceVersionSync(appVer, pageKey);
         if (replaced) return;
       }
 
-      // 等 DOM 可用再 patch 資源
-      var doPatch = function () { try { patchResourceUrls(); } catch (e) {} };
-      if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", doPatch, { once: true });
-      } else {
-        doPatch();
+      if (opts.patchResources !== false && opts.patchResources !== undefined ? opts.patchResources : true) {
+        var doPatch = function () { try { patchResourceUrls(); } catch (e) {} };
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", doPatch, { once: true });
+        } else {
+          doPatch();
+        }
       }
     }
 
@@ -177,13 +221,19 @@
   TasunCore.clamp = clamp;
   TasunCore.lerp = lerp;
 
+  TasunCore.rafDebounce = rafDebounce;
+  TasunCore.onFontsReady = onFontsReady;
+
   TasunCore.withV = function (url) { return withV(url); };
   TasunCore.forceVersionSync = function (appVer, pageKey) { return forceVersionSync(appVer, pageKey); };
   TasunCore.patchResourceUrls = function () { return patchResourceUrls(); };
   TasunCore.installNetToast = function () { return installNetToast(); };
+  TasunCore.setAppHeightVar = function(){ return setAppHeightVar(); };
+  TasunCore.installAppHeightVar = function(){ return installAppHeightVar(); };
+
   TasunCore.init = init;
 
-  // 向下相容：保留你原本 index.html 會用到的全域
+  // 向下相容：保留你原本會用到的全域
   window.__withV = window.__withV || TasunCore.withV;
 
   window.TasunCore = TasunCore;
