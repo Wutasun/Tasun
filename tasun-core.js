@@ -3,7 +3,7 @@
   "use strict";
 
   var TasunCore = window.TasunCore || {};
-  var CORE_VER = "20260127_01";
+  var CORE_VER = "20260127_02";
 
   function str(v) { return (v === undefined || v === null) ? "" : String(v); }
 
@@ -14,7 +14,6 @@
   function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
   function lerp(a, b, t) { return a + (b - a) * t; }
 
-  // ✅ raf debounce（避免 resize/scroll 過度計算）
   function rafDebounce(fn) {
     var r = 0;
     return function () {
@@ -25,7 +24,6 @@
     };
   }
 
-  // ✅ fonts ready helper
   function onFontsReady(cb) {
     cb = cb || function(){};
     try{
@@ -39,7 +37,6 @@
     }
   }
 
-  // ===== 版本 withV =====
   function getAppVer(optVer) {
     var v = str(optVer || window.TASUN_APP_VER || "").trim();
     return v;
@@ -64,7 +61,6 @@
     }
   }
 
-  // 替同源資源補 v（img/link/script）
   function patchResourceUrls() {
     var vv = str(window.__CACHE_V || "").trim();
     if (!vv) return;
@@ -93,7 +89,28 @@
     for (var m = 0; m < imgs.length; m++) patchAttr(imgs[m], "src");
   }
 
-  // ===== 版本同步（避免不同裝置顯示不同版本）=====
+  /* ✅✅✅ 可全站共用：URL v 強制等於 appVer（比 forceVersionSync 更單純） */
+  function forceUrlV(appVer, pageKey) {
+    var v = str(appVer || "").trim();
+    if (!v) return false;
+
+    var TAB_GUARD = "tasun_force_url_v_once_v1" + (pageKey ? ("_" + pageKey) : "") + "_" + v;
+    try{
+      var u = new URL(window.location.href);
+      var curV = str(u.searchParams.get("v") || "").trim();
+      var already = false;
+      try { already = (sessionStorage.getItem(TAB_GUARD) === "1"); } catch (e) { already = false; }
+
+      if (curV !== v && !already) {
+        try { sessionStorage.setItem(TAB_GUARD, "1"); } catch (e) {}
+        u.searchParams.set("v", v);
+        window.location.replace(u.toString());
+        return true;
+      }
+    }catch(e){}
+    return false;
+  }
+
   function forceVersionSync(appVer, pageKey) {
     var v = str(appVer || "").trim();
     if (!v) return;
@@ -125,7 +142,6 @@
     return false;
   }
 
-  // ===== 網路狀態提示 =====
   function installNetToast() {
     if (document.getElementById("tasunNetToast")) return;
 
@@ -156,7 +172,6 @@
     sync();
   }
 
-  // ✅ appHeightVar：統一用 visualViewport 設定 --appH（加快/更穩定）
   function setAppHeightVar() {
     var apply = rafDebounce(function(){
       try{
@@ -173,7 +188,6 @@
     }
   }
 
-  // ===== init =====
   function init(opts) {
     opts = opts || {};
     var pageKey = str(opts.pageKey || "").trim();
@@ -185,6 +199,12 @@
 
     if (appVer) {
       ensureCacheV(appVer);
+
+      /* ✅（新增）如果開啟 forceUrlV：先做一次最單純的 v 鎖定 */
+      if (opts.forceUrlV) {
+        var r0 = forceUrlV(appVer, pageKey);
+        if (r0) return;
+      }
 
       if (opts.forceVersionSync !== false) {
         var replaced = forceVersionSync(appVer, pageKey);
@@ -213,7 +233,6 @@
     }
   }
 
-  // ===== 對外 API =====
   TasunCore.coreVer = CORE_VER;
   TasunCore.jsonParse = jsonParse;
   TasunCore.clamp = clamp;
@@ -224,6 +243,7 @@
   TasunCore.setAppHeightVar = setAppHeightVar;
 
   TasunCore.withV = function (url) { return withV(url); };
+  TasunCore.forceUrlV = function(appVer, pageKey){ return forceUrlV(appVer, pageKey); };
   TasunCore.forceVersionSync = function (appVer, pageKey) { return forceVersionSync(appVer, pageKey); };
   TasunCore.patchResourceUrls = function () { return patchResourceUrls(); };
   TasunCore.installNetToast = function () { return installNetToast(); };
