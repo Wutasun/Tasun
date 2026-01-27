@@ -3,14 +3,18 @@
   "use strict";
 
   var TasunCore = window.TasunCore || {};
-  var CORE_VER = "20260127_05";
+  var CORE_VER = "20260127_06"; // ←你可自行改
 
   function str(v) { return (v === undefined || v === null) ? "" : String(v); }
-  function jsonParse(s, fallback) { try { return JSON.parse(s); } catch (e) { return fallback; } }
+
+  function jsonParse(s, fallback) {
+    try { return JSON.parse(s); } catch (e) { return fallback; }
+  }
 
   function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
   function lerp(a, b, t) { return a + (b - a) * t; }
 
+  // ✅ raf debounce（避免 resize/scroll 過度計算）
   function rafDebounce(fn) {
     var r = 0;
     return function () {
@@ -21,6 +25,7 @@
     };
   }
 
+  // ✅ fonts ready helper
   function onFontsReady(cb) {
     cb = cb || function(){};
     try{
@@ -31,6 +36,7 @@
     }
   }
 
+  // ===== 版本 withV =====
   function getAppVer(optVer) {
     var v = str(optVer || window.TASUN_APP_VER || "").trim();
     return v;
@@ -55,6 +61,29 @@
     }
   }
 
+  // ✅強制 URL v 必須等於 APP_VER（舊書籤也會被跳到最新）
+  function forceUrlV(appVer, pageKey) {
+    try{
+      var v = str(appVer || "").trim();
+      if(!v) return false;
+
+      var u = new URL(window.location.href);
+      var cur = str(u.searchParams.get("v") || "").trim();
+
+      // 避免無限 replace：用「目前v+目標v+頁」當 guard
+      var KEY = "tasun_force_url_guard_v1" + (pageKey ? ("_" + pageKey) : "") + "_" + (cur||"none") + "_to_" + v;
+
+      if(cur !== v && !sessionStorage.getItem(KEY)){
+        sessionStorage.setItem(KEY, "1");
+        u.searchParams.set("v", v);
+        window.location.replace(u.toString());
+        return true;
+      }
+    }catch(e){}
+    return false;
+  }
+
+  // 替同源資源補 v（img/link/script）
   function patchResourceUrls() {
     var vv = str(window.__CACHE_V || "").trim();
     if (!vv) return;
@@ -63,7 +92,7 @@
       try {
         var val = el.getAttribute(attr);
         if (!val) return;
-        if (/^(data:|blob:|mailto:)/i.test(val)) return;
+        if (/^(data:|blob:|mailto:|tel:)/i.test(val)) return;
 
         var next = withV(val);
         if (next && next !== val) el.setAttribute(attr, next);
@@ -83,49 +112,23 @@
     for (var m = 0; m < imgs.length; m++) patchAttr(imgs[m], "src");
   }
 
-  /* ✅✅✅ 新增：強制 URL v = appVer（舊書籤也會更新） */
-  function forceUrlV(appVer, pageKey) {
-    var v = str(appVer || "").trim();
-    if (!v) return false;
-
-    try {
-      var u = new URL(window.location.href);
-      var curV = str(u.searchParams.get("v") || "").trim();
-
-      // guard 跟「當前v + 目標v + pageKey」綁定，避免無限 replace
-      var gk = "tasun_force_url_guard_v2_" + (pageKey || "p") + "_" + (curV || "none") + "_to_" + v;
-      var already = false;
-      try { already = (sessionStorage.getItem(gk) === "1"); } catch (e) { already = false; }
-
-      if (curV !== v && !already) {
-        try { sessionStorage.setItem(gk, "1"); } catch (e) {}
-        u.searchParams.set("v", v);
-        window.location.replace(u.toString());
-        return true;
-      }
-    } catch (e) {}
-
-    return false;
-  }
-
-  /* ✅ 既有：版本同步（保留，但 guard 更穩） */
+  // ===== 版本同步（避免不同裝置顯示不同版本）=====
   function forceVersionSync(appVer, pageKey) {
     var v = str(appVer || "").trim();
     if (!v) return false;
 
     var KEY = "tasun_app_ver_global_v1" + (pageKey ? ("_" + pageKey) : "");
+    var TAB_GUARD = "tasun_tab_replaced_once_v1" + (pageKey ? ("_" + pageKey) : "");
 
     try {
       var last = str(localStorage.getItem(KEY) || "");
       if (last !== v) {
         localStorage.setItem(KEY, v);
+        try { sessionStorage.removeItem(TAB_GUARD); } catch (e) {}
       }
 
       var u = new URL(window.location.href);
       var curV = str(u.searchParams.get("v") || "").trim();
-
-      // guard 跟「當前v->目標v」綁定
-      var TAB_GUARD = "tasun_tab_replaced_once_v2" + (pageKey ? ("_" + pageKey) : "") + "_" + (curV || "none") + "_to_" + v;
 
       var already = false;
       try { already = (sessionStorage.getItem(TAB_GUARD) === "1"); } catch (e) { already = false; }
@@ -141,6 +144,7 @@
     return false;
   }
 
+  // ===== 網路狀態提示 =====
   function installNetToast() {
     if (document.getElementById("tasunNetToast")) return;
 
@@ -171,6 +175,7 @@
     sync();
   }
 
+  // ✅ appHeightVar：統一用 visualViewport 設定 --appH
   function setAppHeightVar() {
     var apply = rafDebounce(function(){
       try{
@@ -187,6 +192,7 @@
     }
   }
 
+  // ===== init =====
   function init(opts) {
     opts = opts || {};
     var pageKey = str(opts.pageKey || "").trim();
@@ -199,16 +205,15 @@
     if (appVer) {
       ensureCacheV(appVer);
 
-      // ✅先做 forceUrlV（更直覺：進站就鎖網址）
+      // ✅你要求的：強制 URL v 必須等於 APP_VER（早做，避免後面多跑）
       if (opts.forceUrlV) {
-        var replaced1 = forceUrlV(appVer, pageKey);
-        if (replaced1) return;
+        var replacedUrl = forceUrlV(appVer, pageKey);
+        if (replacedUrl) return;
       }
 
-      // ✅再做既有 forceVersionSync（保險）
       if (opts.forceVersionSync !== false) {
-        var replaced2 = forceVersionSync(appVer, pageKey);
-        if (replaced2) return;
+        var replaced = forceVersionSync(appVer, pageKey);
+        if (replaced) return;
       }
 
       var doPatch = function () { try { patchResourceUrls(); } catch (e) {} };
@@ -231,8 +236,374 @@
         mount();
       }
     }
+
+    // ✅提供給頁面：core ready 事件（給 tasun-boot / 各頁等待用）
+    try{ window.dispatchEvent(new CustomEvent("tasun:core-ready")); }catch(e){}
   }
 
+  /* ======================================================
+     ✅✅✅ TasunCore.Auth（搬進 core）
+     - 使用 localStorage: tasunAuthTable_v1 / tasunCurrentUser_v1
+     - 密碼變更/帳號移除：自動強制重新登入
+     - 提供 ensureLoggedIn / open / close / role / canWrite / isAdmin
+     ====================================================== */
+  TasunCore.Auth = (function(Core){
+    var CURRENT_KEY = "tasunCurrentUser_v1";
+    var AUTH_KEY    = "tasunAuthTable_v1";
+    var SESSION_WATCH_MS = 3000;
+
+    var currentUser = null;
+    var _watchStarted = false;
+    var _onAuthed = null;
+    var _onSessionChange = null;
+    var _onForceRelogin = null;
+
+    function norm(s){ return (s===undefined||s===null) ? "" : String(s).trim(); }
+
+    function mapRole(v){
+      var s = norm(v).toLowerCase();
+      if(!s) return "read";
+      if(s==="admin") return "admin";
+      if(s==="write" || s==="edit") return "write";
+      if(s==="read"  || s==="view") return "read";
+      if(s==="0") return "admin";
+      if(s==="1") return "write";
+      if(s==="2") return "read";
+      return s;
+    }
+
+    function loadAuthTable(){
+      try{
+        var raw = localStorage.getItem(AUTH_KEY);
+        if(!raw) return [];
+        var parsed = Core.jsonParse(raw, null);
+        if(Array.isArray(parsed)) return parsed;
+        if(parsed && Array.isArray(parsed.users)) return parsed.users;
+        return [];
+      }catch(e){ return []; }
+    }
+
+    function pickUsername(row){
+      return norm(row && (row.username ?? row.user ?? row.account ?? row.name));
+    }
+    function pickPassword(row){
+      return String((row && (row.password ?? row.pass ?? row.pwd)) ?? "");
+    }
+    function pickRole(row){
+      return mapRole(row && (row.role ?? row.level ?? row.perm ?? row.permission));
+    }
+
+    function findAuthUser(username){
+      var u = norm(username).toLowerCase();
+      if(!u) return null;
+      var rows = loadAuthTable();
+      for(var i=0;i<rows.length;i++){
+        var r = rows[i];
+        var ru = pickUsername(r).toLowerCase();
+        if(ru && ru === u){
+          return { username: pickUsername(r), password: pickPassword(r), role: pickRole(r) || "read" };
+        }
+      }
+      return null;
+    }
+
+    function fnv1a(s){
+      var h = 0x811c9dc5;
+      for(var i=0;i<s.length;i++){
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+      }
+      return (h >>> 0).toString(16).padStart(8, "0");
+    }
+    function authStampFromAuth(auth){
+      return fnv1a(String(auth.username || "") + "|" + String(auth.password ?? ""));
+    }
+
+    function loadCurrentUser(){
+      try{ currentUser = Core.jsonParse(localStorage.getItem(CURRENT_KEY) || "null", null); }
+      catch(e){ currentUser = null; }
+
+      if(currentUser && typeof currentUser === "object"){
+        var uname = norm(currentUser.username ?? currentUser.user ?? currentUser.name ?? currentUser.account);
+        if(uname) currentUser.username = uname;
+
+        var r = mapRole(currentUser.role ?? currentUser.level ?? "read");
+        currentUser.role = r;
+        currentUser.level = r;
+
+        currentUser.authStamp = String(currentUser.authStamp ?? "");
+      }
+    }
+
+    function setCurrentUser(username, role, authStamp){
+      var u = {
+        username: username,
+        user: username,
+        role: mapRole(role),
+        level: mapRole(role),
+        authStamp: String(authStamp || "")
+      };
+      try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(u)); }catch(e){}
+      currentUser = u;
+    }
+
+    function current(){
+      loadCurrentUser();
+      return currentUser;
+    }
+
+    function role(){
+      loadCurrentUser();
+      return mapRole(currentUser && (currentUser.role ?? currentUser.level ?? "read"));
+    }
+    function canWrite(){
+      var r = role();
+      return (r === "admin" || r === "write");
+    }
+    function isAdmin(){
+      return role() === "admin";
+    }
+
+    // ===== UI 綁定（由頁面提供 id；保持你現有 DOM 不變）=====
+    function $(id){ return document.getElementById(id); }
+
+    function rebuildUserDropdown(preselectUser){
+      var sel = $("loginUser");
+      if(!sel) return;
+
+      var rows = loadAuthTable();
+      var users = [];
+      for(var i=0;i<rows.length;i++){
+        var u = pickUsername(rows[i]);
+        if(u) users.push(u);
+      }
+
+      // uniq
+      var seen = {};
+      var uniq = [];
+      for(var j=0;j<users.length;j++){
+        var k = users[j].toLowerCase();
+        if(seen[k]) continue;
+        seen[k] = 1;
+        uniq.push(users[j]);
+      }
+
+      var html = '<option value="">請選擇帳號</option>';
+      for(var m=0;m<uniq.length;m++){
+        var u2 = uniq[m];
+        var s = (preselectUser && u2.toLowerCase() === preselectUser.toLowerCase()) ? "selected" : "";
+        var vv = u2.replace(/"/g, "&quot;");
+        html += '<option value="' + vv + '" ' + s + '>' + u2 + '</option>';
+      }
+      sel.innerHTML = html;
+    }
+
+    function open(msg){
+      var mask = $("loginMask");
+      var err  = $("loginErr");
+      if(!mask) return;
+
+      if(err){
+        err.style.display = "none";
+        if(msg){
+          err.textContent = msg;
+          err.style.display = "block";
+        }
+      }
+
+      loadCurrentUser();
+      rebuildUserDropdown(currentUser && currentUser.username ? currentUser.username : "");
+      var pass = $("loginPass");
+      if(pass) pass.value = "";
+
+      mask.classList.add("show");
+      mask.setAttribute("aria-hidden","false");
+
+      setTimeout(function(){
+        var userSel = $("loginUser");
+        var passEl  = $("loginPass");
+        if(userSel && userSel.value && passEl) passEl.focus();
+        else if(userSel) userSel.focus();
+      },0);
+    }
+
+    function close(){
+      var mask = $("loginMask");
+      if(!mask) return;
+      mask.classList.remove("show");
+      mask.setAttribute("aria-hidden","true");
+    }
+
+    function fireSessionChange(){
+      if(typeof _onSessionChange === "function") _onSessionChange(current());
+    }
+
+    function forceReLogin(msg){
+      try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
+      currentUser = null;
+
+      if(typeof _onForceRelogin === "function") _onForceRelogin(msg || "");
+      open(msg || "權限表已更新，請重新登入");
+      fireSessionChange();
+    }
+
+    function validateSession(){
+      var mask = $("loginMask");
+      if(mask && mask.classList.contains("show")) return;
+
+      loadCurrentUser();
+      if(!currentUser || !currentUser.username) return;
+
+      var auth = findAuthUser(currentUser.username);
+      if(!auth){ forceReLogin("帳號已被移除，請重新登入"); return; }
+
+      var stampNow = authStampFromAuth(auth);
+
+      // 第一次補 stamp
+      if(!currentUser.authStamp){
+        setCurrentUser(auth.username, auth.role || "read", stampNow);
+        fireSessionChange();
+        return;
+      }
+
+      if(currentUser.authStamp !== stampNow){
+        forceReLogin("密碼已更新，請重新登入");
+        return;
+      }
+
+      var r = auth.role || "read";
+      if(mapRole(currentUser.role) !== r){
+        setCurrentUser(auth.username, r, stampNow);
+        fireSessionChange();
+      }
+    }
+
+    function ensureLoggedIn(){
+      loadCurrentUser();
+      var rows = loadAuthTable();
+      if(!Array.isArray(rows) || rows.length === 0){
+        open("尚未建立權限表：請先到「權限表.html」建立帳號。");
+        return false;
+      }
+
+      if(!currentUser || !currentUser.username){
+        open();
+        return false;
+      }
+
+      var auth = findAuthUser(currentUser.username);
+      if(!auth){ forceReLogin("帳號已被移除，請重新登入"); return false; }
+
+      var stampNow = authStampFromAuth(auth);
+      if(currentUser.authStamp && currentUser.authStamp !== stampNow){
+        forceReLogin("密碼已更新，請重新登入");
+        return false;
+      }
+
+      setCurrentUser(auth.username, auth.role || "read", stampNow);
+      fireSessionChange();
+      return true;
+    }
+
+    function doLogin(){
+      var userSel = $("loginUser");
+      var passEl  = $("loginPass");
+      var err     = $("loginErr");
+
+      var u = norm(userSel ? userSel.value : "");
+      var p = String(passEl ? passEl.value : "");
+      var rows = loadAuthTable();
+
+      function showErr(m){
+        if(!err) return;
+        err.textContent = m;
+        err.style.display = "block";
+      }
+
+      if(!Array.isArray(rows) || rows.length === 0) return showErr("尚未建立權限表：請先到「權限表.html」建立帳號。");
+      if(!u) return showErr("請先選擇帳號。");
+      if(!p) return showErr("請輸入密碼。");
+
+      var auth = findAuthUser(u);
+      if(!auth) return showErr("帳號不存在（以權限表為準）。");
+      if(String(auth.password ?? "") !== p) return showErr("密碼錯誤（以權限表為準）。");
+
+      var stampNow = authStampFromAuth(auth);
+      setCurrentUser(auth.username, auth.role || "read", stampNow);
+
+      close();
+      fireSessionChange();
+      if(typeof _onAuthed === "function") _onAuthed(current());
+    }
+
+    function bindUI(){
+      var closeBtn = $("loginClose");
+      var toAuth   = $("loginToAuth");
+      var loginBtn = $("loginBtn");
+      var mask     = $("loginMask");
+      var userSel  = $("loginUser");
+
+      if(closeBtn) closeBtn.onclick = close;
+      if(toAuth)   toAuth.onclick = function(){ window.location.href = Core.withV("權限表.html"); };
+      if(loginBtn) loginBtn.onclick = doLogin;
+
+      if(userSel){
+        userSel.addEventListener("change", function(){
+          var pass = $("loginPass");
+          if(userSel.value && pass) pass.focus();
+        });
+      }
+
+      if(mask){
+        mask.addEventListener("click", function(e){
+          if(e.target === mask) close();
+        });
+      }
+
+      window.addEventListener("keydown", function(e){
+        var m = $("loginMask");
+        if(!m) return;
+        if(e.key === "Escape" && m.classList.contains("show")) close();
+        if(e.key === "Enter"  && m.classList.contains("show")) doLogin();
+      });
+    }
+
+    function startWatch(){
+      if(_watchStarted) return;
+      _watchStarted = true;
+
+      window.addEventListener("storage", function(e){
+        if(e.key === AUTH_KEY || e.key === CURRENT_KEY){
+          validateSession();
+        }
+      });
+      setInterval(validateSession, SESSION_WATCH_MS);
+    }
+
+    function init(opts){
+      opts = opts || {};
+      _onAuthed = opts.onAuthed || null;
+      _onSessionChange = opts.onSessionChange || null;
+      _onForceRelogin = opts.onForceRelogin || null;
+
+      bindUI();
+      startWatch();
+    }
+
+    return {
+      init: init,
+      ensureLoggedIn: ensureLoggedIn,
+      validateSession: validateSession,
+      open: open,
+      close: close,
+      current: current,
+      role: role,
+      canWrite: canWrite,
+      isAdmin: isAdmin
+    };
+  })(TasunCore);
+
+  // ===== 對外 API =====
   TasunCore.coreVer = CORE_VER;
   TasunCore.jsonParse = jsonParse;
   TasunCore.clamp = clamp;
