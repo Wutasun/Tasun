@@ -32,24 +32,81 @@
   })();
   </script>
 
-  <!-- ✅ 先 core → 再 boot（都帶 v=APP_VER），最後才跑本頁 -->
+  <!-- ✅ 共用等待方式（全站共用）：可 push(fn) 排隊、也保留 then(fn) 相容 -->
   <script>
   (function(){
     var APP = (window.TASUN_APP_VER||"").toString().trim();
-    function addScript(src){
+    if(!APP) return;
+
+    // ① 建立/沿用「共用等待器」
+    //    - push(fn): 未 ready 就排隊；ready 立刻執行
+    //    - then(fn): 相容舊版 Promise 等待寫法
+    //    - flush(): 宣告 ready 並把隊列全部跑完（只會跑一次）
+    var WAIT = window.__TASUN_READY__;
+    if(!WAIT || typeof WAIT !== "object"){
+      var _q = [];
+      var _ready = false;
+      var _resolve = null;
+      var _p = new Promise(function(res){ _resolve = res; });
+
+      WAIT = {
+        get ready(){ return _ready; },
+        push: function(fn){
+          if(typeof fn !== "function") return;
+          if(_ready){
+            try{ fn(); }catch(e){}
+          }else{
+            _q.push(fn);
+          }
+        },
+        then: function(onFulfilled, onRejected){
+          return _p.then(onFulfilled, onRejected);
+        },
+        flush: function(){
+          if(_ready) return;
+          _ready = true;
+          try{ _resolve(true); }catch(e){}
+          var list = _q.splice(0);
+          for(var i=0;i<list.length;i++){
+            try{ list[i](); }catch(e){}
+          }
+        }
+      };
+
+      window.__TASUN_READY__ = WAIT;
+    }
+    // 讓你之後也可以用 __TASUN_WAIT__ 呼叫（同一顆）
+    window.__TASUN_WAIT__ = WAIT;
+
+    // ② 共用載入器：避免重複載入 core/boot
+    function addV(src){
+      return src + (src.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(APP);
+    }
+    function hasScript(id){
+      return !!document.querySelector('script[data-tasun-id="'+id+'"]');
+    }
+    function loadOnce(id, src){
       return new Promise(function(resolve){
-        var s=document.createElement("script");
-        s.src = src + (src.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(APP);
+        // 已插過 script 就不重複插入
+        if(hasScript(id)) return resolve(true);
+
+        var s = document.createElement("script");
+        s.src = src;
         s.async = false;
-        s.onload = function(){ resolve(true); };
-        s.onerror= function(){ resolve(false); };
+        s.setAttribute("data-tasun-id", id);
+        s.onload  = function(){ resolve(true); };
+        s.onerror = function(){ resolve(false); };
         document.head.appendChild(s);
       });
     }
-    window.__TASUN_READY__ = (async function(){
-      await addScript("tasun-core.js");
-      await addScript("tasun-boot.js");
-      return true;
+
+    // ③ 先 core → 再 boot，載入完成後 flush()（若 boot 已先 flush，這裡不會重複）
+    (async function(){
+      try{
+        if(!window.TasunCore) await loadOnce("tasun-core", addV("tasun-core.js"));
+        await loadOnce("tasun-boot", addV("tasun-boot.js"));
+      }catch(e){}
+      try{ if(!WAIT.ready) WAIT.flush(); }catch(e){}
     })();
   })();
   </script>
@@ -1892,7 +1949,23 @@
       start();
     }
 
-    (window.__TASUN_READY__ || Promise.resolve(true)).then(run);
+    /* ✅ 改成「共用等待方式」：優先用 push 排隊，也相容 then */
+    (function(onReady){
+      onReady(run);
+    })(function(fn){
+      try{
+        var W = window.__TASUN_WAIT__ || window.__TASUN_READY__;
+        if(W){
+          if(typeof W.push === "function"){ W.push(fn); return; }
+          if(typeof W.then === "function"){ W.then(fn); return; }
+          if(W.ready === true){ fn(); return; }
+        }
+      }catch(e){}
+      // fallback（極少數情況）
+      if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", fn);
+      else fn();
+    });
+
   })();
   </script>
 </body>
