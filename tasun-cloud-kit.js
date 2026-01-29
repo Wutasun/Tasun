@@ -1,1264 +1,754 @@
-/* tasun-cloud-kit.js
- * Tasun Standard Cloud Kit (Dropbox JSON Store + Lock + Watch + Auto-merge)
- * - One file for all pages: read/write/lock/watch + status bar + merge-safe save
- * - Does NOT change your page UI (only adds a small fixed status bar overlay)
- * - Auto detects read-only and hides lock buttons
+/* tasun-cloud-kit.js (Tasun Cloud Kit)
+ * - Minimal public API:
+ *   TasunCloudKit.init({ appVer, resourcesUrl, ui:{enabled, hideLockButtons, position} })
+ *   TasunCloudKit.mount({ resourceKey, pk, idField, counterField, merge, watch, getLocal, apply })
  *
- * Public minimal API (fixed):
- *   TasunCloudKit.init(opts)
- *   TasunCloudKit.mount(pageOpts) -> cloud instance
- *   cloud.ready, cloud.syncNow(), cloud.saveMerged(), cloud.status(), cloud.destroy()
- *   cloud.store (low-level): read/write/lock/watch/unwatch
- *
- * ✅ NEW (UI option):
- *   TasunCloudKit.init({ ui:{ hideLockButtons:true } })
- *   - hides lock/unlock buttons on status bar (lock mechanism still works internally)
+ * - NEW: ui.hideLockButtons
+ *   true  => hide Lock/Unlock buttons (auto lock/write/release still works)
+ *   false => show Lock/Unlock buttons (if ui.enabled)
  */
 (function (window, document) {
   "use strict";
 
-  // ============================================================
-  // 0) Utils
-  // ============================================================
-  function str(v){ return (v===undefined||v===null) ? "" : String(v); }
-  function now(){ return Date.now(); }
-  function clamp(n,a,b){ return Math.max(a, Math.min(b, n)); }
-  function jsonParse(s, fallback){ try{ return JSON.parse(s); }catch(e){ return fallback; } }
-  function safeJsonStringify(o){ try{ return JSON.stringify(o); }catch(e){ return ""; } }
-  function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
-
-  function uuid(){
-    var a = Math.random().toString(16).slice(2);
-    return "u" + Date.now().toString(16) + "_" + a;
-  }
-
-  function addV(url, v){
-    var u = str(url);
-    var vv = str(v).trim();
-    if(!vv) return u;
-    try{
-      var uu = new URL(u, document.baseURI);
-      uu.searchParams.set("v", vv);
-      return uu.toString();
-    }catch(e){
-      return u + (u.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(vv);
-    }
-  }
-
-  function deepClone(obj){
-    return jsonParse(safeJsonStringify(obj), null);
-  }
-
-  function stablePickRow(row){
-    // for diff: ignore volatile keys
-    if(!row || typeof row!=="object") return {};
-    var out = {};
-    Object.keys(row).sort().forEach(function(k){
-      if(k==="updatedAt" || k==="createdAt" || k==="__ts") return;
-      if(k==="meta") return;
-      out[k] = row[k];
-    });
-    return out;
-  }
-
-  function rowFingerprint(row){
-    return safeJsonStringify(stablePickRow(row)) || "";
-  }
-
-  function isObj(x){ return x && typeof x==="object"; }
-
-  // ============================================================
-  // 1) Dropbox Store (embedded) => window.TasunDropboxStore
-  // ============================================================
-  var Store = window.TasunDropboxStore || {};
-  var STORE_VER = Store.storeVer || "20260129_01";
-
-  var _storeCfg = {
-    appVer: "",
-    resourcesUrl: "tasun-resources.json",
-    resourcesInline: null,
-    tokenKey: "tasun_dropbox_token_v1",
-    getToken: null,
-    getUser: null,
-    onStatus: null,
-    fetchTimeoutMs: 12000,
-    cachePrefix: "tasun_dbx_store__v1__"
-  };
-
-  var _registry = null, _registryLoaded=false, _registryLoading=null;
-  var _memCache = {};       // { [key]: {payload, rev, loadedAt} }
-  var _locks = {};          // lock states
-  var _watchers = {};       // watchers
-
-  function storeStatus(type,msg,detail){
-    try{ if(typeof _storeCfg.onStatus==="function") _storeCfg.onStatus(type,msg,detail||null); }catch(e){}
-  }
-
-  function storeGetToken(){
-    try{
-      if(typeof _storeCfg.getToken==="function") return str(_storeCfg.getToken()).trim();
-    }catch(e){}
-    try{ return str(localStorage.getItem(_storeCfg.tokenKey)).trim(); }catch(e2){}
-    return "";
-  }
-
-  function storeGetUser(){
-    try{
-      if(typeof _storeCfg.getUser==="function"){
-        var u = _storeCfg.getUser();
-        if(u && typeof u==="object") return u;
-      }
-    }catch(e){}
-    return { username:"anonymous", role:"read" };
-  }
-
-  function ownerFromUser(u){
-    u = u || storeGetUser();
-    var username = str(u.username||u.user||u.name||"anonymous").trim() || "anonymous";
-    var role = str(u.role||u.permission||"read").trim() || "read";
-    var device = str(navigator.userAgent).slice(0,160);
-    return { username: username, role: role, device: device };
-  }
-
-  async function fetchWithTimeout(url, options, timeoutMs){
-    timeoutMs = clamp(Number(timeoutMs)||12000, 2000, 60000);
-    var ctrl = new AbortController();
-    var t = setTimeout(function(){ try{ ctrl.abort(); }catch(e){} }, timeoutMs);
-    try{
-      options = options || {};
-      options.signal = ctrl.signal;
-      return await fetch(url, options);
-    }finally{
-      clearTimeout(t);
-    }
-  }
-
-  var DBX = {
-    downloadUrl: "https://content.dropboxapi.com/2/files/download",
-    uploadUrl:   "https://content.dropboxapi.com/2/files/upload",
-    metaUrl:     "https://api.dropboxapi.com/2/files/get_metadata"
-  };
-
-  async function dbxDownloadPath(path){
-    var token = storeGetToken();
-    if(!token) throw new Error("Dropbox token missing.");
-    var res = await fetchWithTimeout(DBX.downloadUrl, {
-      method:"POST",
-      headers:{
-        "Authorization":"Bearer "+token,
-        "Dropbox-API-Arg": JSON.stringify({ path: path })
-      }
-    }, _storeCfg.fetchTimeoutMs);
-
-    if(!res.ok){
-      var tx = await res.text().catch(function(){return "";});
-      throw new Error("Dropbox download failed: "+res.status+" "+tx);
-    }
-    var metaHeader = res.headers.get("dropbox-api-result");
-    var meta = metaHeader ? jsonParse(metaHeader,null) : null;
-    var text = await res.text();
-    return { text:text, meta:meta, rev:(meta&&meta.rev)?meta.rev:"" };
-  }
-
-  async function dbxGetMetadata(path){
-    var token = storeGetToken();
-    if(!token) throw new Error("Dropbox token missing.");
-    var res = await fetchWithTimeout(DBX.metaUrl, {
-      method:"POST",
-      headers:{
-        "Authorization":"Bearer "+token,
-        "Content-Type":"application/json"
-      },
-      body: JSON.stringify({ path:path, include_deleted:false })
-    }, _storeCfg.fetchTimeoutMs);
-
-    if(!res.ok){
-      var tx = await res.text().catch(function(){return "";});
-      throw new Error("Dropbox metadata failed: "+res.status+" "+tx);
-    }
-    return await res.json();
-  }
-
-  async function dbxUploadPath(path, contentText, modeObj){
-    var token = storeGetToken();
-    if(!token) throw new Error("Dropbox token missing.");
-    var arg = {
-      path: path,
-      mode: modeObj || { ".tag":"overwrite" },
-      autorename:false,
-      mute:true,
-      strict_conflict:true
-    };
-    var res = await fetchWithTimeout(DBX.uploadUrl, {
-      method:"POST",
-      headers:{
-        "Authorization":"Bearer "+token,
-        "Content-Type":"application/octet-stream",
-        "Dropbox-API-Arg": JSON.stringify(arg)
-      },
-      body: contentText
-    }, _storeCfg.fetchTimeoutMs);
-
-    if(!res.ok){
-      var tx = await res.text().catch(function(){return "";});
-      throw new Error("Dropbox upload failed: "+res.status+" "+tx);
-    }
-    return await res.json();
-  }
-
-  function regCacheKey(){ return _storeCfg.cachePrefix + "registry"; }
-
-  async function loadRegistry(){
-    if(_registryLoaded) return _registry || {};
-    if(_registryLoading) return _registryLoading;
-
-    _registryLoading = (async function(){
-      if(_storeCfg.resourcesInline && typeof _storeCfg.resourcesInline==="object"){
-        _registry = _storeCfg.resourcesInline;
-        _registryLoaded = true;
-        try{ localStorage.setItem(regCacheKey(), safeJsonStringify(_registry)); }catch(e){}
-        return _registry;
-      }
-
-      var url = str(_storeCfg.resourcesUrl).trim();
-      if(!url){
-        var cached = null;
-        try{ cached = jsonParse(localStorage.getItem(regCacheKey()), null); }catch(e2){}
-        _registry = (cached && typeof cached==="object") ? cached : {};
-        _registryLoaded = true;
-        return _registry;
-      }
-
-      var finalUrl = addV(url, _storeCfg.appVer);
-      try{
-        var res = await fetchWithTimeout(finalUrl, { method:"GET", cache:"no-store" }, _storeCfg.fetchTimeoutMs);
-        if(!res.ok) throw new Error("registry http "+res.status);
-        var obj = await res.json();
-        _registry = (obj && typeof obj==="object") ? obj : {};
-        _registryLoaded = true;
-        try{ localStorage.setItem(regCacheKey(), safeJsonStringify(_registry)); }catch(e3){}
-        return _registry;
-      }catch(e){
-        var cached2=null;
-        try{ cached2=jsonParse(localStorage.getItem(regCacheKey()), null); }catch(e4){}
-        _registry = (cached2 && typeof cached2==="object") ? cached2 : {};
-        _registryLoaded = true;
-        storeStatus("warn","資源表讀取失敗，改用快取（可能不是最新）",{ error:str(e&&e.message) });
-        return _registry;
-      }finally{
-        _registryLoading = null;
-      }
-    })();
-
-    return _registryLoading;
-  }
-
-  function pick(obj, keys, fallback){
-    for(var i=0;i<keys.length;i++){
-      var k=keys[i];
-      if(obj && obj[k]!==undefined && obj[k]!==null) return obj[k];
-    }
-    return fallback;
-  }
-
-  function resolveResource(resourceKey){
-    var reg = _registry || {};
-    var r = reg[resourceKey];
-    if(!r || typeof r!=="object") return null;
-    var db = r.db || {};
-    var lock = r.lock || {};
-
-    return {
-      key: resourceKey,
-      db: {
-        path: str(pick(db,["path","dropboxPath"],"")).trim(),
-        url:  str(pick(db,["url","rawUrl","httpUrl"],"")).trim()
-      },
-      lock: {
-        path: str(pick(lock,["path","dropboxPath"],"")).trim(),
-        url:  str(pick(lock,["url","rawUrl","httpUrl"],"")).trim()
-      },
-      meta: r.meta || {}
-    };
-  }
-
-  function normalizePayload(obj, resourceKey){
-    obj = (obj && typeof obj==="object") ? obj : {};
-    if(!obj.meta || typeof obj.meta!=="object") obj.meta = {};
-    if(!obj.meta.resource) obj.meta.resource = resourceKey;
-    if(!obj.meta.schema) obj.meta.schema = "tasun.db.v1";
-    if(!obj.meta.updatedAt) obj.meta.updatedAt = new Date().toISOString();
-    if(!Array.isArray(obj.db)) obj.db = [];
-    if(obj.counter===undefined || obj.counter===null) obj.counter = 0;
-    return obj;
-  }
-
-  function payloadCacheKey(resourceKey){ return _storeCfg.cachePrefix + "payload__" + resourceKey; }
-  function savePayloadCache(resourceKey, payload, rev){
-    try{
-      localStorage.setItem(payloadCacheKey(resourceKey), safeJsonStringify({ savedAt: now(), rev: str(rev), payload: payload }));
-    }catch(e){}
-  }
-  function loadPayloadCache(resourceKey){
-    try{
-      var o = jsonParse(localStorage.getItem(payloadCacheKey(resourceKey)), null);
-      if(o && o.payload) return o;
-    }catch(e){}
-    return null;
-  }
-
-  async function storeRead(resourceKey, opts){
-    opts = opts || {};
-    await loadRegistry();
-    var res = resolveResource(resourceKey);
-    if(!res) throw new Error("Unknown resourceKey: "+resourceKey);
-
-    if(!!opts.preferCache && _memCache[resourceKey] && _memCache[resourceKey].payload){
-      return { payload:_memCache[resourceKey].payload, rev:_memCache[resourceKey].rev||"", source:"mem" };
-    }
-
-    if(res.db.path){
-      try{
-        var dl = await dbxDownloadPath(res.db.path);
-        var obj = jsonParse(dl.text, null);
-        if(!obj) throw new Error("db json parse failed");
-        obj = normalizePayload(obj, resourceKey);
-        _memCache[resourceKey] = { payload:obj, rev:dl.rev||"", loadedAt:now() };
-        savePayloadCache(resourceKey, obj, dl.rev||"");
-        return { payload:obj, rev:dl.rev||"", source:"dropbox" };
-      }catch(e1){
-        storeStatus("warn","Dropbox 讀取失敗，改用快取/HTTP（若有）",{ resourceKey:resourceKey, error:str(e1&&e1.message) });
-      }
-    }
-
-    if(opts.allowHttpReadOnly!==false && res.db.url){
-      try{
-        var url = addV(res.db.url, _storeCfg.appVer);
-        var r2 = await fetchWithTimeout(url, { method:"GET", cache:"no-store" }, _storeCfg.fetchTimeoutMs);
-        if(!r2.ok) throw new Error("http "+r2.status);
-        var obj2 = await r2.json();
-        obj2 = normalizePayload(obj2, resourceKey);
-        _memCache[resourceKey] = { payload:obj2, rev:"", loadedAt:now() };
-        savePayloadCache(resourceKey, obj2, "");
-        return { payload:obj2, rev:"", source:"http" };
-      }catch(e2){
-        storeStatus("warn","HTTP 讀取失敗，改用快取",{ resourceKey:resourceKey, error:str(e2&&e2.message) });
-      }
-    }
-
-    var c = loadPayloadCache(resourceKey);
-    if(c && c.payload){
-      var p = normalizePayload(c.payload, resourceKey);
-      _memCache[resourceKey] = { payload:p, rev:str(c.rev||""), loadedAt:now() };
-      return { payload:p, rev:str(c.rev||""), source:"cache" };
-    }
-
-    var empty = normalizePayload({ db:[], counter:0 }, resourceKey);
-    _memCache[resourceKey] = { payload:empty, rev:"", loadedAt:now() };
-    return { payload:empty, rev:"", source:"empty" };
-  }
-
-  async function storeWrite(resourceKey, payload, opts){
-    opts = opts || {};
-    await loadRegistry();
-    var res = resolveResource(resourceKey);
-    if(!res) throw new Error("Unknown resourceKey: "+resourceKey);
-    if(!res.db.path) throw new Error("This resource has no Dropbox db.path (cannot write).");
-
-    if(opts.requireLock !== false){
-      var ls = _locks[resourceKey];
-      if(!ls || !ls.lockId) throw new Error("Lock not held. Acquire lock before write.");
-    }
-
-    var p = normalizePayload(payload, resourceKey);
-    p.meta.updatedAt = new Date().toISOString();
-    var u = ownerFromUser(storeGetUser());
-    p.meta.updatedBy = u.username;
-    p.meta.updatedRole = u.role;
-    p.meta.storeVer = STORE_VER;
-
-    var text = JSON.stringify(p, null, 2);
-    var rev = str(opts.rev || (_memCache[resourceKey] && _memCache[resourceKey].rev) || "");
-    var mode = rev ? { ".tag":"update", update:rev } : { ".tag":"overwrite" };
-
-    var meta = await dbxUploadPath(res.db.path, text, mode);
-    var newRev = meta && meta.rev ? meta.rev : "";
-
-    _memCache[resourceKey] = { payload:p, rev:newRev, loadedAt:now() };
-    savePayloadCache(resourceKey, p, newRev);
-
-    try{ window.dispatchEvent(new CustomEvent("tasun:db-updated",{ detail:{ resourceKey:resourceKey, rev:newRev } })); }catch(e){}
-    return { rev:newRev, meta:meta };
-  }
-
-  // ----- Lock -----
-  function lockCacheKey(resourceKey){ return _storeCfg.cachePrefix + "lock__" + resourceKey; }
-  function saveLockCache(resourceKey, obj, rev){
-    try{ localStorage.setItem(lockCacheKey(resourceKey), safeJsonStringify({ savedAt:now(), rev:str(rev), lock:obj })); }catch(e){}
-  }
-  function loadLockCache(resourceKey){
-    try{
-      var o = jsonParse(localStorage.getItem(lockCacheKey(resourceKey)), null);
-      if(o && o.lock) return o;
-    }catch(e){}
-    return null;
-  }
-  function normalizeLock(obj, resourceKey){
-    obj = (obj && typeof obj==="object") ? obj : {};
-    if(!obj.schema) obj.schema = "tasun.lock.v1";
-    obj.resource = resourceKey;
-    if(!obj.owner || typeof obj.owner!=="object") obj.owner = { username:"unknown", role:"read", device:"" };
-    obj.acquiredAt = Number(obj.acquiredAt)||0;
-    obj.heartbeatAt = Number(obj.heartbeatAt)||0;
-    obj.expiresAt = Number(obj.expiresAt)||0;
-    obj.ttlSec = clamp(Number(obj.ttlSec)||90, 30, 600);
-    obj.lockId = str(obj.lockId||"");
-    return obj;
-  }
-  function isExpired(lockObj){
-    var ex = Number(lockObj && lockObj.expiresAt) || 0;
-    return ex <= now();
-  }
-
-  async function lockRead(resourceKey){
-    await loadRegistry();
-    var res = resolveResource(resourceKey);
-    if(!res) throw new Error("Unknown resourceKey: "+resourceKey);
-
-    if(res.lock.path){
-      try{
-        var dl = await dbxDownloadPath(res.lock.path);
-        var obj = normalizeLock(jsonParse(dl.text,null), resourceKey);
-        saveLockCache(resourceKey, obj, dl.rev||"");
-        return { lock:obj, rev:dl.rev||"", source:"dropbox" };
-      }catch(e1){
-        storeStatus("warn","Lock 讀取失敗，改用快取/HTTP（若有）",{ resourceKey:resourceKey, error:str(e1&&e1.message) });
-      }
-    }
-    if(res.lock.url){
-      try{
-        var url = addV(res.lock.url, _storeCfg.appVer);
-        var r2 = await fetchWithTimeout(url, { method:"GET", cache:"no-store" }, _storeCfg.fetchTimeoutMs);
-        if(!r2.ok) throw new Error("http "+r2.status);
-        var obj2 = normalizeLock(await r2.json(), resourceKey);
-        saveLockCache(resourceKey, obj2, "");
-        return { lock:obj2, rev:"", source:"http" };
-      }catch(e2){
-        storeStatus("warn","Lock HTTP 讀取失敗，改用快取",{ resourceKey:resourceKey, error:str(e2&&e2.message) });
-      }
-    }
-    var c = loadLockCache(resourceKey);
-    if(c && c.lock) return { lock: normalizeLock(c.lock, resourceKey), rev:str(c.rev||""), source:"cache" };
-    return { lock: normalizeLock({}, resourceKey), rev:"", source:"empty" };
-  }
-
-  async function lockWrite(resourceKey, lockObj, opts){
-    opts = opts || {};
-    await loadRegistry();
-    var res = resolveResource(resourceKey);
-    if(!res) throw new Error("Unknown resourceKey: "+resourceKey);
-    if(!res.lock.path) throw new Error("This resource has no Dropbox lock.path (cannot write lock).");
-
-    var obj = normalizeLock(lockObj, resourceKey);
-    var text = JSON.stringify(obj, null, 2);
-    var rev = str(opts.rev||"");
-    var mode = rev ? { ".tag":"update", update:rev } : { ".tag":"overwrite" };
-
-    var meta = await dbxUploadPath(res.lock.path, text, mode);
-    var newRev = meta && meta.rev ? meta.rev : "";
-    saveLockCache(resourceKey, obj, newRev);
-    return { rev:newRev, meta:meta };
-  }
-
-  function startHeartbeat(resourceKey){
-    var st = _locks[resourceKey];
-    if(!st || !st.lockId) return;
-    if(st.hbTimer) return;
-    var intervalMs = Math.max(10000, Math.floor(st.ttlSec*1000/2));
-    st.hbTimer = setInterval(function(){ lockHeartbeat(resourceKey).catch(function(){}); }, intervalMs);
-  }
-  function stopHeartbeat(resourceKey){
-    var st = _locks[resourceKey];
-    if(!st) return;
-    if(st.hbTimer){ try{ clearInterval(st.hbTimer); }catch(e){} st.hbTimer=null; }
-  }
-
-  async function lockAcquire(resourceKey, owner, opts){
-    opts = opts || {};
-    owner = owner || ownerFromUser(storeGetUser());
-    var ttlSec = clamp(Number(opts.ttlSec)||90, 30, 600);
-    var waitMs = clamp(Number(opts.waitMs)||8000, 0, 60000);
-    var retryDelayMs = clamp(Number(opts.retryDelayMs)||650, 250, 5000);
-
-    await loadRegistry();
-    var res = resolveResource(resourceKey);
-    if(!res) throw new Error("Unknown resourceKey: "+resourceKey);
-    if(!res.lock.path) throw new Error("This resource has no Dropbox lock.path (cannot lock).");
-
-    var myLockId = uuid();
-    var start = now();
-
-    while(true){
-      var cur = await lockRead(resourceKey);
-      var lockObj = normalizeLock(cur.lock, resourceKey);
-      var curRev = str(cur.rev||"");
-      var free = (!lockObj.lockId) || isExpired(lockObj);
-
-      if(free){
-        var ts = now();
-        var newLock = {
-          schema:"tasun.lock.v1",
-          resource:resourceKey,
-          lockId:myLockId,
-          owner:owner,
-          acquiredAt:ts,
-          heartbeatAt:ts,
-          expiresAt:ts + ttlSec*1000,
-          ttlSec:ttlSec
-        };
-        try{
-          var wr = await lockWrite(resourceKey, newLock, { rev: curRev });
-          _locks[resourceKey] = { lockId: myLockId, expiresAt:newLock.expiresAt, ttlSec:ttlSec, lastLockObj:newLock, lockRev:wr.rev||"", hbTimer:null };
-          startHeartbeat(resourceKey);
-          storeStatus("info","已取得鎖",{ resourceKey:resourceKey, owner:owner.username, ttlSec:ttlSec });
-          return { lockId:myLockId, expiresAt:newLock.expiresAt, ttlSec:ttlSec };
-        }catch(e1){
-          storeStatus("warn","取得鎖失敗，重試中…",{ resourceKey:resourceKey, error:str(e1&&e1.message) });
-        }
-      }else{
-        var who = (lockObj.owner && lockObj.owner.username) ? lockObj.owner.username : "unknown";
-        var leftMs = (Number(lockObj.expiresAt)||0) - now();
-        storeStatus("info","鎖被占用："+who,{ resourceKey:resourceKey, leftMs:leftMs });
-      }
-
-      if(waitMs<=0) throw new Error("Lock busy.");
-      if(now()-start > waitMs) throw new Error("Lock timeout.");
-      await sleep(retryDelayMs);
-    }
-  }
-
-  async function lockHeartbeat(resourceKey){
-    var st = _locks[resourceKey];
-    if(!st || !st.lockId) return false;
-
-    var cur = await lockRead(resourceKey);
-    var lockObj = normalizeLock(cur.lock, resourceKey);
-    var curRev = str(cur.rev||"");
-
-    if(str(lockObj.lockId) !== str(st.lockId)){
-      stopHeartbeat(resourceKey);
-      delete _locks[resourceKey];
-      storeStatus("warn","已失去鎖（lockId 不一致）",{ resourceKey:resourceKey });
-      return false;
-    }
-
-    var ts = now();
-    lockObj.heartbeatAt = ts;
-    lockObj.expiresAt = ts + (st.ttlSec*1000);
-
-    try{
-      var wr = await lockWrite(resourceKey, lockObj, { rev: curRev });
-      st.expiresAt = lockObj.expiresAt;
-      st.lastLockObj = lockObj;
-      st.lockRev = wr.rev || "";
-      return true;
-    }catch(e){
-      storeStatus("warn","鎖心跳更新失敗",{ resourceKey:resourceKey, error:str(e&&e.message) });
-      return false;
-    }
-  }
-
-  async function lockRelease(resourceKey){
-    var st = _locks[resourceKey];
-    if(!st || !st.lockId) return true;
-
-    try{
-      var cur = await lockRead(resourceKey);
-      var lockObj = normalizeLock(cur.lock, resourceKey);
-      var curRev = str(cur.rev||"");
-
-      if(str(lockObj.lockId) !== str(st.lockId)){
-        stopHeartbeat(resourceKey);
-        delete _locks[resourceKey];
-        return true;
-      }
-
-      lockObj.heartbeatAt = now();
-      lockObj.expiresAt = 0;
-      await lockWrite(resourceKey, lockObj, { rev: curRev });
-
-      stopHeartbeat(resourceKey);
-      delete _locks[resourceKey];
-      storeStatus("info","已釋放鎖",{ resourceKey:resourceKey });
-      return true;
-    }catch(e){
-      storeStatus("warn","釋放鎖失敗（可忽略，過 TTL 會自動失效）",{ resourceKey:resourceKey, error:str(e&&e.message) });
-      stopHeartbeat(resourceKey);
-      delete _locks[resourceKey];
-      return false;
-    }
-  }
-
-  function lockIsHolding(resourceKey){
-    var st = _locks[resourceKey];
-    return !!(st && st.lockId);
-  }
-
-  // ----- Watch -----
-  async function getDbRev(resourceKey){
-    await loadRegistry();
-    var res = resolveResource(resourceKey);
-    if(!res) throw new Error("Unknown resourceKey: "+resourceKey);
-    if(!res.db.path) return "";
-    var meta = await dbxGetMetadata(res.db.path);
-    return meta && meta.rev ? meta.rev : "";
-  }
-
-  function storeWatch(resourceKey, opts){
-    opts = opts || {};
-    var intervalSec = clamp(Number(opts.intervalSec)||8, 3, 120);
-    var onChange = (typeof opts.onChange==="function") ? opts.onChange : null;
-
-    storeUnwatch(resourceKey);
-
-    var w = { intervalMs: intervalSec*1000, timer:null, lastRev:"", onChange:onChange };
-    _watchers[resourceKey] = w;
-
-    w.timer = setInterval(function(){
-      (async function(){
-        try{
-          var r = await getDbRev(resourceKey);
-          if(!w.lastRev) w.lastRev = r;
-          if(r && w.lastRev && r !== w.lastRev){
-            w.lastRev = r;
-            try{ await storeRead(resourceKey, { preferCache:false }); }catch(e2){}
-            if(w.onChange) w.onChange({ resourceKey:resourceKey, rev:r });
-            try{ window.dispatchEvent(new CustomEvent("tasun:db-changed",{ detail:{ resourceKey:resourceKey, rev:r } })); }catch(e3){}
-          }
-        }catch(e){ /* ignore */ }
-      })();
-    }, w.intervalMs);
-
-    return function(){ storeUnwatch(resourceKey); };
-  }
-
-  function storeUnwatch(resourceKey){
-    var w = _watchers[resourceKey];
-    if(!w) return;
-    if(w.timer){ try{ clearInterval(w.timer); }catch(e){} }
-    delete _watchers[resourceKey];
-  }
-
-  async function storeTransaction(resourceKey, mutator, opts){
-    opts = opts || {};
-    if(typeof mutator!=="function") throw new Error("mutator must be function(payload)=>payload|void");
-    var owner = opts.owner || ownerFromUser(storeGetUser());
-    var ttlSec = clamp(Number(opts.ttlSec)||90, 30, 600);
-
-    await lockAcquire(resourceKey, owner, { ttlSec:ttlSec, waitMs:opts.waitMs, retryDelayMs:opts.retryDelayMs });
-    try{
-      var r = await storeRead(resourceKey, { preferCache:false });
-      var payload = r.payload, rev = r.rev || "";
-      var out = await mutator(payload);
-      if(out && typeof out==="object") payload = out;
-      var wr = await storeWrite(resourceKey, payload, { rev:rev, requireLock:true });
-      return { rev: wr.rev, payload: payload };
-    }finally{
-      await lockRelease(resourceKey);
-    }
-  }
-
-  // init store (idempotent)
-  Store.init = function(options){
-    options = options || {};
-    _storeCfg.appVer = str(options.appVer || window.TASUN_APP_VER || "").trim();
-    _storeCfg.resourcesUrl = str(options.resourcesUrl || _storeCfg.resourcesUrl || "").trim();
-    _storeCfg.resourcesInline = (options.resourcesInline && typeof options.resourcesInline==="object") ? options.resourcesInline : null;
-
-    _storeCfg.tokenKey = str(options.tokenKey || _storeCfg.tokenKey);
-    _storeCfg.getToken = (typeof options.getToken==="function") ? options.getToken : null;
-    _storeCfg.getUser  = (typeof options.getUser==="function") ? options.getUser  : null;
-    _storeCfg.onStatus = (typeof options.onStatus==="function") ? options.onStatus : null;
-    _storeCfg.fetchTimeoutMs = Number(options.fetchTimeoutMs)||_storeCfg.fetchTimeoutMs;
-
-    Store.storeVer = STORE_VER;
-    Store.version = STORE_VER;
-    Store.cfg = Object.assign({}, _storeCfg);
-
-    _registryLoaded=false; _registry=null; _registryLoading=null;
-    storeStatus("info","TasunDropboxStore init",{ storeVer:STORE_VER, appVer:_storeCfg.appVer });
-    return Store;
-  };
-
-  Store.ready = async function(){ await loadRegistry(); return true; };
-
-  Store.getToken = storeGetToken;
-  Store.getUser = storeGetUser;
-  Store.ownerFromUser = ownerFromUser;
-  Store.loadRegistry = loadRegistry;
-  Store.resolve = function(resourceKey){ return resolveResource(resourceKey); };
-
-  Store.read = storeRead;
-  Store.write = storeWrite;
-  Store.transaction = storeTransaction;
-
-  Store.lock = {
-    read: lockRead,
-    acquire: lockAcquire,
-    heartbeat: lockHeartbeat,
-    release: lockRelease,
-    isHolding: lockIsHolding
-  };
-
-  Store.watch = storeWatch;
-  Store.unwatch = storeUnwatch;
-
-  window.TasunDropboxStore = Store;
-
-  // ============================================================
-  // 2) Cloud Kit wrapper => window.TasunCloudKit
-  // ============================================================
+  var TasunCloudKit = window.TasunCloudKit || {};
   var KIT_VER = "20260129_01";
 
-  var _kitCfg = {
-    appVer: str(window.TASUN_APP_VER || "").trim(),
+  var CFG = {
+    appVer: "",
     resourcesUrl: "tasun-resources.json",
-    resourcesInline: null,
-    tokenKey: "tasun_dropbox_token_v1",
-    getToken: null,
-    getUser: null,
-    // ✅ NEW: ui.hideLockButtons
-    ui: { enabled: true, hideLockButtons: false }
+    ui: {
+      enabled: true,
+      hideLockButtons: false,
+      position: "bottom-right" // bottom-right | bottom-left | top-right | top-left
+    }
   };
 
-  function defaultGetUser(){
-    // Prefer TasunCore.Auth if exists
-    try{
-      var Core = window.TasunCore;
-      if(Core && Core.Auth){
-        var role = (Core.Auth.role && Core.Auth.role()) || "read";
-        var cur = (Core.Auth.current && Core.Auth.current()) || null;
-        var username = (cur && (cur.username || cur.user || cur.name)) ? (cur.username || cur.user || cur.name) : "anonymous";
-        return { username: username, role: role };
-      }
-    }catch(e){}
-    return { username:"anonymous", role:"read" };
+  function isObj(x){ return !!x && typeof x === "object" && !Array.isArray(x); }
+  function str(v){ return (v === undefined || v === null) ? "" : String(v); }
+  function norm(v){ return str(v).trim(); }
+  function jsonParse(s, fallback){ try{ return JSON.parse(s); }catch(e){ return fallback; } }
+
+  // FNV-1a hash for change detection
+  function fnv1a(s){
+    s = str(s);
+    var h = 0x811c9dc5;
+    for(var i=0;i<s.length;i++){
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0).toString(16).padStart(8,"0");
   }
 
-  function canWriteByUser(u){
-    var role = str(u && u.role || "read").toLowerCase();
-    return role==="admin" || role==="write";
+  // Safe fetch JSON
+  async function fetchJSON(url, opt){
+    var r = await fetch(url, opt || {});
+    var t = await r.text();
+    if(!r.ok){
+      var err = new Error("HTTP " + r.status + " " + r.statusText);
+      err.status = r.status;
+      err.body = t;
+      throw err;
+    }
+    return jsonParse(t, null);
   }
 
-  function makeStatusBar(){
-    var el = document.getElementById("tasunCloudStatusBar");
-    if(el) return el;
+  function shallowClone(o){
+    if(!isObj(o)) return o;
+    var x = {};
+    for(var k in o){ if(Object.prototype.hasOwnProperty.call(o,k)) x[k] = o[k]; }
+    return x;
+  }
 
-    el = document.createElement("div");
-    el.id = "tasunCloudStatusBar";
-    el.setAttribute("role","status");
-    el.style.cssText = [
-      "position:fixed","left:10px","right:10px","bottom:10px",
-      "z-index:99999",
-      "display:flex","align-items:center","gap:10px",
-      "padding:8px 10px",
-      "border-radius:999px",
-      "border:1px solid rgba(246,214,150,.28)",
-      "background:rgba(14,18,16,.72)",
-      "backdrop-filter: blur(8px)",
-      "color:rgba(246,214,150,.96)",
-      "font: 600 13px/1.2 system-ui, -apple-system, Segoe UI, Arial",
-      "letter-spacing:.04em",
-      "box-shadow:0 18px 50px rgba(0,0,0,.35)"
-    ].join(";");
+  function now(){ return Date.now(); }
 
-    el.innerHTML =
-      '<span data-part="msg" style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Cloud: —</span>' +
-      '<button data-act="sync"   style="border:1px solid rgba(246,214,150,.25);background:rgba(255,255,255,.06);color:inherit;border-radius:999px;padding:6px 10px;cursor:pointer;">同步</button>' +
-      '<button data-act="lock"   style="border:1px solid rgba(246,214,150,.25);background:rgba(255,255,255,.06);color:inherit;border-radius:999px;padding:6px 10px;cursor:pointer;">取得鎖</button>' +
-      '<button data-act="unlock" style="border:1px solid rgba(246,214,150,.25);background:rgba(255,255,255,.06);color:inherit;border-radius:999px;padding:6px 10px;cursor:pointer;display:none;">釋放鎖</button>';
+  // =============== UI ===============
+  var UI = {
+    el: null,
+    statusEl: null,
+    lockBtn: null,
+    unlockBtn: null,
+    syncBtn: null,
+    mounted: false
+  };
 
+  function uiPosStyle(pos){
+    var s = { top:"auto", left:"auto", right:"auto", bottom:"auto" };
+    switch(pos){
+      case "top-left": s.top="12px"; s.left="12px"; break;
+      case "top-right": s.top="12px"; s.right="12px"; break;
+      case "bottom-left": s.bottom="12px"; s.left="12px"; break;
+      default: s.bottom="12px"; s.right="12px"; break;
+    }
+    return s;
+  }
+
+  function ensureUI(){
+    if(!CFG.ui || !CFG.ui.enabled) return null;
+    if(UI.mounted && UI.el) return UI;
+
+    // style
+    if(!document.getElementById("tasun-cloud-kit-ui-style")){
+      var st = document.createElement("style");
+      st.id = "tasun-cloud-kit-ui-style";
+      st.textContent = `
+#tasunCloudKitUI{
+  position: fixed;
+  z-index: 9998;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(246,214,150,.22);
+  background: linear-gradient(180deg, rgba(14,18,16,.64), rgba(14,18,16,.38));
+  box-shadow: 0 18px 50px rgba(0,0,0,.28);
+  color: rgba(246,214,150,.96);
+  font-family: system-ui, -apple-system, "Segoe UI", Arial, "Noto Sans TC", sans-serif;
+  min-width: 210px;
+  backdrop-filter: blur(2px);
+}
+#tasunCloudKitUI .row{
+  display:flex; align-items:center; justify-content:space-between;
+  gap:10px;
+}
+#tasunCloudKitUI .status{
+  font-size: 12.5px;
+  letter-spacing: .04em;
+  text-shadow: 0 1px 1px rgba(0,0,0,.18);
+  white-space: nowrap;
+  opacity: .95;
+}
+#tasunCloudKitUI .btns{ display:flex; gap:8px; }
+#tasunCloudKitUI button{
+  appearance:none;
+  border: 1px solid rgba(246,214,150,.20);
+  background: linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.04));
+  color: rgba(246,214,150,.98);
+  border-radius: 999px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  letter-spacing: .04em;
+  box-shadow: 0 12px 22px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.22);
+}
+#tasunCloudKitUI button:disabled{ opacity:.45; cursor:not-allowed; box-shadow:none; }
+#tasunCloudKitUI.hideLocks .lockBtn,
+#tasunCloudKitUI.hideLocks .unlockBtn{
+  display:none !important;
+}
+      `.trim();
+      document.head.appendChild(st);
+    }
+
+    var el = document.createElement("div");
+    el.id = "tasunCloudKitUI";
+    var p = uiPosStyle(CFG.ui.position || "bottom-right");
+    el.style.top = p.top; el.style.left = p.left; el.style.right = p.right; el.style.bottom = p.bottom;
+
+    if(CFG.ui.hideLockButtons) el.classList.add("hideLocks");
+
+    el.innerHTML = `
+      <div class="row">
+        <div class="status" id="tasunCloudKitStatus">雲端：初始化…</div>
+        <div class="btns">
+          <button class="lockBtn"   id="tasunCloudKitLockBtn"   type="button">鎖定</button>
+          <button class="unlockBtn" id="tasunCloudKitUnlockBtn" type="button">解鎖</button>
+          <button class="syncBtn"   id="tasunCloudKitSyncBtn"   type="button">同步</button>
+        </div>
+      </div>
+    `;
     document.body.appendChild(el);
-    return el;
+
+    UI.el = el;
+    UI.statusEl = document.getElementById("tasunCloudKitStatus");
+    UI.lockBtn = document.getElementById("tasunCloudKitLockBtn");
+    UI.unlockBtn = document.getElementById("tasunCloudKitUnlockBtn");
+    UI.syncBtn = document.getElementById("tasunCloudKitSyncBtn");
+    UI.mounted = true;
+
+    return UI;
   }
 
-  function setBarMsg(bar, text){
-    if(!bar) return;
-    var msg = bar.querySelector('[data-part="msg"]');
-    if(msg) msg.textContent = text;
+  function uiSetStatus(msg){
+    if(!UI || !UI.statusEl) return;
+    UI.statusEl.textContent = msg;
   }
 
-  function setBarButtons(bar, st){
-    if(!bar) return;
-    var btnLock = bar.querySelector('[data-act="lock"]');
-    var btnUnlk = bar.querySelector('[data-act="unlock"]');
+  function uiBindHandlers(ctrl){
+    if(!UI || !UI.mounted) return;
 
-    // ✅ NEW: hide lock buttons regardless of role/lock state
-    var hideLocks = !!(_kitCfg.ui && _kitCfg.ui.hideLockButtons);
-    if(hideLocks){
-      if(btnLock) btnLock.style.display = "none";
-      if(btnUnlk) btnUnlk.style.display = "none";
-      return;
+    if(UI.lockBtn){
+      UI.lockBtn.onclick = function(){
+        ctrl.lock().catch(function(e){
+          uiSetStatus("雲端：鎖定失敗");
+        });
+      };
     }
-
-    // read-only => hide both
-    if(st.readOnly){
-      if(btnLock) btnLock.style.display = "none";
-      if(btnUnlk) btnUnlk.style.display = "none";
-      return;
+    if(UI.unlockBtn){
+      UI.unlockBtn.onclick = function(){
+        ctrl.unlock().catch(function(e){
+          uiSetStatus("雲端：解鎖失敗");
+        });
+      };
     }
-
-    // writable
-    if(st.holdingLock){
-      if(btnLock) btnLock.style.display = "none";
-      if(btnUnlk) btnUnlk.style.display = "inline-block";
-    }else{
-      if(btnLock) btnLock.style.display = "inline-block";
-      if(btnUnlk) btnUnlk.style.display = "none";
+    if(UI.syncBtn){
+      UI.syncBtn.onclick = function(){
+        ctrl.pullNow().catch(function(e){
+          uiSetStatus("雲端：同步失敗");
+        });
+      };
     }
   }
 
-  function computeDelta(basePayload, localPayload, pk){
-    pk = pk || "uid";
-    basePayload = isObj(basePayload) ? basePayload : { db:[] };
-    localPayload = isObj(localPayload) ? localPayload : { db:[] };
+  // =============== Resources resolve ===============
+  function normalizeResourceShape(raw, resourceKey){
+    // Accept multiple shapes:
+    // 1) { resources: { key: {...} } }
+    // 2) { resources: [ { key, readUrl, writeUrl, ... } ] }
+    // 3) { key: {...} }
+    // 4) [ { key, ... } ]
+    if(!raw) return null;
 
-    var baseDb = Array.isArray(basePayload.db) ? basePayload.db : [];
-    var localDb = Array.isArray(localPayload.db) ? localPayload.db : [];
+    var hit = null;
 
-    var baseMap = new Map();
-    baseDb.forEach(function(r){
-      var k = str(r && r[pk]);
-      if(k) baseMap.set(k, r);
-    });
+    function pickFromObj(obj){
+      if(!isObj(obj)) return null;
+      if(isObj(obj.resources) && isObj(obj.resources[resourceKey])) return obj.resources[resourceKey];
+      if(isObj(obj[resourceKey])) return obj[resourceKey];
+      return null;
+    }
 
-    var localMap = new Map();
-    localDb.forEach(function(r){
-      var k = str(r && r[pk]);
-      if(k) localMap.set(k, r);
-    });
+    hit = pickFromObj(raw);
+    if(hit) return hit;
 
-    var added = [];
-    var changed = [];
-    var deleted = [];
+    if(Array.isArray(raw)){
+      hit = raw.find(function(x){
+        return isObj(x) && norm(x.key) === resourceKey;
+      }) || null;
+      if(hit) return hit;
+    }
 
-    localDb.forEach(function(r){
-      var k = str(r && r[pk]);
-      if(!k) return;
-      if(!baseMap.has(k)){
-        added.push(r);
-      }else{
-        var b = baseMap.get(k);
-        if(rowFingerprint(b) !== rowFingerprint(r)) changed.push(r);
+    if(isObj(raw) && Array.isArray(raw.resources)){
+      hit = raw.resources.find(function(x){
+        return isObj(x) && norm(x.key) === resourceKey;
+      }) || null;
+      if(hit) return hit;
+    }
+
+    return null;
+  }
+
+  async function loadResourcesDocument(){
+    var url = norm(CFG.resourcesUrl) || "tasun-resources.json";
+
+    try{
+      return await fetchJSON(url, { cache: "no-store" });
+    }catch(e){
+      // soft fallback if someone typed ".json.json"
+      if(/\.json\.json$/i.test(url)){
+        var url2 = url.replace(/\.json\.json$/i, ".json");
+        try{
+          return await fetchJSON(url2, { cache: "no-store" });
+        }catch(e2){}
       }
-    });
-
-    baseDb.forEach(function(r){
-      var k = str(r && r[pk]);
-      if(!k) return;
-      if(!localMap.has(k)) deleted.push(r);
-    });
-
-    return { added:added, changed:changed, deleted:deleted };
-  }
-
-  function ensureUidDb(db, pk){
-    pk = pk || "uid";
-    if(!Array.isArray(db)) return db;
-    for(var i=0;i<db.length;i++){
-      var r = db[i];
-      if(!isObj(r)) continue;
-      if(!str(r[pk]).trim()) r[pk] = uuid();
+      throw e;
     }
-    return db;
   }
 
-  function maxId(db, idField){
-    idField = idField || "id";
-    var m = 0;
-    if(!Array.isArray(db)) return 0;
-    for(var i=0;i<db.length;i++){
-      var n = Number(db[i] && db[i][idField]);
-      if(Number.isFinite(n) && n>m) m=n;
+  // =============== Transport ===============
+  function buildTransport(resource){
+    // resource fields we try:
+    // readUrl / writeUrl / lockUrl / unlockUrl
+    // OR baseUrl + actions
+    var readUrl   = norm(resource.readUrl || resource.read || resource.getUrl || resource.urlRead || "");
+    var writeUrl  = norm(resource.writeUrl || resource.write || resource.putUrl || resource.urlWrite || "");
+    var lockUrl   = norm(resource.lockUrl || resource.lock || "");
+    var unlockUrl = norm(resource.unlockUrl || resource.unlock || "");
+
+    var baseUrl = norm(resource.baseUrl || resource.endpoint || "");
+
+    function withAction(u, action){
+      if(!u) return "";
+      try{
+        var uu = new URL(u, document.baseURI);
+        uu.searchParams.set("op", action);
+        return uu.toString();
+      }catch(e){
+        // relative or malformed; do simple
+        return u + (u.indexOf("?")>=0 ? "&" : "?") + "op=" + encodeURIComponent(action);
+      }
     }
-    return m;
+
+    if(!readUrl && baseUrl) readUrl = withAction(baseUrl, "read");
+    if(!writeUrl && baseUrl) writeUrl = withAction(baseUrl, "write");
+    if(!lockUrl && baseUrl) lockUrl = withAction(baseUrl, "lock");
+    if(!unlockUrl && baseUrl) unlockUrl = withAction(baseUrl, "unlock");
+
+    async function read(resourceKey){
+      if(!readUrl) throw new Error("No readUrl for resource " + resourceKey);
+      // allow either GET returning payload or {payload:...}
+      var obj = await fetchJSON(readUrl, { cache:"no-store" });
+      if(obj && isObj(obj) && ("payload" in obj)) return obj.payload;
+      return obj;
+    }
+
+    async function write(resourceKey, payload, lockToken, owner){
+      if(!writeUrl) throw new Error("No writeUrl for resource " + resourceKey);
+      var body = {
+        resourceKey: resourceKey,
+        owner: owner || "",
+        appVer: CFG.appVer || "",
+        ts: now(),
+        lockToken: lockToken || "",
+        payload: payload
+      };
+      var obj = await fetchJSON(writeUrl, {
+        method: "POST",
+        headers: { "Content-Type":"application/json" },
+        body: JSON.stringify(body)
+      });
+      // allow endpoint to return saved payload
+      if(obj && isObj(obj) && ("payload" in obj)) return obj.payload;
+      return payload;
+    }
+
+    async function lock(resourceKey, owner, ttlSec){
+      if(!lockUrl) return { ok:true, supported:false };
+      var body = {
+        resourceKey: resourceKey,
+        owner: owner || "",
+        ttlSec: Number(ttlSec||30),
+        ts: now()
+      };
+      var obj = await fetchJSON(lockUrl, {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify(body)
+      });
+      // expected: { ok:true, token:"...", until:123 } OR similar
+      return obj || { ok:true };
+    }
+
+    async function unlock(resourceKey, owner, token){
+      if(!unlockUrl) return { ok:true, supported:false };
+      var body = { resourceKey: resourceKey, owner: owner||"", token: token||"", ts: now() };
+      var obj = await fetchJSON(unlockUrl, {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify(body)
+      });
+      return obj || { ok:true };
+    }
+
+    return { read:read, write:write, lock:lock, unlock:unlock, urls:{readUrl,writeUrl,lockUrl,unlockUrl} };
   }
 
-  function indexByPk(db, pk){
+  // =============== Merge ===============
+  function normalizePayload(payload){
+    return (payload && isObj(payload)) ? payload : {};
+  }
+
+  function buildRowMap(rows, pk){
     var map = new Map();
-    if(!Array.isArray(db)) return map;
-    for(var i=0;i<db.length;i++){
-      var r = db[i];
+    if(!Array.isArray(rows)) return map;
+    for(var i=0;i<rows.length;i++){
+      var r = rows[i];
       if(!isObj(r)) continue;
-      var k = str(r[pk]).trim();
-      if(k) map.set(k, r);
+      var k = norm(r[pk]);
+      if(!k) continue;
+      map.set(k, r);
     }
     return map;
   }
 
-  function stashConflicts(resourceKey, conflicts){
-    try{
-      localStorage.setItem("tasun_cloud_conflicts__"+resourceKey, safeJsonStringify({
-        savedAt: now(),
-        conflicts: conflicts
-      }));
-    }catch(e){}
+  function stableStringifyRow(row){
+    // stable-ish stringify for conflict compare
+    try{ return JSON.stringify(row); }catch(e){ return String(row); }
   }
 
-  function mount(pageOpts){
-    pageOpts = pageOpts || {};
-    var resourceKey = str(pageOpts.resourceKey).trim();
-    if(!resourceKey) throw new Error("mount(): resourceKey is required");
+  function mergeByDiff(basePayload, localPayload, remotePayload, opt){
+    opt = opt || {};
+    var pk = opt.pk;
+    var idField = opt.idField;
+    var counterField = opt.counterField;
+    var conflictPolicy = norm(opt.conflictPolicy) || "stash-remote"; // stash-remote | remote-wins | local-wins
 
-    var pk = str(pageOpts.pk || "uid").trim() || "uid";
-    var idField = str(pageOpts.idField || "id").trim() || "id";
-    var counterField = str(pageOpts.counterField || "counter").trim() || "counter";
+    basePayload = normalizePayload(basePayload);
+    localPayload = normalizePayload(localPayload);
+    remotePayload = normalizePayload(remotePayload);
 
-    var getLocal = pageOpts.getLocal;
-    var apply = pageOpts.apply;
+    var baseRows   = Array.isArray(basePayload.db) ? basePayload.db : [];
+    var localRows  = Array.isArray(localPayload.db) ? localPayload.db : [];
+    var remoteRows = Array.isArray(remotePayload.db) ? remotePayload.db : [];
 
-    if(typeof getLocal!=="function") throw new Error("mount(): getLocal() is required");
-    if(typeof apply!=="function") throw new Error("mount(): apply(payload) is required");
+    var baseMap   = buildRowMap(baseRows, pk);
+    var localMap  = buildRowMap(localRows, pk);
+    var remoteMap = buildRowMap(remoteRows, pk);
 
-    var mergeOpt = pageOpts.merge || {};
-    var conflictPolicy = str(mergeOpt.conflictPolicy || "stash-remote");
+    var conflicts = [];
 
-    var watchOpt = pageOpts.watch || null;
-    var watchIntervalSec = watchOpt ? clamp(Number(watchOpt.intervalSec)||8, 3, 120) : 0;
+    // diff: base -> local
+    var deleted = [];
+    var added = [];
+    var updated = [];
 
-    var u = (typeof _kitCfg.getUser==="function") ? _kitCfg.getUser() : defaultGetUser();
-    var readOnly = (pageOpts.readOnly===true) ? true : (pageOpts.readOnly===false ? false : !canWriteByUser(u));
+    baseMap.forEach(function(v, k){
+      if(!localMap.has(k)) deleted.push(k);
+    });
+    localMap.forEach(function(v, k){
+      if(!baseMap.has(k)) added.push(k);
+      else{
+        var a = stableStringifyRow(baseMap.get(k));
+        var b = stableStringifyRow(v);
+        if(a !== b) updated.push(k);
+      }
+    });
 
-    // status bar
-    var bar = null;
-    if(_kitCfg.ui && _kitCfg.ui.enabled !== false){
-      try{ bar = makeStatusBar(); }catch(e){}
-    }
+    // apply local changes onto remote latest
+    deleted.forEach(function(k){
+      if(remoteMap.has(k)) remoteMap.delete(k);
+    });
 
-    var st = {
-      resourceKey: resourceKey,
-      readOnly: !!readOnly,
-      holdingLock: false,
-      dirty: false,
-      pendingRev: "",
-      lastRev: "",
-      lastSyncAt: 0,
-      lastSource: "",
-      lastMsg: "",
-      online: (navigator.onLine !== false)
-    };
-
-    function refreshBar(){
-      if(!bar) return;
-      var parts = [];
-      parts.push("Cloud:"+resourceKey);
-      parts.push(st.online ? "Online" : "Offline");
-      if(st.lastSource) parts.push("src:"+st.lastSource);
-      if(st.lastRev) parts.push("rev:"+st.lastRev.slice(0,6));
-      if(st.pendingRev) parts.push("遠端更新待同步");
-      if(st.dirty) parts.push("本機未儲存");
-      if(st.readOnly) parts.push("read-only");
-      else parts.push(st.holdingLock ? "已鎖定" : "未鎖定");
-      setBarMsg(bar, parts.join(" · "));
-      setBarButtons(bar, st);
-    }
-
-    function computeDirty(basePayload){
-      try{
-        var local = getLocal() || {};
-        var localDb = ensureUidDb(Array.isArray(local.db)?local.db:[], pk);
-        var baseDb  = ensureUidDb(Array.isArray(basePayload && basePayload.db)?basePayload.db:[], pk);
-        if(localDb.length !== baseDb.length) return true;
-
-        var baseMap = indexByPk(baseDb, pk);
-        for(var i=0;i<localDb.length;i++){
-          var r = localDb[i];
-          var k = str(r && r[pk]).trim();
-          if(!k || !baseMap.has(k)) return true;
-          if(rowFingerprint(baseMap.get(k)) !== rowFingerprint(r)) return true;
+    function setRow(k, row){
+      if(remoteMap.has(k)){
+        var rr = remoteMap.get(k);
+        var a = stableStringifyRow(rr);
+        var b = stableStringifyRow(row);
+        if(a !== b){
+          // conflict (remote changed too, or just different)
+          if(conflictPolicy === "remote-wins"){
+            // keep remote
+            conflicts.push({ pk:k, kind:"update", local:row, remote:rr, winner:"remote" });
+            return;
+          }
+          // local-wins or stash-remote (default)
+          if(conflictPolicy === "stash-remote"){
+            conflicts.push({ pk:k, kind:"update", local:row, remote:rr, winner:"local" });
+          }
+          remoteMap.set(k, row);
+          return;
         }
-        return false;
-      }catch(e){
-        return true;
+        // same -> no-op
+        return;
+      }else{
+        remoteMap.set(k, row);
       }
     }
 
-    var basePayload = null;
+    updated.forEach(function(k){
+      setRow(k, shallowClone(localMap.get(k)));
+    });
 
-    async function syncNow(){
-      var rr = await Store.read(resourceKey, { preferCache:false });
-      var payload = rr.payload || { db:[], counter:0 };
-      payload.db = ensureUidDb(payload.db, pk);
+    added.forEach(function(k){
+      if(remoteMap.has(k)){
+        // rare collision (same pk)
+        var rr = remoteMap.get(k);
+        var lr = localMap.get(k);
+        if(conflictPolicy === "remote-wins"){
+          conflicts.push({ pk:k, kind:"add-collision", local:lr, remote:rr, winner:"remote" });
+          return;
+        }
+        conflicts.push({ pk:k, kind:"add-collision", local:lr, remote:rr, winner:"local" });
+      }
+      remoteMap.set(k, shallowClone(localMap.get(k)));
+    });
 
-      basePayload = deepClone(payload) || payload;
-      st.lastRev = str(rr.rev||"");
-      st.lastSource = str(rr.source||"");
-      st.lastSyncAt = now();
-      st.pendingRev = "";
-      st.dirty = false;
+    // rebuild rows array
+    var mergedRows = Array.from(remoteMap.values());
 
+    // ensure numeric ids stable; also update counter
+    var maxId = 0;
+    for(var i=0;i<mergedRows.length;i++){
+      var n = Number(mergedRows[i] && mergedRows[i][idField]);
+      if(Number.isFinite(n) && n > maxId) maxId = n;
+    }
+
+    var remoteCounter = Number(remotePayload[counterField] || 0);
+    if(!Number.isFinite(remoteCounter)) remoteCounter = 0;
+    var localCounter = Number(localPayload[counterField] || 0);
+    if(!Number.isFinite(localCounter)) localCounter = 0;
+
+    var mergedCounter = Math.max(remoteCounter, localCounter, maxId);
+
+    mergedRows.sort(function(a,b){
+      var aa = Number(a && a[idField] || 0);
+      var bb = Number(b && b[idField] || 0);
+      if(!Number.isFinite(aa)) aa = 0;
+      if(!Number.isFinite(bb)) bb = 0;
+      return aa - bb;
+    });
+
+    var merged = shallowClone(remotePayload);
+    merged.db = mergedRows;
+    merged[counterField] = mergedCounter;
+
+    return { payload: merged, conflicts: conflicts };
+  }
+
+  function detectOwner(){
+    try{
+      var Core = window.TasunCore;
+      if(Core && Core.Auth && typeof Core.Auth.current === "function"){
+        var u = Core.Auth.current();
+        if(u && u.username) return String(u.username);
+      }
+    }catch(e){}
+    return "anon";
+  }
+
+  // =============== Public API ===============
+  TasunCloudKit.init = function(cfg){
+    cfg = cfg || {};
+    if(isObj(cfg)){
+      if("appVer" in cfg) CFG.appVer = norm(cfg.appVer);
+      if("resourcesUrl" in cfg) CFG.resourcesUrl = norm(cfg.resourcesUrl) || CFG.resourcesUrl;
+      if(isObj(cfg.ui)){
+        CFG.ui = CFG.ui || {};
+        if("enabled" in cfg.ui) CFG.ui.enabled = !!cfg.ui.enabled;
+        if("hideLockButtons" in cfg.ui) CFG.ui.hideLockButtons = !!cfg.ui.hideLockButtons;
+        if("position" in cfg.ui) CFG.ui.position = norm(cfg.ui.position) || CFG.ui.position;
+      }
+    }
+    // create UI lazily later (after DOM ready) to avoid early body null
+    return TasunCloudKit;
+  };
+
+  TasunCloudKit.mount = function(opts){
+    opts = opts || {};
+    var resourceKey  = norm(opts.resourceKey);
+    var pk           = norm(opts.pk || "uid");
+    var idField      = norm(opts.idField || "id");
+    var counterField = norm(opts.counterField || "counter");
+    var conflictPolicy = norm(opts.merge && opts.merge.conflictPolicy) || "stash-remote";
+    var watchSec = Number(opts.watch && opts.watch.intervalSec);
+    if(!Number.isFinite(watchSec) || watchSec < 3) watchSec = 0;
+
+    var getLocal = (typeof opts.getLocal === "function") ? opts.getLocal : function(){ return {}; };
+    var applyFn  = (typeof opts.apply === "function") ? opts.apply : function(){};
+
+    var state = {
+      resourceKey: resourceKey,
+      pk: pk,
+      idField: idField,
+      counterField: counterField,
+      conflictPolicy: conflictPolicy,
+      owner: detectOwner(),
+      lockToken: "",
+      lockSupported: false,
+      resourcesDoc: null,
+      resource: null,
+      transport: null,
+      lastRemoteHash: "",
+      lastAppliedPayload: null,
+      pulling: false,
+      saving: false,
+      timer: 0
+    };
+
+    var readyResolve = null;
+    var readyReject = null;
+    var ready = new Promise(function(res, rej){ readyResolve=res; readyReject=rej; });
+
+    function ensureUIOnDomReady(){
+      if(!CFG.ui || !CFG.ui.enabled) return;
+      var run = function(){
+        try{
+          ensureUI();
+          uiBindHandlers(ctrl);
+          uiSetStatus("雲端：初始化…");
+        }catch(e){}
+      };
+      if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", run);
+      else run();
+    }
+
+    async function ensureResource(){
+      if(state.transport && state.resource) return true;
+      if(!resourceKey) throw new Error("mount() missing resourceKey");
+
+      // UI mount if enabled
+      ensureUIOnDomReady();
+
+      uiSetStatus("雲端：載入資源…");
+
+      var doc = await loadResourcesDocument();
+      state.resourcesDoc = doc;
+
+      var res = normalizeResourceShape(doc, resourceKey);
+      if(!res) throw new Error("resourcesUrl 找不到 resourceKey: " + resourceKey);
+
+      state.resource = res;
+      state.transport = buildTransport(res);
+
+      uiSetStatus("雲端：資源就緒");
+      return true;
+    }
+
+    function stashConflicts(conflicts, remotePayload){
+      if(!conflicts || conflicts.length === 0) return;
       try{
-        localStorage.setItem("tasun_cloud_snapshot__"+resourceKey, safeJsonStringify({
-          savedAt: st.lastSyncAt,
-          rev: st.lastRev,
-          payload: payload
+        var key = "tasunCloudKit_conflicts__" + resourceKey + "__" + now();
+        localStorage.setItem(key, JSON.stringify({
+          ts: now(),
+          resourceKey: resourceKey,
+          conflicts: conflicts,
+          remoteSnapshot: remotePayload
         }));
       }catch(e){}
-
-      apply(payload, { source: rr.source, rev: rr.rev, at: st.lastSyncAt });
-      refreshBar();
-      return rr;
     }
 
-    async function acquireLock(){
-      if(st.readOnly) throw new Error("read-only");
-      var owner = ownerFromUser((typeof _kitCfg.getUser==="function") ? _kitCfg.getUser() : defaultGetUser());
-      var r = await Store.lock.acquire(resourceKey, owner, { ttlSec: 90, waitMs: 8000 });
-      st.holdingLock = true;
-      refreshBar();
-      return r;
+    async function pull(){
+      if(state.pulling) return;
+      state.pulling = true;
+
+      try{
+        await ensureResource();
+
+        uiSetStatus("雲端：同步中…");
+        var remotePayload = await state.transport.read(resourceKey);
+        remotePayload = normalizePayload(remotePayload);
+
+        var h = fnv1a(JSON.stringify(remotePayload || {}));
+        if(h !== state.lastRemoteHash){
+          state.lastRemoteHash = h;
+          state.lastAppliedPayload = shallowClone(remotePayload);
+          applyFn(remotePayload, { source:"remote", conflicts: null });
+        }
+        uiSetStatus("雲端：已同步");
+      }catch(e){
+        uiSetStatus("雲端：同步失敗");
+        throw e;
+      }finally{
+        state.pulling = false;
+      }
     }
 
-    async function releaseLock(){
-      try{ await Store.lock.release(resourceKey); }catch(e){}
-      st.holdingLock = false;
-      refreshBar();
-      return true;
+    async function lock(ttlSec){
+      await ensureResource();
+      var owner = detectOwner();
+      state.owner = owner;
+
+      try{
+        var r = await state.transport.lock(resourceKey, owner, ttlSec || 30);
+        state.lockSupported = !!(r && (r.supported !== false));
+        if(r && (r.token || r.lockToken)) state.lockToken = norm(r.token || r.lockToken);
+        uiSetStatus(r && r.ok === false ? "雲端：被鎖定" : "雲端：已鎖定");
+        return r;
+      }catch(e){
+        uiSetStatus("雲端：鎖定失敗");
+        throw e;
+      }
+    }
+
+    async function unlock(){
+      await ensureResource();
+      var owner = detectOwner();
+      state.owner = owner;
+
+      try{
+        var r = await state.transport.unlock(resourceKey, owner, state.lockToken || "");
+        state.lockToken = "";
+        uiSetStatus("雲端：已解鎖");
+        return r;
+      }catch(e){
+        uiSetStatus("雲端：解鎖失敗");
+        throw e;
+      }
     }
 
     async function saveMerged(){
-      if(st.readOnly) throw new Error("read-only");
+      if(state.saving) return;
+      state.saving = true;
 
-      var local = getLocal() || {};
-      local = isObj(local) ? local : {};
-      local.db = ensureUidDb(Array.isArray(local.db)?local.db:[], pk);
-
-      if(!basePayload){
-        try{ await syncNow(); }catch(e){}
-      }
-      var base = basePayload || { db:[], counter:0 };
-      base.db = ensureUidDb(Array.isArray(base.db)?base.db:[], pk);
-
-      var delta = computeDelta(base, local, pk);
-
-      await acquireLock();
       try{
-        var latest = await Store.read(resourceKey, { preferCache:false });
-        var remote = latest.payload || { db:[], counter:0 };
-        remote.db = ensureUidDb(Array.isArray(remote.db)?remote.db:[], pk);
+        await ensureResource();
 
-        var remoteMap = indexByPk(remote.db, pk);
-        var baseMap = indexByPk(base.db, pk);
+        uiSetStatus("雲端：讀取遠端…");
+        var remoteLatest = await state.transport.read(resourceKey);
+        remoteLatest = normalizePayload(remoteLatest);
 
-        var conflicts = [];
+        var base = state.lastAppliedPayload || remoteLatest; // base for diff
+        var local = normalizePayload(getLocal());
 
-        var curMaxId = Math.max(maxId(remote.db, idField), Number(remote[counterField]||0)||0);
-        delta.added.forEach(function(r){
-          var key = str(r && r[pk]).trim();
-          if(!key) return;
-          if(remoteMap.has(key)) return;
-          curMaxId += 1;
-          var nr = deepClone(r) || r;
-          nr[idField] = curMaxId;
-          remote.db.push(nr);
-          remoteMap.set(key, nr);
+        uiSetStatus("雲端：合併中…");
+        var merged = mergeByDiff(base, local, remoteLatest, {
+          pk: pk,
+          idField: idField,
+          counterField: counterField,
+          conflictPolicy: conflictPolicy
         });
 
-        delta.changed.forEach(function(r){
-          var key = str(r && r[pk]).trim();
-          if(!key) return;
-
-          var remoteRow = remoteMap.get(key);
-          if(!remoteRow){
-            curMaxId += 1;
-            var nr2 = deepClone(r) || r;
-            nr2[idField] = curMaxId;
-            remote.db.push(nr2);
-            remoteMap.set(key, nr2);
-            return;
-          }
-
-          var baseRow = baseMap.get(key);
-          var remoteChanged = baseRow ? (rowFingerprint(baseRow) !== rowFingerprint(remoteRow)) : false;
-
-          if(remoteChanged){
-            conflicts.push({ pk:key, local:r, remote:remoteRow, base:baseRow||null });
-            if(conflictPolicy === "prefer-local"){
-              var keepId = remoteRow[idField];
-              Object.keys(remoteRow).forEach(function(k){ delete remoteRow[k]; });
-              Object.keys(r).forEach(function(k){ remoteRow[k] = r[k]; });
-              remoteRow[idField] = keepId;
-            }else{
-              // stash-remote: keep remote
-            }
-          }else{
-            var keepId2 = remoteRow[idField];
-            Object.keys(remoteRow).forEach(function(k){ delete remoteRow[k]; });
-            Object.keys(r).forEach(function(k){ remoteRow[k] = r[k]; });
-            remoteRow[idField] = keepId2;
-          }
-        });
-
-        remote[counterField] = Math.max(curMaxId, Number(remote[counterField]||0)||0);
-
-        var wr = await Store.write(resourceKey, remote, { rev: latest.rev || "", requireLock:true });
-
-        st.lastRev = str(wr.rev||"");
-        st.lastSource = "dropbox";
-        st.lastSyncAt = now();
-        st.pendingRev = "";
-        st.dirty = false;
-
-        if(conflicts.length){
-          stashConflicts(resourceKey, conflicts);
+        if(merged.conflicts && merged.conflicts.length){
+          stashConflicts(merged.conflicts, remoteLatest);
         }
 
-        basePayload = deepClone(remote) || remote;
-        apply(remote, { source:"dropbox", rev:st.lastRev, at:st.lastSyncAt, conflicts:conflicts.length });
-
-        refreshBar();
-        return { payload: remote, rev: st.lastRev, conflicts: conflicts.length };
-      }finally{
-        await releaseLock();
-      }
-    }
-
-    function status(){
-      st.dirty = basePayload ? computeDirty(basePayload) : false;
-      st.holdingLock = Store.lock.isHolding(resourceKey);
-      st.online = (navigator.onLine !== false);
-      refreshBar();
-      return Object.assign({}, st);
-    }
-
-    var unwatchFn = null;
-    function startWatch(){
-      if(!watchIntervalSec) return;
-      if(unwatchFn) return;
-
-      unwatchFn = Store.watch(resourceKey, {
-        intervalSec: watchIntervalSec,
-        onChange: async function(info){
-          st.pendingRev = str(info && info.rev || "");
-          st.online = (navigator.onLine !== false);
-
-          var dirtyNow = basePayload ? computeDirty(basePayload) : true;
-          st.dirty = dirtyNow;
-
-          if(!dirtyNow){
-            try{ await syncNow(); }catch(e){}
-          }else{
-            refreshBar();
-          }
-        }
-      });
-    }
-
-    function stopWatch(){
-      if(unwatchFn){ try{ unwatchFn(); }catch(e){} unwatchFn=null; }
-      try{ Store.unwatch(resourceKey); }catch(e2){}
-    }
-
-    function destroy(){
-      stopWatch();
-      try{ releaseLock(); }catch(e){}
-      if(bar){
-        try{ bar.remove(); }catch(e2){}
-        bar = null;
-      }
-    }
-
-    if(bar){
-      bar.addEventListener("click", function(ev){
-        var b = ev.target && ev.target.closest ? ev.target.closest("button[data-act]") : null;
-        if(!b) return;
-        var act = b.getAttribute("data-act");
-        if(act==="sync"){
-          syncNow().catch(function(){});
-        }else if(act==="lock"){
-          acquireLock().catch(function(){});
-        }else if(act==="unlock"){
-          releaseLock().catch(function(){});
-        }
-      });
-
-      window.addEventListener("online", function(){ st.online=true; refreshBar(); });
-      window.addEventListener("offline", function(){ st.online=false; refreshBar(); });
-    }
-
-    var ready = (async function(){
-      Store.init({
-        appVer: _kitCfg.appVer,
-        resourcesUrl: _kitCfg.resourcesUrl,
-        resourcesInline: _kitCfg.resourcesInline,
-        tokenKey: _kitCfg.tokenKey,
-        getToken: _kitCfg.getToken || null,
-        getUser:  _kitCfg.getUser || defaultGetUser,
-        onStatus: function(type,msg,detail){
-          st.lastMsg = str(msg);
-          refreshBar();
-        }
-      });
-      await Store.ready();
-
-      await syncNow().catch(function(){
+        // Auto lock/write/release (if lock endpoints exist)
         try{
-          var snap = jsonParse(localStorage.getItem("tasun_cloud_snapshot__"+resourceKey), null);
-          if(snap && snap.payload){
-            basePayload = deepClone(snap.payload) || snap.payload;
-            apply(basePayload, { source:"snapshot", rev:str(snap.rev||""), at:Number(snap.savedAt)||0 });
-            st.lastSource="snapshot";
-            st.lastRev=str(snap.rev||"");
-            st.lastSyncAt=Number(snap.savedAt)||0;
-          }
-        }catch(e){}
-      });
+          await lock(30);
+        }catch(e){
+          // if lock fails, still attempt write (some backends have no lock)
+        }
 
-      startWatch();
-      refreshBar();
-      return true;
-    })();
+        uiSetStatus("雲端：寫入中…");
+        var savedPayload = await state.transport.write(resourceKey, merged.payload, state.lockToken || "", state.owner || "");
+        savedPayload = normalizePayload(savedPayload);
 
-    var cloud = {
-      key: resourceKey,
+        try{ await unlock(); }catch(e){}
+
+        // apply locally
+        state.lastAppliedPayload = shallowClone(savedPayload);
+        state.lastRemoteHash = fnv1a(JSON.stringify(savedPayload || {}));
+        applyFn(savedPayload, { source:"saveMerged", conflicts: merged.conflicts || null });
+
+        uiSetStatus((merged.conflicts && merged.conflicts.length) ? "雲端：已同步（含衝突快照）" : "雲端：已同步");
+        return savedPayload;
+      }catch(e){
+        uiSetStatus("雲端：寫入失敗");
+        throw e;
+      }finally{
+        state.saving = false;
+      }
+    }
+
+    function startWatch(){
+      if(watchSec <= 0) return;
+      if(state.timer) clearInterval(state.timer);
+      state.timer = setInterval(function(){
+        pull().catch(function(){});
+      }, Math.max(3000, Math.floor(watchSec * 1000)));
+    }
+
+    var ctrl = {
       ready: ready,
-      syncNow: syncNow,
+      pullNow: pull,
       saveMerged: saveMerged,
-      status: status,
-      destroy: destroy,
-      store: Store
+      lock: lock,
+      unlock: unlock,
+      info: function(){
+        return {
+          ver: KIT_VER,
+          appVer: CFG.appVer,
+          resourceKey: resourceKey,
+          pk: pk,
+          idField: idField,
+          counterField: counterField,
+          urls: state.transport ? state.transport.urls : null
+        };
+      }
     };
 
-    refreshBar();
-    return cloud;
-  }
+    (async function boot(){
+      try{
+        await ensureResource();
+        await pull();
+        startWatch();
+        readyResolve(true);
+      }catch(e){
+        // still resolve ready to keep app running if cloud fails
+        try{ readyResolve(false); }catch(e2){}
+      }
+    })();
 
-  var Kit = window.TasunCloudKit || {};
-  Kit.version = KIT_VER;
-
-  Kit.init = function(opts){
-    opts = opts || {};
-    _kitCfg.appVer = str(opts.appVer || window.TASUN_APP_VER || _kitCfg.appVer).trim();
-    _kitCfg.resourcesUrl = str(opts.resourcesUrl || _kitCfg.resourcesUrl).trim();
-    _kitCfg.resourcesInline = (opts.resourcesInline && typeof opts.resourcesInline==="object") ? opts.resourcesInline : null;
-
-    _kitCfg.tokenKey = str(opts.tokenKey || _kitCfg.tokenKey);
-    _kitCfg.getToken = (typeof opts.getToken==="function") ? opts.getToken : null;
-    _kitCfg.getUser  = (typeof opts.getUser==="function")  ? opts.getUser  : null;
-
-    // ✅ NEW: merge ui defaults + user ui
-    var uiIn = (opts.ui && typeof opts.ui==="object") ? opts.ui : null;
-    _kitCfg.ui = Object.assign(
-      { enabled:true, hideLockButtons:false },
-      (_kitCfg.ui && typeof _kitCfg.ui==="object") ? _kitCfg.ui : {},
-      uiIn || {}
-    );
-
-    return Kit;
+    return ctrl;
   };
 
-  Kit.mount = mount;
-
-  window.TasunCloudKit = Kit;
+  window.TasunCloudKit = TasunCloudKit;
 
 })(window, document);
