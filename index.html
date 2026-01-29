@@ -14,31 +14,21 @@
 </head>
 
 <body class="locked booting">
-  <!-- ✅把原本 head 的「版本鎖定 + boot/loader 動態載入 + preload」搬到 body 開頭（head 維持標準 10 行） -->
+  <!-- ✅版本鎖定 + APP高度穩定（避免 iOS 地址列跳動）+ 視覺視窗上下遮擋（避免底部字/按鍵被遮）+ preload + 動態載入 -->
   <script>
   (function () {
     "use strict";
 
     const VER = String(window.TASUN_APP_VER || window.APP_VER || "").trim();
-    const ONCE_KEY = "tasun_ver_guard_once_v1";
     const url = new URL(location.href);
     const curV = url.searchParams.get("v") || "";
 
-    // ✅以 APP_VER 為準：若目前 v != APP_VER，直接 replace 成 APP_VER（避免不同電腦不同 v）
+    // ✅✅✅「手機網址沒有 ?v」的根因：之前用 sessionStorage guard 可能讓 curV 空值時不再 replace
+    // 這裡改成：只要 url_v != APP_VER（含空值）就直接 replace 一次，保證所有裝置都會出現 ?v=APP_VER
     if (VER && curV !== VER) {
-      try {
-        const last = sessionStorage.getItem(ONCE_KEY) || "";
-        if (last !== VER) {
-          sessionStorage.setItem(ONCE_KEY, VER);
-          url.searchParams.set("v", VER);
-          location.replace(url.toString());
-          return;
-        }
-      } catch (e) {
-        url.searchParams.set("v", VER);
-        location.replace(url.toString());
-        return;
-      }
+      url.searchParams.set("v", VER);
+      location.replace(url.toString());
+      return;
     }
 
     // ✅提前建立全站 withV（同源才加 v）
@@ -62,7 +52,56 @@
       }
     };
 
-    // ✅建立 preload（等同原 head 的 preloadZen，但 head 保持 10 行）
+    // ✅✅✅ iOS 地址列收合/展開：用「穩定高度」鎖首屏，避免跳動（不追著 vv.height 變動）
+    // 同時提供 --vv-top / --vv-bottom（視覺視窗遮擋），讓底部字與按鍵不被 Safari 工具列吃掉
+    (function initViewportStabilizer(){
+      const root = document.documentElement;
+      let stableH = 0;
+      let stableW = 0;
+
+      function calcVV() {
+        try{
+          const vv = window.visualViewport;
+          const h = Math.round(vv ? vv.height : window.innerHeight);
+          const w = Math.round(vv ? vv.width  : window.innerWidth);
+
+          const top = Math.round(vv ? vv.offsetTop : 0);
+          const bottom = Math.max(0, Math.round(window.innerHeight - (vv ? (vv.height + vv.offsetTop) : window.innerHeight)));
+
+          root.style.setProperty("--vv-top", top + "px");
+          root.style.setProperty("--vv-bottom", bottom + "px");
+
+          // 首屏：鎖定 stableH，避免地址列小幅變動導致跳動
+          if(!stableH){
+            stableH = h; stableW = w;
+          }else{
+            const dw = Math.abs(w - stableW);
+            const dh = Math.abs(h - stableH);
+
+            // ✅大幅變動（旋轉/鍵盤/真正 resize）才更新 stableH
+            if(dw > 140 || dh > 160){
+              stableH = h;
+              stableW = w;
+            }
+          }
+          root.style.setProperty("--appH", stableH + "px");
+        }catch(e){
+          // fallback：至少給 appH
+          try{ root.style.setProperty("--appH", window.innerHeight + "px"); }catch(_){}
+        }
+      }
+
+      calcVV();
+      window.addEventListener("resize", calcVV, { passive:true });
+      window.addEventListener("orientationchange", calcVV, { passive:true });
+      if(window.visualViewport){
+        window.visualViewport.addEventListener("resize", calcVV, { passive:true });
+        window.visualViewport.addEventListener("scroll", calcVV, { passive:true });
+      }
+      document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible") calcVV(); }, { passive:true });
+    })();
+
+    // ✅建立 preload（head 保持精簡，這裡補回）
     try{
       const id = "preloadZen";
       if(!document.getElementById(id)){
@@ -119,7 +158,6 @@
         await loadScript(withV("tasun-boot.js"));
         await loadScript(withV("tasun-loader.js"));
 
-        // ✅本頁啟動（等待 TasunLoader 出現再 start）
         function tryStart(){
           try{
             if(window.TasunLoader && typeof window.TasunLoader.start === "function"){
@@ -129,12 +167,15 @@
                 corePath: "tasun-core.js",
                 forceUrlV: true,
 
-                // ✅以 APP_VER 為準，避免 tasun-version.json 過舊把你拉回舊版
+                // ✅以 APP_VER 為準（避免舊 tasun-version.json 拉回舊版）
                 forceVersionSync: false,
 
                 patchResources: true,
                 networkToast: true,
-                appHeightVar: true,
+
+                // ✅本頁改用「穩定 appH」：避免地址列收合/展開首屏跳動
+                appHeightVar: false,
+
                 preloadId: "preloadZen",
                 zenImgId: "zenImg",
                 appVer: window.TASUN_APP_VER
@@ -149,7 +190,7 @@
           let n = 0;
           const t = setInterval(()=>{
             n++;
-            if(tryStart() || n > 120) clearInterval(t); // 最多等 6 秒
+            if(tryStart() || n > 120) clearInterval(t);
           }, 50);
         }
       })();
@@ -157,22 +198,27 @@
   })();
   </script>
 
-  <!-- ✅把原本 head 的 style 搬到這裡（head 維持標準 10 行） -->
   <style>
     :root{
       /* =========================
-         ✅標示2：三層間隙固定 0.1cm（桌機寬/窄都一致）
+         ✅三層間隙固定 0.1cm
          第1層：body 黑底
          第2層：hero-inner 棕色框底
          第3層：lotus-stage 舞台
          ========================= */
       --gap-01cm: 0.1cm;
-      --outer-side: var(--gap-01cm);      /* 黑底 → 棕底：固定 0.1cm */
-      --frame-inset: var(--gap-01cm);     /* 棕底 → 舞台：固定 0.1cm */
+      --outer-side: var(--gap-01cm);
+      --frame-inset: var(--gap-01cm);
+
+      /* ✅✅✅ 舞台左右放大到邊框：不再限制 1680px（桌機也滿版） */
       --frame-radius: clamp(16px, 1.55vw, 30px);
       --stage-top: var(--frame-inset);
 
-      /* ========= 整體色系（✅不再黑壓字，但外層保持「黑底」層次） ========= */
+      /* iOS 視覺視窗遮擋（由 JS 寫入） */
+      --vv-top: 0px;
+      --vv-bottom: 0px;
+
+      /* ========= 整體色系 ========= */
       --exposure: 1.06;
       --ambient-op: 0.44;
 
@@ -185,7 +231,7 @@
       --zen-posX: 50%;
       --zen-posY: 50%;
 
-      /* ========= 波紋/煙霧（更淡：背景不搶字） ========= */
+      /* ========= 波紋/煙霧 ========= */
       --ripple-op: .0032;
       --ripple-speed: 30s;
 
@@ -204,23 +250,23 @@
       /* ========= 標題 ========= */
       --title-size: clamp(2.45rem, 5.1vw, 4.30rem);
 
-      /* ========= 空 無 明（標示4：往上移） ========= */
+      /* ========= 空 無 明 ========= */
       --axis-top: clamp(78px, 11vh, 170px);
       --axis-pad-x: clamp(18px, 2vw, 26px);
       --axis-pad-y: clamp(10px, 1.2vw, 14px);
       --axis-size: clamp(2.06rem, 3.9vw, 3.85rem);
       --axis-op: 0.80;
 
-      /* ========= 禪字（標示3：靠近蓮花、若有若無、不要灰） ========= */
+      /* ========= 禪字 ========= */
       --mantra-size: clamp(1.05rem, 2.0vw, 1.92rem);
-      --side-op: 0.62;        /* ✅透明若有若無 */
-      --bottom-op: 0.60;      /* ✅透明若有若無 */
+      --side-op: 0.62;
+      --bottom-op: 0.60;
 
-      --zen-fixed-y: 58%;     /* ✅略往上 */
-      --zen-fixed-x: clamp(64px, 18vw, 360px); /* ✅左右靠近蓮花（不要重疊） */
+      --zen-fixed-y: 58%;
+      --zen-fixed-x: clamp(64px, 18vw, 360px);
 
-      /* 標示4：底部禪字往上移 */
-      --zw-bottom-pad: calc(var(--frame-inset) + 0.85cm + env(safe-area-inset-bottom));
+      /* ✅底部禪字：加上 vv-bottom，避免被 iOS 底部工具列吃掉 */
+      --zw-bottom-pad: calc(var(--frame-inset) + 0.70cm + env(safe-area-inset-bottom) + var(--vv-bottom));
 
       --zw-plate-op-axis: 0.07;
       --zw-plate-op-side: 0.09;
@@ -230,34 +276,30 @@
       --zw-plate-b: rgba(255, 244, 220, 0.07);
       --zw-plate-border: rgba(255, 235, 195, 0.13);
 
-      /* ✅左上 user-bar 安全距離（避免貼到外框/圓角） */
+      /* ✅左上 user-bar 安全距離 */
       --userbar-pad: clamp(14px, 1.15vw, 22px);
 
-      /* ========= 黃水晶字（可被「自動亮度」覆寫） ========= */
+      /* ========= 黃水晶字 ========= */
       --ui-fill: rgba(255, 236, 196, 0.998);
       --ui-stroke: rgba(66, 28, 10, 0.86);
       --ui-stroke-w: 1.18px;
       --ui-shadow-1: rgba(8, 4, 2, 0.46);
       --ui-glow: rgba(255, 225, 155, 0.14);
 
-      /* ========= 按鍵主角（標示4：文字要亮、上層不要黑壓字） ========= */
-      --btn-border: rgba(246, 211, 122, 0.60);
-      --btn-border-hi: rgba(255, 244, 210, 0.82);
+      /* ========= 按鍵（更透明玻璃膜） ========= */
+      --btn-border: rgba(246, 211, 122, 0.56);
+      --btn-border-hi: rgba(255, 244, 210, 0.80);
 
-      /* 玻璃高光更弱（避免洗字） */
-      --btn-glass-a: 0.055;
-      --btn-glass-b: 0.045;
+      /* 高光更弱（避免洗字） */
+      --btn-glass-a: 0.040;
+      --btn-glass-b: 0.036;
 
-      /* 按鍵底更淡更輕 */
-      --btn-body-a: rgba(86, 66, 48, 0.16);
-      --btn-body-b: rgba(58, 44, 33, 0.28);
+      /* ✅按鍵底更透明（你能看到底下圖/字） */
+      --btn-body-a: rgba(86, 66, 48, 0.10);
+      --btn-body-b: rgba(58, 44, 33, 0.16);
 
       /* ========= 投射燈 ========= */
       --lotus-spot-op: .15;
-
-      /* 手機 nav 安全區（基底；實際會由 JS 動態加大避免疊） */
-      --nav-top-m: calc(var(--frame-inset) + 108px);
-      --nav-bottom-m: calc(var(--frame-inset) + 14px);
 
       /* ===== 登入區 ===== */
       --login-border: rgba(246,211,122,0.62);
@@ -274,7 +316,6 @@
     *{ box-sizing:border-box; margin:0; padding:0; }
     html, body { height: 100%; }
 
-    /* ✅第1層：黑底（外層） */
     body{
       min-height:100vh;
       font-family:"標楷體","Noto Serif TC","Microsoft JhengHei",serif;
@@ -292,7 +333,6 @@
     body.locked{ overflow:hidden; }
     body.booting *{ transition:none !important; }
 
-    /* ✅加 fallback，避免某些環境變黑字 */
     .crystal-ui{
       color: var(--ui-fill, rgba(255,232,178,0.998));
       -webkit-text-stroke: var(--ui-stroke-w, 1.2px) var(--ui-stroke, rgba(80,36,10,0.86));
@@ -303,19 +343,20 @@
       letter-spacing: .12em;
     }
 
+    /* ✅主畫面：使用穩定 --appH，fallback 100svh（避免跳動） */
     .hero{
-      min-height: var(--appH, 100vh);
+      min-height: var(--appH, 100svh);
       display:flex;
       align-items:center;
       justify-content:center;
-      padding: var(--outer-side); /* ✅固定 0.1cm */
+      padding: var(--outer-side);
     }
 
-    /* ✅第2層：棕色框底（融為一體） */
+    /* ✅✅✅ hero-inner：桌機/手機都「滿版」（不再 1680px） */
     .hero-inner{
       position:relative;
-      width: min(1680px, calc(100vw - (var(--outer-side) * 2)));
-      height: calc(var(--appH, 100vh) - (var(--outer-side) * 2));
+      width: calc(100vw - (var(--outer-side) * 2));
+      height: calc(var(--appH, 100svh) - (var(--outer-side) * 2));
       min-height: 560px;
       border-radius: calc(var(--frame-radius) + 10px);
       overflow:hidden;
@@ -355,7 +396,6 @@
       opacity: .92;
     }
 
-    /* ✅第3層：舞台（與棕底固定 0.1cm） */
     .lotus-stage{
       position:absolute;
       left: var(--frame-inset);
@@ -446,7 +486,7 @@
     .site-title-wrapper{
       position:absolute;
       left: 50%;
-      top: calc(var(--frame-inset) + 6px);
+      top: calc(var(--frame-inset) + 6px + var(--vv-top));
       transform: translateX(-50%);
       z-index: 12;
       pointer-events:none;
@@ -490,7 +530,6 @@
     .zw-plate.side::before{ opacity: var(--zw-plate-op-side); }
     .zw-plate.bottom::before{ opacity: var(--zw-plate-op-bottom); }
 
-    /* ✅標示3：禪字若有若無（透明）+ 不灰（偏金暖）+ 不要黑壓字 */
     .zen-crystal{
       --zc-stroke: rgba(56, 26, 10, 0.52);
       --zc-shadow: rgba(0,0,0,0.28);
@@ -523,7 +562,7 @@
     .zw-top-axis{
       position:absolute;
       left: 50%;
-      top: var(--axis-top);
+      top: calc(var(--axis-top) + var(--vv-top));
       transform: translateX(-50%);
       opacity: var(--axis-op);
       padding: var(--axis-pad-y) var(--axis-pad-x);
@@ -565,18 +604,16 @@
       white-space: nowrap;
       padding: 8px 10px;
       border-radius: 18px;
-
       background: transparent !important;
       box-shadow: none !important;
       backdrop-filter: none !important;
       -webkit-backdrop-filter: none !important;
     }
 
-    /* ✅標示1：user-bar 往內縮，避免貼到外框/圓角 */
     .user-bar{
       position:absolute;
       left: calc(var(--frame-inset) + var(--userbar-pad) + env(safe-area-inset-left));
-      top:  calc(var(--frame-inset) + var(--userbar-pad) + env(safe-area-inset-top));
+      top:  calc(var(--frame-inset) + var(--userbar-pad) + env(safe-area-inset-top) + var(--vv-top));
 
       display:flex;
       gap: 10px;
@@ -644,7 +681,6 @@
       pointer-events:auto;
     }
 
-    /* ✅標示4：上層不要黑（減弱黑色暗角罩） */
     .nav-area::before{
       content:"";
       position:absolute;
@@ -692,19 +728,30 @@
       z-index: 1;
     }
 
+    /* ✅液化光澤層（更像透明玻璃膜漂浮） */
     .nav-btn::before{
       content:"";
       position:absolute;
       inset:-2px;
       background:
-        radial-gradient(240px 80px at 30% 18%, rgba(255,255,255,0.07), rgba(0,0,0,0) 60%),
-        radial-gradient(320px 110px at 70% 24%, rgba(246,211,122,0.08), rgba(0,0,0,0) 68%);
-      opacity: .34;
+        radial-gradient(240px 80px at 30% 18%, rgba(255,255,255,0.065), rgba(0,0,0,0) 60%),
+        radial-gradient(320px 110px at 70% 24%, rgba(246,211,122,0.070), rgba(0,0,0,0) 68%);
+      opacity: .28;
+      pointer-events:none;
+    }
+    .nav-btn::after{
+      content:"";
+      position:absolute;
+      inset:-1px;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,0.11), rgba(255,255,255,0.00) 46%),
+        radial-gradient(240px 120px at 40% 12%, rgba(255,255,255,0.08), rgba(0,0,0,0) 70%);
+      opacity: .20;
+      mix-blend-mode: screen;
       pointer-events:none;
     }
 
     .nav-btn{
-      /* ✅預設就偏亮金，描邊改深棕（不是黑壓字） */
       --btn-text: rgba(255,248,230,0.998);
       --btn-stroke: rgba(58, 24, 10, 0.92);
       --btn-stroke-w: 2.00px;
@@ -736,7 +783,6 @@
       text-wrap: balance;
 
       -webkit-font-smoothing: antialiased;
-
       transform: none;
 
       max-width: 92%;
@@ -750,9 +796,7 @@
       letter-spacing: .06em;
       font-weight: 850;
     }
-    .nav-btn span.latin-only{
-      letter-spacing: .04em;
-    }
+    .nav-btn span.latin-only{ letter-spacing: .04em; }
 
     @supports (width: 1cqw){
       .nav-btn span{
@@ -777,17 +821,7 @@
         0 0 38px rgba(246,211,122,0.14);
     }
 
-    /* 原 arc（保留但桌機不再依賴它判斷） */
-    .nav-area.arc .nav-btn{
-      position:absolute;
-      left: 50%;
-      top: 0;
-      transform: translate(calc(-50% + var(--x, 0px)), var(--y, 0px)) rotate(var(--rot, 0deg));
-      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
-      will-change: transform;
-    }
-
-    /* ✅桌機固定左右兩側（不疊蓮花與禪字） */
+    /* 桌機 sides */
     .nav-area.sides .nav-btn{
       position:absolute;
       transform: none !important;
@@ -798,24 +832,27 @@
       will-change: top, left, right;
     }
 
-    /* ✅手機/窄寬：改為可捲動堆疊（避免按鍵疊在一處） */
+    /* 手機 stack（預設可捲 → JS 會改成「能塞就不捲，真的塞不下才捲」） */
     .nav-area.stack{
       display:flex;
       flex-direction: column;
       gap: 14px;
       justify-content:flex-start;
-      padding-top: var(--nav-top-m);
-      padding-bottom: var(--nav-bottom-m);
-      overflow:auto;
+      padding-top: 120px;
+      padding-bottom: 140px;
+      padding-left: 16px;
+      padding-right: 16px;
+      overflow: hidden;
       -webkit-overflow-scrolling: touch;
     }
     .nav-area.stack .nav-btn{
       position:relative !important;
       left:auto !important;
       top:auto !important;
+      right:auto !important;
       transform:none !important;
       width: 100% !important;
-      min-height: 62px;
+      min-height: 44px;
       border-radius: 18px;
       backdrop-filter: blur(var(--btn-blur-m));
       -webkit-backdrop-filter: blur(var(--btn-blur-m));
@@ -824,7 +861,6 @@
     @media (max-width: 900px){
       .hero-inner{ min-height: 540px; }
 
-      /* ✅手機 user-bar 變成「可換行、不中間擠壓」 */
       .user-bar{
         left: calc(var(--frame-inset) + 12px + env(safe-area-inset-left));
         right: calc(var(--frame-inset) + 12px + env(safe-area-inset-right));
@@ -832,41 +868,16 @@
       }
       .user-pill{ flex: 1 1 auto; min-width: 220px; }
 
-      .nav-area{
-        display:flex;
-        flex-direction: column;
-        gap: 14px;
-        justify-content:flex-start;
-        padding-top: var(--nav-top-m);
-        padding-bottom: var(--nav-bottom-m);
-        overflow:auto;
-        -webkit-overflow-scrolling: touch;
-      }
-      .nav-btn{
-        position:relative !important;
-        left:auto !important;
-        top:auto !important;
-        transform:none !important;
-        width: 100% !important;
-        min-height: 62px;
-        border-radius: 18px;
-        backdrop-filter: blur(var(--btn-blur-m));
-        -webkit-backdrop-filter: blur(var(--btn-blur-m));
-      }
-
       :root{
         --mantra-size: clamp(0.98rem, 3.0vw, 1.30rem);
         --zen-fixed-x: clamp(56px, 12vw, 140px);
         --axis-top: clamp(86px, 12vh, 170px);
       }
-      .zw-side-col{
-        padding: 8px 10px;
-        opacity: var(--side-op);
-      }
+      .zw-side-col{ padding: 8px 10px; opacity: var(--side-op); }
       .zw-top-axis{ opacity: var(--axis-op); }
     }
 
-    /* ===== 登入遮罩（保留） ===== */
+    /* ===== 登入遮罩 ===== */
     .login-overlay{
       position:fixed; inset:0; z-index: 3000;
       display:none; align-items:center; justify-content:center;
@@ -928,7 +939,7 @@
     }
     .btn-login:hover, .btn-secondary:hover{ background: rgba(0,0,0,0.28); }
 
-    /* ===== 自製下拉（保留） ===== */
+    /* ===== 自製下拉 ===== */
     .select-wrap{ position:relative; width:100%; }
     .select-wrap select{ position:absolute; inset:0; opacity:0; pointer-events:none; }
     .select-display{
@@ -1061,7 +1072,7 @@
       (function(){
         "use strict";
 
-        // ✅版本/網址診斷（不改 UI，只寫 console，方便你確認是不是新檔）
+        // ✅版本/網址診斷（console）
         try{
           const v = new URL(location.href).searchParams.get("v") || "";
           console.info("[Tasun index]", "APP_VER=", (window.TASUN_APP_VER||""), "url_v=", v);
@@ -1074,7 +1085,7 @@
         const lerp  = (Core && Core.lerp)  ? Core.lerp  : ((a,b,t)=>a+(b-a)*t);
 
         const rafDebounce = (Core && Core.rafDebounce) ? Core.rafDebounce : (fn=>{
-          let r=0; return function(){ cancelAnimationFrame(r); r=requestAnimationFrame(fn); };
+          let r=0; return function(){ try{ cancelAnimationFrame(r); }catch(e){} r=requestAnimationFrame(()=>{ try{ fn(); }catch(e){} }); };
         });
         const onFontsReady = (Core && Core.onFontsReady) ? Core.onFontsReady : (cb=>{
           if(document.fonts && document.fonts.ready) document.fonts.ready.then(cb);
@@ -1133,7 +1144,7 @@
         const usernameMenu = document.getElementById("usernameMenu");
 
         /* =========================
-           ✅ CloudKit（套入：讀取 + 鎖 + watch + 版本統一 + 狀態列）
+           ✅ CloudKit
            ========================= */
         const CLOUD_RES_URL = "tasun-resources.json";
         const CLOUD_RESOURCE_KEY = "index-config";
@@ -1162,16 +1173,6 @@
               resolve(false);
             }
           });
-        }
-
-        function getPxVar(name, fallback){
-          try{
-            const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-            const n = parseFloat(v);
-            return Number.isFinite(n) ? n : fallback;
-          }catch(e){
-            return fallback;
-          }
         }
 
         function hrefToDom(href){
@@ -1549,7 +1550,7 @@
         }
 
         /* =========================
-           ✅按鍵排版（桌機 sides / 手機 stack）
+           ✅按鍵排版：桌機 sides / 手機 stack（不縮底部字，若空間不足就縮按鍵高度/間距）
            ========================= */
         function fitButtonHeights(btns, baseH){
           btns.forEach(btn => {
@@ -1572,16 +1573,16 @@
           let fs = hh / 4.236;
           if(span.classList.contains("latin")) fs *= 0.96;
 
-          fs = clamp(fs, 16, 30);
+          fs = clamp(fs, 14, 30);
           btn.style.setProperty("--btn-fs", `${Math.round(fs)}px`);
 
-          for(let i=0;i<5;i++){
+          for(let i=0;i<6;i++){
             const sw = span.scrollWidth;
             const sh = span.scrollHeight;
 
             if(sw <= ww * 0.92 && sh <= hh * 0.74) break;
 
-            fs = Math.max(14, fs - 1.6);
+            fs = Math.max(12, fs - 1.6);
             btn.style.setProperty("--btn-fs", `${Math.round(fs)}px`);
           }
         }
@@ -1592,6 +1593,14 @@
           if(cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") return false;
           const r = el.getBoundingClientRect();
           return r.width > 0 && r.height > 0;
+        }
+
+        function getVVBottomInset(){
+          try{
+            const vv = window.visualViewport;
+            if(!vv) return 0;
+            return Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
+          }catch(e){ return 0; }
         }
 
         let BTN_CONFIGS = [];
@@ -1671,7 +1680,7 @@
 
         function resetButtonsForLogout(){
           mainNavBtns.forEach(btn => btn.style.display = "none");
-          navArea.classList.remove("arc","stack","sides");
+          navArea.classList.remove("stack","sides");
           scheduleAll();
         }
 
@@ -1702,55 +1711,135 @@
           const visible = mainNavBtns.filter(b => b.style.display !== "none");
           if(!visible.length) return;
 
-          // ✅每次重算先清掉動態 padding（避免模式切換殘留）
+          // 每次重算清掉動態樣式
           navArea.style.paddingTop = "";
           navArea.style.paddingBottom = "";
+          navArea.style.paddingLeft = "";
+          navArea.style.paddingRight = "";
+          navArea.style.gap = "";
+          navArea.style.overflow = "";
 
           const isMobile = window.matchMedia("(max-width: 900px)").matches;
 
           /* =========================
-             ✅手機/窄寬：stack + 動態避讓（圖2：按鍵疊在一處）
+             ✅手機/窄寬：stack（不縮底部字；若會撞到底部字→縮按鍵）
              ========================= */
           if(isMobile || W < 980){
-            navArea.classList.remove("arc","sides");
+            navArea.classList.remove("sides");
             navArea.classList.add("stack");
+
+            const vvBottom = getVVBottomInset();
 
             const ub = userBar ? userBar.getBoundingClientRect() : null;
             const tw = titleWrap ? titleWrap.getBoundingClientRect() : null;
             const ax = zwTopAxis ? zwTopAxis.getBoundingClientRect() : null;
             const bl = zwBottomLine ? zwBottomLine.getBoundingClientRect() : null;
 
-            const topSafe = Math.max(
+            // ✅上方安全區：userBar / title / 空無明
+            let topSafe = Math.max(
               104,
               ub ? (ub.bottom - rect.top) + 14 : 0,
               tw ? (tw.bottom - rect.top) + 14 : 0,
               ax ? (ax.bottom - rect.top) + 14 : 0
             );
-            const bottomReserve = Math.max(
-              120,
-              bl ? (rect.bottom - bl.top) + 18 : 120
-            );
 
-            navArea.style.paddingTop = Math.round(topSafe) + "px";
-            navArea.style.paddingBottom = Math.round(bottomReserve) + "px";
+            // ✅下方安全區：底部字（不縮字） + iOS 底部工具列遮擋
+            let bottomSafe = H - Math.max(14, 8 + vvBottom);
+            if(bl){
+              bottomSafe = Math.min(bottomSafe, (bl.top - rect.top) - 12);
+            }
 
-            visible.forEach(btn=>{
-              btn.style.width = "100%";
-              btn.style.height = "";
-              btn.style.left = "";
-              btn.style.right = "";
-              btn.style.top = "";
-              const bw = btn.getBoundingClientRect().width || W;
-              const bh = btn.getBoundingClientRect().height || 72;
-              setButtonFontScale(btn, bw, bh);
-            });
+            // 保障 bottomSafe 不會跑到 topSafe 上面
+            bottomSafe = Math.max(bottomSafe, topSafe + 120);
+            const avail = Math.max(1, bottomSafe - topSafe);
+
+            // 左右 padding（全螢幕時也好按）
+            const padX = clamp(W * 0.04, 14, 28);
+            navArea.style.paddingLeft = Math.round(padX) + "px";
+            navArea.style.paddingRight = Math.round(padX) + "px";
+
+            // ✅目標：按鍵「全部在螢幕內」→ 依可用高度自動縮放（高度太小就縮小）
+            const scales = [1.00, 0.94, 0.88, 0.82, 0.76, 0.70, 0.64, 0.58, 0.52];
+            let chosen = null;
+
+            function measureTotal(gap){
+              const hs = visible.map(b => b.getBoundingClientRect().height || 44);
+              return hs.reduce((a,b)=>a+b,0) + gap * (visible.length - 1);
+            }
+
+            for(const s of scales){
+              const gapY = clamp(14 * s, 6, 14);
+              const baseH = clamp(72 * s, 44, 72);
+
+              navArea.style.gap = Math.round(gapY) + "px";
+
+              visible.forEach(btn=>{
+                btn.style.width = "100%";
+                btn.style.left = "";
+                btn.style.right = "";
+                btn.style.top = "";
+                btn.style.height = baseH + "px";
+              });
+
+              // 先讓字決定必要高度（避免換行被壓扁）
+              fitButtonHeights(visible, baseH);
+
+              // 套用字體縮放
+              visible.forEach(btn=>{
+                const br = btn.getBoundingClientRect();
+                setButtonFontScale(btn, br.width || (W - padX*2), br.height || baseH);
+              });
+
+              const total = measureTotal(Math.round(gapY));
+              if(total <= avail){
+                chosen = { s, gapY: Math.round(gapY), total };
+                break;
+              }
+            }
+
+            // 若仍塞不下：用最小配置，並允許極端情況可捲（但優先盡量塞滿螢幕）
+            if(!chosen){
+              const gapY = 6;
+              const baseH = 44;
+
+              navArea.style.gap = gapY + "px";
+              visible.forEach(btn=>{
+                btn.style.width = "100%";
+                btn.style.height = baseH + "px";
+              });
+              fitButtonHeights(visible, baseH);
+              visible.forEach(btn=>{
+                const br = btn.getBoundingClientRect();
+                setButtonFontScale(btn, br.width || (W - padX*2), br.height || baseH);
+              });
+
+              // 最後如果真的高度太低，才開 overflow
+              const total = measureTotal(gapY);
+              if(total > avail + 8){
+                navArea.style.overflow = "auto";
+              }else{
+                navArea.style.overflow = "hidden";
+              }
+              chosen = { s: 0.52, gapY, total };
+            }else{
+              navArea.style.overflow = "hidden";
+            }
+
+            // ✅偵測底部字是否會撞到按鍵：我們用 bottomSafe（底部字上緣）當界線
+            // 若空間剩餘，稍微把按鍵區「往下推」一點（更符合你想要的視覺：按鍵浮在舞台下方區域）
+            const slack = Math.max(0, avail - (chosen.total || 0));
+            const pushDown = Math.min(28, Math.round(slack * 0.18));
+
+            navArea.style.paddingTop = Math.round(topSafe + pushDown) + "px";
+            navArea.style.paddingBottom = Math.round(H - bottomSafe) + "px";
+
             return;
           }
 
           /* =========================
-             ✅桌機：sides
+             ✅桌機：sides（左右分開佈置）
              ========================= */
-          navArea.classList.remove("arc","stack");
+          navArea.classList.remove("stack");
           navArea.classList.add("sides");
 
           const left = [];
@@ -1773,8 +1862,9 @@
           if(bl){
             bottomSafe = Math.min(bottomSafe, (bl.top - rect.top) - 12);
           }
+          bottomSafe = Math.max(bottomSafe, topSafe + 160);
 
-          const edgePad = getPxVar("--frame-inset", 8) + 16;
+          const edgePad = 16 + 16; // 舞台滿版後，左右更外擴（更貼近邊框）
           const gapToZen = 22;
 
           const lz = isVisibleEl(zwLeft) ? zwLeft.getBoundingClientRect() : null;
@@ -1783,8 +1873,8 @@
           let corridorLeft = (lz ? (lz.right - rect.left) : (W * 0.44)) + gapToZen;
           let corridorRight = (rz ? (rz.left - rect.left) : (W * 0.56)) - gapToZen;
 
-          corridorLeft = clamp(corridorLeft, W * 0.36, W * 0.49);
-          corridorRight = clamp(corridorRight, W * 0.51, W * 0.64);
+          corridorLeft = clamp(corridorLeft, W * 0.34, W * 0.49);
+          corridorRight = clamp(corridorRight, W * 0.51, W * 0.66);
 
           const leftAreaL = edgePad;
           const leftAreaR = Math.max(leftAreaL + 10, corridorLeft - edgePad);
@@ -1794,7 +1884,7 @@
           const leftAvailW = Math.max(0, leftAreaR - leftAreaL);
           const rightAvailW = Math.max(0, rightAreaR - rightAreaL);
 
-          if(leftAvailW < 250 || rightAvailW < 250){
+          if(leftAvailW < 260 || rightAvailW < 260){
             navArea.classList.remove("sides");
             navArea.classList.add("stack");
             return;
@@ -1805,10 +1895,10 @@
           const baseH0 = clamp(H * 0.105, 66, 98);
           const gapY0  = clamp(H * 0.050, 16, 26);
 
-          const wTarget = clamp(W * 0.23, 300, 460);
+          const wTarget = clamp(W * 0.23, 320, 520);
 
           function applySideWidths(scale){
-            const s = clamp(scale, 0.72, 1.0);
+            const s = clamp(scale, 0.70, 1.0);
 
             const wL = Math.min(leftAvailW - 4, Math.round(wTarget * s));
             const wR = Math.min(rightAvailW - 4, Math.round(wTarget * s));
@@ -1857,10 +1947,6 @@
               btn.style.right = (side === "R") ? (Math.round(W - (x + width)) + "px") : "";
               btn.style.top = Math.round(y) + "px";
 
-              btn.style.setProperty("--x", "0px");
-              btn.style.setProperty("--y", "0px");
-              btn.style.setProperty("--rot", "0deg");
-
               y += bh + gapY;
             }
             return true;
@@ -1892,7 +1978,7 @@
         }
 
         /* =========================
-           ✅✅✅ 自動亮度/對比（保持，但「不要黑壓字」→描邊改深棕）
+           ✅自動亮度/對比（原邏輯保留）
            ========================= */
         let _toneCanvas = null;
         let _toneCtx = null;
@@ -1965,7 +2051,6 @@
           return [lerp(a[0],b[0],t), lerp(a[1],b[1],t), lerp(a[2],b[2],t)];
         }
 
-        /* ✅標示4：按鍵文字亮金；描邊深棕（不是黑壓字） */
         function applyBtnTextByLum(btn, lumAdj){
           const t = clamp((lumAdj - 0.30) / 0.62, 0, 1);
 
@@ -1979,13 +2064,12 @@
           btn.style.setProperty("--btn-text", rgba(fill[0], fill[1], fill[2], 0.998));
           btn.style.setProperty("--btn-stroke", rgba(stroke[0], stroke[1], stroke[2], 0.92));
           btn.style.setProperty("--btn-stroke-w", `${strokeW.toFixed(2)}px`);
-          btn.style.setProperty("--btn-shadowA", `rgba(0,0,0,${shadowA.toFixed(2)})`);
-          btn.style.setProperty("--btn-glowA", `rgba(255,220,150,${glowA.toFixed(2)})`);
+          btn.style.setProperty("--btn-shadowA", rgba(0,0,0, shadowA.toFixed(2)));
+          btn.style.setProperty("--btn-glowA", rgba(255,220,150, glowA.toFixed(2)));
 
           btn.dataset.tone = (lumAdj >= 0.60) ? "light" : "dark";
         }
 
-        /* ✅標示3：禪字透明若有若無 + 偏金暖 + 不灰 */
         function applyZenTextByLum(el, lumAdj){
           if(!el) return;
 
@@ -1998,9 +2082,9 @@
           const hiA     = lerp(0.12, 0.08, t);
 
           el.style.setProperty("--zc-stroke", rgba(strokeRGB[0], strokeRGB[1], strokeRGB[2], strokeA.toFixed(2)));
-          el.style.setProperty("--zc-shadow", `rgba(0,0,0,${shadowA.toFixed(2)})`);
-          el.style.setProperty("--zc-glow", `rgba(255,220,150,${glowA.toFixed(2)})`);
-          el.style.setProperty("--zc-hi", `rgba(255,255,255,${hiA.toFixed(2)})`);
+          el.style.setProperty("--zc-shadow", rgba(0,0,0, shadowA.toFixed(2)));
+          el.style.setProperty("--zc-glow", rgba(255,220,150, glowA.toFixed(2)));
+          el.style.setProperty("--zc-hi", rgba(255,255,255, hiA.toFixed(2)));
 
           el.dataset.tone = (lumAdj >= 0.60) ? "light" : "dark";
         }
