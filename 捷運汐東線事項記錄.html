@@ -38,10 +38,6 @@
     var APP = (window.TASUN_APP_VER||"").toString().trim();
     if(!APP) return;
 
-    // ① 建立/沿用「共用等待器」
-    //    - push(fn): 未 ready 就排隊；ready 立刻執行
-    //    - then(fn): 相容舊版 Promise 等待寫法
-    //    - flush(): 宣告 ready 並把隊列全部跑完（只會跑一次）
     var WAIT = window.__TASUN_READY__;
     if(!WAIT || typeof WAIT !== "object"){
       var _q = [];
@@ -75,10 +71,8 @@
 
       window.__TASUN_READY__ = WAIT;
     }
-    // 讓你之後也可以用 __TASUN_WAIT__ 呼叫（同一顆）
     window.__TASUN_WAIT__ = WAIT;
 
-    // ② 共用載入器：避免重複載入 core/boot
     function addV(src){
       return src + (src.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(APP);
     }
@@ -87,9 +81,7 @@
     }
     function loadOnce(id, src){
       return new Promise(function(resolve){
-        // 已插過 script 就不重複插入
         if(hasScript(id)) return resolve(true);
-
         var s = document.createElement("script");
         s.src = src;
         s.async = false;
@@ -100,11 +92,12 @@
       });
     }
 
-    // ③ 先 core → 再 boot，載入完成後 flush()（若 boot 已先 flush，這裡不會重複）
+    // ✅ core → boot → cloud-kit（新增雲端套件載入）
     (async function(){
       try{
         if(!window.TasunCore) await loadOnce("tasun-core", addV("tasun-core.js"));
         await loadOnce("tasun-boot", addV("tasun-boot.js"));
+        await loadOnce("tasun-cloud-kit", addV("tasun-cloud-kit.js"));
       }catch(e){}
       try{ if(!WAIT.ready) WAIT.flush(); }catch(e){}
     })();
@@ -173,10 +166,8 @@
       --wTable: 650;
       --wBtn: 580;
 
-      /* ✅ 讓標示2/3（視窗標題/關閉）更亮、圓滑、3D透明 */
       --modalTitleSize: clamp(18px, 1.7vw, 24px);
 
-      /* ✅ 加強按鍵文字立體清晰 */
       --btnStroke: .22px;
       --btnEdge: rgba(255,230,180,.24);
       --btnFocusA: rgba(0,0,0,.26);
@@ -380,7 +371,6 @@
     .small{ padding:11px 16px; font-size:14px; border-radius:999px; letter-spacing:.05em }
     .btn[disabled]{opacity:.45; cursor:not-allowed; filter:none !important; transform:none !important;}
 
-    /* ✅ 加亮按鍵文字（更像圓滑3D透明金字） */
     @supports (-webkit-background-clip:text) or (background-clip:text){
       .btn .t{
         color:transparent;
@@ -552,7 +542,6 @@
       font-weight:var(--wBtn);
     }
 
-    /* ✅ Modal */
     .mask{
       position:fixed; inset:0;
       display:none;
@@ -573,7 +562,6 @@
       position:relative;
     }
 
-    /* ✅ 標示2/3：視窗標題/關閉 按鍵文字更亮 + 自動縮放 */
     .mHead{
       padding:14px 16px;
       display:grid;
@@ -626,7 +614,6 @@
       background: linear-gradient(180deg, rgba(255,255,255,.02), rgba(255,255,255,.05));
     }
 
-    /* Prompt */
     .pMask{
       position:fixed; inset:0;
       background: radial-gradient(800px 520px at 50% 42%, rgba(0,0,0,.46), rgba(0,0,0,.74));
@@ -692,7 +679,6 @@
       letter-spacing:.06em;
     }
 
-    /* Login */
     .loginMask{
       position:fixed; inset:0;
       background: radial-gradient(900px 560px at 50% 42%, rgba(0,0,0,.46), rgba(0,0,0,.74));
@@ -991,6 +977,9 @@
       var Auth = Core.Auth;
       var withV = Core.withV;
 
+      // ===============================
+      // ✅ Local keys
+      // ===============================
       var DB_KEY      = "tasunSxdhNotes_v1";
       var COUNTER_KEY = "tasunSxdhNotes_counter_v1";
 
@@ -1016,21 +1005,33 @@
 
       var TRADE_DICT_KEY = "tasunSxdhNotes_tradeDict_v1";
       var SYS_DICT_KEY   = "tasunSxdhNotes_sysDict_v1";
-
-      /* ✅ 新增：工種→系統 關聯（用來做「系統依工種篩選」） */
       var TRADE_SYS_MAP_KEY = "tasunSxdhNotes_tradeSysMap_v1";
-
       var READ_MODE_KEY  = "tasunSxdhNotes_readMode_v1";
 
       var CLOUD_URL = "https://www.dropbox.com/scl/fo/glb4s65934h195bxuyuqm/AH5ClZ2u4MtPMvmgtfOUAa4?rlkey=tfxkpbpw8k9bctshx5xvuge8h&st=guo88r98&dl=0";
 
+      // ===============================
+      // ✅ Cloud resource binding
+      // ===============================
+      var CLOUD_RESOURCE_KEY = "sxdh-notes";
+      var CLOUD_PK = "uid";
+      var SETTINGS_UID = "__settings__";
+
       var db = [];
-      var editingId = null;
-      var selectedId = null;
+      var editingUid = null;
+      var selectedUid = null;
       var promptMode = null;
+
+      var cloud = null;
+      var cloudInited = false;
 
       var $ = function(id){ return document.getElementById(id); };
       var norm = function(s){ return (s===undefined||s===null) ? "" : String(s).trim(); };
+
+      function uuid(){
+        var a = Math.random().toString(16).slice(2);
+        return "u" + Date.now().toString(16) + "_" + a;
+      }
 
       function toast(msg){
         var t = $("toast");
@@ -1049,10 +1050,10 @@
           .replaceAll("'","&#39;");
       }
 
-      function fnv1a(str){
+      function fnv1a(str2){
         var h = 0x811c9dc5;
-        for(var i=0;i<str.length;i++){
-          h ^= str.charCodeAt(i);
+        for(var i=0;i<str2.length;i++){
+          h ^= str2.charCodeAt(i);
           h = Math.imul(h, 0x01000193);
         }
         return (h >>> 0).toString(16).padStart(8, "0");
@@ -1108,6 +1109,7 @@
       function normalizeRow(x){
         if(!x || typeof x !== "object") return null;
 
+        var uid = norm(x.uid ?? x._uid ?? x.pk ?? "");
         var idRaw = (x.id ?? x.no ?? x.idx ?? x.key);
         var id = Number(idRaw);
         if(!Number.isFinite(id) || id <= 0) id = null;
@@ -1126,7 +1128,14 @@
             else date = "";
           }
         }
-        return { id: id, text: text, trade: trade, system: system, attach: attach, remark: remark, date: date };
+
+        // ✅ legacy uid: stable by id if possible
+        if(!uid){
+          if(id) uid = "legacy_" + String(id);
+          else uid = uuid();
+        }
+
+        return { uid: uid, id: id, text: text, trade: trade, system: system, attach: attach, remark: remark, date: date };
       }
 
       function rowKey(r){
@@ -1171,6 +1180,7 @@
         }
         for(var k=0;k<normed.length;k++){
           if(!normed[k].id){ maxId += 1; normed[k].id = maxId; }
+          if(!normed[k].uid) normed[k].uid = "legacy_" + String(normed[k].id);
         }
 
         var seen = new Set();
@@ -1334,9 +1344,6 @@
         }
       }
 
-      /* ==========================================================
-         ✅ 工種→系統 關聯：用來做「系統依工種篩選」
-         ========================================================== */
       function loadTradeSysMap(){
         try{
           var raw = localStorage.getItem(TRADE_SYS_MAP_KEY);
@@ -1387,7 +1394,133 @@
         return arr;
       }
 
-      /* ========================================================== */
+      // ===============================
+      // ✅ Cloud payload helpers
+      // - 用隱藏 row (uid="__settings__") 同步字典/關聯
+      // ===============================
+      function exportDbWithSettings(){
+        var rows = (Array.isArray(db)?db:[]).map(function(r){
+          var rr = Object.assign({}, r);
+          rr.uid = norm(rr.uid) || (rr.id ? "legacy_"+String(rr.id) : uuid());
+          return rr;
+        });
+
+        rows.push({
+          uid: SETTINGS_UID,
+          id: 0,
+          tradeDict: loadDict(TRADE_DICT_KEY),
+          sysDict: loadDict(SYS_DICT_KEY),
+          tradeSysMap: loadTradeSysMap()
+        });
+
+        return rows;
+      }
+
+      function importPayload(payload){
+        payload = (payload && typeof payload==="object") ? payload : {};
+        var arr = Array.isArray(payload.db) ? payload.db : [];
+
+        // settings row
+        var srow = null;
+        for(var i=0;i<arr.length;i++){
+          if(norm(arr[i] && arr[i].uid) === SETTINGS_UID){ srow = arr[i]; break; }
+        }
+        if(srow){
+          if(Array.isArray(srow.tradeDict)) saveDict(TRADE_DICT_KEY, srow.tradeDict.map(norm).filter(Boolean));
+          if(Array.isArray(srow.sysDict)) saveDict(SYS_DICT_KEY, srow.sysDict.map(norm).filter(Boolean));
+          if(srow.tradeSysMap && typeof srow.tradeSysMap==="object") saveTradeSysMap(srow.tradeSysMap);
+        }
+
+        // data rows
+        db = arr
+          .filter(function(r){ return norm(r && r.uid) !== SETTINGS_UID; })
+          .map(normalizeRow)
+          .filter(Boolean)
+          .filter(function(r){ return r.text && r.text.toString().trim(); });
+
+        // counter
+        var maxId2 = 0;
+        for(var j=0;j<db.length;j++){
+          var n = Number(db[j].id||0);
+          if(Number.isFinite(n) && n>maxId2) maxId2 = n;
+        }
+        var cnt = Number(payload.counter||0);
+        if(!Number.isFinite(cnt)) cnt = 0;
+        ensureCounterAtLeast(Math.max(cnt, maxId2));
+
+        // local snapshot
+        try{ localStorage.setItem(DB_KEY, JSON.stringify(db)); }catch(e){}
+      }
+
+      function cloudSave(reason){
+        if(!cloud) return;
+        if(!Auth.canWrite()) return;
+        cloud.ready.then(function(){
+          return cloud.saveMerged();
+        }).catch(function(e){
+          toast("雲端儲存失敗：" + (e && e.message ? e.message : String(e||"")));
+        });
+      }
+
+      function initCloudOnce(){
+        if(cloudInited) return;
+        cloudInited = true;
+
+        if(!window.TasunCloudKit){
+          toast("雲端套件未載入（僅本機模式）");
+          return;
+        }
+
+        try{
+          // ✅ 隱藏鎖按鈕（但儲存仍會自動鎖/釋放）
+          window.TasunCloudKit.init({
+            appVer: window.TASUN_APP_VER,
+            resourcesUrl: "tasun-resources.json.json",
+            ui: { enabled:true, hideLockButtons:true }
+          });
+
+          var firstApply = true;
+          var localHadData = Array.isArray(db) && db.length > 0;
+
+          cloud = window.TasunCloudKit.mount({
+            resourceKey: CLOUD_RESOURCE_KEY,
+            pk: CLOUD_PK,
+            idField: "id",
+            counterField: "counter",
+            merge: { conflictPolicy: "stash-remote" },
+            watch: { intervalSec: 8 },
+            getLocal: function(){
+              return { db: exportDbWithSettings(), counter: getCounter() };
+            },
+            apply: function(payload, info){
+              // ✅ 首次同步：若本機已有資料且可寫，先保留本機，改用 saveMerged 自動合併到雲端
+              if(firstApply){
+                firstApply = false;
+                if(localHadData && Auth.canWrite()){
+                  toast("雲端同步中：將自動合併本機資料…");
+                  setTimeout(function(){
+                    if(!cloud) return;
+                    cloud.ready.then(function(){ return cloud.saveMerged(); })
+                      .catch(function(e){
+                        toast("雲端合併失敗（已保留本機資料）");
+                      });
+                  }, 0);
+                  return;
+                }
+              }
+
+              importPayload(payload);
+              if(info && info.conflicts){
+                toast("雲端合併完成（衝突已另存快照）");
+              }
+              scheduleRender();
+            }
+          });
+
+        }catch(e){
+          toast("雲端初始化失敗：" + (e && e.message ? e.message : String(e||"")));
+        }
+      }
 
       function makeExportPayload(){
         return {
@@ -1480,7 +1613,7 @@
 
         var systems = [];
         if(pickedTrade){
-          systems = systemsByTrade(pickedTrade); /* ✅ 改：依工種篩選（map+db） */
+          systems = systemsByTrade(pickedTrade);
         }else{
           systems = unionOptions("system", SYS_DICT_KEY);
         }
@@ -1530,8 +1663,8 @@
 
       function applySelectionToDOM(){
         document.querySelectorAll("tr.sel").forEach(function(el){ el.classList.remove("sel"); });
-        if(selectedId == null) return;
-        var tr = document.querySelector('tr[data-id="'+selectedId+'"]');
+        if(!selectedUid) return;
+        var tr = document.querySelector('tr[data-uid="'+selectedUid+'"]');
         if(tr) tr.classList.add("sel");
       }
 
@@ -1542,13 +1675,16 @@
 
         $("btnAdd").style.display  = Auth.canWrite() ? "inline-block" : "none";
         $("btnEdit").style.display = Auth.canWrite() ? "inline-block" : "none";
-        $("btnView").disabled = !selectedId;
+        $("btnView").disabled = !selectedUid;
+
+        var selItem = selectedUid ? (db.find(function(x){ return x.uid===selectedUid; }) || null) : null;
+        var selText = selItem ? ("#"+(selItem.id||"—")) : "";
 
         $("hint").innerHTML =
           '目前為 <b style="color:var(--goldText)">'+modeText+'</b>（role: '+escHtml(Auth.role())+'）。' +
           ' 筆數：<b style="color:var(--goldText)">'+rowsCount+'</b>。' +
           (pickedTrade && sysDisabled ? ' <span style="color:rgba(124,88,30,.82)">（此工種尚無系統可篩選）</span>' : '') +
-          (selectedId ? ' 已選取：<b style="color:var(--goldText)">#'+selectedId+'</b>' : '（請先點選一筆，再按右上「顯示畫面 / 編輯」）');
+          (selectedUid ? ' 已選取：<b style="color:var(--goldText)">'+escHtml(selText)+'</b>' : '（請先點選一筆，再按右上「顯示畫面 / 編輯」）');
       }
 
       function fillDropdown(selectId, options, placeholder){
@@ -1570,7 +1706,6 @@
       }
 
       function rebuildModalSystemOptions(trade, selected){
-        /* ✅ 改：系統依工種篩選（map+db），沒有就顯示提示，讓使用者用「新增系統」補進來 */
         var t = norm(trade);
         var systems = t ? systemsByTrade(t) : [];
         fillDropdown("mSysSel", systems, t ? "（此工種尚無系統：請按「新增系統」）" : "（請先選擇工種）");
@@ -1581,7 +1716,7 @@
 
       function setModalEditable(editable){
         $("btnSave").style.display = editable ? "inline-block" : "none";
-        $("btnDelete").style.display = (editable && Auth.isAdmin() && editingId != null) ? "inline-block" : "none";
+        $("btnDelete").style.display = (editable && Auth.isAdmin() && editingUid != null) ? "inline-block" : "none";
         ["mText","mTradeSel","mSysSel","mAttach","mRemark","mDate"].forEach(function(id){
           $(id).disabled = !editable;
         });
@@ -1590,12 +1725,12 @@
         $("btnAddSys").style.display   = allowAddOpt ? "inline-block" : "none";
       }
 
-      function openModal(id, editable){
+      function openModal(uid, editable){
         Auth.validateSession();
         if(!Auth.ensureLoggedIn()) return;
 
-        var item = (id == null) ? null : (db.find(function(x){ return x.id === id; }) || null);
-        editingId = item ? item.id : null;
+        var item = (uid == null) ? null : (db.find(function(x){ return x.uid === uid; }) || null);
+        editingUid = item ? item.uid : null;
 
         rebuildModalTradeOptions(item ? item.trade : "");
         var tradeNow = norm($("mTradeSel").value) || (item ? item.trade : "");
@@ -1632,16 +1767,19 @@
         var remark = norm($("mRemark").value);
         var date   = norm($("mDate").value) || new Date().toISOString().slice(0,10);
 
-        if(editingId != null){
-          var idx = db.findIndex(function(x){ return x.id === editingId; });
-          if(idx >= 0) db[idx] = { id: editingId, text: text, trade: trade, system: system, attach: attach, remark: remark, date: date };
+        if(editingUid != null){
+          var idx = db.findIndex(function(x){ return x.uid === editingUid; });
+          if(idx >= 0){
+            var keep = db[idx];
+            db[idx] = { uid: keep.uid, id: keep.id, text: text, trade: trade, system: system, attach: attach, remark: remark, date: date };
+          }
         }else{
           var nid = nextCounter();
-          db.push({ id: nid, text: text, trade: trade, system: system, attach: attach, remark: remark, date: date });
-          selectedId = nid;
+          var newUid = uuid();
+          db.push({ uid: newUid, id: nid, text: text, trade: trade, system: system, attach: attach, remark: remark, date: date });
+          selectedUid = newUid;
         }
 
-        /* ✅ 儲存後，自動把「工種→系統」關聯記住，讓下次篩選更準 */
         addTradeSysLink(trade, system);
 
         saveDB();
@@ -1649,23 +1787,29 @@
         scheduleRender();
         toast("已儲存");
         backupOnExit("save");
+
+        // ✅ 雲端自動合併寫入
+        cloudSave("save");
       }
 
       function deleteItem(){
         Auth.validateSession();
         if(!Auth.ensureLoggedIn()) return;
         if(!Auth.isAdmin()){ toast("僅 admin 可刪除"); return; }
-        if(editingId == null) return;
+        if(editingUid == null) return;
         if(!confirm("確定刪除這筆記事？")) return;
 
-        db = db.filter(function(x){ return x.id !== editingId; });
-        if(selectedId === editingId) selectedId = null;
+        db = db.filter(function(x){ return x.uid !== editingUid; });
+        if(selectedUid === editingUid) selectedUid = null;
         saveDB();
 
         closeModal();
         scheduleRender();
         toast("已刪除");
         backupOnExit("delete");
+
+        // ✅ 雲端自動合併寫入
+        cloudSave("delete");
       }
 
       function openPrompt(mode){
@@ -1673,7 +1817,6 @@
         if(!Auth.ensureLoggedIn()) return;
         if(!Auth.canWrite()){ toast("read 權限不可新增選單"); return; }
 
-        /* ✅ 新增系統時：必須先選工種（因為系統要綁工種，才能篩選） */
         if(mode === "sys"){
           var curT = norm($("mTradeSel").value);
           if(!curT){
@@ -1727,7 +1870,6 @@
           rebuildModalSystemOptions(v, "");
         }else{
           var curTrade = norm($("mTradeSel").value);
-          /* ✅ 新增系統：寫入「工種→系統」關聯 */
           addTradeSysLink(curTrade, v);
           rebuildModalSystemOptions(curTrade, v);
           $("mSysSel").value = v;
@@ -1737,27 +1879,30 @@
         closePrompt();
         toast("已新增選項");
         backupOnExit("add_option");
+
+        // ✅ 雲端自動合併寫入（透過 __settings__ row 同步字典/關聯）
+        cloudSave("dict");
       }
 
       function render(){
         rebuildFilters();
 
         var rows = filteredRows();
-        if(selectedId != null && !rows.some(function(r){ return r.id===selectedId; })) selectedId = null;
+        if(selectedUid && !rows.some(function(r){ return r.uid===selectedUid; })) selectedUid = null;
 
         var tbody = $("tbody");
         tbody.innerHTML = rows.map(function(r){
-          var isSel = (selectedId === r.id);
+          var isSel = (selectedUid === r.uid);
           var att = norm(r.attach || "");
           var attCell = att
-            ? '<button class="attBtn" data-act="att" data-id="'+r.id+'"><span class="t">開啟</span></button>'
+            ? '<button class="attBtn" data-act="att" data-uid="'+escHtml(r.uid)+'"><span class="t">開啟</span></button>'
             : '<span class="muted">—</span>';
 
           var textHtml = escHtml((r.text ?? "").toString()).replaceAll("\n","<br>");
           var remarkHtml = escHtml((r.remark ?? "").toString()).replaceAll("\n","<br>");
 
           return ''
-            + '<tr data-id="'+r.id+'" class="'+(isSel ? "sel" : "")+'">'
+            + '<tr data-uid="'+escHtml(r.uid)+'" class="'+(isSel ? "sel" : "")+'">'
             +   '<td style="text-align:center;">'+(r.id ?? "")+'</td>'
             +   '<td>'+(textHtml ? textHtml : '<span class="muted">—</span>')+'</td>'
             +   '<td style="text-align:center;">'+(escHtml(r.trade) || '<span class="muted">—</span>')+'</td>'
@@ -1765,7 +1910,7 @@
             +   '<td style="text-align:center;">'+attCell+'</td>'
             +   '<td>'+(remarkHtml ? remarkHtml : '<span class="muted">—</span>')+'</td>'
             +   '<td style="text-align:center;">'+(escHtml(r.date) || '<span class="muted">—</span>')+'</td>'
-            +   '<td style="text-align:center;"><button class="btn ghost small" data-act="view" data-id="'+r.id+'"><span class="t">顯示畫面</span></button></td>'
+            +   '<td style="text-align:center;"><button class="btn ghost small" data-act="view" data-uid="'+escHtml(r.uid)+'"><span class="t">顯示畫面</span></button></td>'
             + '</tr>';
         }).join("") || (
           '<tr><td colspan="8" class="muted" style="padding:18px;">尚無資料（write/admin 可用右上「新增」建立第一筆）</td></tr>'
@@ -1825,8 +1970,8 @@
         };
 
         $("btnView").onclick = function(){
-          if(!selectedId){ toast("請先點選一筆，再按顯示畫面"); return; }
-          openModal(selectedId, false);
+          if(!selectedUid){ toast("請先點選一筆，再按顯示畫面"); return; }
+          openModal(selectedUid, false);
         };
 
         $("qText").addEventListener("input", scheduleRender);
@@ -1842,14 +1987,14 @@
 
         $("btnAdd").onclick = function(){
           if(!Auth.canWrite()){ toast("唯讀不可新增"); return; }
-          editingId = null;
+          editingUid = null;
           openModal(null, true);
         };
 
         $("btnEdit").onclick = function(){
           if(!Auth.canWrite()){ toast("唯讀不可編輯"); return; }
-          if(!selectedId){ toast("請先點選項目再按編輯"); return; }
-          openModal(selectedId, true);
+          if(!selectedUid){ toast("請先點選項目再按編輯"); return; }
+          openModal(selectedUid, true);
         };
 
         $("btnClose").onclick = closeModal;
@@ -1875,24 +2020,24 @@
         $("tbody").addEventListener("click", function(e){
           var viewBtn = e.target.closest("button[data-act='view']");
           if(viewBtn){
-            var id = Number(viewBtn.getAttribute("data-id"));
-            if(Number.isFinite(id)) openModal(id, false);
+            var uid = norm(viewBtn.getAttribute("data-uid"));
+            if(uid) openModal(uid, false);
             return;
           }
           var attBtn = e.target.closest("button[data-act='att']");
           if(attBtn){
-            var id2 = Number(attBtn.getAttribute("data-id"));
-            var item2 = db.find(function(x){ return x.id === id2; });
+            var uid2 = norm(attBtn.getAttribute("data-uid"));
+            var item2 = db.find(function(x){ return x.uid === uid2; });
             var href2 = norm(item2 && item2.attach ? item2.attach : "");
             if(!href2){ toast("此筆尚未設定附件"); return; }
             openAttachment(href2);
             return;
           }
-          var tr = e.target.closest("tr[data-id]");
+          var tr = e.target.closest("tr[data-uid]");
           if(!tr) return;
-          var id3 = Number(tr.getAttribute("data-id"));
-          if(!Number.isFinite(id3)) return;
-          selectedId = id3;
+          var uid3 = norm(tr.getAttribute("data-uid"));
+          if(!uid3) return;
+          selectedUid = uid3;
           applySelectionToDOM();
           renderHint(filteredRows().length);
         });
@@ -1929,6 +2074,9 @@
         syncUserUI();
         applyReadMode(isReadModeOn());
 
+        // ✅ 啟用雲端（並隱藏鎖按鈕）
+        initCloudOnce();
+
         scheduleRender();
       }
 
@@ -1949,7 +2097,6 @@
       start();
     }
 
-    /* ✅ 改成「共用等待方式」：優先用 push 排隊，也相容 then */
     (function(onReady){
       onReady(run);
     })(function(fn){
@@ -1961,7 +2108,6 @@
           if(W.ready === true){ fn(); return; }
         }
       }catch(e){}
-      // fallback（極少數情況）
       if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", fn);
       else fn();
     });
