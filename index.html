@@ -19,43 +19,155 @@
     window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
   </script>
 
-  <!-- ✅全站：Boot（抓 tasun-version.json、鎖 URL v、載入最新版 core） -->
-  <script src="tasun-boot.js"></script>
+  <!--
+    ✅✅✅【版本鎖定保證生效】
+    1) 強制把 URL 的 ?v 鎖成 APP_VER（避免被舊版 v 綁住）
+    2) 提前建立 __CACHE_V / __withV（後續載入 boot/loader/core 都用同一把 v）
+  -->
+  <script>
+  (function () {
+    "use strict";
 
-  <!-- ✅全站：Loader（共用等待 core-ready / __withV / fallback） -->
-  <script src="tasun-loader.js"></script>
+    const VER = String(window.TASUN_APP_VER || window.APP_VER || "").trim();
+    const ONCE_KEY = "tasun_ver_guard_once_v1";
+    const url = new URL(location.href);
+    const curV = url.searchParams.get("v") || "";
 
-  <!-- ✅本頁啟動（交給 Loader：會優先走 Boot，不在才 fallback） -->
+    // 提前建立全站 withV（同源才加 v）
+    window.__CACHE_V = VER || curV || "";
+    window.__withV = window.__withV || function (u) {
+      const vv = String(window.__CACHE_V || "").trim();
+      if (!vv) return u;
+
+      try {
+        const uu = new URL(u, document.baseURI);
+        // 只 patch 同源資源（避免外站被亂加 v）
+        if (uu.origin === location.origin) {
+          uu.searchParams.set("v", vv);
+          return uu.toString();
+        }
+        return u;
+      } catch (e) {
+        const s = String(u || "");
+        if (!s || /^https?:\/\//i.test(s) || /^mailto:/i.test(s)) return s;
+        const sep = s.includes("?") ? "&" : "?";
+        return s + sep + "v=" + encodeURIComponent(vv);
+      }
+    };
+
+    // ✅以 APP_VER 為準：若目前 v != APP_VER，直接 replace 成 APP_VER（避免不同電腦不同 v）
+    if (VER && curV !== VER) {
+      try {
+        const last = sessionStorage.getItem(ONCE_KEY) || "";
+        if (last !== VER) {
+          sessionStorage.setItem(ONCE_KEY, VER);
+          url.searchParams.set("v", VER);
+          location.replace(url.toString());
+          return;
+        }
+      } catch (e) {
+        // sessionStorage 不可用時仍強制
+        url.searchParams.set("v", VER);
+        location.replace(url.toString());
+        return;
+      }
+    }
+  })();
+  </script>
+
+  <!-- ✅preload：保留 data-base，實際 href 由 __withV 動態補 v -->
+  <link id="preloadZen" rel="preload" as="image"
+        href="佛教禪意主視覺.png"
+        data-base="佛教禪意主視覺.png">
+
+  <!--
+    ✅✅✅ 動態載入 boot/loader（自動帶 ?v=APP_VER）
+    目的：避免 tasun-boot.js / tasun-loader.js 被瀏覽器快取成舊版，導致你一直看到舊畫面
+  -->
   <script>
   (function(){
-    try{
-      if(window.TasunLoader && typeof window.TasunLoader.start === "function"){
-        window.TasunLoader.start({
-          pageKey: "index",
-          verUrl: "tasun-version.json",
-          corePath: "tasun-core.js",
-          forceUrlV: true,
-          forceVersionSync: true,
-          patchResources: true,
-          networkToast: true,
-          appHeightVar: true,
-          preloadId: "preloadZen",
-          zenImgId: "zenImg",
-          appVer: window.TASUN_APP_VER
-        });
+    "use strict";
+
+    const withV = window.__withV || ((u)=>u);
+
+    function loadScript(src){
+      return new Promise((resolve)=>{
+        try{
+          const s = document.createElement("script");
+          s.src = src;
+          s.async = false; // 保序：boot -> loader
+          s.onload = ()=>resolve(true);
+          s.onerror = ()=>resolve(false);
+          document.head.appendChild(s);
+        }catch(e){
+          resolve(false);
+        }
+      });
+    }
+
+    function patchZenResources(){
+      try{
+        const l = document.getElementById("preloadZen");
+        if(l){
+          const base = l.getAttribute("data-base") || l.getAttribute("href") || "";
+          if(base) l.href = withV(base);
+        }
+      }catch(e){}
+      try{
+        const img = document.getElementById("zenImg");
+        if(img){
+          const base = img.getAttribute("data-base") || img.getAttribute("src") || "";
+          if(base) img.src = withV(base);
+        }
+      }catch(e){}
+    }
+
+    patchZenResources();
+    document.addEventListener("DOMContentLoaded", patchZenResources, { once:true });
+
+    (async()=>{
+      await loadScript(withV("tasun-boot.js"));
+      await loadScript(withV("tasun-loader.js"));
+
+      // ✅本頁啟動（等待 TasunLoader 出現再 start）
+      function tryStart(){
+        try{
+          if(window.TasunLoader && typeof window.TasunLoader.start === "function"){
+            window.TasunLoader.start({
+              pageKey: "index",
+              verUrl: "tasun-version.json",
+              corePath: "tasun-core.js",
+              forceUrlV: true,
+
+              // ✅以 APP_VER 為準，避免 tasun-version.json 過舊把你拉回舊版
+              forceVersionSync: false,
+
+              patchResources: true,
+              networkToast: true,
+              appHeightVar: true,
+              preloadId: "preloadZen",
+              zenImgId: "zenImg",
+              appVer: window.TASUN_APP_VER
+            });
+            return true;
+          }
+        }catch(e){}
+        return false;
       }
-    }catch(e){}
+
+      if(!tryStart()){
+        let n = 0;
+        const t = setInterval(()=>{
+          n++;
+          if(tryStart() || n > 120) clearInterval(t); // 最多等 6 秒
+        }, 50);
+      }
+    })();
   })();
   </script>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-
-  <!-- ✅preload：不要手寫 ?v，交給 Boot/Core 自動補 v（並保留 data-base） -->
-  <link id="preloadZen" rel="preload" as="image"
-        href="佛教禪意主視覺.png"
-        data-base="佛教禪意主視覺.png">
-
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet">
 
   <style>
@@ -183,13 +295,14 @@
     body.locked{ overflow:hidden; }
     body.booting *{ transition:none !important; }
 
+    /* ✅加 fallback，避免某些環境變黑字 */
     .crystal-ui{
-      color: var(--ui-fill);
-      -webkit-text-stroke: var(--ui-stroke-w) var(--ui-stroke);
+      color: var(--ui-fill, rgba(255,232,178,0.998));
+      -webkit-text-stroke: var(--ui-stroke-w, 1.2px) var(--ui-stroke, rgba(80,36,10,0.86));
       text-shadow:
         0 1px 0 rgba(0,0,0,0.18),
-        0 10px 22px var(--ui-shadow-1),
-        0 0 16px var(--ui-glow);
+        0 10px 22px var(--ui-shadow-1, rgba(8,4,2,0.52)),
+        0 0 16px var(--ui-glow, rgba(255,225,155,0.14));
       letter-spacing: .12em;
     }
 
@@ -372,7 +485,6 @@
     .zw-plate.side::before{ opacity: var(--zw-plate-op-side); }
     .zw-plate.bottom::before{ opacity: var(--zw-plate-op-bottom); }
 
-    /* ✅禪字更偏深黃金（不再白灰） */
     .zen-crystal{
       --zc-stroke: rgba(72,30,10,0.52);
       --zc-shadow: rgba(0,0,0,0.26);
@@ -520,7 +632,6 @@
       pointer-events:auto;
     }
 
-    /* ✅上層黑色更透明：能看到深黃金字，不洗字 */
     .nav-area::before{
       content:"";
       position:absolute;
@@ -568,7 +679,6 @@
       z-index: 1;
     }
 
-    /* ✅亮膜縮小縮弱（避免洗字） */
     .nav-btn::before{
       content:"";
       position:absolute;
@@ -580,7 +690,6 @@
       pointer-events:none;
     }
 
-    /* ✅按鍵文字：深黃金 + 穩描邊 + 微細緊實陰影（不做厚重3D） */
     .nav-btn{
       --btn-text: rgba(246,211,122,0.998);
       --btn-stroke: rgba(10,4,2,0.92);
@@ -594,14 +703,16 @@
       position:relative;
       z-index: 1;
 
-      font-size: var(--btn-fs, clamp(1.02rem, 4.6cqw, 1.56rem));
+      /* ✅跨環境 fallback：避免 cqw 不支援時整條 font-size 失效 */
+      font-size: var(--btn-fs, 1.25rem);
+      font-size: var(--btn-fs, clamp(1.02rem, 2.2vw, 1.56rem));
 
-      color: var(--btn-text);
-      -webkit-text-stroke: var(--btn-stroke-w) var(--btn-stroke);
+      color: var(--btn-text, rgba(246,211,122,0.998));
+      -webkit-text-stroke: var(--btn-stroke-w, 1.82px) var(--btn-stroke, rgba(10,4,2,0.92));
       text-shadow:
         0 1px 0 rgba(0,0,0,0.18),
-        0 8px 18px var(--btn-shadowA),
-        0 0 14px var(--btn-glowA);
+        0 8px 18px var(--btn-shadowA, rgba(0,0,0,0.78)),
+        0 0 14px var(--btn-glowA, rgba(255,220,150,0.10));
 
       letter-spacing: .10em;
       font-weight: 900;
@@ -612,15 +723,19 @@
       text-align: center;
       text-wrap: balance;
 
-      /* ✅避免霧化：讓字更立、更清楚 */
       -webkit-font-smoothing: antialiased;
       transform: translateZ(0);
 
-      /* ✅文字換行更自然（中英混排也不亂） */
       max-width: 92%;
       overflow-wrap: anywhere;
       word-break: keep-all;
       line-break: strict;
+    }
+
+    @supports (width: 1cqw){
+      .nav-btn span{
+        font-size: var(--btn-fs, clamp(1.02rem, 4.6cqw, 1.56rem));
+      }
     }
 
     .nav-btn:hover{
@@ -640,7 +755,6 @@
         0 0 38px rgba(246,211,122,0.14);
     }
 
-    /* 桌機：拱形定位（JS 寫入 --x/--y/--rot） */
     .nav-area.arc .nav-btn{
       position:absolute;
       left: 50%;
@@ -650,7 +764,6 @@
       will-change: transform;
     }
 
-    /* ✅堆疊（保底：手機/窄版） */
     .nav-area.stack{
       display:flex;
       flex-direction: column;
@@ -803,8 +916,8 @@
     }
     .select-menu.open{ display:block; }
     .select-option{
-      padding: .66rem .92rem; border-radius: 12px; cursor:pointer;
-      color: rgba(246,211,122,0.98); letter-spacing:.06em;
+      padding: .66rem .92rem; border-radius: 12px; cursor:pointer
+      ;color: rgba(246,211,122,0.98); letter-spacing:.06em;
       -webkit-text-stroke: .40px rgba(0,0,0,0.32);
       text-shadow: 0 2px 10px rgba(0,0,0,0.35);
       user-select:none; border: 1px solid transparent;
@@ -903,6 +1016,12 @@
       (function(){
         "use strict";
 
+        // ✅版本/網址診斷（不改 UI，只寫 console，方便你確認是不是新檔）
+        try{
+          const v = new URL(location.href).searchParams.get("v") || "";
+          console.info("[Tasun index]", "APP_VER=", (window.TASUN_APP_VER||""), "url_v=", v);
+        }catch(e){}
+
         const Core = window.TasunCore || null;
         const withV = (Core && Core.withV) ? Core.withV : (window.__withV || ((u)=>u));
         const safeJsonParse = (Core && Core.jsonParse) ? Core.jsonParse : ((s,f)=>{ try{return JSON.parse(s);}catch(e){return f;} });
@@ -971,7 +1090,8 @@
         /* =========================
            ✅ CloudKit（套入：讀取 + 鎖 + watch + 版本統一 + 狀態列）
            ========================= */
-        const CLOUD_RES_URL = "tasun-resources.json.json";
+        // ✅修正：你原本是 "tasun-resources.json.json"（會 404）
+        const CLOUD_RES_URL = "tasun-resources.json";
         const CLOUD_RESOURCE_KEY = "index-config";
 
         const CLOUD_KEYS = [AUTH_KEY, NAV_KEY, ROUTE_KEY];
@@ -1385,7 +1505,7 @@
         }
 
         /* =========================
-           ✅按鍵排版（✅改成真正拱形：以「禪字內側走廊 + 中央橢圓禁區」推到外側）
+           ✅按鍵排版（原邏輯保留）
            ========================= */
         function fitButtonHeights(btns, baseH){
           btns.forEach(btn => {
@@ -1579,7 +1699,6 @@
           const edgePad = getPxVar("--frame-inset", 8) + 10;
           const gapToZen = getPxVar("--gap-05cm", 18);
 
-          // ✅禪字左右柱當作「內側走廊」界線（避免 union 太大導致退回 stack）
           const lz = isVisibleEl(zwLeft) ? zwLeft.getBoundingClientRect() : null;
           const rz = isVisibleEl(zwRight) ? zwRight.getBoundingClientRect() : null;
 
@@ -1639,10 +1758,8 @@
             });
           }
 
-          // ✅中央「蓮花＋禪字」橢圓禁區（按鍵必須在外側形成拱形）
           const cx = W * 0.5;
 
-          // centerY：用上/下禪字估，再稍微往蓮花中心偏下
           let cY = H * 0.62;
           if(ax && bl){
             const mid = ((ax.top + bl.bottom) * 0.5) - rect.top;
@@ -1663,12 +1780,10 @@
           }
 
           function boundaryNeedLeft(bw){
-            // buttonRight <= innerLeft - margin
             const need = (cx + (bw/2)) - (innerLeft - marginEdge);
             return Math.max(0, need);
           }
           function boundaryNeedRight(bw){
-            // buttonLeft >= innerRight + margin
             const need = (innerRight + marginEdge) - (cx - (bw/2));
             return Math.max(0, need);
           }
@@ -1700,11 +1815,11 @@
               if(minNeed > maxXAbs) return false;
 
               const dy = clamp((yMid - cY) / Math.max(1, ry), -1, 1);
-              const extraBulge = clamp(W * 0.030, 16, 58) * (1 - Math.abs(dy)); // 中段更外 → 拱形更像包住
+              const extraBulge = clamp(W * 0.030, 16, 58) * (1 - Math.abs(dy));
               let xAbs = minNeed + extraBulge;
               xAbs = clamp(xAbs, minNeed, maxXAbs);
 
-              const rot = (sideSign * dy * 4.0); // 微角度貼弧
+              const rot = (sideSign * dy * 4.0);
 
               btn.style.setProperty("--x", `${sideSign * xAbs}px`);
               btn.style.setProperty("--y", `${Math.round(yTop)}px`);
@@ -1769,7 +1884,7 @@
         }
 
         /* =========================
-           ✅✅✅ 自動亮度/對比（按鍵文字：亮底變「更深金」而不是變白）
+           ✅✅✅ 自動亮度/對比（原邏輯保留）
            ========================= */
         let _toneCanvas = null;
         let _toneCtx = null;
@@ -1836,14 +1951,13 @@
         }
 
         function applyBtnTextByLum(btn, lumAdj){
-          // t=0 暗底 → 亮金；t=1 亮底 → 深金（更清楚）
           const t = clamp((lumAdj - 0.34) / 0.56, 0, 1);
 
-          const fill   = lerpRGB([255,242,210], [235,168,58], t);   // ✅亮底更深金
-          const stroke = lerpRGB([26,10,4],    [10,4,2],    t);     // ✅描邊更深更穩
-          const strokeW = lerp(1.78, 2.02, t);                      // ✅亮底略加粗
-          const shadowA = lerp(0.66, 0.90, t);                      // ✅亮底陰影更實
-          const glowA   = lerp(0.12, 0.06, t);                      // ✅亮底減光暈避免洗字
+          const fill   = lerpRGB([255,242,210], [235,168,58], t);
+          const stroke = lerpRGB([26,10,4],    [10,4,2],    t);
+          const strokeW = lerp(1.78, 2.02, t);
+          const shadowA = lerp(0.66, 0.90, t);
+          const glowA   = lerp(0.12, 0.06, t);
 
           btn.style.setProperty("--btn-text", rgba(fill[0], fill[1], fill[2], 0.998));
           btn.style.setProperty("--btn-stroke", rgba(stroke[0], stroke[1], stroke[2], 0.94));
@@ -2272,6 +2386,7 @@
       })();
     }
 
+    // ✅等 Loader/Core ready（都沒有就直接跑）
     if(window.TasunLoader && typeof window.TasunLoader.ready === "function"){
       window.TasunLoader.ready(runIndexApp, 8000);
     }else if(window.TasunCore && typeof window.TasunCore.ready === "function"){
