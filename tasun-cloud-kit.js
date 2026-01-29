@@ -9,6 +9,10 @@
  *   TasunCloudKit.mount(pageOpts) -> cloud instance
  *   cloud.ready, cloud.syncNow(), cloud.saveMerged(), cloud.status(), cloud.destroy()
  *   cloud.store (low-level): read/write/lock/watch/unwatch
+ *
+ * ✅ NEW (UI option):
+ *   TasunCloudKit.init({ ui:{ hideLockButtons:true } })
+ *   - hides lock/unlock buttons on status bar (lock mechanism still works internally)
  */
 (function (window, document) {
   "use strict";
@@ -723,7 +727,8 @@
     tokenKey: "tasun_dropbox_token_v1",
     getToken: null,
     getUser: null,
-    ui: { enabled: true }
+    // ✅ NEW: ui.hideLockButtons
+    ui: { enabled: true, hideLockButtons: false }
   };
 
   function defaultGetUser(){
@@ -787,6 +792,14 @@
     if(!bar) return;
     var btnLock = bar.querySelector('[data-act="lock"]');
     var btnUnlk = bar.querySelector('[data-act="unlock"]');
+
+    // ✅ NEW: hide lock buttons regardless of role/lock state
+    var hideLocks = !!(_kitCfg.ui && _kitCfg.ui.hideLockButtons);
+    if(hideLocks){
+      if(btnLock) btnLock.style.display = "none";
+      if(btnUnlk) btnUnlk.style.display = "none";
+      return;
+    }
 
     // read-only => hide both
     if(st.readOnly){
@@ -908,9 +921,7 @@
     if(typeof apply!=="function") throw new Error("mount(): apply(payload) is required");
 
     var mergeOpt = pageOpts.merge || {};
-    var conflictPolicy = str(mergeOpt.conflictPolicy || "stash-remote"); 
-    // "stash-remote" (default): keep remote, stash conflict rows locally
-    // "prefer-local": overwrite remote with local on conflict
+    var conflictPolicy = str(mergeOpt.conflictPolicy || "stash-remote");
 
     var watchOpt = pageOpts.watch || null;
     var watchIntervalSec = watchOpt ? clamp(Number(watchOpt.intervalSec)||8, 3, 120) : 0;
@@ -986,7 +997,6 @@
       st.pendingRev = "";
       st.dirty = false;
 
-      // auto snapshot (standard extra feature)
       try{
         localStorage.setItem("tasun_cloud_snapshot__"+resourceKey, safeJsonStringify({
           savedAt: st.lastSyncAt,
@@ -1019,22 +1029,18 @@
     async function saveMerged(){
       if(st.readOnly) throw new Error("read-only");
 
-      // get local snapshot
       var local = getLocal() || {};
       local = isObj(local) ? local : {};
       local.db = ensureUidDb(Array.isArray(local.db)?local.db:[], pk);
 
       if(!basePayload){
-        // if never synced, do a sync first (use cache if needed)
         try{ await syncNow(); }catch(e){}
       }
       var base = basePayload || { db:[], counter:0 };
       base.db = ensureUidDb(Array.isArray(base.db)?base.db:[], pk);
 
-      // delta from base -> local
       var delta = computeDelta(base, local, pk);
 
-      // lock + rebase on latest remote, then apply delta
       await acquireLock();
       try{
         var latest = await Store.read(resourceKey, { preferCache:false });
@@ -1046,27 +1052,24 @@
 
         var conflicts = [];
 
-        // apply adds (assign new display id)
         var curMaxId = Math.max(maxId(remote.db, idField), Number(remote[counterField]||0)||0);
         delta.added.forEach(function(r){
           var key = str(r && r[pk]).trim();
           if(!key) return;
-          if(remoteMap.has(key)) return; // already exists
+          if(remoteMap.has(key)) return;
           curMaxId += 1;
           var nr = deepClone(r) || r;
-          nr[idField] = curMaxId; // display serial
+          nr[idField] = curMaxId;
           remote.db.push(nr);
           remoteMap.set(key, nr);
         });
 
-        // apply changes
         delta.changed.forEach(function(r){
           var key = str(r && r[pk]).trim();
           if(!key) return;
 
           var remoteRow = remoteMap.get(key);
           if(!remoteRow){
-            // treat as add
             curMaxId += 1;
             var nr2 = deepClone(r) || r;
             nr2[idField] = curMaxId;
@@ -1075,23 +1078,20 @@
             return;
           }
 
-          // conflict check: remote differs from base and local differs from base
           var baseRow = baseMap.get(key);
           var remoteChanged = baseRow ? (rowFingerprint(baseRow) !== rowFingerprint(remoteRow)) : false;
 
           if(remoteChanged){
             conflicts.push({ pk:key, local:r, remote:remoteRow, base:baseRow||null });
             if(conflictPolicy === "prefer-local"){
-              // overwrite remote
               var keepId = remoteRow[idField];
               Object.keys(remoteRow).forEach(function(k){ delete remoteRow[k]; });
               Object.keys(r).forEach(function(k){ remoteRow[k] = r[k]; });
               remoteRow[idField] = keepId;
             }else{
-              // stash-remote: keep remote; do nothing
+              // stash-remote: keep remote
             }
           }else{
-            // safe overwrite
             var keepId2 = remoteRow[idField];
             Object.keys(remoteRow).forEach(function(k){ delete remoteRow[k]; });
             Object.keys(r).forEach(function(k){ remoteRow[k] = r[k]; });
@@ -1099,13 +1099,8 @@
           }
         });
 
-        // deletions (disabled by default, but you can enable later)
-        // if(mergeOpt.allowDelete===true) ...
-
-        // update counter
         remote[counterField] = Math.max(curMaxId, Number(remote[counterField]||0)||0);
 
-        // write back (rev-safe)
         var wr = await Store.write(resourceKey, remote, { rev: latest.rev || "", requireLock:true });
 
         st.lastRev = str(wr.rev||"");
@@ -1114,12 +1109,10 @@
         st.pendingRev = "";
         st.dirty = false;
 
-        // stash conflicts (standard extra feature)
         if(conflicts.length){
           stashConflicts(resourceKey, conflicts);
         }
 
-        // update base and apply remote-as-truth
         basePayload = deepClone(remote) || remote;
         apply(remote, { source:"dropbox", rev:st.lastRev, at:st.lastSyncAt, conflicts:conflicts.length });
 
@@ -1131,7 +1124,6 @@
     }
 
     function status(){
-      // refresh dirty snapshot cheaply
       st.dirty = basePayload ? computeDirty(basePayload) : false;
       st.holdingLock = Store.lock.isHolding(resourceKey);
       st.online = (navigator.onLine !== false);
@@ -1139,7 +1131,6 @@
       return Object.assign({}, st);
     }
 
-    // watch handling
     var unwatchFn = null;
     function startWatch(){
       if(!watchIntervalSec) return;
@@ -1151,7 +1142,6 @@
           st.pendingRev = str(info && info.rev || "");
           st.online = (navigator.onLine !== false);
 
-          // if not dirty => auto sync
           var dirtyNow = basePayload ? computeDirty(basePayload) : true;
           st.dirty = dirtyNow;
 
@@ -1178,7 +1168,6 @@
       }
     }
 
-    // bar events
     if(bar){
       bar.addEventListener("click", function(ev){
         var b = ev.target && ev.target.closest ? ev.target.closest("button[data-act]") : null;
@@ -1197,9 +1186,7 @@
       window.addEventListener("offline", function(){ st.online=false; refreshBar(); });
     }
 
-    // ready chain
     var ready = (async function(){
-      // init Store with kit cfg
       Store.init({
         appVer: _kitCfg.appVer,
         resourcesUrl: _kitCfg.resourcesUrl,
@@ -1208,16 +1195,13 @@
         getToken: _kitCfg.getToken || null,
         getUser:  _kitCfg.getUser || defaultGetUser,
         onStatus: function(type,msg,detail){
-          // reflect status to bar without touching page UI
           st.lastMsg = str(msg);
           refreshBar();
         }
       });
       await Store.ready();
 
-      // initial sync
       await syncNow().catch(function(){
-        // fallback: try snapshot (auto restore)
         try{
           var snap = jsonParse(localStorage.getItem("tasun_cloud_snapshot__"+resourceKey), null);
           if(snap && snap.payload){
@@ -1235,7 +1219,6 @@
       return true;
     })();
 
-    // public instance
     var cloud = {
       key: resourceKey,
       ready: ready,
@@ -1263,7 +1246,13 @@
     _kitCfg.getToken = (typeof opts.getToken==="function") ? opts.getToken : null;
     _kitCfg.getUser  = (typeof opts.getUser==="function")  ? opts.getUser  : null;
 
-    _kitCfg.ui = (opts.ui && typeof opts.ui==="object") ? opts.ui : (_kitCfg.ui || { enabled:true });
+    // ✅ NEW: merge ui defaults + user ui
+    var uiIn = (opts.ui && typeof opts.ui==="object") ? opts.ui : null;
+    _kitCfg.ui = Object.assign(
+      { enabled:true, hideLockButtons:false },
+      (_kitCfg.ui && typeof _kitCfg.ui==="object") ? _kitCfg.ui : {},
+      uiIn || {}
+    );
 
     return Kit;
   };
