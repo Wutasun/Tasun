@@ -743,6 +743,7 @@
         0 0 38px rgba(246,211,122,0.14);
     }
 
+    /* 原 arc（保留但桌機不再依賴它判斷） */
     .nav-area.arc .nav-btn{
       position:absolute;
       left: 50%;
@@ -750,6 +751,17 @@
       transform: translate(calc(-50% + var(--x, 0px)), var(--y, 0px)) rotate(var(--rot, 0deg));
       transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
       will-change: transform;
+    }
+
+    /* ✅✅✅ 新增：桌機固定左右兩側（不疊蓮花與禪字） */
+    .nav-area.sides .nav-btn{
+      position:absolute;
+      transform: none !important;
+      left: auto;
+      right: auto;
+      top: 0;
+      transition: box-shadow .18s ease, border-color .18s ease;
+      will-change: top, left, right;
     }
 
     .nav-area.stack{
@@ -1490,7 +1502,7 @@
         }
 
         /* =========================
-           ✅按鍵排版（原邏輯保留）
+           ✅按鍵排版（✅桌機改為穩定 sides 兩側排版）
            ========================= */
         function fitButtonHeights(btns, baseH){
           btns.forEach(btn => {
@@ -1514,19 +1526,6 @@
           if(cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") return false;
           const r = el.getBoundingClientRect();
           return r.width > 0 && r.height > 0;
-        }
-
-        function rectOverlap(a, b, pad){
-          if(!a || !b) return false;
-          const p = Number(pad||0);
-          return !(a.right < b.left + p || a.left > b.right - p || a.bottom < b.top + p || a.top > b.bottom - p);
-        }
-
-        function rgba(r,g,b,a){
-          return `rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},${a})`;
-        }
-        function lerpRGB(a,b,t){
-          return [lerp(a[0],b[0],t), lerp(a[1],b[1],t), lerp(a[2],b[2],t)];
         }
 
         let BTN_CONFIGS = [];
@@ -1600,8 +1599,7 @@
 
         function resetButtonsForLogout(){
           mainNavBtns.forEach(btn => btn.style.display = "none");
-          navArea.classList.remove("arc");
-          navArea.classList.remove("stack");
+          navArea.classList.remove("arc","stack","sides");
           scheduleAll();
         }
 
@@ -1634,12 +1632,16 @@
 
           const isMobile = window.matchMedia("(max-width: 900px)").matches;
 
-          if(isMobile){
-            navArea.classList.remove("arc");
-            navArea.classList.remove("stack");
+          // ✅手機：維持 stack
+          if(isMobile || W < 980){
+            navArea.classList.remove("arc","sides");
+            navArea.classList.add("stack");
             visible.forEach(btn=>{
               btn.style.width = "100%";
               btn.style.height = "";
+              btn.style.left = "";
+              btn.style.right = "";
+              btn.style.top = "";
               const bw = btn.getBoundingClientRect().width || W;
               const bh = btn.getBoundingClientRect().height || 72;
               setButtonFontScale(btn, bw, bh);
@@ -1647,18 +1649,9 @@
             return;
           }
 
-          if(W < 980){
-            navArea.classList.remove("arc");
-            navArea.classList.add("stack");
-            visible.forEach(btn=>{
-              btn.style.width = "100%";
-              btn.style.height = "";
-              const bw = btn.getBoundingClientRect().width || W;
-              const bh = btn.getBoundingClientRect().height || 72;
-              setButtonFontScale(btn, bw, bh);
-            });
-            return;
-          }
+          // ✅桌機：固定左右兩側（sides），避免回落 stack 疊在蓮花/禪字
+          navArea.classList.remove("arc","stack");
+          navArea.classList.add("sides");
 
           const left = [];
           const right = [];
@@ -1681,190 +1674,124 @@
             bottomSafe = Math.min(bottomSafe, (bl.top - rect.top) - 12);
           }
 
-          const edgePad = getPxVar("--frame-inset", 8) + 10;
-          const gapToZen = getPxVar("--gap-05cm", 18);
+          const edgePad = getPxVar("--frame-inset", 8) + 16;   // ✅比之前再保守一點
+          const gapToZen = getPxVar("--gap-05cm", 18) + 6;
 
           const lz = isVisibleEl(zwLeft) ? zwLeft.getBoundingClientRect() : null;
           const rz = isVisibleEl(zwRight) ? zwRight.getBoundingClientRect() : null;
 
-          let innerLeft = (lz ? (lz.left - rect.left) : (W * 0.36)) - gapToZen;
-          let innerRight = (rz ? (rz.right - rect.left) : (W * 0.64)) + gapToZen;
+          // ✅中央走廊：用禪字做參考，但加入 clamp 防止禪字太靠邊導致側邊可用寬度變 0
+          let corridorLeft = (lz ? (lz.right - rect.left) : (W * 0.44)) + gapToZen;
+          let corridorRight = (rz ? (rz.left - rect.left) : (W * 0.56)) - gapToZen;
 
-          innerLeft = clamp(innerLeft, W*0.18, W*0.46);
-          innerRight = clamp(innerRight, W*0.54, W*0.82);
+          corridorLeft = clamp(corridorLeft, W * 0.36, W * 0.48);
+          corridorRight = clamp(corridorRight, W * 0.52, W * 0.64);
 
-          const maxWLeftAvail  = Math.max(0, innerLeft - edgePad - 6);
-          const maxWRightAvail = Math.max(0, (W - innerRight) - edgePad - 6);
+          const leftAreaL = edgePad;
+          const leftAreaR = Math.max(leftAreaL + 10, corridorLeft - edgePad);
+          const rightAreaL = Math.min(W - edgePad - 10, corridorRight + edgePad);
+          const rightAreaR = W - edgePad;
 
-          const minW = clamp(W * 0.14, 220, 330);
+          const leftAvailW = Math.max(0, leftAreaR - leftAreaL);
+          const rightAvailW = Math.max(0, rightAreaR - rightAreaL);
 
-          if(maxWLeftAvail < minW || maxWRightAvail < minW){
-            navArea.classList.remove("arc");
+          // ✅若側邊真的不夠寬，才回 stack（但桌機通常不會）
+          if(leftAvailW < 250 || rightAvailW < 250){
+            navArea.classList.remove("sides");
             navArea.classList.add("stack");
             return;
           }
 
-          const gapY = clamp(H * 0.045, 16, 26);
-          const availY = Math.max(1, (bottomSafe - topSafe));
-          const baseH = clamp(H * 0.105, 62, 96);
+          const availY = Math.max(1, bottomSafe - topSafe);
 
-          function totalHeight(btns){
-            if(!btns.length) return 0;
-            const hs = btns.map(b => (b.getBoundingClientRect().height || baseH));
-            return hs.reduce((a,b)=>a+b,0) + gapY * (btns.length - 1);
-          }
+          const baseH0 = clamp(H * 0.105, 66, 98);
+          const gapY0  = clamp(H * 0.050, 16, 26);
 
-          function setWidthsBySide(scale){
-            const s = clamp(scale, 0.68, 1.0);
+          const wTarget = clamp(W * 0.23, 300, 460);
 
-            function estWidth(btn, maxAvail){
-              const span = btn.querySelector("span");
-              const label = span ? String(span.textContent || "") : "";
-              const len = label.length || 8;
+          function applySideWidths(scale){
+            const s = clamp(scale, 0.72, 1.0);
 
-              const est = (len * 22) + 150;
-              const hardMax = Math.min(maxAvail, clamp(W * 0.30, 380, 560));
-              const w = clamp(est, minW, hardMax) * s;
-              return Math.round(w);
-            }
+            const wL = Math.min(leftAvailW - 4, Math.round(wTarget * s));
+            const wR = Math.min(rightAvailW - 4, Math.round(wTarget * s));
 
-            left.forEach(btn => {
-              btn.style.width = estWidth(btn, maxWLeftAvail) + "px";
-            });
-            right.forEach(btn => {
-              btn.style.width = estWidth(btn, maxWRightAvail) + "px";
-            });
+            left.forEach(btn => { btn.style.width = wL + "px"; });
+            right.forEach(btn => { btn.style.width = wR + "px"; });
 
+            const baseH = Math.max(56, Math.round(baseH0 * s));
             fitButtonHeights(visible, baseH);
+
             visible.forEach(btn=>{
-              const bw = btn.getBoundingClientRect().width || 520;
+              const bw = btn.getBoundingClientRect().width || wTarget;
               const bh = btn.getBoundingClientRect().height || baseH;
               setButtonFontScale(btn, bw, bh);
             });
+
+            return { wL, wR, baseH, gapY: Math.max(12, Math.round(gapY0 * s)) };
           }
 
-          const cx = W * 0.5;
-
-          let cY = H * 0.62;
-          if(ax && bl){
-            const mid = ((ax.top + bl.bottom) * 0.5) - rect.top;
-            cY = clamp(mid + H*0.06, H*0.52, H*0.72);
+          function totalHeight(btns, gapY){
+            if(!btns.length) return 0;
+            const hs = btns.map(b => (b.getBoundingClientRect().height || baseH0));
+            return hs.reduce((a,b)=>a+b,0) + gapY * (btns.length - 1);
           }
 
-          const corridorW = Math.max(1, (innerRight - innerLeft));
-          const rx = clamp(corridorW * 0.52, W * 0.24, W * 0.36);
-          const ry = clamp(H * 0.42, 260, H * 0.52);
+          function placeSide(btns, side, width, gapY){
+            if(!btns.length) return true;
 
-          const marginEdge = clamp(W * 0.012, 12, 22);
-          const marginEllipse = clamp(W * 0.010, 10, 18);
-
-          function ellipseNeedXAbs(yMid, bw){
-            const dy = clamp((yMid - cY) / Math.max(1, ry), -0.98, 0.98);
-            const xE = rx * Math.sqrt(Math.max(0, 1 - dy*dy));
-            return xE + marginEllipse + (bw/2);
-          }
-
-          function boundaryNeedLeft(bw){
-            const need = (cx + (bw/2)) - (innerLeft - marginEdge);
-            return Math.max(0, need);
-          }
-          function boundaryNeedRight(bw){
-            const need = (innerRight + marginEdge) - (cx - (bw/2));
-            return Math.max(0, need);
-          }
-
-          function placeArcSide(btns, sideSign){
-            const n = btns.length;
-            if(!n) return true;
-
-            const hs = btns.map(b => (b.getBoundingClientRect().height || baseH));
-            const total = hs.reduce((a,b)=>a+b,0) + gapY * (n - 1);
+            const total = totalHeight(btns, gapY);
             if(total > availY) return false;
 
-            const yStart = topSafe + Math.max(0, Math.min((availY - total) * 0.42, 42));
-            let yTop = yStart;
+            const yStart = topSafe + Math.max(0, Math.min((availY - total) * 0.22, 48));
+            let y = yStart;
 
-            for(let i=0;i<n;i++){
-              const btn = btns[i];
-              const bw = btn.getBoundingClientRect().width || 520;
-              const bh = hs[i] || baseH;
+            let x;
+            if(side === "L"){
+              x = leftAreaL + Math.max(0, (leftAvailW - width) * 0.5);
+            }else{
+              x = rightAreaL + Math.max(0, (rightAvailW - width) * 0.5);
+            }
 
-              const yMid = yTop + bh/2;
+            for(const btn of btns){
+              const bh = btn.getBoundingClientRect().height || baseH0;
 
-              const maxXAbs = Math.max(0, cx - (bw/2) - edgePad);
+              btn.style.left = (side === "L") ? (Math.round(x) + "px") : "";
+              btn.style.right = (side === "R") ? (Math.round(W - (x + width)) + "px") : "";
+              btn.style.top = Math.round(y) + "px";
 
-              const needEllipse = ellipseNeedXAbs(yMid, bw);
-              const needBoundary = (sideSign < 0) ? boundaryNeedLeft(bw) : boundaryNeedRight(bw);
-              const minNeed = Math.max(needEllipse, needBoundary);
+              // 清掉 arc 用的變數避免殘留
+              btn.style.setProperty("--x", "0px");
+              btn.style.setProperty("--y", "0px");
+              btn.style.setProperty("--rot", "0deg");
 
-              if(minNeed > maxXAbs) return false;
-
-              const dy = clamp((yMid - cY) / Math.max(1, ry), -1, 1);
-              const extraBulge = clamp(W * 0.030, 16, 58) * (1 - Math.abs(dy));
-              let xAbs = minNeed + extraBulge;
-              xAbs = clamp(xAbs, minNeed, maxXAbs);
-
-              const rot = (sideSign * dy * 4.0);
-
-              btn.style.setProperty("--x", `${sideSign * xAbs}px`);
-              btn.style.setProperty("--y", `${Math.round(yTop)}px`);
-              btn.style.setProperty("--rot", `${rot.toFixed(2)}deg`);
-
-              yTop += bh + gapY;
+              y += bh + gapY;
             }
             return true;
           }
 
-          function testBadPlacement(){
-            const pad = 6;
-            const topLim = rect.top + topSafe - pad;
-            const botLim = rect.top + bottomSafe + pad;
-
-            const avoidEls = [zwTopAxis, zwAxisText, zwBottomLine, zwLeft, zwRight].filter(isVisibleEl);
-            const avoidRects = avoidEls.map(el=>el.getBoundingClientRect());
-
-            return visible.some(btn=>{
-              const r = btn.getBoundingClientRect();
-
-              if((r.left < rect.left + pad) || (r.right > rect.right - pad) || (r.top < topLim) || (r.bottom > botLim)){
-                return true;
-              }
-
-              for(const ar of avoidRects){
-                if(rectOverlap(r, ar, 8)) return true;
-              }
-              return false;
-            });
-          }
-
-          navArea.classList.remove("stack");
-          navArea.classList.add("arc");
-
-          const scales = [1.00, 0.92, 0.85, 0.78, 0.72];
+          // ✅逐級縮小，確保一定能落在左右兩側且不超出 safe 區
+          const scales = [1.00, 0.94, 0.88, 0.82, 0.76];
           let placed = false;
 
-          for(let k=0;k<scales.length;k++){
-            setWidthsBySide(scales[k]);
+          for(const s of scales){
+            const m = applySideWidths(s);
 
-            if(Math.max(totalHeight(left), totalHeight(right)) > availY){
-              continue;
-            }
+            const need = Math.max(totalHeight(left, m.gapY), totalHeight(right, m.gapY));
+            if(need > availY) continue;
 
-            const okL = placeArcSide(left, -1);
-            const okR = placeArcSide(right,  1);
-            if(!okL || !okR) continue;
-
-            if(testBadPlacement()){
-              continue;
-            }
-
-            placed = true;
-            break;
+            const okL = placeSide(left, "L", m.wL, m.gapY);
+            const okR = placeSide(right, "R", m.wR, m.gapY);
+            if(okL && okR){ placed = true; break; }
           }
 
           if(!placed){
-            navArea.classList.remove("arc");
+            navArea.classList.remove("sides");
             navArea.classList.add("stack");
+            visible.forEach(btn=>{
+              btn.style.left = "";
+              btn.style.right = "";
+              btn.style.top = "";
+            });
           }
         }
 
@@ -1933,6 +1860,13 @@
           }catch(e){
             return null;
           }
+        }
+
+        function rgba(r,g,b,a){
+          return `rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},${a})`;
+        }
+        function lerpRGB(a,b,t){
+          return [lerp(a[0],b[0],t), lerp(a[1],b[1],t), lerp(a[2],b[2],t)];
         }
 
         function applyBtnTextByLum(btn, lumAdj){
