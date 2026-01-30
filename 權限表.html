@@ -12,10 +12,10 @@
   <script>
   (function () {
     /**
-     * ✅你每次更新本頁，只要改 APP_VER（例如：20260126_01 → 20260126_02）
+     * ✅你每次更新本頁，只要改 APP_VER（例如：20260126_01 → 20260130_01）
      * 全部使用者會自動跳到 ?v=APP_VER，保證同步最新版。
      */
-    const APP_VER = "20260126_01";  // ←←← 每次改版請改這裡（建議與首頁/管理表一致）
+    const APP_VER = "20260130_01";  // ←←← 每次改版請改這裡（建議與首頁/管理表一致）
     const VER_KEY = "tasun_app_ver_auth_v1";
     const TAB_GUARD = "tasun_tab_replaced_once_auth_v1";
 
@@ -205,9 +205,7 @@
       background: rgba(0,0,0,.14);
       flex-wrap:wrap;
     }
-    .entryHead strong{
-      letter-spacing:.12em;
-    }
+    .entryHead strong{ letter-spacing:.12em; }
     .entryBody{
       padding: 12px 14px 14px;
       display:grid;
@@ -250,10 +248,7 @@
       color: rgba(246,211,122,.86);
     }
 
-    .previewStage{
-      grid-column: 1 / -1;
-      padding-top: 6px;
-    }
+    .previewStage{ grid-column: 1 / -1; padding-top: 6px; }
     .previewTitle{
       display:flex;
       gap:10px;
@@ -305,15 +300,8 @@
       text-shadow: 0 0 16px rgba(246,211,122,.14);
       user-select:none;
     }
-    .navPill.dim{
-      opacity:.38;
-      filter: grayscale(.15);
-    }
-    .navPill small{
-      font-weight:700;
-      opacity:.85;
-      letter-spacing:.06em;
-    }
+    .navPill.dim{ opacity:.38; filter: grayscale(.15); }
+    .navPill small{ font-weight:700; opacity:.85; letter-spacing:.06em; }
 
     .tableWrap{
       width:100%;
@@ -324,11 +312,7 @@
       box-shadow: inset 0 0 0 1px rgba(255,255,255,.02);
       margin-top: 12px;
     }
-    table{
-      width: 100%;
-      border-collapse: collapse;
-      min-width: 980px;
-    }
+    table{ width: 100%; border-collapse: collapse; min-width: 980px; }
     thead th{
       position:sticky;
       top:0;
@@ -349,12 +333,7 @@
       vertical-align:middle;
     }
 
-    .chk{
-      width: 18px;
-      height: 18px;
-      accent-color: var(--gold);
-      cursor:pointer;
-    }
+    .chk{ width: 18px; height: 18px; accent-color: var(--gold); cursor:pointer; }
     .delBtn{
       padding: 9px 14px;
       border-radius: 999px;
@@ -416,9 +395,7 @@
       border-bottom: 1px solid rgba(246,211,122,.10);
       background: rgba(0,0,0,.14);
     }
-    .navPanelHead strong{
-      letter-spacing:.12em;
-    }
+    .navPanelHead strong{ letter-spacing:.12em; }
     .navGrid{
       padding: 12px 14px 14px;
       display:grid;
@@ -721,9 +698,18 @@
   const ENTRY_SELECTED_KEY = 'tasunEntrySelected_v1';
   const PERM_MATRIX_KEY    = 'tasunPermMatrix_v1';
 
-  const DROPBOX_PATH = '/權限表.json';
-  const TOKEN_DOWNLOAD_URL = 'https://www.dropbox.com/developers/apps';
+  // ✅ 改為支援 tasun-resources.json（新增 auth-table）
+  const RESOURCES_URL  = 'tasun-resources.json';
+  const RESOURCE_KEY   = 'auth-table';
 
+  // 預設仍可用（就算 resources.json 不存在也能跑）
+  let DROPBOX_PATH      = '/權限表.json';
+  let DROPBOX_LOCK_PATH = '/權限表-lock.json2';
+
+  // ✅ 版本控制上傳（避免多人覆蓋）：記住 Dropbox 檔案 rev
+  const CLOUD_REV_KEY = 'tasun_cloud_rev_auth_table_v1';
+
+  const TOKEN_DOWNLOAD_URL = 'https://www.dropbox.com/developers/apps';
   const METRO_FIXED_HREF = '汐東工程管理表.html';
   const roleOptions = ['admin','write','read'];
 
@@ -858,6 +844,24 @@
     msg.textContent = text || '';
   }
   function userKey(name){ return String(name||'').trim().toLowerCase(); }
+
+  // ✅ 讀取 tasun-resources.json 的 auth-table 路徑（若沒有就用預設）
+  async function loadResourcesForAuthTable(){
+    try{
+      const url = (window.__withV ? window.__withV(RESOURCES_URL) : RESOURCES_URL);
+      const res = await fetch(url, { cache:'no-store' });
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      const json = await res.json();
+      const node = json && json[RESOURCE_KEY];
+      const dbPath = node?.db?.path;
+      const lkPath = node?.lock?.path;
+
+      if(typeof dbPath === 'string' && dbPath.trim()) DROPBOX_PATH = dbPath.trim();
+      if(typeof lkPath === 'string' && lkPath.trim()) DROPBOX_LOCK_PATH = lkPath.trim();
+    }catch(_){
+      // 靜默：保持預設路徑即可
+    }
+  }
 
   function sanitizeToken(raw){
     let t = stripInvisibles(raw);
@@ -1435,10 +1439,54 @@
     onEntryChanged();
   });
 
+  // ✅ 合併策略：auth 依 user 合併（保留雲端新增、以本機覆蓋同名）
+  function mergeAuthByUser(localList){
+    const l = Array.isArray(localList) ? localList : [];
+    const map = new Map(auth.map(x => [String(x.user||'').trim().toLowerCase(), x]));
+    l.forEach(x => {
+      const u = String(x.user||'').trim();
+      if(!u) return;
+      const k = u.toLowerCase();
+      const r = String(x.role||'read').toLowerCase();
+      const row = map.get(k);
+      if(row){
+        row.user = u;
+        row.pass = String(x.pass||'');
+        row.role = roleOptions.includes(r) ? r : 'read';
+      }else{
+        auth.push({ user:u, pass:String(x.pass||''), role: roleOptions.includes(r)?r:'read' });
+      }
+    });
+    normalizeAuth();
+  }
+  // ✅ 合併策略：permMatrix 深度合併（本機優先）
+  function mergePermMatrix(localPM){
+    const lp = (localPM && typeof localPM === 'object') ? localPM : null;
+    if(!lp || !lp.users || typeof lp.users !== 'object') return;
+
+    if(!permMatrix || typeof permMatrix !== 'object') permMatrix = { users:{} };
+    if(!permMatrix.users || typeof permMatrix.users !== 'object') permMatrix.users = {};
+
+    for(const uk of Object.keys(lp.users)){
+      const uNode = lp.users[uk];
+      if(!uNode || typeof uNode !== 'object') continue;
+      if(!permMatrix.users[uk] || typeof permMatrix.users[uk] !== 'object') permMatrix.users[uk] = {};
+      for(const entry of Object.keys(uNode)){
+        const eNode = uNode[entry];
+        if(!eNode || typeof eNode !== 'object') continue;
+        if(!permMatrix.users[uk][entry] || typeof permMatrix.users[uk][entry] !== 'object') permMatrix.users[uk][entry] = {};
+        for(const btnKey of Object.keys(eNode)){
+          permMatrix.users[uk][entry][btnKey] = !!eNode[btnKey];
+        }
+      }
+    }
+  }
+
   // Dropbox
-  async function cloudDownload(token){
+  async function cloudDownload(token, opt = {}){
+    const silent = !!opt.silent;
     try{
-      setMsg('雲端下載中…');
+      if(!silent) setMsg('雲端下載中…');
 
       const arg = jsonToAsciiSafe({ path: DROPBOX_PATH });
 
@@ -1454,6 +1502,16 @@
         if((res.status === 400 || res.status === 401) && /malformed|OAuth 2 access token is malformed/i.test(t)){ markTokenInvalid('OAuth 2 access token is malformed'); return; }
         throw new Error(`下載失敗 HTTP ${res.status}\n${t}`);
       }
+
+      // ✅ 記住 rev（供 update 模式上傳）
+      try{
+        const apiResult = res.headers.get('Dropbox-API-Result');
+        if(apiResult){
+          const meta = safeJsonParse(apiResult, null);
+          const rev = meta?.rev;
+          if(rev) localStorage.setItem(CLOUD_REV_KEY, String(rev));
+        }
+      }catch(_){}
 
       const text = await res.text();
       const remote = safeJsonParse(text, null);
@@ -1483,52 +1541,90 @@
     }
   }
 
+  async function doUploadOnce(token){
+    const bodyObj = { auth, permMatrix };
+    const body = JSON.stringify(bodyObj, null, 2);
+
+    const lastRev = stripInvisibles(localStorage.getItem(CLOUD_REV_KEY) || '');
+    const mode = lastRev ? { ".tag":"update", "update": lastRev } : "overwrite";
+
+    const apiArg = jsonToAsciiSafe({
+      path: DROPBOX_PATH,
+      mode,
+      autorename: false,
+      mute: true
+    });
+
+    const headers = new Headers();
+    headers.set('Authorization', 'Bearer ' + token);
+    headers.set('Content-Type', 'application/octet-stream');
+    headers.set('Dropbox-API-Arg', apiArg);
+
+    const res = await fetch('https://content.dropboxapi.com/2/files/upload', { method:'POST', headers, body });
+    const text = await res.text().catch(()=>'');
+
+    if(!res.ok){
+      if(res.status === 401 && /expired_access_token/i.test(text)){ markTokenExpired('expired_access_token'); return { ok:false, retry:false }; }
+      if((res.status === 400 || res.status === 401) && /malformed|OAuth 2 access token is malformed/i.test(text)){ markTokenInvalid('OAuth 2 access token is malformed'); return { ok:false, retry:false }; }
+      // ✅ rev 衝突：多人同時上傳時，先抓最新再合併重試
+      if(res.status === 409 && /conflict|incorrect_rev|path\/conflict/i.test(text)){
+        return { ok:false, retry:true, message:text };
+      }
+      if(/files\.content\.write/i.test(text)){
+        setMsg('上傳失敗：可能 scopes 不足（需要 files.content.write）。\n' + text, true);
+        return { ok:false, retry:false };
+      }
+      throw new Error(`上傳失敗 HTTP ${res.status}\n${text}`);
+    }
+
+    const info = safeJsonParse(text, null);
+    if(info && typeof info === 'object'){
+      const rev = info.rev;
+      if(rev) localStorage.setItem(CLOUD_REV_KEY, String(rev));
+      const sm = info.server_modified || info.client_modified || '';
+      updateStates('上傳成功。' + (sm ? `\n雲端時間：${sm}` : ''));
+    }else{
+      updateStates('上傳成功。');
+    }
+    return { ok:true, retry:false };
+  }
+
   async function saveAndUpload(token){
     if(!isAdmin){
       setMsg('你不是 admin，禁止上傳。', true);
       return;
     }
+
     normalizeAuth();
     saveLocal();
+
+    // ✅ 先保留本機快照（若遇到雲端已更新 → 下載後合併再上傳）
+    const localSnap = {
+      auth: safeJsonParse(JSON.stringify(auth), []),
+      permMatrix: safeJsonParse(JSON.stringify(permMatrix), { users:{} })
+    };
 
     try{
       setMsg('上傳中…');
 
-      const bodyObj = { auth, permMatrix };
-      const body = JSON.stringify(bodyObj, null, 2);
+      let r = await doUploadOnce(token);
+      if(r.ok) return;
 
-      const apiArg = jsonToAsciiSafe({
-        path: DROPBOX_PATH,
-        mode: 'overwrite',
-        autorename: false,
-        mute: true
-      });
-
-      const headers = new Headers();
-      headers.set('Authorization', 'Bearer ' + token);
-      headers.set('Content-Type', 'application/octet-stream');
-      headers.set('Dropbox-API-Arg', apiArg);
-
-      const res = await fetch('https://content.dropboxapi.com/2/files/upload', { method:'POST', headers, body });
-      const text = await res.text().catch(()=>'');
-
-      if(!res.ok){
-        if(res.status === 401 && /expired_access_token/i.test(text)){ markTokenExpired('expired_access_token'); return; }
-        if((res.status === 400 || res.status === 401) && /malformed|OAuth 2 access token is malformed/i.test(text)){ markTokenInvalid('OAuth 2 access token is malformed'); return; }
-        if(/files\.content\.write/i.test(text)){
-          setMsg('上傳失敗：可能 scopes 不足（需要 files.content.write）。\n' + text, true);
+      if(r.retry){
+        setMsg('偵測雲端已有更新，正在重新下載並合併後重試上傳…');
+        await cloudDownload(token, { silent:true });
+        // 下載後的 auth/permMatrix = 雲端最新，合併本機快照
+        mergeAuthByUser(localSnap.auth);
+        mergePermMatrix(localSnap.permMatrix);
+        normalizeAuth();
+        saveLocal();
+        setMsg('合併完成，重試上傳中…');
+        r = await doUploadOnce(token);
+        if(!r.ok && !r.retry){
+          // doUploadOnce 已顯示訊息
           return;
         }
-        throw new Error(`上傳失敗 HTTP ${res.status}\n${text}`);
       }
-
-      const info = safeJsonParse(text, null);
-      let stamp = '';
-      if(info && typeof info === 'object'){
-        const sm = info.server_modified || info.client_modified || '';
-        if(sm) stamp = `\n雲端時間：${sm}`;
-      }
-      updateStates('上傳成功。' + stamp);
     }catch(err){
       setMsg('上傳失敗：' + (err?.message || err), true);
     }
@@ -1699,7 +1795,11 @@
     }
   });
 
-  load();
+  // ✅ 先載入 resources → 再 load（確保 DROPBOX_PATH 可從 auth-table 取得）
+  (async () => {
+    await loadResourcesForAuthTable();
+    load();
+  })();
 })();
 </script>
 </body>
