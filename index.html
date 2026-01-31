@@ -176,7 +176,10 @@
                 verUrl: "tasun-version.json",
                 corePath: "tasun-core.js",
                 forceUrlV: true,
-                forceVersionSync: false,
+
+                /* ✅(版本一致) 不同設備避免卡舊版：改為 true（以 tasun-version.json 為準） */
+                forceVersionSync: true,
+
                 patchResources: true,
                 networkToast: true,
                 appHeightVar: false,
@@ -254,15 +257,22 @@
       --mantra-size: clamp(1.10rem, 2.1vw, 2.00rem);
       --side-op: 0.66;
 
-      /* ✅(3) 底部禪字上移（你圖中紅箭頭位置） */
-      --bottom-op: 0.72;
+      /* ✅(圖標示1) 底部禪字：上移到箭頭位置（一致、含 safe-area） */
+      --bottom-op: 0.84; /* 文字更亮的基準 */
       --zen-fixed-y: 58%;
       --zen-fixed-x: clamp(64px, 18vw, 360px);
-      --zw-bottom-pad: calc(var(--frame-inset) + 1.55cm + env(safe-area-inset-bottom) + var(--vv-bottom));
+
+      --zw-bottom-lift: clamp(2.35cm, 10vh, 3.10cm); /* ← 原本 1.55cm，改為更上移 */
+      --zw-bottom-pad: calc(var(--frame-inset) + var(--zw-bottom-lift) + env(safe-area-inset-bottom) + var(--vv-bottom));
+
+      /* ✅底部禪字亮度自適應用（JS 會微調） */
+      --bottom-stroke-w: 1.14px;
+      --bottom-shadow: rgba(0,0,0,0.36);
+      --bottom-glow: rgba(255,235,200,0.20);
 
       --zw-plate-op-axis: 0.07;
       --zw-plate-op-side: 0.09;
-      --zw-plate-op-bottom: 0.07;
+      --zw-plate-op-bottom: 0.06;
 
       --zw-plate-a: rgba(70, 52, 36, 0.13);
       --zw-plate-b: rgba(255, 244, 220, 0.07);
@@ -679,6 +689,28 @@
         0 0 10px var(--zc-glow);
     }
 
+    /* ✅(圖標示1) 只針對底部那行：更亮、更水晶透明（且亮底仍清楚） */
+    .zw-bottom-line.zen-crystal{
+      background:
+        linear-gradient(180deg,
+          rgba(255,255,255,0.88) 0%,
+          rgba(255,244,210,0.82) 30%,
+          rgba(255,210,140,0.90) 62%,
+          rgba(155,82,20,0.92) 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      -webkit-text-fill-color: transparent;
+
+      -webkit-text-stroke: var(--bottom-stroke-w) rgba(92,56,22,0.62);
+      paint-order: stroke fill;
+
+      text-shadow:
+        0 1px 0 rgba(255,255,255,0.14),
+        0 7px 14px var(--bottom-shadow),
+        0 0 14px var(--bottom-glow);
+    }
+
     .zw-top-axis{
       position:absolute;
       left: 50%;
@@ -1015,6 +1047,9 @@
         --mantra-size: clamp(1.02rem, 3.2vw, 1.38rem);
         --zen-fixed-x: clamp(56px, 12vw, 140px);
         --axis-top: clamp(86px, 12vh, 170px);
+
+        /* 手機再多抬一點點，避免被底部 UI/手勢區壓到 */
+        --zw-bottom-lift: clamp(2.45cm, 11vh, 3.20cm);
       }
       .zw-side-col{ padding: 8px 10px; opacity: var(--side-op); }
       .zw-top-axis{ opacity: var(--axis-op); }
@@ -1177,8 +1212,8 @@
     }
     .select-menu.open{ display:block; }
     .select-option{
-      padding: .70rem .96rem; border-radius: 12px; cursor:pointer;
-      color: rgba(255,232,175,0.98); letter-spacing:.06em;
+      padding: .70rem .96rem; border-radius: 12px; cursor:pointer
+      ;color: rgba(255,232,175,0.98); letter-spacing:.06em;
       -webkit-text-stroke: .50px rgba(92,56,22,0.42);
       text-shadow: 0 2px 10px rgba(0,0,0,0.38);
       user-select:none; border: 1px solid transparent;
@@ -1365,6 +1400,68 @@
         let cloudApplying = false;
         let cloudSaveTimer = 0;
 
+        /* ✅(雲端離線改善) 同源快速探測：避免「其實有網路卻一直顯示離線」
+           - 探測成功：標記 online + 立刻 pullNow()
+           - 探測失敗：標記 offline
+        */
+        function fetchWithTimeout(url, ms){
+          return new Promise((resolve)=>{
+            let done = false;
+            let t = 0;
+            let ctrl = null;
+            try{ ctrl = window.AbortController ? new AbortController() : null; }catch(e){ ctrl = null; }
+
+            function finish(ok){
+              if(done) return;
+              done = true;
+              clearTimeout(t);
+              resolve(!!ok);
+            }
+
+            t = setTimeout(()=>{
+              try{ ctrl && ctrl.abort(); }catch(e){}
+              finish(false);
+            }, Math.max(350, ms|0));
+
+            try{
+              fetch(url, {
+                cache: "no-store",
+                credentials: "same-origin",
+                signal: ctrl ? ctrl.signal : undefined
+              }).then(r=>{
+                finish(!!(r && r.ok));
+              }).catch(()=>finish(false));
+            }catch(e){
+              finish(false);
+            }
+          });
+        }
+
+        let _netProbeBusy = false;
+        async function probeNetwork(reason){
+          if(_netProbeBusy) return false;
+          _netProbeBusy = true;
+
+          try{
+            const root = document.documentElement;
+            const onlineHint = (typeof navigator.onLine === "boolean") ? navigator.onLine : true;
+
+            // 用同源檔案探測（最快、最不會被擋）
+            const ok = await fetchWithTimeout(withV("tasun-version.json"), 1200);
+
+            const finalOk = !!(onlineHint && ok);
+            try{ root.dataset.net = finalOk ? "online" : "offline"; }catch(e){}
+
+            // 在線：雲端立即拉一次（加速從「離線」回復）
+            if(finalOk && cloudCtrl && typeof cloudCtrl.pullNow === "function"){
+              try{ cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
+            }
+            return finalOk;
+          }finally{
+            _netProbeBusy = false;
+          }
+        }
+
         /* ✅(效能修正 + 當機修正)
            Cloud UI bar 掃描：避免 querySelectorAll("body *") 大量配置 → 改成「尾端小範圍」掃描
            + 修正 MutationObserver 無限迴圈（fixText 只有在文字變動時才寫回）
@@ -1425,7 +1522,7 @@
               if(bar.dataset) bar.dataset.tasunSanitized = "1";
             }catch(e){}
 
-            /* ✅(5) 右下雲端 bar：改黃金字、描邊更穩、陰影更聚焦 */
+            /* ✅右下雲端 bar：改黃金字、描邊更穩、陰影更聚焦 */
             try{
               bar.style.background = "rgba(0,0,0,0.46)";
               bar.style.border = "1px solid rgba(255,244,210,0.34)";
@@ -1477,8 +1574,21 @@
                 const oldText = String(statusEl.textContent || "");
                 let t = oldText;
 
+                const rootNet = (document.documentElement && document.documentElement.dataset) ? (document.documentElement.dataset.net || "") : "";
+                const isOnline = (rootNet === "online") || (typeof navigator.onLine !== "boolean") || !!navigator.onLine;
+
                 if(t.includes("鎖定失敗")) t = t.replaceAll("鎖定失敗", "自動合併");
-                if(t.includes("同步失敗")) t = t.replaceAll("同步失敗", "離線（可按同步重試）");
+
+                // 原本「同步失敗」→ 友善提示
+                if(t.includes("同步失敗")){
+                  t = t.replaceAll("同步失敗", isOnline ? "連線中（請按同步重試）" : "離線（可按同步重試）");
+                }
+
+                // ✅(雲端離線改善) 若網路其實可用：不要長期顯示離線
+                if(/離線|offline/i.test(t) && isOnline){
+                  t = t.replace(/離線.*$/i, "連線中（若仍離線請按同步）");
+                  if(!t.includes("雲端")) t = "雲端：" + t;
+                }
 
                 // ✅只有真的變動才寫回（避免 observer 無限自觸發）
                 if(t !== oldText){
@@ -1678,17 +1788,25 @@
         function startCloudSelfHeal(){
           if(_cloudRetryTimer) return;
           _cloudRetryTimer = setInterval(()=>{
-            if(!cloudCtrl || typeof cloudCtrl.pullNow !== "function") return;
-            Promise.resolve(cloudCtrl.pullNow()).catch(()=>{});
-          }, 30000);
+            // ✅先探測網路：在線再 pullNow（減少假離線）
+            probeNetwork("interval").then((ok)=>{
+              if(!ok) return;
+              if(!cloudCtrl || typeof cloudCtrl.pullNow !== "function") return;
+              Promise.resolve(cloudCtrl.pullNow()).catch(()=>{});
+            }).catch(()=>{});
+          }, 25000);
 
           window.addEventListener("online", ()=>{
-            try{ cloudCtrl && cloudCtrl.pullNow && cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
+            probeNetwork("online").catch(()=>{});
+          }, { passive:true });
+
+          window.addEventListener("offline", ()=>{
+            try{ document.documentElement.dataset.net = "offline"; }catch(e){}
           }, { passive:true });
 
           document.addEventListener("visibilitychange", ()=>{
             if(document.visibilityState === "visible"){
-              try{ cloudCtrl && cloudCtrl.pullNow && cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
+              probeNetwork("visible").catch(()=>{});
             }
           }, { passive:true });
         }
@@ -1726,7 +1844,7 @@
             });
 
             cloudCtrl = window.TasunCloudKit.mount({
-              resourceKey: "index-config",
+              resourceKey: CLOUD_RESOURCE_KEY, /* ✅避免字串打錯 */
               pk: "k",
               idField: "id",
               counterField: "counter",
@@ -1765,7 +1883,9 @@
               }
             });
 
-            try{ cloudCtrl.pullNow && cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
+            // ✅先探測網路，再 pullNow（更快從離線回來）
+            probeNetwork("mount").then(()=>{ try{ cloudCtrl.pullNow && cloudCtrl.pullNow().catch(()=>{}); }catch(e){} }).catch(()=>{});
+
             cloudCtrl.__readOnly__ = readOnly;
 
             patchCloudUiBarAuto();
@@ -2148,9 +2268,25 @@
           try{ if(titleWrap){ titleWrap.dataset.tone = bright ? "light" : "dark"; } }catch(e){}
         }
 
+        /* ✅(圖標示1) 底部禪字：依底圖亮度微調「亮度/描邊」→ 亮底更穩、暗底更通透 */
+        function applyBottomZenContrast(){
+          computeToneIfNeeded();
+          const lum = _tone.bottom || 0.42;
+          const bright = lum >= 0.60;
+
+          const root = document.documentElement;
+          try{
+            root.style.setProperty("--bottom-op", bright ? "0.90" : "0.84");
+            root.style.setProperty("--bottom-stroke-w", bright ? "1.28px" : "1.14px");
+            root.style.setProperty("--bottom-shadow", bright ? "rgba(0,0,0,0.44)" : "rgba(0,0,0,0.36)");
+            root.style.setProperty("--bottom-glow",  bright ? "rgba(255,240,210,0.22)" : "rgba(255,235,200,0.20)");
+          }catch(e){}
+        }
+
         function applyAdaptiveTonesLite(){
           computeToneIfNeeded();
           applyUiContrastByTop();
+          applyBottomZenContrast();
 
           if(!navArea) return;
           const rect = navArea.getBoundingClientRect();
@@ -2681,6 +2817,7 @@
           scheduleExport("login:applyUser");
 
           mountCloudKitForUser(user).catch(()=>{});
+          probeNetwork("applyUser").catch(()=>{});
 
           scheduleAll();
         }
@@ -2709,6 +2846,7 @@
           _toneDirty = true;
           scheduleAll();
           onFontsReady(() => { _toneDirty = true; scheduleAll(); });
+          probeNetwork("boot").catch(()=>{});
         });
 
         loginForm.addEventListener("submit", (e) => {
@@ -2766,6 +2904,11 @@
             scheduleAll();
           }, { passive:true });
         }
+
+        // ✅雲端 bar 文案會依 dataset.net 調整，這裡監聽 online/offline 讓 UI 更即時
+        window.addEventListener("online", ()=>{ patchCloudUiBarAuto(); }, { passive:true });
+        window.addEventListener("offline", ()=>{ patchCloudUiBarAuto(); }, { passive:true });
+
       })();
     }
 
