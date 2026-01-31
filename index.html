@@ -1,4 +1,4 @@
-<!DOCTYPE html> 
+<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
@@ -1366,11 +1366,22 @@
         const usernameMenu = document.getElementById("usernameMenu");
 
         /* =========================
-           ✅ CloudKit
+           ✅ CloudKit（套到 index.html）
+           - resourceKey：預設 tasun-index-db（你也可改成 tasun-xxx-config / sxdh-xxx-db）
+           - getLocal/apply：資料放在 localStorage keys（AUTH_KEY / NAV_KEY / ROUTE_KEY）
+             雲端存成 merge-table：{ counter, db:[{id,k,v}, ...] }，其中 v 一律存 localStorage 原字串
+           - 雲端 UI：用 tasun-cloud-kit 預設右下角（不改頁面 UI）
            ========================= */
         const CLOUD_RES_URL = "tasun-resources.json";
-        const CLOUD_RESOURCE_KEY = "index-config";
 
+        // ✅你指定的 resourceKey（若想改名：只要 tasun-resources.json 有同名 key 即可）
+        const CLOUD_RESOURCE_KEY_WANT =
+          String(window.TASUN_INDEX_CLOUD_KEY || "tasun-index-db").trim() || "tasun-index-db";
+
+        // ✅保險 fallback（避免你尚未更新 resources.json 或舊站仍叫 index-config）
+        const CLOUD_RESOURCE_KEY_FALLBACKS = ["index-config", "tasun-index-config"];
+
+        // ✅本頁同步的 localStorage keys（這三個就是 index 的「配置資料」來源）
         const CLOUD_KEYS = [AUTH_KEY, NAV_KEY, ROUTE_KEY];
         const CLOUD_KEY_SET = new Set(CLOUD_KEYS);
 
@@ -1382,7 +1393,7 @@
         /* =========================
            ✅(圖標示2) 雲端離線根因診斷（精準對應 4 類 + 最小自動修補）
            - tasun-resources.json 取不到
-           - 資源鍵不存在
+           - 資源鍵不存在（含 fallback）
            - 雲端端點被擋
            - 版本不一致導致路徑錯（可自動修補）
            ========================= */
@@ -1467,22 +1478,28 @@
           if(!val) return "";
           if(typeof val === "string") return val.trim();
           if(typeof val === "object"){
-            const fields = ["url","href","endpoint","api","sheetUrl","dataUrl","resourceUrl","loadUrl"];
+            const fields = ["url","href","endpoint","api","sheetUrl","dataUrl","resourceUrl","loadUrl","path"];
             for(const f of fields){
               const s = val[f];
               if(typeof s === "string" && s.trim()) return s.trim();
             }
             for(const k of Object.keys(val)){
               const s = val[k];
-              if(typeof s === "string" && /^https?:\/\//i.test(s.trim())) return s.trim();
+              if(typeof s === "string" && s.trim()) return s.trim();
+              if(typeof s === "object" && s){
+                // ✅支援 {db:{path:"/xxx.json"}} 這種
+                const p = s.path;
+                if(typeof p === "string" && p.trim()) return p.trim();
+              }
             }
           }
           return "";
         }
 
-        function _diagMsgFromCause(cause, detail){
+        function _diagMsgFromCause(cause, detail, wantKey){
+          const wk = String(wantKey || CLOUD_RESOURCE_KEY_WANT || "");
           if(cause === "resources-missing") return "離線｜tasun-resources.json 取不到";
-          if(cause === "resource-key-missing") return `離線｜資源鍵不存在（${CLOUD_RESOURCE_KEY}）`;
+          if(cause === "resource-key-missing") return `離線｜資源鍵不存在（${wk}）`;
           if(cause === "endpoint-blocked") return "離線｜雲端端點被擋";
           if(cause === "path-wrong") return "離線｜版本不一致導致路徑錯（已自動修補）";
           return "離線｜原因未明（可按同步重試）";
@@ -1490,7 +1507,7 @@
 
         function _pickResourceKey(entries, want){
           const wn = _normKey(want);
-          if(!entries || !entries.length) return { found:null, actualKey: want, remapped:false };
+          if(!entries || !entries.length) return { found:null, actualKey: want, remapped:false, fromKey: want };
 
           // 1) exact
           let found = entries.find(e => e.key === want) || null;
@@ -1504,7 +1521,9 @@
           let remapped = false;
           if(!found){
             const scored = entries.map(e => ({ e, nk:_normKey(e.key) })).filter(x=>x.nk);
-            const both = scored.filter(x => x.nk.includes("index") && x.nk.includes("config"));
+
+            // ✅同時包含 index + (config/db) 的唯一者 → 更貼近 index 配置/資料庫
+            const both = scored.filter(x => x.nk.includes("index") && (x.nk.includes("config") || x.nk.includes("db")));
             if(both.length === 1){
               found = both[0].e; remapped = true;
             }else{
@@ -1518,7 +1537,21 @@
           }
 
           const actualKey = found ? found.key : want;
-          return { found, actualKey, remapped };
+          return { found, actualKey, remapped, fromKey: want };
+        }
+
+        function _pickResourceKeyAny(entries, want, fallbacks){
+          const tries = [want].concat(Array.isArray(fallbacks) ? fallbacks : []);
+          for(const t of tries){
+            const r = _pickResourceKey(entries, t);
+            if(r && r.found){
+              // 若是 fallback 命中 → 視為 remapped
+              if(String(t) !== String(want)) r.remapped = true;
+              r.fromKey = want;
+              return r;
+            }
+          }
+          return { found:null, actualKey: want, remapped:false, fromKey: want };
         }
 
         async function diagnoseCloudRootCause(localWithV){
@@ -1560,7 +1593,7 @@
           }
 
           if(!picked){
-            return { cause:"resources-missing", resourcesUrl: _ensureSameOriginV(wv(CLOUD_RES_URL)), resourceKey: CLOUD_RESOURCE_KEY, detail:{ last } };
+            return { cause:"resources-missing", resourcesUrl: _ensureSameOriginV(wv(CLOUD_RES_URL)), resourceKey: CLOUD_RESOURCE_KEY_WANT, wantKey: CLOUD_RESOURCE_KEY_WANT, detail:{ last } };
           }
 
           const usedUrl = _ensureSameOriginV(picked.url);
@@ -1568,17 +1601,18 @@
 
           const entries = _collectResourceEntries(picked.json);
 
-          const pickedKey = _pickResourceKey(entries, CLOUD_RESOURCE_KEY);
+          const pickedKey = _pickResourceKeyAny(entries, CLOUD_RESOURCE_KEY_WANT, CLOUD_RESOURCE_KEY_FALLBACKS);
           if(!pickedKey.found){
             return {
               cause:"resource-key-missing",
               resourcesUrl: usedUrl,
-              resourceKey: CLOUD_RESOURCE_KEY,
+              resourceKey: CLOUD_RESOURCE_KEY_WANT,
+              wantKey: CLOUD_RESOURCE_KEY_WANT,
               detail:{ keys: entries.slice(0,24).map(e=>e.key) }
             };
           }
 
-          // ✅端點探測：用來區分「雲端端點被擋」
+          // ✅端點探測（db.path 或 url）→ 用來區分「雲端端點被擋」
           let endpoint = _extractEndpoint(pickedKey.found.val);
           if(endpoint){
             try{
@@ -1590,6 +1624,7 @@
                 cause:"endpoint-blocked",
                 resourcesUrl: usedUrl,
                 resourceKey: pickedKey.actualKey,
+                wantKey: CLOUD_RESOURCE_KEY_WANT,
                 detail:{ endpoint, status: ep.status, error: ep.error || "", hint:"endpoint fetch failed" }
               };
             }
@@ -1600,7 +1635,8 @@
               cause:"path-wrong",
               resourcesUrl: usedUrl,
               resourceKey: pickedKey.actualKey,
-              detail:{ fixedTo: usedUrl, remapped: pickedKey.remapped ? { from:CLOUD_RESOURCE_KEY, to:pickedKey.actualKey } : null }
+              wantKey: CLOUD_RESOURCE_KEY_WANT,
+              detail:{ fixedTo: usedUrl, remapped: pickedKey.remapped ? { from: pickedKey.fromKey, to:pickedKey.actualKey } : null, endpoint: endpoint || "" }
             };
           }
 
@@ -1608,7 +1644,8 @@
             cause:"ok",
             resourcesUrl: usedUrl,
             resourceKey: pickedKey.actualKey,
-            detail:{ endpoint: endpoint || "", remapped: pickedKey.remapped ? { from:CLOUD_RESOURCE_KEY, to:pickedKey.actualKey } : null }
+            wantKey: CLOUD_RESOURCE_KEY_WANT,
+            detail:{ endpoint: endpoint || "", remapped: pickedKey.remapped ? { from: pickedKey.fromKey, to:pickedKey.actualKey } : null }
           };
         }
 
@@ -1740,7 +1777,7 @@
                 if(t.includes("鎖定失敗")) t = t.replaceAll("鎖定失敗", "自動合併");
                 if(t.includes("同步失敗")) t = t.replaceAll("同步失敗", "離線（可按同步重試）");
 
-                // ✅(圖標示2) 若出現 fu/3、資源不存在… → 用「精準根因」取代
+                // ✅若出現 fu/3、資源不存在… → 用「精準根因」取代
                 const needReplace =
                   !!diag && (
                     /離線/.test(oldText) ||
@@ -1940,12 +1977,14 @@
           exportBackupNow("exit/pagehide", { download:false });
         }
 
+        // ✅getLocal：把本頁「配置資料」(localStorage keys) 轉成 merge-table rows
+        // rows: [{id, k, v}]，v 一律用 localStorage 原字串（不在這裡 JSON.parse）
         function buildCloudPayloadFromLocal(){
           const rows = [];
           const keys = CLOUD_KEYS.slice().sort((a,b)=>a.localeCompare(b,"zh-Hant"));
           keys.forEach((k, idx)=>{
             const raw = localStorage.getItem(k);
-            rows.push({ k, id: idx + 1, v: (raw == null ? "" : String(raw)) });
+            rows.push({ id: idx + 1, k, v: (raw == null ? "" : String(raw)) });
           });
           return { db: rows, counter: rows.length };
         }
@@ -1980,37 +2019,61 @@
           }, { passive:true });
         }
 
-        async function mountCloudKitForUser(user){
-          if(cloudMounted) return;
-          cloudMounted = true;
+        // ✅apply 後「立刻刷新」：不改 UI，只重建資料 → 立刻重繪
+        function onIndexConfigApplied(){
+          try{
+            ROUTES = loadRoutes();
+            NAV_ARR = loadNavButtonsSeedIfMissing();
+            AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
 
-          const role = String(user?.level || "read").toLowerCase();
-          const readOnly = (role === "read");
+            // 若登入遮罩正在顯示 → 立刻更新使用者清單（避免「新增帳號後無法登入」）
+            try{
+              if(loginOverlay && loginOverlay.style.display === "flex"){
+                populateUserSelect();
+              }
+            }catch(e){}
 
-          // ✅先診斷（不依賴 cloud-kit.js 是否載入）→ 取得「精準根因」與「最小修補用的 resourcesUrl / resourceKey」
+            buildMainButtonsDOM();
+
+            if(CURRENT_USER){
+              refreshButtonsForCurrentUser();
+            }else{
+              resetButtonsForLogout();
+            }
+
+            scheduleAll();
+          }catch(e){}
+        }
+
+        // ✅統一掛載：可在「未登入」先 pull（更新 AUTH/NAV/ROUTES），登入後再切換 readOnly
+        async function ensureCloudMounted(opts){
+          const o = opts || {};
+          const user = o.user || null;
+          const readOnly = !!o.readOnly;
+
+          // 掛到 window：供 cloud bar 的「同步」按鈕點擊重跑
+          window.__tasunCloudDiagnoseNow = async function(){
+            try{
+              const d = await diagnoseCloudRootCause(withV);
+              const msg = (d && d.cause && d.cause !== "ok") ? _diagMsgFromCause(d.cause, d.detail, d.wantKey) : "";
+              if(d && d.cause && d.cause !== "ok"){
+                setCloudDiag(d.cause, msg, d.detail);
+              }else{
+                setCloudDiag("ok", "", d ? d.detail : null);
+              }
+              return d;
+            }catch(e){
+              setCloudDiag("endpoint-blocked", _diagMsgFromCause("endpoint-blocked"), { error:String(e) });
+              return { cause:"endpoint-blocked" };
+            }
+          };
+
+          // 先診斷（不依賴 cloud-kit.js 是否載入）
           let diag = null;
           try{
             diag = await diagnoseCloudRootCause(withV);
-
-            // 把診斷函數掛到 window，讓「同步」按鈕點擊可重跑
-            window.__tasunCloudDiagnoseNow = async function(){
-              try{
-                const d = await diagnoseCloudRootCause(withV);
-                const msg = _diagMsgFromCause(d.cause, d.detail);
-                if(d.cause && d.cause !== "ok"){
-                  setCloudDiag(d.cause, msg, d.detail);
-                }else{
-                  setCloudDiag("ok", "", d.detail);
-                }
-                return d;
-              }catch(e){
-                setCloudDiag("endpoint-blocked", _diagMsgFromCause("endpoint-blocked"), { error:String(e) });
-                return { cause:"endpoint-blocked" };
-              }
-            };
-
             if(diag && diag.cause && diag.cause !== "ok"){
-              setCloudDiag(diag.cause, _diagMsgFromCause(diag.cause, diag.detail), diag.detail);
+              setCloudDiag(diag.cause, _diagMsgFromCause(diag.cause, diag.detail, diag.wantKey), diag.detail);
             }else{
               setCloudDiag("ok", "", diag ? diag.detail : null);
             }
@@ -2021,20 +2084,24 @@
           const ok = await loadScriptOnce(withV("tasun-cloud-kit.js"));
           if(!ok || !window.TasunCloudKit || typeof window.TasunCloudKit.mount !== "function"){
             setCloudDiag("endpoint-blocked", _diagMsgFromCause("endpoint-blocked"), { hint:"tasun-cloud-kit.js load failed" });
-            return;
+            return null;
           }
 
+          // 供 CloudKit 取當前使用者（若未登入則回傳空）
           try{
             window.TasunCore = window.TasunCore || {};
             window.TasunCore.Auth = window.TasunCore.Auth || {};
             window.TasunCore.Auth.current = function(){
-              return { username: String(user?.username || ""), role: String(user?.level || "") };
+              if(user){
+                return { username: String(user?.username || ""), role: String(user?.level || "") };
+              }
+              return { username:"", role:"" };
             };
           }catch(e){}
 
-          // ✅(最小修補) 若診斷指出路徑/版本/快取問題：resourcesUrl 仍確保帶 v
+          // ✅若診斷指出路徑/版本/快取問題：resourcesUrl 仍確保帶 v
           const resourcesUrlFixed = _ensureSameOriginV((diag && diag.resourcesUrl) ? diag.resourcesUrl : withV(CLOUD_RES_URL));
-          const resourceKeyFixed  = (diag && diag.resourceKey) ? diag.resourceKey : CLOUD_RESOURCE_KEY;
+          const resourceKeyFixed  = (diag && diag.resourceKey) ? diag.resourceKey : CLOUD_RESOURCE_KEY_WANT;
 
           try{
             window.TasunCloudKit.init({
@@ -2047,7 +2114,18 @@
               },
               lock: { enabled:false, auto:false }
             });
+          }catch(e){}
 
+          // 已掛載過 → 只更新 readOnly + 拉一次
+          if(cloudCtrl){
+            cloudCtrl.__readOnly__ = readOnly;
+            try{ cloudCtrl.pullNow && cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
+            cloudMounted = true;
+            return cloudCtrl;
+          }
+
+          // 初次掛載
+          try{
             cloudCtrl = window.TasunCloudKit.mount({
               resourceKey: resourceKeyFixed,
               pk: "k",
@@ -2073,28 +2151,23 @@
                   cloudApplying = false;
                 }
 
-                try{
-                  ROUTES = loadRoutes();
-                  NAV_ARR = loadNavButtonsSeedIfMissing();
-                  AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-                  buildMainButtonsDOM();
-                  if(CURRENT_USER){
-                    refreshButtonsForCurrentUser();
-                  }else{
-                    resetButtonsForLogout();
-                  }
-                  scheduleAll();
-                }catch(e){}
+                // ✅套用後立刻刷新（不 reload，全頁 UI 不變，只重建資料/按鈕/登入清單）
+                try{ onIndexConfigApplied(); }catch(e){}
               }
             });
 
-            try{ cloudCtrl.pullNow && cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
             cloudCtrl.__readOnly__ = readOnly;
+
+            try{ cloudCtrl.pullNow && cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
 
             patchCloudUiBarAuto();
             startCloudSelfHeal();
 
-          }catch(e){}
+            cloudMounted = true;
+            return cloudCtrl;
+          }catch(e){
+            return null;
+          }
         }
 
         (function patchLocalStorageOnce(){
@@ -3017,7 +3090,9 @@
           refreshButtonsForCurrentUser();
           scheduleExport("login:applyUser");
 
-          mountCloudKitForUser(user).catch(()=>{});
+          // ✅登入後：依角色切換 readOnly（admin/write 可推送；read 只拉取）
+          const role = String(user?.level || "read").toLowerCase();
+          ensureCloudMounted({ user, readOnly: (role === "read") }).catch(()=>{});
 
           scheduleAll();
         }
@@ -3032,6 +3107,10 @@
 
         AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
         buildMainButtonsDOM();
+
+        // ✅未登入也先掛雲端（readOnly）→ 先 pull 回來更新 AUTH/NAV/ROUTES，登入清單會自動刷新
+        ensureCloudMounted({ user:null, readOnly:true }).catch(()=>{});
+
         showLogin();
 
         if(zenImg){
