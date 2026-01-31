@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!DOCTYPE html> 
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
@@ -1126,6 +1126,10 @@
     "use strict";
 
     function runIndexApp(){
+      // ✅防止重複初始化（避免 loader/ready 邏輯在少數狀況觸發兩次）
+      if(window.__tasun_index_app_started__) return;
+      window.__tasun_index_app_started__ = true;
+
       (function(){
         "use strict";
 
@@ -1213,7 +1217,10 @@
         let cloudApplying = false;
         let cloudSaveTimer = 0;
 
-        /* ✅(效能修正) Cloud UI bar 掃描：避免 querySelectorAll("body *") 大量配置 → 改成「尾端小範圍」掃描 */
+        /* ✅(效能修正 + 當機修正)
+           Cloud UI bar 掃描：避免 querySelectorAll("body *") 大量配置 → 改成「尾端小範圍」掃描
+           + 修正 MutationObserver 無限迴圈（fixText 只有在文字變動時才寫回）
+        */
         function patchCloudUiBarAuto(){
           const WANT = { tried:0 };
           const MAX_TRY = 80;
@@ -1264,6 +1271,12 @@
           function sanitize(bar){
             if(!bar) return;
 
+            // ✅避免重複 sanitize / 重複掛 observer
+            try{
+              if(bar.dataset && bar.dataset.tasunSanitized === "1") return;
+              if(bar.dataset) bar.dataset.tasunSanitized = "1";
+            }catch(e){}
+
             try{
               bar.style.background = "rgba(0,0,0,0.50)";
               bar.style.border = "1px solid rgba(255,244,210,0.32)";
@@ -1297,23 +1310,48 @@
               });
             }catch(e){}
 
+            // ✅修正：MutationObserver 自己改 textContent 會觸發自己 → 無限迴圈
+            let _fixing = false;
+            let _pending = false;
+
             function fixText(){
+              if(_fixing) return;
+              _fixing = true;
               try{
                 const leafs = Array.from(bar.querySelectorAll("*"))
                   .filter(x => x.childElementCount === 0 && (x.textContent||"").includes("雲端"));
                 const statusEl = leafs.sort((a,b)=>(a.textContent||"").length - (b.textContent||"").length)[0] || bar;
 
-                let t = String(statusEl.textContent || "");
+                const oldText = String(statusEl.textContent || "");
+                let t = oldText;
+
                 if(t.includes("鎖定失敗")) t = t.replaceAll("鎖定失敗", "自動合併");
                 if(t.includes("同步失敗")) t = t.replaceAll("同步失敗", "離線（可按同步重試）");
-                statusEl.textContent = t;
-              }catch(e){}
+
+                // ✅只有真的變動才寫回（避免 observer 無限自觸發）
+                if(t !== oldText){
+                  statusEl.textContent = t;
+                }
+              }catch(e){
+              }finally{
+                _fixing = false;
+              }
             }
 
-            fixText();
+            function scheduleFix(){
+              if(_pending) return;
+              _pending = true;
+              requestAnimationFrame(()=>{
+                _pending = false;
+                fixText();
+              });
+            }
+
+            // 先跑一次
+            scheduleFix();
 
             try{
-              const mo = new MutationObserver(()=>fixText());
+              const mo = new MutationObserver(()=>scheduleFix());
               mo.observe(bar, { childList:true, characterData:true, subtree:true });
             }catch(e){}
           }
@@ -1894,8 +1932,6 @@
 
         /* =========================
            ✅(效能) 文字亮度「輕量自適應」
-           - 只在「圖載入/視窗尺寸變更」時重算一次
-           - 不再對每顆按鍵做 getImageData（避免吃記憶體/卡死）
            ========================= */
         let _toneCanvas = null;
         let _toneCtx = null;
@@ -1946,7 +1982,6 @@
         }
 
         function applyBtnContrast(btn, lum){
-          // 背景越亮 → 墊片更不透明、描邊更強
           const bright = lum >= 0.58;
           btn.style.setProperty("--btn-text", "rgba(255,255,255,0.999)");
           btn.style.setProperty("--btn-stroke", bright ? "rgba(0,0,0,0.98)" : "rgba(0,0,0,0.94)");
@@ -1956,23 +1991,13 @@
         }
 
         function applyUiContrastByTop(){
-          // 讓「使用者列/標題」在亮背景仍清楚
           const bright = _tone.top >= 0.58;
-          try{
-            if(userBar){
-              userBar.dataset.tone = bright ? "light" : "dark";
-            }
-          }catch(e){}
-          try{
-            if(titleWrap){
-              titleWrap.dataset.tone = bright ? "light" : "dark";
-            }
-          }catch(e){}
+          try{ if(userBar){ userBar.dataset.tone = bright ? "light" : "dark"; } }catch(e){}
+          try{ if(titleWrap){ titleWrap.dataset.tone = bright ? "light" : "dark"; } }catch(e){}
         }
 
         function applyAdaptiveTonesLite(){
           computeToneIfNeeded();
-
           applyUiContrastByTop();
 
           if(!navArea) return;
@@ -2509,8 +2534,6 @@
         }
 
         const scheduleLayout = rafDebounce(layoutButtons);
-
-        // ✅(效能) tone 套用不會每次都讀像素，只在 dirty 時重算
         const scheduleTone  = rafDebounce(applyAdaptiveTonesLite);
 
         function scheduleAll(){
@@ -2578,12 +2601,18 @@
           exportBackupNow("manual:button", { download:true });
         });
 
-        // ✅(效能) resize / vv resize 會讓 tone dirty，但仍由 rafDebounce 合併執行
         window.addEventListener("resize", () => { _toneDirty = true; scheduleAll(); }, { passive:true });
         if(window.visualViewport){
           window.visualViewport.addEventListener("resize", () => { _toneDirty = true; scheduleAll(); }, { passive:true });
-          // ✅不要在 scroll 時硬做 dirty（避免地址列滑動造成大量觸發）
-          window.visualViewport.addEventListener("scroll", () => { scheduleAll(); }, { passive:true });
+
+          // ✅保留你的邏輯但避免滾動時極高頻觸發（仍不改 UI）
+          let _vvScrollTick = 0;
+          window.visualViewport.addEventListener("scroll", () => {
+            const now = (performance && performance.now) ? performance.now() : Date.now();
+            if(now - _vvScrollTick < 120) return;
+            _vvScrollTick = now;
+            scheduleAll();
+          }, { passive:true });
         }
       })();
     }
