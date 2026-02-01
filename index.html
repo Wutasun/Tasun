@@ -2,6 +2,7 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
+  <!-- ✅ iOS / Android：用 visualViewport + svh/dvh 穩定首屏，降低地址列收合跳動 -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Tasun 資料首頁 · 空無明</title>
   <link rel="icon" href="data:,">
@@ -10,7 +11,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
 
-  <!-- ✅（效能降載）低記憶體/省流量/減少動作 → 自動關閉高成本特效，避免「無回應」與當機 -->
+  <!-- ✅（效能降載）低記憶體/省流量/減少動作 → 自動關閉高成本特效 -->
   <script>
   (function(){
     try{
@@ -26,7 +27,11 @@
   })();
   </script>
 
-  <script>window.APP_VER=window.APP_VER||"20260129_03";window.TASUN_APP_VER=window.TASUN_APP_VER||window.APP_VER;</script>
+  <!-- ✅全站版本 -->
+  <script>
+    window.APP_VER = window.APP_VER || "20260129_03";
+    window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
+  </script>
 
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -34,7 +39,7 @@
 </head>
 
 <body class="locked booting">
-  <!-- ✅版本鎖定 + APP高度穩定（避免 iOS 地址列跳動）+ 視覺視窗上下遮擋（避免底部字/按鍵被遮）+ preload + 動態載入 -->
+  <!-- ✅版本鎖定 + appH 穩定（避免 iOS 地址列跳動）+ preload 主圖（減少首屏空白） -->
   <script>
   (function () {
     "use strict";
@@ -50,10 +55,10 @@
     }
 
     window.__CACHE_V = VER || curV || "";
+
     window.__withV = window.__withV || function (u) {
       const vv = String(window.__CACHE_V || "").trim();
       if (!vv) return u;
-
       try {
         const uu = new URL(u, document.baseURI);
         if (uu.origin === location.origin) {
@@ -69,12 +74,13 @@
       }
     };
 
+    /* ✅ iOS 地址列跳動抑制：取「最小可視高度」作為 appH（只會變小，不會因收合而變大造成跳動） */
     (function initViewportStabilizer(){
       const root = document.documentElement;
-      let stableH = 0;
-      let stableW = 0;
+      let minH = 0;
+      let lastW = 0;
 
-      function calcVV() {
+      function calcVV(reset){
         try{
           const vv = window.visualViewport;
           const h = Math.round(vv ? vv.height : window.innerHeight);
@@ -86,33 +92,38 @@
           root.style.setProperty("--vv-top", top + "px");
           root.style.setProperty("--vv-bottom", bottom + "px");
 
-          if(!stableH){
-            stableH = h; stableW = w;
+          if(reset || !minH || Math.abs(w - lastW) > 180){
+            minH = h;
+            lastW = w;
           }else{
-            const dw = Math.abs(w - stableW);
-            const dh = Math.abs(h - stableH);
-            if(dw > 140 || dh > 160){
-              stableH = h;
-              stableW = w;
-            }
+            minH = Math.min(minH, h); // ✅只取更小的高度 → 收合/展開不跳
           }
-          root.style.setProperty("--appH", stableH + "px");
+          root.style.setProperty("--appH", minH + "px");
+          root.style.setProperty("--appW", w + "px");
         }catch(e){
-          try{ root.style.setProperty("--appH", window.innerHeight + "px"); }catch(_){}
+          try{
+            root.style.setProperty("--appH", window.innerHeight + "px");
+            root.style.setProperty("--appW", window.innerWidth + "px");
+          }catch(_){}
         }
       }
 
-      calcVV();
-      window.addEventListener("resize", calcVV, { passive:true });
-      window.addEventListener("orientationchange", calcVV, { passive:true });
+      calcVV(true);
+
+      const onResize = () => calcVV(false);
+      const onOrient = () => calcVV(true);
+
+      window.addEventListener("resize", onResize, { passive:true });
+      window.addEventListener("orientationchange", onOrient, { passive:true });
       if(window.visualViewport){
-        window.visualViewport.addEventListener("resize", calcVV, { passive:true });
-        // ✅避免 visualViewport scroll 造成「每幀重排」→ 交給 layout 程式自己判斷是否需要刷新
-        window.visualViewport.addEventListener("scroll", calcVV, { passive:true });
+        window.visualViewport.addEventListener("resize", onResize, { passive:true });
+        // ✅scroll 也可能觸發 offset 變化，但只更新 CSS 變數，不做 layout 量測
+        window.visualViewport.addEventListener("scroll", onResize, { passive:true });
       }
-      document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible") calcVV(); }, { passive:true });
+      document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible") calcVV(false); }, { passive:true });
     })();
 
+    // ✅ preload 主圖（更快進來）
     try{
       const id = "preloadZen";
       if(!document.getElementById(id)){
@@ -146,9 +157,9 @@
     patchZenResources();
     document.addEventListener("DOMContentLoaded", patchZenResources, { once:true });
 
+    // ✅動態載入（維持你原本架構）
     (function(){
       const withV = window.__withV || ((u)=>u);
-
       function loadScript(src){
         return new Promise((resolve)=>{
           try{
@@ -158,9 +169,7 @@
             s.onload = ()=>resolve(true);
             s.onerror = ()=>resolve(false);
             document.head.appendChild(s);
-          }catch(e){
-            resolve(false);
-          }
+          }catch(e){ resolve(false); }
         });
       }
 
@@ -191,10 +200,10 @@
         }
 
         if(!tryStart()){
-          let n = 0;
-          const t = setInterval(()=>{
+          let n=0;
+          const t=setInterval(()=>{
             n++;
-            if(tryStart() || n > 120) clearInterval(t);
+            if(tryStart() || n>120) clearInterval(t);
           }, 50);
         }
       })();
@@ -207,29 +216,25 @@
       --gap-01cm: 0.1cm;
       --outer-side: var(--gap-01cm);
       --frame-inset: var(--gap-01cm);
-
       --frame-radius: clamp(16px, 1.55vw, 30px);
-      --stage-top: var(--frame-inset);
 
       --vv-top: 0px;
       --vv-bottom: 0px;
 
-      /* ✅整體亮度（改用背景調整，避免全頁 filter 造成 GPU/記憶體壓力） */
+      /* ✅主視覺亮度（避免整頁 filter） */
       --ambient-op: 0.58;
 
-      /* ✅底圖略提亮，保留禪風 */
-      --zen-opacity: 0.990;
+      --zen-opacity: 0.99;
       --zen-scale: 1.00;
-      --zen-contrast: 1.16;
+      --zen-contrast: 1.14;
       --zen-bright: 1.12;
       --zen-sat: 1.05;
       --zen-posX: 50%;
       --zen-posY: 50%;
 
-      /* ✅特效（高成本）預設存在；perf-lite 會自動關閉 */
+      /* ✅特效（perf-lite 會關） */
       --ripple-op: .0032;
       --ripple-speed: 30s;
-
       --mist-op: .10;
       --mist-a: rgba(245,250,255,0.10);
       --mist-b: rgba(235,245,255,0.06);
@@ -237,119 +242,67 @@
       --mist-blur: 16px;
       --mist-speed: 54s;
 
-      /* ✅降低大面積 blur（舞台不再使用 backdrop-filter） */
-      --stage-blur: 0px;
-      --panel-blur: 8px;
-      --btn-blur: 0.35px;
-      --btn-blur-m: 0.55px;
+      /* ✅Blur：桌機 16–18px；手機 12px（效能大幅好） */
+      --panel-blur: 17px;
+      --btn-blur: 17px;
 
-      --title-size: clamp(2.45rem, 5.1vw, 4.30rem);
+      --title-size: clamp(2.15rem, 4.6vw, 4.15rem);
 
+      /* ✅禪字大小：底部字「保底不縮」 */
       --axis-top: clamp(78px, 11vh, 170px);
-      --axis-pad-x: clamp(18px, 2vw, 26px);
-      --axis-pad-y: clamp(10px, 1.2vw, 14px);
-      --axis-size: clamp(2.06rem, 3.9vw, 3.85rem);
-      --axis-op: 0.84;
+      --axis-size: clamp(2.00rem, 3.8vw, 3.80rem);
+      --axis-op: 0.86;
 
-      --mantra-size: clamp(1.10rem, 2.1vw, 2.00rem);
-      --side-op: 0.66;
+      --side-size: clamp(1.06rem, 2.0vw, 1.70rem);
+      --bottom-size: clamp(1.14rem, 2.2vw, 1.72rem);
 
-      /* ✅(圖標示1) 底部禪字：更清楚 + 上移一點（桌機/手機自適應） */
-      --bottom-op: 0.94; /* ⬅️加強 */
+      --side-op: 0.68;
+      --bottom-op: 0.95;
+
       --zen-fixed-y: 58%;
       --zen-fixed-x: clamp(64px, 18vw, 360px);
 
-      /* ⬅️略上移一點點（不改版面，只微調避開最亮區） */
       --zw-bottom-lift: clamp(2.10cm, 5.4vh, 2.95cm);
       --zw-bottom-pad: calc(var(--frame-inset) + var(--zw-bottom-lift) + env(safe-area-inset-bottom) + var(--vv-bottom));
 
-      --zw-plate-op-axis: 0.07;
-      --zw-plate-op-side: 0.09;
-      --zw-plate-op-bottom: 0.20; /* ⬅️加強底部底板透明度（仍是金棕系，不是黑底） */
-
-      --zw-plate-a: rgba(70, 52, 36, 0.13);
-      --zw-plate-b: rgba(255, 244, 220, 0.07);
-      --zw-plate-border: rgba(255, 235, 195, 0.13);
-
-      --userbar-pad: clamp(14px, 1.15vw, 22px);
-
-      /* ✅(黃水晶 3D) 共用色：更深金、更銳利、描邊更穩、陰影更聚焦(細) */
-      --gold-fallback: rgba(255, 232, 175, 0.98);
-
-      /* ✅主題金色（更透明水晶感） */
+      /* ✅黃水晶：更深金、更銳利、描邊更穩、陰影更聚焦 */
       --amber-1: rgba(255, 255, 255, 0.78);
       --amber-2: rgba(255, 244, 210, 0.72);
-      --amber-3: rgba(245, 184, 74, 0.88);
-      --amber-4: rgba(155, 82, 20, 0.95);
-
-      /* ✅描邊不要黑：改成深金棕（穩、但不黑） */
-      --gold-stroke: rgba(92, 56, 22, 0.68);
-
-      /* ✅陰影更聚焦更細（縮小 blur） */
-      --gold-shadow: rgba(0, 0, 0, 0.50);
+      --amber-3: rgba(245, 184, 74, 0.90);
+      --amber-4: rgba(155, 82, 20, 0.96);
+      --gold-fallback: rgba(255, 232, 175, 0.98);
+      --gold-stroke: rgba(92, 56, 22, 0.70);
+      --gold-shadow: rgba(0, 0, 0, 0.52);
       --gold-glow: rgba(255, 220, 160, 0.18);
 
-      /* ✅(使用者列) 玻璃底更清澈、更亮（圖2-標示1） */
-      --bar-glass-hi: rgba(255,255,255,0.14);
-      --bar-glass-gold: rgba(246,211,122,0.12);
-      --bar-body-a: rgba(255,244,210,0.08);
-      --bar-body-b: rgba(0,0,0,0.26);
-      --bar-border: rgba(255,244,210,0.30);
-      --bar-border-hi: rgba(255,244,210,0.46);
-
-      /* ✅(登入表按鍵) 玻璃底更清澈、更亮（圖1圈選） */
-      --action-glass-hi: rgba(255,255,255,0.16);
-      --action-glass-gold: rgba(246,211,122,0.14);
-      --action-body-a: rgba(255,244,210,0.10);
-      --action-body-b: rgba(0,0,0,0.24);
-      --action-border: rgba(255,244,210,0.40);
-      --action-border-hi: rgba(255,244,210,0.62);
-
-      --ui-fill: rgba(255, 255, 255, 0.995);
-      --ui-stroke: rgba(0, 0, 0, 0.94);
-      --ui-stroke-w: 1.55px;
-      --ui-shadow-1: rgba(0, 0, 0, 0.82);
-      --ui-glow: rgba(255, 242, 200, 0.18);
-
-      --btn-border: rgba(246, 211, 122, 0.70);
+      /* ✅按鍵：更透明、但字更清楚（避免洗字） */
+      --btn-border: rgba(246, 211, 122, 0.72);
       --btn-border-hi: rgba(255, 244, 210, 0.92);
 
-      /* ✅按鍵玻璃（更清澈、但不洗字） */
-      --btn-glass-a: 0.085;
-      --btn-glass-b: 0.080;
+      --btn-glass-a: 0.060;
+      --btn-glass-b: 0.055;
 
-      /* ✅按鍵底更「玻璃液化」：亮一點、透明一點（文字更好讀） */
-      --btn-body-a: rgba(255, 244, 210, 0.070);
-      --btn-body-b: rgba(92, 70, 50, 0.105);
-
-      /* ✅按鍵文字：金色基準（避免某些電腦變黑） */
+      --btn-body-a: rgba(255, 248, 232, 0.055);
+      --btn-body-b: rgba(30, 22, 14, 0.070); /* ✅黑更透明 */
       --btn-text: rgba(255, 226, 156, 0.99);
-      --btn-stroke: rgba(18, 8, 2, 0.92);
+      --btn-stroke: rgba(18, 8, 2, 0.94);
       --btn-stroke-w: 2.10px;
-      --btn-shadowA: rgba(0,0,0,0.72);
+      --btn-shadowA: rgba(0,0,0,0.74);
       --btn-glowA: rgba(255, 210, 140, 0.18);
 
-      /* ✅不要黑色文字底墊片（你要求「文字底層黑色不要」） */
-      --btn-text-plate-op: 0;
+      --userbar-pad: clamp(12px, 1.1vw, 20px);
 
-      --lotus-spot-op: .16;
-
-      --login-border: rgba(246,211,122,0.62);
-      --login-solid-top: rgba(34, 22, 12, 0.96);
-      --login-solid-bot: rgba(15, 10, 6, 0.97);
-      --login-field-bg: rgba(10, 7, 4, 0.78);
-      --login-field-bg2: rgba(255,250,235,0.08);
-      --login-ink: rgba(255, 244, 210, 0.99);
-
-      /* ✅登入欄位描邊不要黑：改深金棕 */
-      --login-stroke: rgba(92,56,22,0.52);
-
-      --login-shadow-a: rgba(10,6,2,0.44);
-      --login-shadow-b: rgba(10,6,2,0.28);
+      /* ✅nav layout vars（JS 只改這些，避免大量重排量測） */
+      --navTop: 140px;
+      --navBottom: 140px;
+      --btnH: 82px;
+      --btnGap: 14px;
+      --btnW: 460px; /* 桌機側邊用 */
+      --btnScale: 1;
     }
 
     *{ box-sizing:border-box; margin:0; padding:0; }
-    html, body { height: 100%; }
+    html, body{ height:100%; }
 
     body{
       min-height:100vh;
@@ -358,7 +311,6 @@
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
       text-rendering: geometricPrecision;
-
       background:
         radial-gradient(1100px 720px at 50% 12%, rgba(255,244,220,var(--ambient-op)) 0, rgba(0,0,0,0) 72%),
         radial-gradient(900px 520px at 50% 92%, rgba(246,211,122,0.12) 0, rgba(0,0,0,0) 74%),
@@ -367,12 +319,8 @@
     body.locked{ overflow:hidden; }
     body.booting *{ transition:none !important; }
 
-    /* ✅(效能降載) 直接關閉高成本特效 / 大面積 blur */
     html.perf-lite .ripple-film,
     html.perf-lite .mist-film{ display:none !important; }
-    html.perf-lite .ripple-film::before,
-    html.perf-lite .mist-film::before{ animation:none !important; }
-    html.perf-lite .lotus-stage{ backdrop-filter:none !important; -webkit-backdrop-filter:none !important; }
     html.perf-lite .user-bar::before,
     html.perf-lite .user-pill,
     html.perf-lite .btn-switch,
@@ -381,29 +329,12 @@
       -webkit-backdrop-filter:none !important;
     }
 
-    /* ✅(1)(2) 文字更清楚：陰影層數變少、陰影更聚焦更細 */
-    .crystal-ui{
-      color: var(--ui-fill);
-      -webkit-text-stroke: var(--ui-stroke-w) var(--ui-stroke);
-      text-shadow:
-        0 1px 0 rgba(0,0,0,0.18),
-        0 8px 16px var(--ui-shadow-1),
-        0 0 12px var(--ui-glow);
-      letter-spacing: .10em;
-      font-weight: 900;
-    }
-
-    /* ✅黃水晶 3D（主題/標題用） */
     .gold-crystal{
       font-weight: 900;
       letter-spacing: .14em;
       color: var(--gold-fallback);
-
-      /* ✅描邊不要黑：深金棕 */
       -webkit-text-stroke: 1.15px var(--gold-stroke);
       paint-order: stroke fill;
-
-      /* ✅陰影更聚焦更細 */
       text-shadow:
         0 1px 0 rgba(255,255,255,0.10),
         0 8px 16px var(--gold-shadow),
@@ -423,23 +354,7 @@
       }
     }
 
-    /* ✅(圖2-標示1) 左上按鍵/文字：不要黑描邊 → 直接用「金色站起」(靠聚焦陰影) */
-    .crystal-ui.gold-ink{
-      color: rgba(255, 232, 175, 0.98) !important;
-      -webkit-text-fill-color: rgba(255, 232, 175, 0.98) !important;
-
-      /* ✅不再用黑描邊 */
-      -webkit-text-stroke: 0px transparent !important;
-
-      /* ✅站起：更聚焦、更細的陰影 + 微微晶亮 */
-      text-shadow:
-        0 1px 0 rgba(255,255,255,0.12),
-        0 9px 18px rgba(0,0,0,0.62),
-        0 0 10px rgba(255,210,140,0.16);
-      letter-spacing: .10em;
-      font-weight: 900;
-    }
-
+    /* ===== 主容器 ===== */
     .hero{
       min-height: var(--appH, 100svh);
       display:flex;
@@ -460,6 +375,7 @@
         radial-gradient(1200px 760px at 50% 18%, rgba(255,250,235,0.14), rgba(0,0,0,0) 62%),
         radial-gradient(980px 560px at 50% 92%, rgba(246,211,122,0.15), rgba(0,0,0,0) 74%),
         linear-gradient(180deg, #9c876b 0%, #7b654d 48%, #5a4635 100%);
+      contain: layout paint;
     }
 
     .hero-inner::before{
@@ -491,7 +407,6 @@
       opacity: .94;
     }
 
-    /* ✅佛光：上而下 + 內而外（輕量、不卡） */
     .blessing-film{
       position:absolute;
       inset: 0;
@@ -505,11 +420,12 @@
       opacity: .56;
     }
 
+    /* ===== 舞台（底圖） ===== */
     .lotus-stage{
       position:absolute;
       left: var(--frame-inset);
       right: var(--frame-inset);
-      top: var(--stage-top);
+      top: var(--frame-inset);
       bottom: var(--frame-inset);
       border-radius: var(--frame-radius);
       overflow:hidden;
@@ -517,7 +433,7 @@
       background:
         radial-gradient(1200px 740px at 50% 18%, rgba(255,255,255,0.16), rgba(0,0,0,0) 62%),
         radial-gradient(980px 620px at 50% 72%, rgba(255,244,210,0.08), rgba(0,0,0,0) 72%),
-        linear-gradient(180deg, rgba(112,88,64,0.14), rgba(72,54,40,0.14));
+        linear-gradient(180deg, rgba(112,88,64,0.12), rgba(72,54,40,0.12));
 
       border: 1px solid rgba(246,211,122,0.20);
       box-shadow:
@@ -525,8 +441,8 @@
         inset 0 14px 34px rgba(0,0,0,0.07),
         inset 0 -24px 40px rgba(0,0,0,0.05);
 
-      backdrop-filter: none;
-      -webkit-backdrop-filter: none;
+      /* ✅大面積 blur 不用 backdrop-filter（避免卡頓），用漸層/光澤模擬 */
+      contain: paint;
     }
 
     .zen-visual{ position:absolute; inset:0; }
@@ -545,7 +461,7 @@
       position:absolute;
       inset:0;
       background:
-        radial-gradient(900px 520px at 50% 55%, rgba(255,255,255,var(--lotus-spot-op)) 0, rgba(0,0,0,0) 70%),
+        radial-gradient(900px 520px at 50% 55%, rgba(255,255,255,0.14) 0, rgba(0,0,0,0) 70%),
         radial-gradient(900px 520px at 50% 30%, rgba(246,211,122,0.07) 0, rgba(0,0,0,0) 72%);
       pointer-events:none;
       mix-blend-mode: screen;
@@ -575,7 +491,6 @@
       0%{ transform: translate3d(-2%,0,0) rotate(8deg); }
       100%{ transform: translate3d(2%,0,0) rotate(8deg); }
     }
-
     .mist-film::before{
       content:"";
       position:absolute;
@@ -594,16 +509,16 @@
       100%{ transform: translate3d(-2%, -1%, 0); }
     }
 
+    /* ===== 標題 ===== */
     .site-title-wrapper{
       position:absolute;
       left: 50%;
-      top: calc(var(--frame-inset) + 6px + var(--vv-top));
+      top: calc(var(--frame-inset) + 8px + var(--vv-top));
       transform: translateX(-50%);
       z-index: 12;
       pointer-events:none;
       isolation:isolate;
     }
-    /* ✅表頭底板：不黑、但有聚焦，讓黃金字更清楚 */
     .site-title-wrapper::before{
       content:"";
       position:absolute;
@@ -614,7 +529,7 @@
         linear-gradient(180deg, rgba(255,244,210,0.06), rgba(0,0,0,0));
       border: 1px solid rgba(255,240,200,0.18);
       box-shadow: 0 14px 36px rgba(0,0,0,0.16);
-      opacity: .22;
+      opacity: .20;
       z-index: -1;
     }
     .site-title{
@@ -624,55 +539,31 @@
       white-space: nowrap;
     }
 
+    /* ===== 禪字 ===== */
     .zen-words{
       position:absolute;
       inset: 0;
       z-index: 11;
       pointer-events:none;
       isolation:isolate;
+      contain: paint;
     }
 
-    .zw-plate{ position: relative; display:block !important; visibility: visible !important; }
-    .zw-plate::before{
-      content:"";
-      position:absolute;
-      inset:-10px -14px;
-      border-radius: 20px;
-      background:
-        radial-gradient(240px 120px at 50% 35%, rgba(255,255,255,0.06), rgba(0,0,0,0) 72%),
-        linear-gradient(180deg, var(--zw-plate-b), rgba(0,0,0,0)),
-        linear-gradient(180deg, rgba(0,0,0,0), var(--zw-plate-a));
-      border: 1px solid var(--zw-plate-border);
-      box-shadow:
-        0 10px 22px rgba(0,0,0,0.10),
-        inset 0 1px 0 rgba(255,255,255,0.05);
-      backdrop-filter: blur(2px);
-      -webkit-backdrop-filter: blur(2px);
-      pointer-events:none;
-      opacity: 0.10;
-    }
-    .zw-plate.axis::before{ opacity: var(--zw-plate-op-axis); }
-    .zw-plate.side::before{ opacity: var(--zw-plate-op-side); }
-    .zw-plate.bottom::before{ opacity: var(--zw-plate-op-bottom); }
-
-    /* ✅禪字：修正「某些環境漸層填色失效」→ 先實心金色 fallback，再 @supports 才切漸層 */
     .zen-crystal{
-      --zc-stroke: rgba(92,56,22,0.72);
+      --zc-stroke: rgba(92,56,22,0.74);
       --zc-stroke-w: 1.25px;
-      --zc-shadow: rgba(0,0,0,0.52);
+      --zc-shadow: rgba(0,0,0,0.54);
       --zc-glow: rgba(255,210,140,0.18);
 
       font-weight: 900;
       letter-spacing: .14em;
 
-      /* ✅fallback 填色（避免只剩描邊而變灰） */
       color: rgba(255,232,175,0.98);
       -webkit-text-fill-color: rgba(255,232,175,0.98);
 
       -webkit-text-stroke: var(--zc-stroke-w) var(--zc-stroke);
       paint-order: stroke fill;
 
-      /* ✅更銳利（陰影更聚焦） */
       text-shadow:
         0 1px 0 rgba(255,255,255,0.10),
         0 2px 1px rgba(0,0,0,0.18),
@@ -694,22 +585,13 @@
       }
     }
 
-    /* ✅(圖標示1) 底部禪字：再加強（描邊更厚、陰影更聚焦、底板更有效） */
-    #zwBottomLine.zen-crystal{
-      --zc-stroke: rgba(28,16,6,0.92);
-      --zc-stroke-w: 1.95px;
-      --zc-shadow: rgba(0,0,0,0.62);
-      --zc-glow: rgba(255,248,230,0.26);
-      filter: drop-shadow(0 2px 6px rgba(0,0,0,0.18));
-    }
-
     .zw-top-axis{
       position:absolute;
       left: 50%;
       top: calc(var(--axis-top) + var(--vv-top));
       transform: translateX(-50%);
       opacity: var(--axis-op);
-      padding: var(--axis-pad-y) var(--axis-pad-x);
+      padding: 10px 18px;
       border-radius: 22px;
       white-space: nowrap;
     }
@@ -728,7 +610,7 @@
       writing-mode: vertical-rl;
       text-orientation: mixed;
       letter-spacing: .18em;
-      font-size: var(--mantra-size);
+      font-size: var(--side-size);
       opacity: var(--side-op);
       white-space: nowrap;
       padding: 10px 12px;
@@ -742,18 +624,16 @@
       left:50%;
       transform: translateX(-50%);
       bottom: var(--zw-bottom-pad);
-      font-size: var(--mantra-size);
+      font-size: var(--bottom-size); /* ✅底部字保底不縮 */
       letter-spacing: .28em;
       opacity: var(--bottom-op);
       white-space: nowrap;
       padding: 8px 10px;
       border-radius: 18px;
-      background: transparent !important;
-      box-shadow: none !important;
-      backdrop-filter: none !important;
-      -webkit-backdrop-filter: none !important;
+      filter: drop-shadow(0 2px 6px rgba(0,0,0,0.18));
     }
 
+    /* ===== 使用者列（重新架構：手機不再撐爆） ===== */
     .user-bar{
       position:absolute;
       left: calc(var(--frame-inset) + var(--userbar-pad) + env(safe-area-inset-left));
@@ -766,19 +646,19 @@
       max-width: calc(100% - (var(--frame-inset) * 2) - 12px);
       z-index: 13;
       isolation: isolate;
+      contain: layout paint;
     }
 
-    /* ✅(圖2-標示1) 使用者列底板：玻璃更亮更清澈 */
     .user-bar::before{
       content:"";
       position:absolute;
       inset:-10px -12px;
       border-radius: 999px;
       background:
-        radial-gradient(260px 120px at 18% 28%, var(--bar-glass-hi), rgba(0,0,0,0) 70%),
-        radial-gradient(320px 140px at 78% 30%, var(--bar-glass-gold), rgba(0,0,0,0) 72%),
-        linear-gradient(180deg, var(--bar-body-a), var(--bar-body-b));
-      border: 1px solid var(--bar-border);
+        radial-gradient(260px 120px at 18% 28%, rgba(255,255,255,0.14), rgba(0,0,0,0) 70%),
+        radial-gradient(320px 140px at 78% 30%, rgba(246,211,122,0.12), rgba(0,0,0,0) 72%),
+        linear-gradient(180deg, rgba(255,244,210,0.09), rgba(0,0,0,0.26));
+      border: 1px solid rgba(255,244,210,0.32);
       box-shadow:
         0 18px 44px rgba(0,0,0,0.32),
         inset 0 1px 0 rgba(255,255,255,0.10);
@@ -788,14 +668,13 @@
       pointer-events:none;
     }
 
-    /* ✅(圖2-標示1) pill 玻璃更亮更清澈 */
     .user-pill{
       padding: 10px 14px;
       border-radius: 999px;
       background:
-        radial-gradient(240px 90px at 24% 20%, rgba(255,255,255,0.12), rgba(0,0,0,0) 70%),
-        radial-gradient(300px 120px at 78% 30%, rgba(246,211,122,0.10), rgba(0,0,0,0) 72%),
-        linear-gradient(180deg, rgba(255,244,210,0.07), rgba(0,0,0,0.26));
+        radial-gradient(240px 90px at 24% 20%, rgba(255,255,255,0.10), rgba(0,0,0,0) 70%),
+        radial-gradient(300px 120px at 78% 30%, rgba(246,211,122,0.09), rgba(0,0,0,0) 72%),
+        linear-gradient(180deg, rgba(255,244,210,0.06), rgba(0,0,0,0.22));
       border: 1px solid rgba(255,244,210,0.32);
       backdrop-filter: blur(var(--panel-blur));
       -webkit-backdrop-filter: blur(var(--panel-blur));
@@ -804,15 +683,18 @@
       white-space:nowrap;
       box-shadow: 0 14px 28px rgba(0,0,0,0.22);
       font-weight: 900;
+
+      color: rgba(255, 232, 175, 0.98);
+      -webkit-text-stroke: 0px transparent;
+      text-shadow: 0 9px 18px rgba(0,0,0,0.62), 0 0 10px rgba(255,210,140,0.16);
     }
 
-    /* ✅(圖2-標示1) 左上按鍵玻璃更清澈、更亮 */
     .btn-switch{
       border: 1px solid rgba(255,244,210,0.34);
       background:
-        radial-gradient(220px 80px at 22% 22%, rgba(255,255,255,0.12), rgba(0,0,0,0) 70%),
-        radial-gradient(260px 100px at 78% 28%, rgba(246,211,122,0.11), rgba(0,0,0,0) 72%),
-        linear-gradient(180deg, rgba(255,244,210,0.08), rgba(0,0,0,0.24));
+        radial-gradient(220px 80px at 22% 22%, rgba(255,255,255,0.10), rgba(0,0,0,0) 70%),
+        radial-gradient(260px 100px at 78% 28%, rgba(246,211,122,0.10), rgba(0,0,0,0) 72%),
+        linear-gradient(180deg, rgba(255,244,210,0.06), rgba(0,0,0,0.22));
       padding: 10px 14px;
       border-radius: 999px;
       cursor:pointer;
@@ -822,37 +704,20 @@
       letter-spacing:.08em;
       font-weight: 900;
       font-size: 15px;
-    }
-    .btn-switch:hover{
-      border-color: var(--bar-border-hi);
-      background:
-        radial-gradient(220px 80px at 22% 22%, rgba(255,255,255,0.14), rgba(0,0,0,0) 70%),
-        radial-gradient(260px 100px at 78% 28%, rgba(246,211,122,0.13), rgba(0,0,0,0) 72%),
-        linear-gradient(180deg, rgba(255,244,210,0.10), rgba(0,0,0,0.26));
+
+      color: rgba(255, 232, 175, 0.98);
+      -webkit-text-stroke: 0px transparent;
+      text-shadow: 0 9px 18px rgba(0,0,0,0.62), 0 0 10px rgba(255,210,140,0.16);
     }
     .btn-export{ opacity: .98; }
 
-    /* ===== 導覽按鍵區 ===== */
+    /* ===== 導覽按鍵（透明玻璃膜漂浮） ===== */
     .nav-area{
       position:absolute;
       inset: var(--frame-inset);
       z-index: 7;
       pointer-events:auto;
-      contain: layout paint;
-    }
-
-    .nav-area::before{
-      content:"";
-      position:absolute;
-      inset:0;
-      pointer-events:none;
-      z-index: 0;
-      background:
-        radial-gradient(720px 520px at 18% 58%, rgba(255,255,255,0.10), rgba(0,0,0,0) 74%),
-        radial-gradient(720px 520px at 82% 58%, rgba(255,255,255,0.10), rgba(0,0,0,0) 74%),
-        radial-gradient(980px 640px at 50% 92%, rgba(246,211,122,0.09), rgba(0,0,0,0) 74%);
-      mix-blend-mode: screen;
-      opacity: 0.16;
+      contain: layout paint; /* ✅減少重排擴散 */
     }
 
     .nav-btn{
@@ -864,8 +729,6 @@
       border-radius: 999px;
       border: 1px solid var(--btn-border);
 
-      container-type: inline-size;
-
       background:
         radial-gradient(340px 130px at 24% 20%, rgba(255,255,255,var(--btn-glass-a)), rgba(0,0,0,0) 64%),
         radial-gradient(380px 160px at 76% 26%, rgba(246,211,122,var(--btn-glass-b)), rgba(0,0,0,0) 72%),
@@ -875,7 +738,7 @@
         0 16px 46px rgba(0,0,0,0.28),
         0 0 34px rgba(246,211,122,0.12),
         inset 0 1px 0 rgba(255,255,255,0.10),
-        inset 0 -10px 18px rgba(0,0,0,0.06);
+        inset 0 -10px 18px rgba(0,0,0,0.05);
 
       backdrop-filter: blur(var(--btn-blur));
       -webkit-backdrop-filter: blur(var(--btn-blur));
@@ -886,26 +749,19 @@
       position: relative;
       overflow: hidden;
       z-index: 1;
+
+      height: var(--btnH);
     }
 
-    .nav-btn::before{
-      content:"";
-      position:absolute;
-      inset:-2px;
-      background:
-        radial-gradient(240px 80px at 30% 18%, rgba(255,255,255,0.070), rgba(0,0,0,0) 60%),
-        radial-gradient(320px 110px at 70% 24%, rgba(246,211,122,0.075), rgba(0,0,0,0) 68%);
-      opacity: .26;
-      pointer-events:none;
-    }
+    /* ✅反光縮小、變弱：避免洗字 */
     .nav-btn::after{
       content:"";
       position:absolute;
       inset:-1px;
       background:
-        linear-gradient(135deg, rgba(255,255,255,0.10), rgba(255,255,255,0.00) 46%),
-        radial-gradient(240px 120px at 40% 12%, rgba(255,255,255,0.08), rgba(0,0,0,0) 70%);
-      opacity: .16;
+        linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.00) 46%),
+        radial-gradient(220px 100px at 40% 12%, rgba(255,255,255,0.06), rgba(0,0,0,0) 70%);
+      opacity: .14;
       mix-blend-mode: screen;
       pointer-events:none;
     }
@@ -915,9 +771,9 @@
       position:relative;
       z-index: 1;
 
-      font-size: var(--btn-fs, clamp(1.18rem, 2.6vw, 1.92rem));
+      /* ✅按鍵面積（黃金比例感）縮放：用 btnScale + container query */
+      font-size: clamp(1.16rem, calc(5.2cqw * var(--btnScale)), 2.05rem);
 
-      /* ✅關鍵修正：不要用 inherit（有些電腦會變黑）→ 明確指定填色 */
       color: var(--btn-text) !important;
       -webkit-text-fill-color: var(--btn-text);
 
@@ -942,33 +798,15 @@
       line-break: strict;
     }
 
-    @supports ((-webkit-background-clip: text) or (background-clip: text)){
-      .nav-btn span{
-        background: linear-gradient(180deg,
-          rgba(255,255,255,0.78) 0%,
-          rgba(255,244,210,0.72) 34%,
-          rgba(245,184,74,0.90) 70%,
-          rgba(155,82,20,0.95) 100%);
-        -webkit-background-clip: text;
-        background-clip: text;
-        color: transparent !important;
-        -webkit-text-fill-color: transparent;
-      }
-    }
-
-    .nav-btn span::before{ content:none !important; }
-
+    /* ✅英文字偵測：降低字距 + 略縮字級，避免太寬糊 */
     .nav-btn span.latin{
       font-family:"Noto Sans TC","Microsoft JhengHei","Noto Serif TC",sans-serif;
-      letter-spacing: .05em;
-      font-weight: 900;
+      letter-spacing: .04em;
+      transform: scaleX(0.985);
     }
-    .nav-btn span.latin-only{ letter-spacing: .04em; }
-
-    @supports (width: 1cqw){
-      .nav-btn span{
-        font-size: var(--btn-fs, clamp(1.18rem, 5.2cqw, 1.92rem));
-      }
+    .nav-btn span.latin-only{
+      letter-spacing: .03em;
+      transform: scaleX(0.975);
     }
 
     .nav-btn:hover{
@@ -977,7 +815,7 @@
         0 20px 54px rgba(0,0,0,0.32),
         0 0 44px rgba(246,211,122,0.16),
         inset 0 1px 0 rgba(255,255,255,0.12),
-        inset 0 -10px 18px rgba(0,0,0,0.08);
+        inset 0 -10px 18px rgba(0,0,0,0.06);
     }
     .nav-btn:focus{
       outline:none;
@@ -988,63 +826,58 @@
         0 0 44px rgba(246,211,122,0.16);
     }
 
-    .nav-area.sides .nav-btn{
-      position:absolute;
-      transform: none !important;
-      left: auto;
-      right: auto;
-      top: 0;
-      transition: box-shadow .18s ease, border-color .18s ease;
-      will-change: top, left, right;
+    /* ===== nav layout（JS 只切 class + 變數） ===== */
+    .nav-area{
+      padding-top: var(--navTop);
+      padding-bottom: var(--navBottom);
+      padding-left: 16px;
+      padding-right: 16px;
     }
 
+    /* 手機：直欄 */
     .nav-area.stack{
       display:flex;
       flex-direction: column;
-      gap: 14px;
+      gap: var(--btnGap);
       justify-content:flex-start;
-      padding-top: 120px;
-      padding-bottom: 140px;
-      padding-left: 16px;
-      padding-right: 16px;
-      overflow: hidden;
-      -webkit-overflow-scrolling: touch;
     }
     .nav-area.stack .nav-btn{
-      position:relative !important;
-      left:auto !important;
-      top:auto !important;
-      right:auto !important;
-      transform:none !important;
-      width: 100% !important;
-      min-height: 52px;
+      position:relative;
+      width: 100%;
       border-radius: 18px;
-      backdrop-filter: blur(var(--btn-blur-m));
-      -webkit-backdrop-filter: blur(var(--btn-blur-m));
     }
 
-    @media (max-width: 900px){
-      .hero-inner{ min-height: 540px; }
+    /* 手機：雙欄（超低高度時用） */
+    .nav-area.grid2{
+      display:grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--btnGap);
+      align-content: start;
+    }
+    .nav-area.grid2 .nav-btn{
+      position:relative;
+      width: 100%;
+      border-radius: 18px;
+    }
+    /* systemBtn 讓它一列吃滿（更好按） */
+    .nav-area.grid2 #systemBtn{ grid-column: 1 / -1; }
 
-      .user-bar{
-        left: calc(var(--frame-inset) + 12px + env(safe-area-inset-left));
-        right: calc(var(--frame-inset) + 12px + env(safe-area-inset-right));
-        max-width: none;
-      }
-      .user-pill{ flex: 1 1 auto; min-width: 220px; }
-
-      :root{
-        --mantra-size: clamp(1.02rem, 3.2vw, 1.38rem);
-        --zen-fixed-x: clamp(56px, 12vw, 140px);
-        --axis-top: clamp(86px, 12vh, 170px);
-        --zw-bottom-lift: clamp(2.25cm, 6.2vh, 3.10cm); /* ⬅️手機也略上移 */
-      }
-      .zw-side-col{ padding: 8px 10px; opacity: var(--side-op); }
-      .zw-top-axis{ opacity: var(--axis-op); }
-      .nav-btn{ --btn-stroke-w: 2.00px; }
+    /* 桌機：左右側邊（用 absolute 定位，避免中心擠壓禪字） */
+    .nav-area.sides{
+      position:absolute;
+      inset: var(--frame-inset);
+      padding-top: 0;
+      padding-bottom: 0;
+      padding-left: 0;
+      padding-right: 0;
+    }
+    .nav-area.sides .nav-btn{
+      position:absolute;
+      width: var(--btnW);
+      height: var(--btnH);
     }
 
-    /* ===== 登入遮罩 ===== */
+    /* ===== 登入遮罩（保留你原功能） ===== */
     .login-overlay{
       position:fixed; inset:0; z-index: 3000;
       display:none; align-items:center; justify-content:center;
@@ -1059,22 +892,15 @@
       width: min(520px, calc(100vw - 36px));
       border-radius: 22px;
       padding: 22px 22px 18px;
-      background: linear-gradient(180deg, var(--login-solid-top), var(--login-solid-bot));
-      border: 1px solid var(--login-border);
+      background: linear-gradient(180deg, rgba(34, 22, 12, 0.96), rgba(15, 10, 6, 0.97));
+      border: 1px solid rgba(246,211,122,0.62);
       box-shadow: 0 26px 90px rgba(0,0,0,0.58), inset 0 1px 0 rgba(255,255,255,0.06);
     }
-
-    .login-title{
-      font-size: 1.64rem;
-      margin-bottom: 10px;
-      text-align:center;
-    }
-
+    .login-title{ font-size: 1.64rem; margin-bottom: 10px; text-align:center; }
     .login-sub{
       text-align:center; min-height: 18px; font-size: 14px; opacity:.86; margin-bottom: 14px;
       color: rgba(255,232,175,0.90);
       letter-spacing:.06em;
-
       -webkit-text-stroke: 0.55px rgba(92,56,22,0.52);
       text-shadow: 0 7px 14px rgba(0,0,0,0.46);
       font-weight: 900;
@@ -1082,7 +908,6 @@
     .login-field{ display:flex; flex-direction: column; gap: 8px; margin: 12px 0; }
     .login-field label{
       font-size: 14px; letter-spacing: .12em; color: rgba(255,232,175,0.90);
-
       -webkit-text-stroke: 0.50px rgba(92,56,22,0.52);
       text-shadow: 0 7px 14px rgba(0,0,0,0.42);
       font-weight: 900;
@@ -1092,11 +917,11 @@
       flex:1; padding: .78rem .96rem; border-radius:999px;
       border:1px solid rgba(246,211,122,0.78);
       background:
-        linear-gradient(180deg, var(--login-field-bg2), rgba(0,0,0,0.00)),
-        linear-gradient(180deg, var(--login-field-bg), rgba(0,0,0,0.44));
-      color: var(--login-ink); caret-color: var(--login-ink);
-      -webkit-text-stroke: .72px var(--login-stroke);
-      text-shadow: 0 1px 0 var(--login-shadow-b), 0 5px 10px var(--login-shadow-a);
+        linear-gradient(180deg, rgba(255,250,235,0.08), rgba(0,0,0,0.00)),
+        linear-gradient(180deg, rgba(10, 7, 4, 0.78), rgba(0,0,0,0.44));
+      color: rgba(255, 244, 210, 0.99); caret-color: rgba(255, 244, 210, 0.99);
+      -webkit-text-stroke: .72px rgba(92,56,22,0.52);
+      text-shadow: 0 1px 0 rgba(10,6,2,0.28), 0 5px 10px rgba(10,6,2,0.44);
       box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 12px 20px rgba(0,0,0,0.24);
       outline:none;
       font-size: 15px;
@@ -1113,7 +938,6 @@
       color: rgba(255,232,175,0.96);
       cursor:pointer;
       box-shadow: 0 12px 22px rgba(0,0,0,0.26);
-
       -webkit-text-stroke: 0.65px rgba(92,56,22,0.52);
       text-shadow: 0 8px 16px rgba(0,0,0,0.50);
       font-weight: 900;
@@ -1125,33 +949,28 @@
       font-weight: 900;
     }
     .login-actions{ display:flex; gap: 12px; justify-content:center; margin-top: 14px; }
-
     .btn-login, .btn-secondary{
       border-radius: 999px; padding: 12px 18px;
-      border: 1px solid var(--action-border);
+      border: 1px solid rgba(255,244,210,0.40);
       background:
-        radial-gradient(240px 90px at 24% 18%, var(--action-glass-hi), rgba(0,0,0,0) 70%),
-        radial-gradient(300px 120px at 78% 26%, var(--action-glass-gold), rgba(0,0,0,0) 72%),
-        linear-gradient(180deg, var(--action-body-a), var(--action-body-b));
+        radial-gradient(240px 90px at 24% 18%, rgba(255,255,255,0.16), rgba(0,0,0,0) 70%),
+        radial-gradient(300px 120px at 78% 26%, rgba(246,211,122,0.14), rgba(0,0,0,0) 72%),
+        linear-gradient(180deg, rgba(255,244,210,0.10), rgba(0,0,0,0.24));
       cursor:pointer; letter-spacing: .12em;
       box-shadow:
         0 16px 34px rgba(0,0,0,0.32),
         inset 0 1px 0 rgba(255,255,255,0.10);
       font-size: 15px;
       font-weight: 900;
-
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
-    }
-    .btn-login:hover, .btn-secondary:hover{
-      border-color: var(--action-border-hi);
-      background:
-        radial-gradient(240px 90px at 24% 18%, rgba(255,255,255,0.18), rgba(0,0,0,0) 70%),
-        radial-gradient(300px 120px at 78% 26%, rgba(246,211,122,0.16), rgba(0,0,0,0) 72%),
-        linear-gradient(180deg, rgba(255,244,210,0.12), rgba(0,0,0,0.26));
+
+      color: rgba(255,232,175,0.98);
+      -webkit-text-stroke: 0px transparent;
+      text-shadow: 0 10px 18px rgba(0,0,0,0.62), 0 0 10px rgba(255,210,140,0.14);
     }
 
-    /* ===== 自製下拉 ===== */
+    /* ===== 自製下拉（保留） ===== */
     .select-wrap{ position:relative; width:100%; }
     .select-wrap select{ position:absolute; inset:0; opacity:0; pointer-events:none; }
     .select-display{
@@ -1159,11 +978,11 @@
       padding: .78rem 2.90rem .78rem .96rem;
       border-radius:999px; border:1px solid rgba(246,211,122,0.78);
       background:
-        linear-gradient(180deg, var(--login-field-bg2), rgba(0,0,0,0.00)),
-        linear-gradient(180deg, var(--login-field-bg), rgba(0,0,0,0.44));
+        linear-gradient(180deg, rgba(255,250,235,0.08), rgba(0,0,0,0.00)),
+        linear-gradient(180deg, rgba(10, 7, 4, 0.78), rgba(0,0,0,0.44));
       color: rgba(255,232,175,0.96);
       -webkit-text-stroke: .70px rgba(92,56,22,0.52);
-      text-shadow: 0 1px 0 var(--login-shadow-b), 0 6px 12px rgba(0,0,0,0.46);
+      text-shadow: 0 1px 0 rgba(10,6,2,0.28), 0 6px 12px rgba(0,0,0,0.46);
       box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 12px 20px rgba(0,0,0,0.24);
       cursor:pointer; user-select:none; position:relative; appearance:none;
       backdrop-filter:none; -webkit-backdrop-filter:none;
@@ -1181,7 +1000,6 @@
       pointer-events:none;
       font-weight: 900;
     }
-
     .select-menu{
       position:absolute; left:0; right:0; top: calc(100% + 10px);
       max-height: 280px; overflow:auto;
@@ -1192,8 +1010,8 @@
     }
     .select-menu.open{ display:block; }
     .select-option{
-      padding: .70rem .96rem; border-radius: 12px; cursor:pointer
-      ;color: rgba(255,232,175,0.98); letter-spacing:.06em;
+      padding: .70rem .96rem; border-radius: 12px; cursor:pointer;
+      color: rgba(255,232,175,0.98); letter-spacing:.06em;
       -webkit-text-stroke: .50px rgba(92,56,22,0.42);
       text-shadow: 0 2px 10px rgba(0,0,0,0.38);
       user-select:none; border: 1px solid transparent;
@@ -1202,8 +1020,54 @@
     .select-option:hover{ background: rgba(255,244,210,0.10); }
     .select-option[aria-selected="true"]{ background: rgba(246,211,122,0.14); border-color: rgba(246,211,122,0.20); }
     .select-option.active{ background: rgba(255,244,210,0.14); border-color: rgba(255,244,210,0.22); outline: none; }
+
+    /* ===== 手機重新排版（關鍵：避免你截圖那種「亂」） ===== */
+    @media (max-width: 900px){
+      :root{
+        --panel-blur: 12px;
+        --btn-blur: 12px;
+
+        --side-size: clamp(1.02rem, 3.0vw, 1.30rem);
+        --bottom-size: clamp(1.14rem, 3.2vw, 1.44rem);
+        --axis-size: clamp(1.90rem, 5.2vw, 2.80rem);
+
+        --zen-fixed-x: clamp(56px, 12vw, 140px);
+        --axis-top: clamp(86px, 12vh, 170px);
+        --zw-bottom-lift: clamp(2.25cm, 6.2vh, 3.10cm);
+      }
+
+      .hero-inner{ min-height: 520px; }
+
+      /* ✅user-bar：改成「兩列小卡」→ 不再撐爆舞台 */
+      .user-bar{
+        left: calc(var(--frame-inset) + 12px + env(safe-area-inset-left));
+        right: calc(var(--frame-inset) + 12px + env(safe-area-inset-right));
+        max-width: none;
+
+        display:grid;
+        grid-template-columns: 1fr 1fr;
+        grid-template-areas:
+          "pill pill"
+          "switch export";
+        gap: 8px;
+        align-items: stretch;
+      }
+      .user-pill{ grid-area: pill; white-space: normal; text-wrap: balance; }
+      #btnSwitchUser{ grid-area: switch; }
+      #btnExport{ grid-area: export; }
+
+      .btn-switch, .user-pill{ font-size: 14px; padding: 10px 12px; }
+      .site-title{ letter-spacing: .12em; }
+    }
+
+    @media (max-height: 560px){
+      /* ✅超低高度：側邊禪字稍微縮小/淡一點，保底字不動 */
+      :root{ --side-op: 0.58; }
+      .zw-side-col{ padding: 8px 10px; }
+    }
   </style>
 
+  <!-- ===== Login Overlay ===== -->
   <div class="login-overlay" id="loginOverlay">
     <div class="login-box">
       <div class="login-title gold-crystal">Tasun 資料 · 登入</div>
@@ -1233,8 +1097,8 @@
         <div class="login-error" id="loginError"></div>
 
         <div class="login-actions">
-          <button type="submit" class="btn-login crystal-ui gold-ink">登入</button>
-          <button type="button" class="btn-secondary crystal-ui gold-ink" id="btnForceRelogin">切換/重新登入</button>
+          <button type="submit" class="btn-login">登入</button>
+          <button type="button" class="btn-secondary" id="btnForceRelogin">切換/重新登入</button>
         </div>
       </form>
     </div>
@@ -1261,25 +1125,25 @@
       </div>
 
       <div class="zen-words" aria-hidden="true">
-        <div class="zw-top-axis zw-plate axis" id="zwTopAxis">
+        <div class="zw-top-axis" id="zwTopAxis">
           <span class="zw-axis-text zen-crystal" id="zwAxisText">空 無 明</span>
         </div>
-
-        <div class="zw-side-col zw-plate side zen-crystal" id="zwLeft">空寧無我</div>
-        <div class="zw-side-col zw-plate side zen-crystal" id="zwRight">清明寧靜</div>
-        <div class="zw-bottom-line zw-plate bottom zen-crystal" id="zwBottomLine">空無　明靜</div>
+        <div class="zw-side-col zen-crystal" id="zwLeft">空寧無我</div>
+        <div class="zw-side-col zen-crystal" id="zwRight">清明寧靜</div>
+        <div class="zw-bottom-line zen-crystal" id="zwBottomLine">空無　明靜</div>
       </div>
 
       <div class="user-bar" id="userBar">
-        <div class="user-pill crystal-ui gold-ink" id="userInfo" data-text="目前使用者：未登入">目前使用者：未登入</div>
-        <button class="btn-switch crystal-ui gold-ink" id="btnSwitchUser" type="button">切換帳號</button>
-        <button class="btn-switch btn-export crystal-ui gold-ink" id="btnExport" type="button">匯出備份</button>
+        <div class="user-pill" id="userInfo" data-text="目前使用者：未登入">目前使用者：未登入</div>
+        <button class="btn-switch" id="btnSwitchUser" type="button">切換帳號</button>
+        <button class="btn-switch btn-export" id="btnExport" type="button">匯出備份</button>
       </div>
 
       <div class="site-title-wrapper" id="titleWrap">
         <div class="site-title gold-crystal">Tasun 資料</div>
       </div>
 
+      <!-- ✅ nav-area：按鍵覆蓋層（疊在圖形與文字上） -->
       <div class="nav-area" id="navArea"></div>
     </div>
   </main>
@@ -1292,1896 +1156,1111 @@
       if(window.__tasun_index_app_started__) return;
       window.__tasun_index_app_started__ = true;
 
-      (function(){
-        "use strict";
+      const Core = window.TasunCore || null;
+      const withV = (Core && Core.withV) ? Core.withV : (window.__withV || ((u)=>u));
+      const safeJsonParse = (Core && Core.jsonParse) ? Core.jsonParse : ((s,f)=>{ try{return JSON.parse(s);}catch(e){return f;} });
+      const clamp = (Core && Core.clamp) ? Core.clamp : ((n,a,b)=>Math.max(a,Math.min(b,n)));
+
+      const rafDebounce = (Core && Core.rafDebounce) ? Core.rafDebounce : (fn=>{
+        let r=0; return function(){ try{ cancelAnimationFrame(r); }catch(e){} r=requestAnimationFrame(()=>{ try{ fn(); }catch(e){} }); };
+      });
+
+      const onFontsReady = (cb)=>{
+        if(document.fonts && document.fonts.ready) document.fonts.ready.then(cb);
+        else setTimeout(cb, 180);
+      };
+
+      const $ = (sel)=>document.querySelector(sel);
+
+      const AUTH_KEY    = "tasunAuthTable_v1";
+      const CURRENT_KEY = "tasunCurrentUser_v1";
+      const SESSION_KEY = "tasunSessionLogin_v1";
+      const NAV_KEY     = "tasunNavButtons_v1";
+      const ROUTE_KEY   = "tasunNavRoutes_v1";
+
+      const BACKUP_RING_KEY = "tasunBackupRing_v1";
+      const BACKUP_RING_MAX = 10;
+
+      const METRO_ID    = "btn2";
+      const METRO_HREF  = "汐東工程管理表.html";
+
+      const FIXED_ROUTES = {
+        "捷運汐東線事項紀錄": "捷運汐東線記事.html",
+        "捷運汐東線事項記錄": "捷運汐東線記事.html",
+        "捷運汐東線事項紀錄.html": "捷運汐東線記事.html",
+        "捷運汐東線事項記錄.html": "捷運汐東線記事.html",
+        "捷運汐東線記事": "捷運汐東線記事.html",
+        "捷運汐東線記事.html": "捷運汐東線記事.html",
+      };
+
+      const LEGACY_BUTTON_KEYS = ["btn1","btn2","btn3","btn4","btn5"];
+
+      const loginOverlay = $("#loginOverlay");
+      const loginForm    = $("#loginForm");
+      const loginError   = $("#loginError");
+      const loginSub     = $("#loginSub");
+      const userInfo     = $("#userInfo");
+      const btnSwitch    = $("#btnSwitchUser");
+      const btnExport    = $("#btnExport");
+      const btnTogglePwd = $("#btnTogglePwd");
+      const btnForceRelogin = $("#btnForceRelogin");
+
+      const navArea      = $("#navArea");
+      const titleWrap    = $("#titleWrap");
+      const userBar      = $("#userBar");
+      const zwTopAxis    = $("#zwTopAxis");
+      const zwBottomLine = $("#zwBottomLine");
+      const zenImg       = document.getElementById("zenImg");
+      const heroInner    = $("#heroInner");
+
+      const usernameWrap = document.getElementById("usernameWrap");
+      const usernameSel = document.getElementById("username");
+      const usernameDisplay = document.getElementById("usernameDisplay");
+      const usernameMenu = document.getElementById("usernameMenu");
+
+      /* =========================
+         ✅雲端（index.html：多個 localStorage key 同步） Type (B)
+         resourceKey：tasun-index-db
+         keys：AUTH_KEY / NAV_KEY / ROUTE_KEY
+         合併：cloud-kit merge 模式（多人同時不覆蓋）
+         UI：維持 kit 預設（右下角）
+         ========================= */
+      const CLOUD_RES_URL = "tasun-resources.json";
+      const CLOUD_RESOURCE_KEY = String(window.TASUN_INDEX_CLOUD_KEY || "tasun-index-db").trim() || "tasun-index-db";
+      const CLOUD_KEYS = [AUTH_KEY, NAV_KEY, ROUTE_KEY];
+      const CLOUD_KEY_SET = new Set(CLOUD_KEYS);
+
+      let cloudCtrl = null;
+      let cloudApplying = false;
+      let cloudSaveTimer = 0;
+
+      function loadScriptOnce(src){
+        return new Promise((resolve)=>{
+          try{
+            const id = "tasunScript__" + src;
+            if(document.getElementById(id)) return resolve(true);
+            const s = document.createElement("script");
+            s.id = id;
+            s.src = src;
+            s.async = true;
+            s.onload = ()=>resolve(true);
+            s.onerror = ()=>resolve(false);
+            document.head.appendChild(s);
+          }catch(e){ resolve(false); }
+        });
+      }
+
+      function buildCloudPayloadFromLocal(){
+        const rows = [];
+        const keys = CLOUD_KEYS.slice().sort((a,b)=>a.localeCompare(b,"zh-Hant"));
+        keys.forEach((k, idx)=>{
+          const raw = localStorage.getItem(k);
+          rows.push({ id: idx + 1, k, v: (raw == null ? "" : String(raw)) });
+        });
+        return { db: rows, counter: rows.length };
+      }
+
+      function scheduleCloudSave(readOnly){
+        if(readOnly) return;
+        if(!cloudCtrl || typeof cloudCtrl.saveMerged !== "function") return;
+        if(cloudApplying) return;
+
+        clearTimeout(cloudSaveTimer);
+        cloudSaveTimer = setTimeout(()=>{
+          Promise.resolve(cloudCtrl.saveMerged({ lock:false, mode:"merge" })).catch(()=>{});
+        }, 650);
+      }
+
+      async function ensureCloudMounted(user){
+        const role = String(user?.level || "read").toLowerCase();
+        const readOnly = (role === "read") || !user;
+
+        const ok = await loadScriptOnce(withV("tasun-cloud-kit.js"));
+        if(!ok || !window.TasunCloudKit || typeof window.TasunCloudKit.mount !== "function"){
+          return null;
+        }
 
         try{
-          const v = new URL(location.href).searchParams.get("v") || "";
-          console.info("[Tasun index]", "APP_VER=", (window.TASUN_APP_VER||""), "url_v=", v);
+          window.TasunCloudKit.init({
+            appVer: window.TASUN_APP_VER || "",
+            resourcesUrl: withV(CLOUD_RES_URL),
+            ui: { enabled:true, hideLockButtons:true, position:"bottom-right" },
+            lock: { enabled:false, auto:false }
+          });
         }catch(e){}
 
-        const Core = window.TasunCore || null;
-        const withV = (Core && Core.withV) ? Core.withV : (window.__withV || ((u)=>u));
-        const safeJsonParse = (Core && Core.jsonParse) ? Core.jsonParse : ((s,f)=>{ try{return JSON.parse(s);}catch(e){return f;} });
-        const clamp = (Core && Core.clamp) ? Core.clamp : ((n,a,b)=>Math.max(a,Math.min(b,n)));
-        const lerp  = (Core && Core.lerp)  ? Core.lerp  : ((a,b,t)=>a+(b-a)*t);
-
-        const rafDebounce = (Core && Core.rafDebounce) ? Core.rafDebounce : (fn=>{
-          let r=0; return function(){ try{ cancelAnimationFrame(r); }catch(e){} r=requestAnimationFrame(()=>{ try{ fn(); }catch(e){} }); };
-        });
-        const onFontsReady = (Core && Core.onFontsReady) ? Core.onFontsReady : (cb=>{
-          if(document.fonts && document.fonts.ready) document.fonts.ready.then(cb);
-          else setTimeout(cb, 180);
-        });
-
-        const $ = (sel) => document.querySelector(sel);
-
-        const AUTH_KEY    = "tasunAuthTable_v1";
-        const CURRENT_KEY = "tasunCurrentUser_v1";
-        const SESSION_KEY = "tasunSessionLogin_v1";
-
-        const NAV_KEY     = "tasunNavButtons_v1";
-        const ROUTE_KEY   = "tasunNavRoutes_v1";
-
-        const BACKUP_RING_KEY = "tasunBackupRing_v1";
-        const BACKUP_RING_MAX = 10;
-
-        const METRO_ID    = "btn2";
-        const METRO_HREF  = "汐東工程管理表.html";
-
-        const FIXED_ROUTES = {
-          "捷運汐東線事項紀錄": "捷運汐東線記事.html",
-          "捷運汐東線事項記錄": "捷運汐東線記事.html",
-          "捷運汐東線事項紀錄.html": "捷運汐東線記事.html",
-          "捷運汐東線事項記錄.html": "捷運汐東線記事.html",
-          "捷運汐東線記事": "捷運汐東線記事.html",
-          "捷運汐東線記事.html": "捷運汐東線記事.html",
-        };
-
-        const LEGACY_BUTTON_KEYS = ["btn1","btn2","btn3","btn4","btn5"];
-
-        const loginOverlay = $("#loginOverlay");
-        const loginForm    = $("#loginForm");
-        const loginError   = $("#loginError");
-        const loginSub     = $("#loginSub");
-        const userInfo     = $("#userInfo");
-        const btnSwitch    = $("#btnSwitchUser");
-        const btnExport    = $("#btnExport");
-        const btnTogglePwd = $("#btnTogglePwd");
-        const btnForceRelogin = $("#btnForceRelogin");
-
-        const navArea      = $("#navArea");
-        const titleWrap    = $("#titleWrap");
-        const userBar      = $("#userBar");
-        const zwTopAxis    = $("#zwTopAxis");
-        const zwAxisText   = $("#zwAxisText");
-        const zwBottomLine = $("#zwBottomLine");
-        const zwLeft       = $("#zwLeft");
-        const zwRight      = $("#zwRight");
-        const zenImg       = document.getElementById("zenImg");
-
-        const usernameWrap = document.getElementById("usernameWrap");
-        const usernameSel = document.getElementById("username");
-        const usernameDisplay = document.getElementById("usernameDisplay");
-        const usernameMenu = document.getElementById("usernameMenu");
-
-        /* =========================
-           ✅ CloudKit（套到 index.html）
-           - resourceKey：預設 tasun-index-db（你也可改成 tasun-xxx-config / sxdh-xxx-db）
-           - getLocal/apply：資料放在 localStorage keys（AUTH_KEY / NAV_KEY / ROUTE_KEY）
-             雲端存成 merge-table：{ counter, db:[{id,k,v}, ...] }，其中 v 一律存 localStorage 原字串
-           - 雲端 UI：用 tasun-cloud-kit 預設右下角（不改頁面 UI）
-           ========================= */
-        const CLOUD_RES_URL = "tasun-resources.json";
-
-        // ✅你指定的 resourceKey（若想改名：只要 tasun-resources.json 有同名 key 即可）
-        const CLOUD_RESOURCE_KEY_WANT =
-          String(window.TASUN_INDEX_CLOUD_KEY || "tasun-index-db").trim() || "tasun-index-db";
-
-        // ✅保險 fallback（避免你尚未更新 resources.json 或舊站仍叫 index-config）
-        const CLOUD_RESOURCE_KEY_FALLBACKS = ["index-config", "tasun-index-config"];
-
-        // ✅本頁同步的 localStorage keys（這三個就是 index 的「配置資料」來源）
-        const CLOUD_KEYS = [AUTH_KEY, NAV_KEY, ROUTE_KEY];
-        const CLOUD_KEY_SET = new Set(CLOUD_KEYS);
-
-        let cloudCtrl = null;
-        let cloudMounted = false;
-        let cloudApplying = false;
-        let cloudSaveTimer = 0;
-
-        /* =========================
-           ✅(圖標示2) 雲端離線根因診斷（精準對應 4 類 + 最小自動修補）
-           - tasun-resources.json 取不到
-           - 資源鍵不存在（含 fallback）
-           - 雲端端點被擋
-           - 版本不一致導致路徑錯（可自動修補）
-           ========================= */
-        const CloudDiag = (window.__tasunCloudDiag = window.__tasunCloudDiag || { code:"", msg:"", detail:null, t:0 });
-        function setCloudDiag(code, msg, detail){
-          try{
-            CloudDiag.code = String(code||"");
-            CloudDiag.msg = String(msg||"");
-            CloudDiag.detail = detail || null;
-            CloudDiag.t = Date.now();
-          }catch(e){}
-        }
-        function getCloudDiagMsg(){
-          try{ return (CloudDiag && CloudDiag.msg) ? String(CloudDiag.msg) : ""; }catch(e){ return ""; }
-        }
-        function _normKey(s){ return String(s||"").toLowerCase().replace(/[^a-z0-9]+/g,""); }
-
-        function _ensureSameOriginV(u){
-          try{
-            const vv = String(window.__CACHE_V||"").trim();
-            if(!vv) return u;
-            const uu = new URL(u, location.href);
-            if(uu.origin === location.origin){
-              if(!uu.searchParams.get("v")) uu.searchParams.set("v", vv);
-              return uu.toString();
-            }
-          }catch(e){}
-          return u;
+        if(cloudCtrl){
+          cloudCtrl.__readOnly__ = readOnly;
+          try{ cloudCtrl.pullNow && cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
+          return cloudCtrl;
         }
 
-        async function _fetchNoStore(url, ms){
-          const timeout = Math.max(1200, ms||6500);
-          const ac = ("AbortController" in window) ? new AbortController() : null;
-          const tid = ac ? setTimeout(()=>{ try{ ac.abort(); }catch(e){} }, timeout) : 0;
-          try{
-            const res = await fetch(url, { cache:"no-store", credentials:"omit", signal: ac ? ac.signal : undefined });
-            const text = await res.text().catch(()=> "");
-            return { ok: res.ok, status: res.status, url, text, ct: (res.headers.get("content-type")||"") };
-          }catch(err){
-            return { ok:false, status:0, url, error: String(err && err.message ? err.message : err) };
-          }finally{
-            if(tid) clearTimeout(tid);
-          }
-        }
-        function _parseJson(text){ try{ return JSON.parse(text); }catch(e){ return null; } }
-
-        function _collectResourceEntries(j){
-          const out = [];
-          if(!j) return out;
-
-          if(Array.isArray(j)){
-            j.forEach(v=>{
-              const k = v && (v.key || v.id || v.name || v.resourceKey || v.k);
-              if(k) out.push({ key:String(k), val:v });
-            });
-            return out;
-          }
-          if(typeof j === "object"){
-            const root = j.resources || j.items || j.data || j.db || null;
-            if(root){
-              if(Array.isArray(root)){
-                root.forEach(v=>{
-                  const k = v && (v.key || v.id || v.name || v.resourceKey || v.k);
-                  if(k) out.push({ key:String(k), val:v });
-                });
-                return out;
-              }
-              if(typeof root === "object"){
-                Object.keys(root).forEach(k => out.push({ key:String(k), val: root[k] }));
-                return out;
-              }
-            }
-            Object.keys(j).forEach(k=>{
-              if(k === "meta" || k === "version" || k === "appVer") return;
-              out.push({ key:String(k), val:j[k] });
-            });
-          }
-          return out;
-        }
-
-        function _extractEndpoint(val){
-          if(!val) return "";
-          if(typeof val === "string") return val.trim();
-          if(typeof val === "object"){
-            const fields = ["url","href","endpoint","api","sheetUrl","dataUrl","resourceUrl","loadUrl","path"];
-            for(const f of fields){
-              const s = val[f];
-              if(typeof s === "string" && s.trim()) return s.trim();
-            }
-            for(const k of Object.keys(val)){
-              const s = val[k];
-              if(typeof s === "string" && s.trim()) return s.trim();
-              if(typeof s === "object" && s){
-                // ✅支援 {db:{path:"/xxx.json"}} 這種
-                const p = s.path;
-                if(typeof p === "string" && p.trim()) return p.trim();
-              }
-            }
-          }
-          return "";
-        }
-
-        function _diagMsgFromCause(cause, detail, wantKey){
-          const wk = String(wantKey || CLOUD_RESOURCE_KEY_WANT || "");
-          if(cause === "resources-missing") return "離線｜tasun-resources.json 取不到";
-          if(cause === "resource-key-missing") return `離線｜資源鍵不存在（${wk}）`;
-          if(cause === "endpoint-blocked") return "離線｜雲端端點被擋";
-          if(cause === "path-wrong") return "離線｜版本不一致導致路徑錯（已自動修補）";
-          return "離線｜原因未明（可按同步重試）";
-        }
-
-        function _pickResourceKey(entries, want){
-          const wn = _normKey(want);
-          if(!entries || !entries.length) return { found:null, actualKey: want, remapped:false, fromKey: want };
-
-          // 1) exact
-          let found = entries.find(e => e.key === want) || null;
-
-          // 2) norm exact
-          if(!found){
-            found = entries.find(e => _normKey(e.key) === wn) || null;
-          }
-
-          // 3) 保守自動修補：只有「唯一命中」才改鍵（避免亂套）
-          let remapped = false;
-          if(!found){
-            const scored = entries.map(e => ({ e, nk:_normKey(e.key) })).filter(x=>x.nk);
-
-            // ✅同時包含 index + (config/db) 的唯一者 → 更貼近 index 配置/資料庫
-            const both = scored.filter(x => x.nk.includes("index") && (x.nk.includes("config") || x.nk.includes("db")));
-            if(both.length === 1){
-              found = both[0].e; remapped = true;
-            }else{
-              const onlyIndex = scored.filter(x => x.nk.includes("index"));
-              if(onlyIndex.length === 1){
-                found = onlyIndex[0].e; remapped = true;
-              }else if(entries.length === 1){
-                found = entries[0]; remapped = true;
-              }
-            }
-          }
-
-          const actualKey = found ? found.key : want;
-          return { found, actualKey, remapped, fromKey: want };
-        }
-
-        function _pickResourceKeyAny(entries, want, fallbacks){
-          const tries = [want].concat(Array.isArray(fallbacks) ? fallbacks : []);
-          for(const t of tries){
-            const r = _pickResourceKey(entries, t);
-            if(r && r.found){
-              // 若是 fallback 命中 → 視為 remapped
-              if(String(t) !== String(want)) r.remapped = true;
-              r.fromKey = want;
-              return r;
-            }
-          }
-          return { found:null, actualKey: want, remapped:false, fromKey: want };
-        }
-
-        async function diagnoseCloudRootCause(localWithV){
-          const wv = localWithV || ((u)=>u);
-
-          const candidates = [];
-          const add = (u)=>{ if(u && !candidates.includes(u)) candidates.push(u); };
-
-          // 1) 既有相對路徑（含 v）
-          add(_ensureSameOriginV(wv(CLOUD_RES_URL)));
-          // 2) 相對路徑（不含 v）
-          add(_ensureSameOriginV(CLOUD_RES_URL));
-
-          // 3) root 絕對路徑（含/不含 v）
-          try{ add(_ensureSameOriginV(wv(new URL("/" + CLOUD_RES_URL.replace(/^\/+/,""), location.origin).toString()))); }catch(e){}
-          try{ add(_ensureSameOriginV(new URL("/" + CLOUD_RES_URL.replace(/^\/+/,""), location.origin).toString())); }catch(e){}
-
-          // 4) baseURI 組合
-          try{ add(_ensureSameOriginV(wv(new URL(CLOUD_RES_URL, document.baseURI).toString()))); }catch(e){}
-          try{ add(_ensureSameOriginV(new URL(CLOUD_RES_URL, document.baseURI).toString())); }catch(e){}
-
-          let picked = null;
-          let pickedIdx = -1;
-          let last = null;
-
-          for(let i=0;i<candidates.length;i++){
-            const u = candidates[i];
-            const r = await _fetchNoStore(u, 6500);
-            last = r;
-
-            if(!r.ok) continue;
-
-            const j = _parseJson(r.text || "");
-            if(!j) continue;
-
-            picked = { url:u, json:j, res:r };
-            pickedIdx = i;
-            break;
-          }
-
-          if(!picked){
-            return { cause:"resources-missing", resourcesUrl: _ensureSameOriginV(wv(CLOUD_RES_URL)), resourceKey: CLOUD_RESOURCE_KEY_WANT, wantKey: CLOUD_RESOURCE_KEY_WANT, detail:{ last } };
-          }
-
-          const usedUrl = _ensureSameOriginV(picked.url);
-          const isAltPath = (pickedIdx > 0);
-
-          const entries = _collectResourceEntries(picked.json);
-
-          const pickedKey = _pickResourceKeyAny(entries, CLOUD_RESOURCE_KEY_WANT, CLOUD_RESOURCE_KEY_FALLBACKS);
-          if(!pickedKey.found){
-            return {
-              cause:"resource-key-missing",
-              resourcesUrl: usedUrl,
-              resourceKey: CLOUD_RESOURCE_KEY_WANT,
-              wantKey: CLOUD_RESOURCE_KEY_WANT,
-              detail:{ keys: entries.slice(0,24).map(e=>e.key) }
-            };
-          }
-
-          // ✅端點探測（db.path 或 url）→ 用來區分「雲端端點被擋」
-          let endpoint = _extractEndpoint(pickedKey.found.val);
-          if(endpoint){
+        cloudCtrl = window.TasunCloudKit.mount({
+          resourceKey: CLOUD_RESOURCE_KEY,
+          pk: "k",
+          idField: "id",
+          counterField: "counter",
+          merge: { conflictPolicy: "stash-remote", lock: "none" },
+          watch: { intervalSec: 10 },
+          getLocal: () => buildCloudPayloadFromLocal(),
+          apply: (payload) => {
+            if(!payload || !Array.isArray(payload.db)) return;
+            cloudApplying = true;
             try{
-              endpoint = new URL(endpoint, usedUrl).toString();
-            }catch(e){}
-            const ep = await _fetchNoStore(endpoint, 6500);
-            if(!ep.ok){
-              return {
-                cause:"endpoint-blocked",
-                resourcesUrl: usedUrl,
-                resourceKey: pickedKey.actualKey,
-                wantKey: CLOUD_RESOURCE_KEY_WANT,
-                detail:{ endpoint, status: ep.status, error: ep.error || "", hint:"endpoint fetch failed" }
-              };
-            }
-          }
-
-          if(isAltPath){
-            return {
-              cause:"path-wrong",
-              resourcesUrl: usedUrl,
-              resourceKey: pickedKey.actualKey,
-              wantKey: CLOUD_RESOURCE_KEY_WANT,
-              detail:{ fixedTo: usedUrl, remapped: pickedKey.remapped ? { from: pickedKey.fromKey, to:pickedKey.actualKey } : null, endpoint: endpoint || "" }
-            };
-          }
-
-          return {
-            cause:"ok",
-            resourcesUrl: usedUrl,
-            resourceKey: pickedKey.actualKey,
-            wantKey: CLOUD_RESOURCE_KEY_WANT,
-            detail:{ endpoint: endpoint || "", remapped: pickedKey.remapped ? { from: pickedKey.fromKey, to:pickedKey.actualKey } : null }
-          };
-        }
-
-        /* ✅(效能修正 + 當機修正)
-           Cloud UI bar 掃描：避免 querySelectorAll("body *") 大量配置 → 改成「尾端小範圍」掃描
-           + 修正 MutationObserver 無限迴圈（fixText 只有在文字變動時才寫回）
-        */
-        function patchCloudUiBarAuto(){
-          const WANT = { tried:0 };
-          const MAX_TRY = 80;
-
-          function findBar(){
-            try{
-              const byId =
-                document.getElementById("tasunCloudBar") ||
-                document.getElementById("tasunCloudUI") ||
-                document.getElementById("tasunCloudUi") ||
-                document.getElementById("tasun-cloud-ui");
-              if(byId) return byId;
-
-              const bySel = document.querySelector("[data-tasun-cloud],[data-cloud-kit],[data-cloudbar],.tasun-cloud-ui,.tasun-cloud-bar,.cloud-bar");
-              if(bySel) return bySel;
-            }catch(e){}
-
-            try{
-              const all = document.body ? document.body.getElementsByTagName("*") : null;
-              if(!all || !all.length) return null;
-
-              const limit = 240;
-              let n = 0;
-              for(let i=all.length-1; i>=0 && n<limit; i--, n++){
-                const el = all[i];
-                if(!el) continue;
-                const t = (el.textContent || "").trim();
-                if(!t) continue;
-                if(!t.includes("雲端")) continue;
-
-                const hasSync = (function(){
-                  try{
-                    const btns = el.querySelectorAll("button, a");
-                    for(const b of btns){
-                      if(((b.textContent||"").trim()).includes("同步")) return true;
-                    }
-                  }catch(e){}
-                  return false;
-                })();
-                if(hasSync) return el;
-              }
-            }catch(e){}
-
-            return null;
-          }
-
-          function sanitize(bar){
-            if(!bar) return;
-
-            try{
-              if(bar.dataset && bar.dataset.tasunSanitized === "1") return;
-              if(bar.dataset) bar.dataset.tasunSanitized = "1";
-            }catch(e){}
-
-            try{
-              bar.style.background = "rgba(0,0,0,0.46)";
-              bar.style.border = "1px solid rgba(255,244,210,0.34)";
-              bar.style.borderRadius = "999px";
-              bar.style.padding = "8px 10px";
-              bar.style.backdropFilter = "blur(10px)";
-              bar.style.webkitBackdropFilter = "blur(10px)";
-              bar.style.boxShadow = "0 16px 44px rgba(0,0,0,0.34), inset 0 1px 0 rgba(255,255,255,0.08)";
-              bar.style.color = "rgba(255,226,156,0.98)";
-              bar.style.letterSpacing = ".08em";
-              bar.style.fontFamily = '"標楷體","Noto Serif TC","Microsoft JhengHei",serif';
-              bar.style.webkitTextStroke = "0px transparent";
-              bar.style.textShadow = "0 10px 18px rgba(0,0,0,0.66), 0 0 10px rgba(255,210,140,0.14)";
-              bar.style.fontWeight = "900";
-            }catch(e){}
-
-            let syncBtn = null;
-
-            try{
-              Array.from(bar.querySelectorAll("button, a")).forEach(b=>{
-                const txt = (b.textContent||"").trim();
-                if(/鎖定|解鎖/.test(txt)){
-                  b.style.display = "none";
-                }else{
-                  if(txt.includes("同步")) syncBtn = b;
-
-                  b.style.borderRadius = "999px";
-                  b.style.border = "1px solid rgba(255,244,210,0.38)";
-                  b.style.background = "rgba(0,0,0,0.22)";
-                  b.style.color = "rgba(255,226,156,0.98)";
-                  b.style.padding = "6px 10px";
-                  b.style.boxShadow = "0 10px 22px rgba(0,0,0,0.24)";
-                  b.style.webkitTextStroke = "0px transparent";
-                  b.style.textShadow = "0 10px 18px rgba(0,0,0,0.62)";
-                  b.style.fontWeight = "900";
-                  b.style.letterSpacing = ".08em";
-                }
+              payload.db.forEach(row=>{
+                const k = String(row?.k || "").trim();
+                if(!k || !CLOUD_KEY_SET.has(k)) return;
+                const v = (row?.v == null) ? "" : String(row.v);
+                if(localStorage.getItem(k) !== v) localStorage.setItem(k, v);
               });
-            }catch(e){}
-
-            // ✅(最小) 同步按鈕點下去時，重跑一次診斷（不改雲端機制，只補「根因顯示」）
-            try{
-              if(syncBtn && syncBtn.dataset && syncBtn.dataset.tasunDiagBind !== "1"){
-                syncBtn.dataset.tasunDiagBind = "1";
-                syncBtn.addEventListener("click", ()=>{
-                  try{ window.__tasunCloudDiagnoseNow && window.__tasunCloudDiagnoseNow(); }catch(e){}
-                });
-              }
-            }catch(e){}
-
-            let _fixing = false;
-            let _pending = false;
-
-            function fixText(){
-              if(_fixing) return;
-              _fixing = true;
-              try{
-                const leafs = Array.from(bar.querySelectorAll("*"))
-                  .filter(x => x.childElementCount === 0 && (x.textContent||"").includes("雲端"));
-                const statusEl = leafs.sort((a,b)=>(a.textContent||"").length - (b.textContent||"").length)[0] || bar;
-
-                const oldText = String(statusEl.textContent || "");
-                let t = oldText;
-
-                const diag = getCloudDiagMsg();
-
-                // 先把 CloudKit 既有文案做一致化
-                if(t.includes("鎖定失敗")) t = t.replaceAll("鎖定失敗", "自動合併");
-                if(t.includes("同步失敗")) t = t.replaceAll("同步失敗", "離線（可按同步重試）");
-
-                // ✅若出現 fu/3、資源不存在… → 用「精準根因」取代
-                const needReplace =
-                  !!diag && (
-                    /離線/.test(oldText) ||
-                    /fu\s*\/\s*\d+/i.test(oldText) ||
-                    /同步失敗/.test(oldText) ||
-                    /資源不存在/.test(oldText) ||
-                    /resource\s*not\s*found/i.test(oldText) ||
-                    (/不存在/.test(oldText) && /index/i.test(oldText))
-                  );
-
-                if(needReplace){
-                  if(/雲端/.test(t)){
-                    t = t.replace(/雲端[：:]\s*.*/g, "雲端：" + diag);
-                  }else{
-                    t = "雲端：" + diag;
-                  }
-                }
-
-                if(t !== oldText){
-                  statusEl.textContent = t;
-                }
-              }catch(e){
-              }finally{
-                _fixing = false;
-              }
+            }finally{
+              cloudApplying = false;
             }
-
-            function scheduleFix(){
-              if(_pending) return;
-              _pending = true;
-              requestAnimationFrame(()=>{
-                _pending = false;
-                fixText();
-              });
-            }
-
-            // ✅若還沒診斷但已出現錯誤字樣 → 先觸發一次診斷
-            try{
-              const txt = String(bar.textContent||"");
-              if(!getCloudDiagMsg() && /(fu\s*\/\s*\d+|資源不存在|同步失敗|離線)/i.test(txt)){
-                Promise.resolve(window.__tasunCloudDiagnoseNow && window.__tasunCloudDiagnoseNow())
-                  .then(()=>scheduleFix())
-                  .catch(()=>{});
-              }
-            }catch(e){}
-
-            scheduleFix();
-
-            try{
-              const mo = new MutationObserver(()=>scheduleFix());
-              mo.observe(bar, { childList:true, characterData:true, subtree:true });
-            }catch(e){}
+            // ✅不 reload：只重建按鍵/登入清單
+            try{ onIndexConfigApplied(); }catch(e){}
           }
-
-          (function loop(){
-            WANT.tried++;
-            const bar = findBar();
-            if(bar){ sanitize(bar); return; }
-            if(WANT.tried < MAX_TRY){
-              setTimeout(loop, 220);
-            }
-          })();
-        }
-
-        function loadScriptOnce(src){
-          return new Promise((resolve)=>{
-            try{
-              const id = "tasunScript__" + src;
-              if(document.getElementById(id)) return resolve(true);
-              const s = document.createElement("script");
-              s.id = id;
-              s.src = src;
-              s.async = true;
-              s.onload = ()=>resolve(true);
-              s.onerror = ()=>resolve(false);
-              document.head.appendChild(s);
-            }catch(e){
-              resolve(false);
-            }
-          });
-        }
-
-        function hrefToDom(href){
-          const h = String(href || "").trim();
-          if(!h) return "#";
-          if(/^https?:\/\//i.test(h)) return h;
-          if(/^mailto:/i.test(h)) return h;
-          return withV(encodeURI(h));
-        }
-        function labelToFile(label){
-          let s = String(label || "").trim();
-          if(!s) return "#";
-          if(s.endsWith(".html")) return s;
-          s = s.replace(/[\\\/:*?"<>|]/g, "").trim();
-          s = s.replace(/\s+/g, "");
-          return s + ".html";
-        }
-
-        function shouldIncludeKey(k){
-          const key = String(k || "");
-          return (
-            key.startsWith("tasun") ||
-            key.includes("汐東") ||
-            key.includes("捷運") ||
-            key.includes("水環") ||
-            key.includes("審查") ||
-            key.includes("文件") ||
-            key.includes("資料庫")
-          );
-        }
-
-        function collectBackupPayload(reason){
-          const now = new Date();
-          const keys = [];
-          for(let i=0;i<localStorage.length;i++){
-            const k = localStorage.key(i);
-            if(shouldIncludeKey(k)) keys.push(k);
-          }
-          keys.sort((a,b)=>a.localeCompare(b, "zh-Hant"));
-
-          const data = {};
-          keys.forEach(k => {
-            const raw = localStorage.getItem(k);
-            const parsed = safeJsonParse(raw, null);
-            data[k] = (parsed === null && raw !== "null" && raw !== null) ? raw : parsed;
-          });
-
-          const sess = safeJsonParse(sessionStorage.getItem(SESSION_KEY) || "null", null);
-
-          return {
-            meta: {
-              app: "Tasun index.html",
-              reason: String(reason || "manual"),
-              ts: now.toISOString(),
-              href: location.href,
-              cacheV: (window.__CACHE_V || "")
-            },
-            session: sess,
-            data
-          };
-        }
-
-        function storeBackupRing(payload){
-          try{
-            const arr = safeJsonParse(localStorage.getItem(BACKUP_RING_KEY) || "[]", []);
-            const next = Array.isArray(arr) ? arr : [];
-            next.unshift(payload);
-            next.length = Math.min(next.length, BACKUP_RING_MAX);
-            localStorage.setItem(BACKUP_RING_KEY, JSON.stringify(next));
-          }catch(e){}
-        }
-
-        function downloadJson(payload){
-          const ts = new Date().toISOString().replace(/[:.]/g, "-");
-          const filename = `Tasun備份_${ts}.json`;
-          const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = filename;
-          a.style.display = "none";
-          document.body.appendChild(a);
-          a.click();
-          setTimeout(() => {
-            URL.revokeObjectURL(url);
-            a.remove();
-          }, 0);
-        }
-
-        let _exportTimer = 0;
-        let _pendingReason = "";
-        let _exportOnceExit = false;
-
-        function exportBackupNow(reason, opts){
-          const o = opts || {};
-          const payload = collectBackupPayload(reason);
-          storeBackupRing(payload);
-          if(o.download){
-            try{ downloadJson(payload); }catch(e){}
-          }
-        }
-
-        function scheduleExport(reason){
-          const r = String(reason || "auto");
-          _pendingReason = _pendingReason ? (_pendingReason + " | " + r) : r;
-          clearTimeout(_exportTimer);
-          _exportTimer = setTimeout(() => {
-            const rr = _pendingReason || "auto";
-            _pendingReason = "";
-            exportBackupNow(rr, { download:false });
-          }, 350);
-        }
-
-        function tryExportOnExit(){
-          if(_exportOnceExit) return;
-          _exportOnceExit = true;
-          exportBackupNow("exit/pagehide", { download:false });
-        }
-
-        // ✅getLocal：把本頁「配置資料」(localStorage keys) 轉成 merge-table rows
-        // rows: [{id, k, v}]，v 一律用 localStorage 原字串（不在這裡 JSON.parse）
-        function buildCloudPayloadFromLocal(){
-          const rows = [];
-          const keys = CLOUD_KEYS.slice().sort((a,b)=>a.localeCompare(b,"zh-Hant"));
-          keys.forEach((k, idx)=>{
-            const raw = localStorage.getItem(k);
-            rows.push({ id: idx + 1, k, v: (raw == null ? "" : String(raw)) });
-          });
-          return { db: rows, counter: rows.length };
-        }
-
-        function scheduleCloudSave(reason, readOnly){
-          if(readOnly) return;
-          if(!cloudCtrl || typeof cloudCtrl.saveMerged !== "function") return;
-          if(cloudApplying) return;
-
-          clearTimeout(cloudSaveTimer);
-          cloudSaveTimer = setTimeout(()=>{
-            Promise.resolve(cloudCtrl.saveMerged({ lock: false, mode: "merge" })).catch(()=>{});
-          }, 650);
-        }
-
-        let _cloudRetryTimer = 0;
-        function startCloudSelfHeal(){
-          if(_cloudRetryTimer) return;
-          _cloudRetryTimer = setInterval(()=>{
-            if(!cloudCtrl || typeof cloudCtrl.pullNow !== "function") return;
-            Promise.resolve(cloudCtrl.pullNow()).catch(()=>{});
-          }, 30000);
-
-          window.addEventListener("online", ()=>{
-            try{ cloudCtrl && cloudCtrl.pullNow && cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
-          }, { passive:true });
-
-          document.addEventListener("visibilitychange", ()=>{
-            if(document.visibilityState === "visible"){
-              try{ cloudCtrl && cloudCtrl.pullNow && cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
-            }
-          }, { passive:true });
-        }
-
-        // ✅apply 後「立刻刷新」：不改 UI，只重建資料 → 立刻重繪
-        function onIndexConfigApplied(){
-          try{
-            ROUTES = loadRoutes();
-            NAV_ARR = loadNavButtonsSeedIfMissing();
-            AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-
-            // 若登入遮罩正在顯示 → 立刻更新使用者清單（避免「新增帳號後無法登入」）
-            try{
-              if(loginOverlay && loginOverlay.style.display === "flex"){
-                populateUserSelect();
-              }
-            }catch(e){}
-
-            buildMainButtonsDOM();
-
-            if(CURRENT_USER){
-              refreshButtonsForCurrentUser();
-            }else{
-              resetButtonsForLogout();
-            }
-
-            scheduleAll();
-          }catch(e){}
-        }
-
-        // ✅統一掛載：可在「未登入」先 pull（更新 AUTH/NAV/ROUTES），登入後再切換 readOnly
-        async function ensureCloudMounted(opts){
-          const o = opts || {};
-          const user = o.user || null;
-          const readOnly = !!o.readOnly;
-
-          // 掛到 window：供 cloud bar 的「同步」按鈕點擊重跑
-          window.__tasunCloudDiagnoseNow = async function(){
-            try{
-              const d = await diagnoseCloudRootCause(withV);
-              const msg = (d && d.cause && d.cause !== "ok") ? _diagMsgFromCause(d.cause, d.detail, d.wantKey) : "";
-              if(d && d.cause && d.cause !== "ok"){
-                setCloudDiag(d.cause, msg, d.detail);
-              }else{
-                setCloudDiag("ok", "", d ? d.detail : null);
-              }
-              return d;
-            }catch(e){
-              setCloudDiag("endpoint-blocked", _diagMsgFromCause("endpoint-blocked"), { error:String(e) });
-              return { cause:"endpoint-blocked" };
-            }
-          };
-
-          // 先診斷（不依賴 cloud-kit.js 是否載入）
-          let diag = null;
-          try{
-            diag = await diagnoseCloudRootCause(withV);
-            if(diag && diag.cause && diag.cause !== "ok"){
-              setCloudDiag(diag.cause, _diagMsgFromCause(diag.cause, diag.detail, diag.wantKey), diag.detail);
-            }else{
-              setCloudDiag("ok", "", diag ? diag.detail : null);
-            }
-          }catch(e){
-            setCloudDiag("endpoint-blocked", _diagMsgFromCause("endpoint-blocked"), { error:String(e) });
-          }
-
-          const ok = await loadScriptOnce(withV("tasun-cloud-kit.js"));
-          if(!ok || !window.TasunCloudKit || typeof window.TasunCloudKit.mount !== "function"){
-            setCloudDiag("endpoint-blocked", _diagMsgFromCause("endpoint-blocked"), { hint:"tasun-cloud-kit.js load failed" });
-            return null;
-          }
-
-          // 供 CloudKit 取當前使用者（若未登入則回傳空）
-          try{
-            window.TasunCore = window.TasunCore || {};
-            window.TasunCore.Auth = window.TasunCore.Auth || {};
-            window.TasunCore.Auth.current = function(){
-              if(user){
-                return { username: String(user?.username || ""), role: String(user?.level || "") };
-              }
-              return { username:"", role:"" };
-            };
-          }catch(e){}
-
-          // ✅若診斷指出路徑/版本/快取問題：resourcesUrl 仍確保帶 v
-          const resourcesUrlFixed = _ensureSameOriginV((diag && diag.resourcesUrl) ? diag.resourcesUrl : withV(CLOUD_RES_URL));
-          const resourceKeyFixed  = (diag && diag.resourceKey) ? diag.resourceKey : CLOUD_RESOURCE_KEY_WANT;
-
-          try{
-            window.TasunCloudKit.init({
-              appVer: window.TASUN_APP_VER || "",
-              resourcesUrl: resourcesUrlFixed,
-              ui: {
-                enabled: true,
-                hideLockButtons: true,
-                position: "bottom-right"
-              },
-              lock: { enabled:false, auto:false }
-            });
-          }catch(e){}
-
-          // 已掛載過 → 只更新 readOnly + 拉一次
-          if(cloudCtrl){
-            cloudCtrl.__readOnly__ = readOnly;
-            try{ cloudCtrl.pullNow && cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
-            cloudMounted = true;
-            return cloudCtrl;
-          }
-
-          // 初次掛載
-          try{
-            cloudCtrl = window.TasunCloudKit.mount({
-              resourceKey: resourceKeyFixed,
-              pk: "k",
-              idField: "id",
-              counterField: "counter",
-              merge: { conflictPolicy: "stash-remote", lock: "none" },
-              watch: { intervalSec: 10 },
-              getLocal: () => buildCloudPayloadFromLocal(),
-              apply: (payload) => {
-                if(!payload || !Array.isArray(payload.db)) return;
-
-                cloudApplying = true;
-                try{
-                  payload.db.forEach(row=>{
-                    const k = String(row?.k || "").trim();
-                    if(!k || !CLOUD_KEY_SET.has(k)) return;
-                    const v = (row?.v == null) ? "" : String(row.v);
-                    if(localStorage.getItem(k) !== v){
-                      localStorage.setItem(k, v);
-                    }
-                  });
-                }finally{
-                  cloudApplying = false;
-                }
-
-                // ✅套用後立刻刷新（不 reload，全頁 UI 不變，只重建資料/按鈕/登入清單）
-                try{ onIndexConfigApplied(); }catch(e){}
-              }
-            });
-
-            cloudCtrl.__readOnly__ = readOnly;
-
-            try{ cloudCtrl.pullNow && cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
-
-            patchCloudUiBarAuto();
-            startCloudSelfHeal();
-
-            cloudMounted = true;
-            return cloudCtrl;
-          }catch(e){
-            return null;
-          }
-        }
-
-        (function patchLocalStorageOnce(){
-          try{
-            if(localStorage.__tasun_patched__) return;
-            Object.defineProperty(localStorage, "__tasun_patched__", { value: true, enumerable:false });
-
-            const _set = localStorage.setItem.bind(localStorage);
-            const _remove = localStorage.removeItem.bind(localStorage);
-
-            localStorage.setItem = function(k, v){
-              _set(k, v);
-              if(shouldIncludeKey(k)) scheduleExport("save:setItem:" + k);
-
-              if(CLOUD_KEY_SET.has(String(k))){
-                const ro = !!(cloudCtrl && cloudCtrl.__readOnly__);
-                scheduleCloudSave("cloud:setItem:" + k, ro);
-              }
-            };
-            localStorage.removeItem = function(k){
-              _remove(k);
-              if(shouldIncludeKey(k)) scheduleExport("save:removeItem:" + k);
-
-              if(CLOUD_KEY_SET.has(String(k))){
-                const ro = !!(cloudCtrl && cloudCtrl.__readOnly__);
-                scheduleCloudSave("cloud:removeItem:" + k, ro);
-              }
-            };
-          }catch(e){}
-        })();
-
-        window.addEventListener("storage", (e) => {
-          if(!e || !e.key) return;
-          if(shouldIncludeKey(e.key)) scheduleExport("storage:" + e.key);
         });
 
-        window.addEventListener("pagehide", tryExportOnExit, { passive:true });
-        document.addEventListener("visibilitychange", () => {
-          if(document.visibilityState === "hidden") tryExportOnExit();
-        }, { passive:true });
+        cloudCtrl.__readOnly__ = readOnly;
 
-        function applyFixedRoutes(obj){
-          const out = (obj && typeof obj === "object") ? { ...obj } : {};
-          Object.keys(FIXED_ROUTES).forEach(k => { out[k] = FIXED_ROUTES[k]; });
-          out[METRO_ID] = METRO_HREF;
-          out["systemBtn"] = out["systemBtn"] || "權限表.html";
-          return out;
-        }
+        try{ cloudCtrl.pullNow && cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
+        return cloudCtrl;
+      }
 
-        function loadRoutes(){
-          const seed = applyFixedRoutes({
-            "btn3": "https://www.dropbox.com/",
-            "systemBtn": "權限表.html",
-            [METRO_ID]: METRO_HREF
-          });
+      /* ✅偵測英文/ASCII */
+      function markLatin(span){
+        const t = String(span.textContent || "");
+        const hasLatin = /[A-Za-z0-9_./-]/.test(t);
+        const hasCJK   = /[\u3400-\u9FFF]/.test(t);
+        if(hasLatin) span.classList.add("latin");
+        if(hasLatin && !hasCJK) span.classList.add("latin-only");
+      }
 
-          const raw = localStorage.getItem(ROUTE_KEY);
-          if(!raw){
-            localStorage.setItem(ROUTE_KEY, JSON.stringify(seed, null, 2));
-            return seed;
+      function hrefToDom(href){
+        const h = String(href || "").trim();
+        if(!h) return "#";
+        if(/^https?:\/\//i.test(h)) return h;
+        if(/^mailto:/i.test(h)) return h;
+        return withV(encodeURI(h));
+      }
+      function labelToFile(label){
+        let s = String(label || "").trim();
+        if(!s) return "#";
+        if(s.endsWith(".html")) return s;
+        s = s.replace(/[\\\/:*?"<>|]/g, "").trim();
+        s = s.replace(/\s+/g, "");
+        return s + ".html";
+      }
+
+      function collectBackupPayload(reason){
+        const now = new Date();
+        const keys = [];
+        for(let i=0;i<localStorage.length;i++){
+          const k = localStorage.key(i);
+          if(!k) continue;
+          if(k.startsWith("tasun") || k.includes("汐東") || k.includes("捷運") || k.includes("水環") || k.includes("審查") || k.includes("文件") || k.includes("資料庫")){
+            keys.push(k);
           }
-
+        }
+        keys.sort((a,b)=>a.localeCompare(b, "zh-Hant"));
+        const data = {};
+        keys.forEach(k => {
+          const raw = localStorage.getItem(k);
           const parsed = safeJsonParse(raw, null);
-          const base = (parsed && typeof parsed === "object") ? parsed : {};
-          const merged = applyFixedRoutes({ ...base, ...seed });
+          data[k] = (parsed === null && raw !== "null" && raw !== null) ? raw : parsed;
+        });
 
-          if(JSON.stringify(base) !== JSON.stringify(merged)){
-            localStorage.setItem(ROUTE_KEY, JSON.stringify(merged, null, 2));
-          }
-          return merged;
+        const sess = safeJsonParse(sessionStorage.getItem(SESSION_KEY) || "null", null);
+
+        return {
+          meta: {
+            app: "Tasun index.html",
+            reason: String(reason || "manual"),
+            ts: now.toISOString(),
+            href: location.href,
+            cacheV: (window.__CACHE_V || "")
+          },
+          session: sess,
+          data
+        };
+      }
+
+      function storeBackupRing(payload){
+        try{
+          const arr = safeJsonParse(localStorage.getItem(BACKUP_RING_KEY) || "[]", []);
+          const next = Array.isArray(arr) ? arr : [];
+          next.unshift(payload);
+          next.length = Math.min(next.length, BACKUP_RING_MAX);
+          localStorage.setItem(BACKUP_RING_KEY, JSON.stringify(next));
+        }catch(e){}
+      }
+
+      function downloadJson(payload){
+        const ts = new Date().toISOString().replace(/[:.]/g, "-");
+        const filename = `Tasun備份_${ts}.json`;
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+        const u = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = u;
+        a.download = filename;
+        a.style.display = "none";
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          URL.revokeObjectURL(u);
+          a.remove();
+        }, 0);
+      }
+
+      let _exportTimer = 0;
+      let _pendingReason = "";
+      let _exportOnceExit = false;
+
+      function exportBackupNow(reason, opts){
+        const o = opts || {};
+        const payload = collectBackupPayload(reason);
+        storeBackupRing(payload);
+        if(o.download){
+          try{ downloadJson(payload); }catch(e){}
         }
+      }
+      function scheduleExport(reason){
+        const r = String(reason || "auto");
+        _pendingReason = _pendingReason ? (_pendingReason + " | " + r) : r;
+        clearTimeout(_exportTimer);
+        _exportTimer = setTimeout(() => {
+          const rr = _pendingReason || "auto";
+          _pendingReason = "";
+          exportBackupNow(rr, { download:false });
+        }, 350);
+      }
+      function tryExportOnExit(){
+        if(_exportOnceExit) return;
+        _exportOnceExit = true;
+        exportBackupNow("exit/pagehide", { download:false });
+      }
 
-        function loadNavButtonsSeedIfMissing(){
-          const seed = [
-            { id:"btn1", label:"臻鼎時代大廈管理表" },
-            { id:"btn2", label:"捷運汐止東湖線" },
-            { id:"btn3", label:"雲端檔案" },
-            { id:"btn4", label:"工程資料庫" },
-            { id:"btn5", label:"資料庫" }
-          ];
-          const raw = localStorage.getItem(NAV_KEY);
-          if(!raw){
-            localStorage.setItem(NAV_KEY, JSON.stringify(seed));
-            return seed;
-          }
-          const arr = safeJsonParse(raw, null);
-          if(Array.isArray(arr) && arr.length) return arr;
-          localStorage.setItem(NAV_KEY, JSON.stringify(seed));
+      window.addEventListener("pagehide", tryExportOnExit, { passive:true });
+      document.addEventListener("visibilitychange", () => {
+        if(document.visibilityState === "hidden") tryExportOnExit();
+      }, { passive:true });
+
+      /* =========================
+         Routes / Buttons / Auth
+         ========================= */
+      function applyFixedRoutes(obj){
+        const out = (obj && typeof obj === "object") ? { ...obj } : {};
+        Object.keys(FIXED_ROUTES).forEach(k => { out[k] = FIXED_ROUTES[k]; });
+        out[METRO_ID] = METRO_HREF;
+        out["systemBtn"] = out["systemBtn"] || "權限表.html";
+        return out;
+      }
+
+      function loadRoutes(){
+        const seed = applyFixedRoutes({
+          "btn3": "https://www.dropbox.com/",
+          "systemBtn": "權限表.html",
+          [METRO_ID]: METRO_HREF
+        });
+
+        const raw = localStorage.getItem(ROUTE_KEY);
+        if(!raw){
+          localStorage.setItem(ROUTE_KEY, JSON.stringify(seed, null, 2));
           return seed;
         }
 
-        function resolveHref(cfg, routes){
-          const id = String(cfg?.id || "").trim();
-          const label = String(cfg?.label || "").trim();
+        const parsed = safeJsonParse(raw, null);
+        const base = (parsed && typeof parsed === "object") ? parsed : {};
+        const merged = applyFixedRoutes({ ...base, ...seed });
 
-          if(label && FIXED_ROUTES[label]) return FIXED_ROUTES[label];
-          if(id === METRO_ID) return METRO_HREF;
-          if(routes && routes[id]) return routes[id];
-          if(routes && label && routes[label]) return routes[label];
-
-          const guess = labelToFile(label);
-          if(FIXED_ROUTES[guess]) return FIXED_ROUTES[guess];
-          return guess;
+        if(JSON.stringify(base) !== JSON.stringify(merged)){
+          localStorage.setItem(ROUTE_KEY, JSON.stringify(merged, null, 2));
         }
+        return merged;
+      }
 
-        function getDefaultAuthTableLegacy(btnCount){
-          const keys = Array.from({length: btnCount}, (_, i) => `btn${i+1}`);
-          const mkAll = () => Object.fromEntries(keys.map(k => [k, true]));
-          const mkOnlyLast = () => Object.fromEntries(keys.map((k, i) => [k, i === btnCount - 1]));
-          return [
-            { user:"alex",  pass:"Tasun08040224", role:"admin", ...mkAll() },
-            { user:"JOYCE", pass:"09220224",      role:"admin", ...mkAll() },
-            { user:"tasun", pass:"tasun08040224", role:"write", ...mkAll() },
-            { user:"wu",    pass:"123456",        role:"read",  ...mkOnlyLast() }
-          ];
+      function loadNavButtonsSeedIfMissing(){
+        const seed = [
+          { id:"btn1", label:"臻鼎時代大廈管理表" },
+          { id:"btn2", label:"捷運汐止東湖線" },
+          { id:"btn3", label:"雲端檔案" },
+          { id:"btn4", label:"工程資料庫" },
+          { id:"btn5", label:"資料庫" }
+        ];
+        const raw = localStorage.getItem(NAV_KEY);
+        if(!raw){
+          localStorage.setItem(NAV_KEY, JSON.stringify(seed));
+          return seed;
         }
+        const arr = safeJsonParse(raw, null);
+        if(Array.isArray(arr) && arr.length) return arr;
+        localStorage.setItem(NAV_KEY, JSON.stringify(seed));
+        return seed;
+      }
 
-        function normalizeRowFromStorage(row, btnCount){
-          const username = (row?.username ?? row?.user ?? row?.name ?? row?.account ?? "").toString().trim();
-          const password = (row?.password ?? row?.pass ?? "").toString();
-          const level    = (row?.level ?? row?.role ?? "read").toString().trim().toLowerCase();
+      function resolveHref(cfg, routes){
+        const id = String(cfg?.id || "").trim();
+        const label = String(cfg?.label || "").trim();
 
-          const buttons = [];
-          for(let i=0;i<btnCount;i++){
-            const k = `btn${i+1}`;
-            buttons[i] = !!row?.[k];
-          }
-          return { username, password, level, buttons };
+        if(label && FIXED_ROUTES[label]) return FIXED_ROUTES[label];
+        if(id === METRO_ID) return METRO_HREF;
+        if(routes && routes[id]) return routes[id];
+        if(routes && label && routes[label]) return routes[label];
+
+        const guess = labelToFile(label);
+        if(FIXED_ROUTES[guess]) return FIXED_ROUTES[guess];
+        return guess;
+      }
+
+      function getDefaultAuthTableLegacy(btnCount){
+        const keys = Array.from({length: btnCount}, (_, i) => `btn${i+1}`);
+        const mkAll = () => Object.fromEntries(keys.map(k => [k, true]));
+        const mkOnlyLast = () => Object.fromEntries(keys.map((k, i) => [k, i === btnCount - 1]));
+        return [
+          { user:"alex",  pass:"Tasun08040224", role:"admin", ...mkAll() },
+          { user:"JOYCE", pass:"09220224",      role:"admin", ...mkAll() },
+          { user:"tasun", pass:"tasun08040224", role:"write", ...mkAll() },
+          { user:"wu",    pass:"123456",        role:"read",  ...mkOnlyLast() }
+        ];
+      }
+
+      function normalizeRowFromStorage(row, btnCount){
+        const username = (row?.username ?? row?.user ?? row?.name ?? row?.account ?? "").toString().trim();
+        const password = (row?.password ?? row?.pass ?? "").toString();
+        const level    = (row?.level ?? row?.role ?? "read").toString().trim().toLowerCase();
+
+        const buttons = [];
+        for(let i=0;i<btnCount;i++){
+          const k = `btn${i+1}`;
+          buttons[i] = !!row?.[k];
         }
+        return { username, password, level, buttons };
+      }
 
-        function loadAuthTable(btnCount){
-          const raw = localStorage.getItem(AUTH_KEY);
-          if(!raw){
-            const legacy = getDefaultAuthTableLegacy(btnCount);
-            localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
-            return legacy.map(r => normalizeRowFromStorage(r, btnCount));
-          }
-          const parsed = safeJsonParse(raw, null);
-          const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
-          if(Array.isArray(arr)){
-            const mapped = arr.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
-            if(mapped.length) return mapped;
-          }
+      function loadAuthTable(btnCount){
+        const raw = localStorage.getItem(AUTH_KEY);
+        if(!raw){
           const legacy = getDefaultAuthTableLegacy(btnCount);
           localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
           return legacy.map(r => normalizeRowFromStorage(r, btnCount));
         }
-
-        function setSession(user){
-          try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: user.username, role: user.level, t: Date.now() })); }catch(e){}
+        const parsed = safeJsonParse(raw, null);
+        const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
+        if(Array.isArray(arr)){
+          const mapped = arr.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
+          if(mapped.length) return mapped;
         }
-        function clearSession(){ try{ sessionStorage.removeItem(SESSION_KEY); }catch(e){} }
-        function getSession(){
-          const obj = safeJsonParse(sessionStorage.getItem(SESSION_KEY) || "null", null);
-          if(!obj || typeof obj !== "object") return null;
-          const u = String(obj.user || "").trim();
-          const r = String(obj.role || "").trim().toLowerCase();
-          if(!u) return null;
-          return { user: u, role: r, t: Number(obj.t || 0) };
-        }
+        const legacy = getDefaultAuthTableLegacy(btnCount);
+        localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
+        return legacy.map(r => normalizeRowFromStorage(r, btnCount));
+      }
 
-        function fitButtonHeights(btns, baseH){
-          btns.forEach(btn => {
-            const span = btn.querySelector("span");
-            if(!span) return;
-            btn.style.height = "auto";
-            const need = Math.ceil(span.scrollHeight + 34);
-            const h = Math.max(baseH, need);
-            btn.style.height = h + "px";
-          });
-        }
+      function setSession(user){
+        try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: user.username, role: user.level, t: Date.now() })); }catch(e){}
+      }
+      function clearSession(){ try{ sessionStorage.removeItem(SESSION_KEY); }catch(e){} }
+      function getSession(){
+        const obj = safeJsonParse(sessionStorage.getItem(SESSION_KEY) || "null", null);
+        if(!obj || typeof obj !== "object") return null;
+        const u = String(obj.user || "").trim();
+        const r = String(obj.role || "").trim().toLowerCase();
+        if(!u) return null;
+        return { user: u, role: r, t: Number(obj.t || 0) };
+      }
 
-        function setButtonFontScale(btn, w, h){
-          const span = btn.querySelector("span");
-          if(!span) return;
+      const ROLE_MAP = {
+        "btn1": ["admin","write","read"],
+        "btn2": ["admin","write","read"],
+        "btn3": ["admin","write","read"],
+        "btn4": ["admin","write"],
+        "btn5": ["admin","write","read"],
+        "systemBtn": ["admin"]
+      };
+      const SYSTEM_BTN = { id:"systemBtn", label:"系統 / 權限", roles:["admin"] };
 
-          const ww = Math.max(1, w);
-          const hh = Math.max(1, h);
+      let BTN_CONFIGS = [];
+      let mainNavBtns = [];
+      let AUTH_TABLE = [];
+      let ROUTES = loadRoutes();
+      let NAV_ARR = loadNavButtonsSeedIfMissing();
 
-          let fs = hh / 3.10;
-          if(span.classList.contains("latin")) fs *= 0.96;
+      function isRoleAllowed(cfg, level){
+        if(!cfg || !Array.isArray(cfg.roles)) return true;
+        return cfg.roles.includes(level);
+      }
+      function isAllowedByAuth(user, cfg){
+        if(cfg && cfg.id === "systemBtn") return true;
+        const flags = Array.isArray(user.buttons) ? user.buttons : [];
+        const m = String(cfg?.id || "").match(/^btn(\d+)$/i);
+        if(!m) return true;
+        const idx = parseInt(m[1], 10) - 1;
+        return (flags[idx] === undefined) ? true : !!flags[idx];
+      }
 
-          fs = clamp(fs, 16, 36);
-          btn.style.setProperty("--btn-fs", `${Math.round(fs)}px`);
+      function buildMainButtonsDOM(){
+        ROUTES = loadRoutes();
+        NAV_ARR = loadNavButtonsSeedIfMissing();
 
-          for(let i=0;i<6;i++){
-            const sw = span.scrollWidth;
-            const sh = span.scrollHeight;
-            if(sw <= ww * 0.92 && sh <= hh * 0.76) break;
+        BTN_CONFIGS = NAV_ARR.map(x => {
+          const id = String(x?.id || "").trim();
+          const label = String(x?.label || "").trim();
+          const roles = ROLE_MAP[id] || ["admin","write","read"];
+          const target = (id === "btn3") ? "_blank" : "";
+          return { id, label, roles, target };
+        }).concat([SYSTEM_BTN]);
 
-            fs = Math.max(15, fs - 1.6);
-            btn.style.setProperty("--btn-fs", `${Math.round(fs)}px`);
+        mainNavBtns = [];
+        navArea.innerHTML = "";
+
+        BTN_CONFIGS.forEach((cfg) => {
+          const a = document.createElement("a");
+          a.className = "nav-btn";
+          a.id = cfg.id || "";
+
+          const span = document.createElement("span");
+          span.textContent = cfg.label;
+          markLatin(span);
+
+          a.appendChild(span);
+
+          const finalHref = resolveHref(cfg, ROUTES);
+          a.setAttribute("href", hrefToDom(finalHref));
+
+          const t = cfg.target || "";
+          if(t){
+            a.target = t;
+            if(t === "_blank") a.rel = "noopener noreferrer";
           }
-        }
 
-        function isVisibleEl(el){
-          if(!el) return false;
-          const cs = getComputedStyle(el);
-          if(cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") return false;
-          const r = el.getBoundingClientRect();
-          return r.width > 0 && r.height > 0;
-        }
+          a.style.display = "none";
+          navArea.appendChild(a);
+          mainNavBtns.push(a);
+        });
+      }
 
-        function getVVBottomInset(){
-          try{
-            const vv = window.visualViewport;
-            if(!vv) return 0;
-            return Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
-          }catch(e){ return 0; }
-        }
+      function resetButtonsForLogout(){
+        mainNavBtns.forEach(btn => btn.style.display = "none");
+        navArea.classList.remove("stack","grid2","sides");
+        scheduleAll();
+      }
 
-        let BTN_CONFIGS = [];
-        let mainNavBtns = [];
-        let AUTH_TABLE = [];
-        let ROUTES = loadRoutes();
-        let NAV_ARR = loadNavButtonsSeedIfMissing();
+      let CURRENT_USER = null;
 
-        const ROLE_MAP = {
-          "btn1": ["admin","write","read"],
-          "btn2": ["admin","write","read"],
-          "btn3": ["admin","write","read"],
-          "btn4": ["admin","write"],
-          "btn5": ["admin","write","read"],
-          "systemBtn": ["admin"]
-        };
+      function refreshButtonsForCurrentUser(){
+        if(!CURRENT_USER) return;
 
-        const SYSTEM_BTN = { id:"systemBtn", label:"系統 / 權限", roles:["admin"] };
+        mainNavBtns.forEach((btn, index) => {
+          const cfg = BTN_CONFIGS[index];
+          const okRole = isRoleAllowed(cfg, CURRENT_USER.level);
+          const okAuth = isAllowedByAuth(CURRENT_USER, cfg);
 
-        function isRoleAllowed(cfg, level){
-          if(!cfg || !Array.isArray(cfg.roles)) return true;
-          return cfg.roles.includes(level);
-        }
-        function isAllowedByAuth(user, cfg){
-          if(cfg && cfg.id === "systemBtn") return true;
-          const flags = Array.isArray(user.buttons) ? user.buttons : [];
-          const m = String(cfg?.id || "").match(/^btn(\d+)$/i);
-          if(!m) return true;
-          const idx = parseInt(m[1], 10) - 1;
-          return (flags[idx] === undefined) ? true : !!flags[idx];
-        }
+          btn.style.display = (okRole && okAuth) ? "flex" : "none";
 
-        function buildMainButtonsDOM(){
+          const finalHref = resolveHref(cfg, ROUTES);
+          btn.setAttribute("href", hrefToDom(finalHref));
+        });
+
+        scheduleAll();
+      }
+
+      function onIndexConfigApplied(){
+        try{
           ROUTES = loadRoutes();
           NAV_ARR = loadNavButtonsSeedIfMissing();
+          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
 
-          BTN_CONFIGS = NAV_ARR.map(x => {
-            const id = String(x?.id || "").trim();
-            const label = String(x?.label || "").trim();
-            const roles = ROLE_MAP[id] || ["admin","write","read"];
-            const target = (id === "btn3") ? "_blank" : "";
-            return { id, label, roles, target };
-          }).concat([SYSTEM_BTN]);
-
-          mainNavBtns = [];
-          navArea.innerHTML = "";
-
-          BTN_CONFIGS.forEach((cfg) => {
-            const a = document.createElement("a");
-            a.className = "nav-btn";
-            a.id = cfg.id || "";
-
-            const span = document.createElement("span");
-            span.textContent = cfg.label;
-
-            const hasLatin = /[A-Za-z]/.test(span.textContent);
-            const hasCJK   = /[\u3400-\u9FFF]/.test(span.textContent);
-            if(hasLatin) span.classList.add("latin");
-            if(hasLatin && !hasCJK) span.classList.add("latin-only");
-
-            a.appendChild(span);
-
-            const finalHref = resolveHref(cfg, ROUTES);
-            a.setAttribute("href", hrefToDom(finalHref));
-
-            const t = cfg.target || "";
-            if(t){
-              a.target = t;
-              if(t === "_blank") a.rel = "noopener noreferrer";
-            }
-
-            a.style.display = "none";
-            navArea.appendChild(a);
-            mainNavBtns.push(a);
-          });
-        }
-
-        function resetButtonsForLogout(){
-          mainNavBtns.forEach(btn => btn.style.display = "none");
-          navArea.classList.remove("stack","sides");
-          scheduleAll();
-        }
-
-        function refreshButtonsForCurrentUser(){
-          if(!CURRENT_USER) return;
-
-          mainNavBtns.forEach((btn, index) => {
-            const cfg = BTN_CONFIGS[index];
-            const okRole = isRoleAllowed(cfg, CURRENT_USER.level);
-            const okAuth = isAllowedByAuth(CURRENT_USER, cfg);
-
-            btn.style.display = (okRole && okAuth) ? "flex" : "none";
-
-            const finalHref = resolveHref(cfg, ROUTES);
-            btn.setAttribute("href", hrefToDom(finalHref));
-          });
-
-          scheduleAll();
-        }
-
-        /* =========================
-           ✅(效能) 文字亮度「輕量自適應」
-           ========================= */
-        let _toneCanvas = null;
-        let _toneCtx = null;
-        let _toneDirty = true;
-        let _tone = { top:0.42, left:0.42, right:0.42, bottom:0.42 };
-
-        function ensureToneCanvas(){
-          if(_toneCanvas && _toneCtx) return true;
+          // 若登入遮罩正在顯示 → 立刻刷新清單
           try{
-            _toneCanvas = document.createElement("canvas");
-            _toneCanvas.width = 64;
-            _toneCanvas.height = 64;
-            _toneCtx = _toneCanvas.getContext("2d", { willReadFrequently:true });
-            return !!_toneCtx;
-          }catch(e){
-            _toneCanvas = null; _toneCtx = null;
-            return false;
-          }
-        }
-
-        function computeToneIfNeeded(){
-          if(!_toneDirty) return;
-          _toneDirty = false;
-
-          try{
-            if(!zenImg || !zenImg.complete || !zenImg.naturalWidth) return;
-            if(!ensureToneCanvas()) return;
-
-            const cw = _toneCanvas.width, ch = _toneCanvas.height;
-            _toneCtx.clearRect(0,0,cw,ch);
-            _toneCtx.drawImage(zenImg, 0, 0, cw, ch);
-
-            const img = _toneCtx.getImageData(0,0,cw,ch).data;
-
-            function lumAt(px, py){
-              const x = Math.max(0, Math.min(cw-1, px|0));
-              const y = Math.max(0, Math.min(ch-1, py|0));
-              const i = (y*cw + x)*4;
-              const r = img[i], g = img[i+1], b = img[i+2];
-              return (0.2126*r + 0.7152*g + 0.0722*b) / 255;
+            if(loginOverlay && loginOverlay.style.display === "flex"){
+              populateUserSelect();
             }
-
-            _tone.top    = (lumAt(32,10) + lumAt(20,12) + lumAt(44,12)) / 3;
-            _tone.left   = (lumAt(16,34) + lumAt(18,40) + lumAt(20,30)) / 3;
-            _tone.right  = (lumAt(48,34) + lumAt(46,40) + lumAt(44,30)) / 3;
-            _tone.bottom = (lumAt(32,54) + lumAt(26,52) + lumAt(38,52)) / 3;
           }catch(e){}
+
+          buildMainButtonsDOM();
+
+          if(CURRENT_USER){
+            refreshButtonsForCurrentUser();
+          }else{
+            resetButtonsForLogout();
+          }
+        }catch(e){}
+      }
+
+      /* =========================
+         ✅Layout：核心目標
+         1) 底部字不縮（bottom-size 保底）
+         2) 偵測底部字會撞按鍵區 → 只推按鍵區（不縮底字）
+         3) 按鍵全部在螢幕內：高度不足時自動縮放（btnH / btnGap / btnScale）
+         4) 減少量測：只量 userBar / title / bottom / hero-inner
+         ========================= */
+      function getVVBottomInset(){
+        try{
+          const vv = window.visualViewport;
+          if(!vv) return 0;
+          return Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
+        }catch(e){ return 0; }
+      }
+
+      function getVisibleButtons(){
+        return mainNavBtns.filter(b => b.style.display !== "none");
+      }
+
+      function layoutButtons(){
+        if(!navArea || !heroInner) return;
+        const visible = getVisibleButtons();
+        if(!visible.length) return;
+
+        // ✅關鍵量測（你指定只量這些）
+        const rect = heroInner.getBoundingClientRect();
+        const H = Math.max(1, rect.height);
+        const W = Math.max(1, rect.width);
+
+        const ub = userBar ? userBar.getBoundingClientRect() : null;
+        const tw = titleWrap ? titleWrap.getBoundingClientRect() : null;
+        const ax = zwTopAxis ? zwTopAxis.getBoundingClientRect() : null;
+        const bl = zwBottomLine ? zwBottomLine.getBoundingClientRect() : null;
+
+        const vvBottom = getVVBottomInset();
+
+        const topBound = Math.max(
+          86,
+          ub ? (ub.bottom - rect.top) + 14 : 0,
+          tw ? (tw.bottom - rect.top) + 14 : 0,
+          ax ? (ax.bottom - rect.top) + 12 : 0
+        );
+
+        // ✅底部界線：以「底部字 top」優先（防撞）
+        let bottomBound = H - (12 + vvBottom);
+        if(bl){
+          bottomBound = Math.min(bottomBound, (bl.top - rect.top) - 10);
         }
+        bottomBound = Math.max(bottomBound, topBound + 120);
 
-        function applyBtnContrast(btn, lum){
-          const bright = lum >= 0.58;
-          btn.style.setProperty("--btn-text", "rgba(255,226,156,0.99)");
-          btn.style.setProperty("--btn-stroke", bright ? "rgba(18,8,2,0.96)" : "rgba(18,8,2,0.92)");
-          btn.style.setProperty("--btn-stroke-w", bright ? "2.20px" : "2.10px");
-          btn.style.setProperty("--btn-shadowA", bright ? "rgba(0,0,0,0.76)" : "rgba(0,0,0,0.72)");
-          btn.style.setProperty("--btn-text-plate-op", "0");
-        }
+        const avail = Math.max(1, bottomBound - topBound);
 
-        function applyUiContrastByTop(){
-          const bright = _tone.top >= 0.58;
-          try{ if(userBar){ userBar.dataset.tone = bright ? "light" : "dark"; } }catch(e){}
-          try{ if(titleWrap){ titleWrap.dataset.tone = bright ? "light" : "dark"; } }catch(e){}
-        }
+        const isNarrow = window.matchMedia("(max-width: 900px)").matches || W < 980;
 
-        // ✅(圖標示1) 底部禪字對比：依底部亮度微調「描邊/底板/透明度」
-        function applyZenBottomContrast(){
-          if(!zwBottomLine) return;
-          const bright = _tone.bottom >= 0.58;
-          try{
-            zwBottomLine.style.setProperty("--zc-stroke", bright ? "rgba(24,14,5,0.94)" : "rgba(60,34,12,0.78)");
-            zwBottomLine.style.setProperty("--zc-stroke-w", bright ? "2.10px" : "1.90px");
-            zwBottomLine.style.setProperty("--zc-shadow", bright ? "rgba(0,0,0,0.66)" : "rgba(0,0,0,0.56)");
-            zwBottomLine.style.setProperty("--zc-glow", bright ? "rgba(255,248,230,0.28)" : "rgba(255,220,170,0.20)");
-            zwBottomLine.style.setProperty("--zw-plate-op-bottom", bright ? "0.30" : "0.24");
-            zwBottomLine.style.setProperty("--bottom-op", bright ? "0.96" : "0.94");
-          }catch(e){}
-        }
+        // 先清掉桌機定位
+        visible.forEach(btn=>{
+          btn.style.left = "";
+          btn.style.right = "";
+          btn.style.top = "";
+          btn.style.width = "";
+          btn.style.height = "";
+        });
 
-        function applyAdaptiveTonesLite(){
-          computeToneIfNeeded();
-          applyUiContrastByTop();
-          applyZenBottomContrast();
+        if(isNarrow){
+          // ✅手機：先嘗試單欄 stack，不夠再換雙欄 grid2
+          navArea.classList.remove("sides");
+          navArea.style.setProperty("--navTop", Math.round(topBound) + "px");
+          navArea.style.setProperty("--navBottom", Math.round(H - bottomBound) + "px");
 
-          if(!navArea) return;
-          const rect = navArea.getBoundingClientRect();
-          const midX = rect.left + rect.width/2;
+          const n = visible.length;
 
-          mainNavBtns.forEach(btn=>{
-            if(btn.style.display === "none") return;
-            const r = btn.getBoundingClientRect();
-            const cx = r.left + r.width/2;
-            const lum = (cx < midX) ? _tone.left : _tone.right;
-            applyBtnContrast(btn, lum);
-          });
-        }
+          // 單欄估算
+          const gapMin = 8, gapMax = 14;
+          const btnMin = 52, btnMax = 88;
 
-        function layoutButtons(){
-          if(!navArea) return;
+          function fitStack(){
+            const gap = clamp(Math.round((avail / (n+1)) * 0.22), gapMin, gapMax);
+            const h = clamp(Math.floor((avail - gap*(n-1)) / n), btnMin, btnMax);
+            const need = n*h + gap*(n-1);
+            const slack = Math.max(0, avail - need);
 
-          const rect = navArea.getBoundingClientRect();
-          const H = Math.max(1, rect.height);
-          const W = Math.max(1, rect.width);
+            // ✅推按鍵區往下（不動底部字）
+            const push = Math.min(32, Math.round(slack * 0.22));
 
-          const visible = mainNavBtns.filter(b => b.style.display !== "none");
-          if(!visible.length) return;
+            navArea.style.setProperty("--btnGap", gap + "px");
+            navArea.style.setProperty("--btnH", h + "px");
 
-          navArea.style.paddingTop = "";
-          navArea.style.paddingBottom = "";
-          navArea.style.paddingLeft = "";
-          navArea.style.paddingRight = "";
-          navArea.style.gap = "";
-          navArea.style.overflow = "";
+            // ✅按鍵面積比例 → btnScale
+            const scale = clamp((h / 82) * 0.98, 0.62, 1.02);
+            navArea.style.setProperty("--btnScale", String(scale));
 
-          const isMobile = window.matchMedia("(max-width: 900px)").matches;
+            navArea.style.setProperty("--navTop", Math.round(topBound + push) + "px");
+            navArea.style.setProperty("--navBottom", Math.round(H - bottomBound) + "px");
 
-          if(isMobile || W < 980){
-            navArea.classList.remove("sides");
+            return (need <= avail);
+          }
+
+          const okStack = fitStack();
+
+          // 仍可能太矮：用雙欄
+          if(!okStack){
+            navArea.classList.remove("stack");
+            navArea.classList.add("grid2");
+
+            // systemBtn 放最後，讓它吃滿一列
+            const sys = visible.find(b => b.id === "systemBtn") || null;
+            if(sys){
+              const others = visible.filter(b => b !== sys);
+              // 重新 append，保持 DOM 簡單（只在極端時做）
+              others.forEach(b=>navArea.appendChild(b));
+              navArea.appendChild(sys);
+            }
+
+            const n2 = getVisibleButtons().length;
+            const hasSys = !!sys;
+            const otherCount = hasSys ? (n2 - 1) : n2;
+            const rows = (hasSys ? Math.ceil(otherCount / 2) + 1 : Math.ceil(n2 / 2));
+
+            const gap = clamp(Math.round((avail / (rows+1)) * 0.24), 6, 12);
+            const h = clamp(Math.floor((avail - gap*(rows-1)) / rows), 46, 84);
+
+            const need = rows*h + gap*(rows-1);
+            const slack = Math.max(0, avail - need);
+            const push = Math.min(32, Math.round(slack * 0.22));
+
+            navArea.style.setProperty("--btnGap", gap + "px");
+            navArea.style.setProperty("--btnH", h + "px");
+            navArea.style.setProperty("--btnScale", String(clamp((h / 78) * 0.98, 0.58, 1.02)));
+            navArea.style.setProperty("--navTop", Math.round(topBound + push) + "px");
+            navArea.style.setProperty("--navBottom", Math.round(H - bottomBound) + "px");
+          }else{
+            navArea.classList.remove("grid2");
             navArea.classList.add("stack");
-
-            const vvBottom = getVVBottomInset();
-
-            const ub = userBar ? userBar.getBoundingClientRect() : null;
-            const tw = titleWrap ? titleWrap.getBoundingClientRect() : null;
-            const ax = zwTopAxis ? zwTopAxis.getBoundingClientRect() : null;
-            const bl = zwBottomLine ? zwBottomLine.getBoundingClientRect() : null;
-
-            let topSafe = Math.max(
-              112,
-              ub ? (ub.bottom - rect.top) + 16 : 0,
-              tw ? (tw.bottom - rect.top) + 16 : 0,
-              ax ? (ax.bottom - rect.top) + 16 : 0
-            );
-
-            let bottomSafe = H - Math.max(16, 10 + vvBottom);
-            if(bl){
-              bottomSafe = Math.min(bottomSafe, (bl.top - rect.top) - 12);
-            }
-
-            bottomSafe = Math.max(bottomSafe, topSafe + 140);
-            const avail = Math.max(1, bottomSafe - topSafe);
-
-            const padX = clamp(W * 0.04, 14, 28);
-            navArea.style.paddingLeft = Math.round(padX) + "px";
-            navArea.style.paddingRight = Math.round(padX) + "px";
-
-            const scales = [1.00, 0.94, 0.88, 0.82, 0.76, 0.70, 0.64, 0.58];
-            let chosen = null;
-
-            function measureTotal(gap){
-              const hs = visible.map(b => b.getBoundingClientRect().height || 52);
-              return hs.reduce((a,b)=>a+b,0) + gap * (visible.length - 1);
-            }
-
-            for(const s of scales){
-              const gapY = clamp(14 * s, 8, 14);
-              const baseH = clamp(86 * s, 52, 88);
-
-              navArea.style.gap = Math.round(gapY) + "px";
-
-              visible.forEach(btn=>{
-                btn.style.width = "100%";
-                btn.style.left = "";
-                btn.style.right = "";
-                btn.style.top = "";
-                btn.style.height = baseH + "px";
-              });
-
-              fitButtonHeights(visible, baseH);
-
-              visible.forEach(btn=>{
-                const br = btn.getBoundingClientRect();
-                setButtonFontScale(btn, br.width || (W - padX*2), br.height || baseH);
-              });
-
-              const total = measureTotal(Math.round(gapY));
-              if(total <= avail){
-                chosen = { s, gapY: Math.round(gapY), total };
-                break;
-              }
-            }
-
-            if(!chosen){
-              const gapY = 8;
-              const baseH = 52;
-
-              navArea.style.gap = gapY + "px";
-              visible.forEach(btn=>{
-                btn.style.width = "100%";
-                btn.style.height = baseH + "px";
-              });
-              fitButtonHeights(visible, baseH);
-              visible.forEach(btn=>{
-                const br = btn.getBoundingClientRect();
-                setButtonFontScale(btn, br.width || (W - padX*2), br.height || baseH);
-              });
-
-              const total = measureTotal(gapY);
-              if(total > avail + 8){
-                navArea.style.overflow = "auto";
-              }else{
-                navArea.style.overflow = "hidden";
-              }
-              chosen = { s: 0.58, gapY, total };
-            }else{
-              navArea.style.overflow = "hidden";
-            }
-
-            const slack = Math.max(0, avail - (chosen.total || 0));
-            const pushDown = Math.min(32, Math.round(slack * 0.18));
-
-            navArea.style.paddingTop = Math.round(topSafe + pushDown) + "px";
-            navArea.style.paddingBottom = Math.round(H - bottomSafe) + "px";
-
-            return;
           }
 
-          navArea.classList.remove("stack");
-          navArea.classList.add("sides");
+          return;
+        }
 
-          const left = [];
-          const right = [];
-          visible.forEach((btn, i) => (i % 2 === 0 ? left : right).push(btn));
+        // ✅桌機：左右側邊（全部在螢幕內）
+        navArea.classList.remove("stack","grid2");
+        navArea.classList.add("sides");
 
-          const ub = userBar ? userBar.getBoundingClientRect() : null;
-          const tw = titleWrap ? titleWrap.getBoundingClientRect() : null;
-          const ax = zwTopAxis ? zwTopAxis.getBoundingClientRect() : null;
-          const bl = zwBottomLine ? zwBottomLine.getBoundingClientRect() : null;
+        const left = [];
+        const right = [];
+        visible.forEach((btn, i) => (i % 2 === 0 ? left : right).push(btn));
 
-          const topSafe = Math.max(
-            86,
-            ub ? (ub.bottom - rect.top) + 18 : 0,
-            tw ? (tw.bottom - rect.top) + 20 : 0,
-            ax ? (ax.bottom - rect.top) + 20 : 0
-          );
+        // 桌機可用高度：仍然避開底部字（bottomBound）與上方列
+        const topSafe = topBound;
+        const bottomSafe = bottomBound;
+        const availY = Math.max(1, bottomSafe - topSafe);
 
-          let bottomSafe = H - clamp(H * 0.12, 92, 150);
-          if(bl){
-            bottomSafe = Math.min(bottomSafe, (bl.top - rect.top) - 12);
-          }
-          bottomSafe = Math.max(bottomSafe, topSafe + 170);
+        // 寬度：留中心走道給禪字
+        const centerGap = clamp(W * 0.16, 180, 260);
+        const sideMaxW = Math.max(280, Math.floor((W - centerGap) / 2) - 40);
+        const btnW = clamp(Math.floor(W * 0.26), 340, Math.min(560, sideMaxW));
+        navArea.style.setProperty("--btnW", btnW + "px");
 
-          const edgePad = 32;
-          const gapToZen = 22;
+        // 高度/間距：自動縮放以塞進 availY
+        const maxRows = Math.max(left.length, right.length);
+        const gapBase = clamp(Math.round(H * 0.045), 16, 26);
+        const hBase = clamp(Math.round(H * 0.118), 74, 112);
 
-          const lz = isVisibleEl(zwLeft) ? zwLeft.getBoundingClientRect() : null;
-          const rz = isVisibleEl(zwRight) ? zwRight.getBoundingClientRect() : null;
+        const need = maxRows*hBase + Math.max(0, (maxRows-1)*gapBase);
+        const s = clamp(availY / need, 0.66, 1.0);
 
-          let corridorLeft = (lz ? (lz.right - rect.left) : (W * 0.44)) + gapToZen;
-          let corridorRight = (rz ? (rz.left - rect.left) : (W * 0.56)) - gapToZen;
+        const gapY = Math.max(14, Math.round(gapBase * s));
+        const btnH = Math.max(64, Math.round(hBase * s));
 
-          corridorLeft = clamp(corridorLeft, W * 0.34, W * 0.49);
-          corridorRight = clamp(corridorRight, W * 0.51, W * 0.66);
+        navArea.style.setProperty("--btnGap", gapY + "px");
+        navArea.style.setProperty("--btnH", btnH + "px");
+        navArea.style.setProperty("--btnScale", String(clamp((btnH / 92) * 0.98, 0.62, 1.00)));
 
-          const leftAreaL = edgePad;
-          const leftAreaR = Math.max(leftAreaL + 10, corridorLeft - edgePad);
-          const rightAreaL = Math.min(W - edgePad - 10, corridorRight + edgePad);
-          const rightAreaR = W - edgePad;
+        const xPad = 28;
+        const leftX = xPad;
+        const rightX = Math.max(leftX + btnW + 12, W - xPad - btnW);
 
-          const leftAvailW = Math.max(0, leftAreaR - leftAreaL);
-          const rightAvailW = Math.max(0, rightAreaR - rightAreaL);
+        function placeColumn(btns, isLeft){
+          const rows = btns.length;
+          if(!rows) return;
 
-          if(leftAvailW < 260 || rightAvailW < 260){
-            navArea.classList.remove("sides");
-            navArea.classList.add("stack");
-            return;
-          }
+          const total = rows*btnH + Math.max(0, (rows-1)*gapY);
+          const slack = Math.max(0, availY - total);
+          const y0 = topSafe + Math.min(52, Math.round(slack * 0.22));
 
-          const availY = Math.max(1, bottomSafe - topSafe);
-
-          const baseH0 = clamp(H * 0.118, 74, 112);
-          const gapY0  = clamp(H * 0.050, 16, 26);
-
-          const wTarget = clamp(W * 0.24, 340, 560);
-
-          function applySideWidths(scale){
-            const s = clamp(scale, 0.72, 1.0);
-
-            const wL = Math.min(leftAvailW - 4, Math.round(wTarget * s));
-            const wR = Math.min(rightAvailW - 4, Math.round(wTarget * s));
-
-            left.forEach(btn => { btn.style.width = wL + "px"; });
-            right.forEach(btn => { btn.style.width = wR + "px"; });
-
-            const baseH = Math.max(64, Math.round(baseH0 * s));
-            fitButtonHeights(visible, baseH);
-
-            visible.forEach(btn=>{
-              const bw = btn.getBoundingClientRect().width || wTarget;
-              const bh = btn.getBoundingClientRect().height || baseH;
-              setButtonFontScale(btn, bw, bh);
-            });
-
-            return { wL, wR, baseH, gapY: Math.max(14, Math.round(gapY0 * s)) };
-          }
-
-          function totalHeight(btns, gapY){
-            if(!btns.length) return 0;
-            const hs = btns.map(b => (b.getBoundingClientRect().height || baseH0));
-            return hs.reduce((a,b)=>a+b,0) + gapY * (btns.length - 1);
-          }
-
-          function placeSide(btns, side, width, gapY){
-            if(!btns.length) return true;
-
-            const total = totalHeight(btns, gapY);
-            if(total > availY) return false;
-
-            const yStart = topSafe + Math.max(0, Math.min((availY - total) * 0.22, 52));
-            let y = yStart;
-
-            let x;
-            if(side === "L"){
-              x = leftAreaL + Math.max(0, (leftAvailW - width) * 0.5);
-            }else{
-              x = rightAreaL + Math.max(0, (rightAvailW - width) * 0.5);
-            }
-
-            for(const btn of btns){
-              const bh = btn.getBoundingClientRect().height || baseH0;
-
-              btn.style.left = (side === "L") ? (Math.round(x) + "px") : "";
-              btn.style.right = (side === "R") ? (Math.round(W - (x + width)) + "px") : "";
-              btn.style.top = Math.round(y) + "px";
-
-              y += bh + gapY;
-            }
-            return true;
-          }
-
-          const scales = [1.00, 0.94, 0.88, 0.82, 0.76];
-          let placed = false;
-
-          for(const s of scales){
-            const m = applySideWidths(s);
-
-            const need = Math.max(totalHeight(left, m.gapY), totalHeight(right, m.gapY));
-            if(need > availY) continue;
-
-            const okL = placeSide(left, "L", m.wL, m.gapY);
-            const okR = placeSide(right, "R", m.wR, m.gapY);
-            if(okL && okR){ placed = true; break; }
-          }
-
-          if(!placed){
-            navArea.classList.remove("sides");
-            navArea.classList.add("stack");
-            visible.forEach(btn=>{
-              btn.style.left = "";
+          let y = y0;
+          for(const btn of btns){
+            btn.style.top = Math.round(y) + "px";
+            if(isLeft){
+              btn.style.left = Math.round(leftX) + "px";
               btn.style.right = "";
-              btn.style.top = "";
-            });
+            }else{
+              btn.style.right = Math.round(W - (rightX + btnW)) + "px";
+              btn.style.left = "";
+            }
+            y += btnH + gapY;
           }
         }
 
-        /* =========================
-           Username picker（原功能保留）
-           ========================= */
-        let _userActiveIndex = -1;
-        let _typeBuf = "";
-        let _typeTimer = 0;
+        placeColumn(left, true);
+        placeColumn(right, false);
+      }
 
-        function menuItems(){ return Array.from(usernameMenu ? usernameMenu.querySelectorAll(".select-option") : []); }
-        function isMenuOpen(){ return !!(usernameMenu && usernameMenu.classList.contains("open")); }
-        function closeUsernameMenu(){
-          if(!usernameMenu) return;
-          usernameMenu.classList.remove("open");
-          if(usernameDisplay) usernameDisplay.setAttribute("aria-expanded", "false");
-          _userActiveIndex = -1;
-          _typeBuf = "";
+      /* =========================
+         Username picker（保留）
+         ========================= */
+      let _userActiveIndex = -1;
+      let _typeBuf = "";
+      let _typeTimer = 0;
+
+      function menuItems(){ return Array.from(usernameMenu ? usernameMenu.querySelectorAll(".select-option") : []); }
+      function isMenuOpen(){ return !!(usernameMenu && usernameMenu.classList.contains("open")); }
+      function closeUsernameMenu(){
+        if(!usernameMenu) return;
+        usernameMenu.classList.remove("open");
+        if(usernameDisplay) usernameDisplay.setAttribute("aria-expanded", "false");
+        _userActiveIndex = -1;
+        _typeBuf = "";
+      }
+      function openUsernameMenu(){
+        if(!usernameMenu || !usernameDisplay) return;
+        if(usernameDisplay.disabled) return;
+
+        usernameMenu.classList.add("open");
+        usernameDisplay.setAttribute("aria-expanded", "true");
+
+        const items = menuItems();
+        if(!items.length) return;
+
+        const idx = items.findIndex(it => (it.dataset.value || "") === (usernameSel.value || ""));
+        setActiveIndex(idx >= 0 ? idx : 0, true);
+      }
+      function toggleUsernameMenu(){ if(isMenuOpen()) closeUsernameMenu(); else openUsernameMenu(); }
+
+      function syncUsernameDisplay(){
+        if(!usernameSel || !usernameDisplay) return;
+        const opt = usernameSel.options[usernameSel.selectedIndex];
+        const txt = opt ? String(opt.textContent || "").trim() : "";
+        if(!txt || (opt && opt.disabled)) usernameDisplay.textContent = "請選擇使用者";
+        else usernameDisplay.textContent = txt;
+      }
+
+      function selectByValue(val){
+        if(!val) return;
+        usernameSel.value = val;
+        syncUsernameDisplay();
+        const items = menuItems();
+        items.forEach(it => it.setAttribute("aria-selected", (it.dataset.value === val) ? "true" : "false"));
+      }
+
+      function setActiveIndex(nextIndex, scrollIntoView){
+        const items = menuItems();
+        if(!items.length) { _userActiveIndex = -1; return; }
+
+        const n = items.length;
+        let idx = nextIndex;
+        if(idx < 0) idx = 0;
+        if(idx >= n) idx = n - 1;
+
+        _userActiveIndex = idx;
+        items.forEach((it, i) => it.classList.toggle("active", i === idx));
+
+        if(scrollIntoView){
+          try{ items[idx].scrollIntoView({ block:"nearest" }); }catch(e){}
         }
-        function openUsernameMenu(){
-          if(!usernameMenu || !usernameDisplay) return;
+      }
+
+      function buildUsernameMenu(){
+        if(!usernameMenu || !usernameSel || !usernameDisplay) return;
+        usernameMenu.innerHTML = "";
+
+        const opts = Array.from(usernameSel.options || []);
+        const usable = opts.filter(o => !o.disabled && String(o.value||"").trim());
+
+        if(!usable.length){
+          usernameDisplay.textContent = "（尚無使用者，請先到「系統 / 權限」新增）";
+          usernameDisplay.disabled = true;
+          closeUsernameMenu();
+          return;
+        }
+
+        usernameDisplay.disabled = false;
+
+        usable.forEach((o, i) => {
+          const item = document.createElement("div");
+          item.className = "select-option";
+          item.setAttribute("role", "option");
+          item.dataset.value = o.value;
+          item.textContent = o.textContent;
+
+          const selected = (o.value === usernameSel.value);
+          item.setAttribute("aria-selected", selected ? "true" : "false");
+
+          item.addEventListener("mouseenter", () => { if(isMenuOpen()) setActiveIndex(i, false); });
+          item.addEventListener("click", () => {
+            selectByValue(o.value);
+            closeUsernameMenu();
+            usernameDisplay.focus();
+          });
+
+          usernameMenu.appendChild(item);
+        });
+      }
+
+      function refreshUsernamePicker(){
+        if(!usernameSel) return;
+
+        const opt = usernameSel.options[usernameSel.selectedIndex];
+        if(opt && opt.disabled){
+          const first = Array.from(usernameSel.options).find(o => !o.disabled && String(o.value||"").trim());
+          if(first) usernameSel.value = first.value;
+        }
+
+        syncUsernameDisplay();
+        buildUsernameMenu();
+      }
+
+      if(usernameDisplay){
+        usernameDisplay.addEventListener("click", toggleUsernameMenu);
+
+        usernameDisplay.addEventListener("keydown", (e) => {
           if(usernameDisplay.disabled) return;
 
-          usernameMenu.classList.add("open");
-          usernameDisplay.setAttribute("aria-expanded", "true");
+          const key = e.key;
 
-          const items = menuItems();
-          if(!items.length) return;
+          if(key === "ArrowDown" || key === "ArrowUp"){
+            e.preventDefault();
+            if(!isMenuOpen()) openUsernameMenu();
+            const items = menuItems();
+            if(!items.length) return;
 
-          const idx = items.findIndex(it => (it.dataset.value || "") === (usernameSel.value || ""));
-          setActiveIndex(idx >= 0 ? idx : 0, true);
-        }
-        function toggleUsernameMenu(){ if(isMenuOpen()) closeUsernameMenu(); else openUsernameMenu(); }
-
-        function syncUsernameDisplay(){
-          if(!usernameSel || !usernameDisplay) return;
-          const opt = usernameSel.options[usernameSel.selectedIndex];
-          const txt = opt ? String(opt.textContent || "").trim() : "";
-          if(!txt || (opt && opt.disabled)) usernameDisplay.textContent = "請選擇使用者";
-          else usernameDisplay.textContent = txt;
-        }
-
-        function selectByValue(val){
-          if(!val) return;
-          usernameSel.value = val;
-          syncUsernameDisplay();
-          const items = menuItems();
-          items.forEach(it => it.setAttribute("aria-selected", (it.dataset.value === val) ? "true" : "false"));
-        }
-
-        function setActiveIndex(nextIndex, scrollIntoView){
-          const items = menuItems();
-          if(!items.length) { _userActiveIndex = -1; return; }
-
-          const n = items.length;
-          let idx = nextIndex;
-          if(idx < 0) idx = 0;
-          if(idx >= n) idx = n - 1;
-
-          _userActiveIndex = idx;
-          items.forEach((it, i) => it.classList.toggle("active", i === idx));
-
-          if(scrollIntoView){
-            try{ items[idx].scrollIntoView({ block:"nearest" }); }catch(e){}
+            const dir = (key === "ArrowDown") ? 1 : -1;
+            const next = (_userActiveIndex < 0) ? 0 : (_userActiveIndex + dir);
+            setActiveIndex(next, true);
+            return;
           }
-        }
 
-        function buildUsernameMenu(){
-          if(!usernameMenu || !usernameSel || !usernameDisplay) return;
-          usernameMenu.innerHTML = "";
+          if(key === "Enter"){
+            e.preventDefault();
+            if(!isMenuOpen()){ openUsernameMenu(); return; }
+            const items = menuItems();
+            if(!items.length) return;
 
-          const opts = Array.from(usernameSel.options || []);
-          const usable = opts.filter(o => !o.disabled && String(o.value||"").trim());
-
-          if(!usable.length){
-            usernameDisplay.textContent = "（尚無使用者，請先到「系統 / 權限」新增）";
-            usernameDisplay.disabled = true;
+            const idx = (_userActiveIndex >= 0) ? _userActiveIndex : 0;
+            const val = items[idx]?.dataset?.value || "";
+            if(val) selectByValue(val);
             closeUsernameMenu();
             return;
           }
 
-          usernameDisplay.disabled = false;
+          if(key === "Escape"){ e.preventDefault(); closeUsernameMenu(); return; }
 
-          usable.forEach((o, i) => {
-            const item = document.createElement("div");
-            item.className = "select-option";
-            item.setAttribute("role", "option");
-            item.dataset.value = o.value;
-            item.textContent = o.textContent;
+          if(key && key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey){
+            if(!isMenuOpen()) openUsernameMenu();
+            _typeBuf += key.toLowerCase();
+            clearTimeout(_typeTimer);
+            _typeTimer = setTimeout(()=>{ _typeBuf=""; }, 650);
 
-            const selected = (o.value === usernameSel.value);
-            item.setAttribute("aria-selected", selected ? "true" : "false");
-
-            item.addEventListener("mouseenter", () => { if(isMenuOpen()) setActiveIndex(i, false); });
-            item.addEventListener("click", () => {
-              selectByValue(o.value);
-              closeUsernameMenu();
-              usernameDisplay.focus();
-            });
-
-            usernameMenu.appendChild(item);
-          });
-        }
-
-        function refreshUsernamePicker(){
-          if(!usernameSel) return;
-
-          const opt = usernameSel.options[usernameSel.selectedIndex];
-          if(opt && opt.disabled){
-            const first = Array.from(usernameSel.options).find(o => !o.disabled && String(o.value||"").trim());
-            if(first) usernameSel.value = first.value;
+            const items = menuItems();
+            const idx = items.findIndex(it => String(it.textContent||"").trim().toLowerCase().startsWith(_typeBuf));
+            if(idx >= 0) setActiveIndex(idx, true);
           }
-
-          syncUsernameDisplay();
-          buildUsernameMenu();
-        }
-
-        if(usernameDisplay){
-          usernameDisplay.addEventListener("click", toggleUsernameMenu);
-
-          usernameDisplay.addEventListener("keydown", (e) => {
-            if(usernameDisplay.disabled) return;
-
-            const key = e.key;
-
-            if(key === "ArrowDown" || key === "ArrowUp"){
-              e.preventDefault();
-              if(!isMenuOpen()) openUsernameMenu();
-              const items = menuItems();
-              if(!items.length) return;
-
-              const dir = (key === "ArrowDown") ? 1 : -1;
-              const next = (_userActiveIndex < 0) ? 0 : (_userActiveIndex + dir);
-              setActiveIndex(next, true);
-              return;
-            }
-
-            if(key === "Enter"){
-              e.preventDefault();
-              if(!isMenuOpen()){ openUsernameMenu(); return; }
-              const items = menuItems();
-              if(!items.length) return;
-
-              const idx = (_userActiveIndex >= 0) ? _userActiveIndex : 0;
-              const val = items[idx]?.dataset?.value || "";
-              if(val) selectByValue(val);
-              closeUsernameMenu();
-              return;
-            }
-
-            if(key === "Escape"){ e.preventDefault(); closeUsernameMenu(); return; }
-
-            if(key && key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey){
-              if(!isMenuOpen()) openUsernameMenu();
-              _typeBuf += key.toLowerCase();
-              clearTimeout(_typeTimer);
-              _typeTimer = setTimeout(()=>{ _typeBuf=""; }, 650);
-
-              const items = menuItems();
-              const idx = items.findIndex(it => String(it.textContent||"").trim().toLowerCase().startsWith(_typeBuf));
-              if(idx >= 0) setActiveIndex(idx, true);
-            }
-          });
-        }
-
-        document.addEventListener("click", (e) => {
-          if(!usernameWrap || !usernameMenu) return;
-          if(isMenuOpen() && !usernameWrap.contains(e.target)) closeUsernameMenu();
         });
-        document.addEventListener("keydown", (e) => { if(e.key === "Escape") closeUsernameMenu(); });
+      }
 
-        function populateUserSelect(){
-          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-          usernameSel.innerHTML = "";
+      document.addEventListener("click", (e) => {
+        if(!usernameWrap || !usernameMenu) return;
+        if(isMenuOpen() && !usernameWrap.contains(e.target)) closeUsernameMenu();
+      });
+      document.addEventListener("keydown", (e) => { if(e.key === "Escape") closeUsernameMenu(); });
 
-          if(!AUTH_TABLE.length){
-            const opt = document.createElement("option");
-            opt.value = "";
-            opt.textContent = "（尚無使用者，請先到「系統 / 權限」新增）";
-            opt.disabled = true;
-            opt.selected = true;
-            usernameSel.appendChild(opt);
-            refreshUsernamePicker();
-            return;
-          }
-
-          const ph = document.createElement("option");
-          ph.value = "";
-          ph.textContent = "請選擇使用者";
-          ph.disabled = true;
-          ph.selected = true;
-          usernameSel.appendChild(ph);
-
-          const names = Array.from(new Set(AUTH_TABLE.map(r => r.username).filter(Boolean)));
-          names.sort((a,b)=>a.localeCompare(b, "zh-Hant"));
-          names.forEach(name => {
-            const opt = document.createElement("option");
-            opt.value = name;
-            opt.textContent = name;
-            usernameSel.appendChild(opt);
-          });
-
-          refreshUsernamePicker();
-        }
-
-        function showLogin(){
-          document.body.classList.add("locked");
-          loginOverlay.style.display = "flex";
-          loginError.textContent = "";
-          loginSub.textContent = "";
-          $("#password").value = "";
-
-          populateUserSelect();
-          resetButtonsForLogout();
-
-          userInfo.textContent = "目前使用者：未登入";
-          userInfo.setAttribute("data-text", "目前使用者：未登入");
-
-          autoEnterIfSessionValid();
-          scheduleAll();
-
-          setTimeout(() => { try{ usernameDisplay && usernameDisplay.focus(); }catch(e){} }, 0);
-        }
-
-        let CURRENT_USER = null;
-
-        function autoEnterIfSessionValid(){
-          const sess = getSession();
-          if(!sess) return;
-
-          const u = AUTH_TABLE.find(r => r.username === sess.user);
-          if(!u){ clearSession(); return; }
-          if(String(u.level||"").toLowerCase() !== String(sess.role||"").toLowerCase()){
-            clearSession(); return;
-          }
-
-          loginSub.textContent = `已登入：${u.username}（${u.level}）… 正在進入`;
-          setTimeout(() => {
-            if(!getSession()) return;
-            applyUser(u);
-          }, 150);
-        }
-
-        function applyUser(user){
-          document.body.classList.remove("locked");
-          loginOverlay.style.display = "none";
-          loginSub.textContent = "";
-
-          setSession(user);
-          localStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: user.level }));
-
-          CURRENT_USER = user;
-
-          const t = `目前使用者：${user.username} (${user.level})`;
-          userInfo.textContent = t;
-          userInfo.setAttribute("data-text", t);
-
-          refreshButtonsForCurrentUser();
-          scheduleExport("login:applyUser");
-
-          // ✅登入後：依角色切換 readOnly（admin/write 可推送；read 只拉取）
-          const role = String(user?.level || "read").toLowerCase();
-          ensureCloudMounted({ user, readOnly: (role === "read") }).catch(()=>{});
-
-          scheduleAll();
-        }
-
-        const scheduleLayout = rafDebounce(layoutButtons);
-        const scheduleTone  = rafDebounce(applyAdaptiveTonesLite);
-
-        function scheduleAll(){
-          scheduleLayout();
-          requestAnimationFrame(() => { scheduleTone(); });
-        }
-
+      function populateUserSelect(){
         AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-        buildMainButtonsDOM();
+        usernameSel.innerHTML = "";
 
-        // ✅未登入也先掛雲端（readOnly）→ 先 pull 回來更新 AUTH/NAV/ROUTES，登入清單會自動刷新
-        ensureCloudMounted({ user:null, readOnly:true }).catch(()=>{});
-
-        showLogin();
-
-        if(zenImg){
-          zenImg.addEventListener("load", () => {
-            _toneDirty = true;
-            scheduleAll();
-          }, { once:false });
+        if(!AUTH_TABLE.length){
+          const opt = document.createElement("option");
+          opt.value = "";
+          opt.textContent = "（尚無使用者，請先到「系統 / 權限」新增）";
+          opt.disabled = true;
+          opt.selected = true;
+          usernameSel.appendChild(opt);
+          refreshUsernamePicker();
+          return;
         }
 
-        requestAnimationFrame(() => {
-          document.body.classList.remove("booting");
-          _toneDirty = true;
-          scheduleAll();
-          onFontsReady(() => { _toneDirty = true; scheduleAll(); });
+        const ph = document.createElement("option");
+        ph.value = "";
+        ph.textContent = "請選擇使用者";
+        ph.disabled = true;
+        ph.selected = true;
+        usernameSel.appendChild(ph);
+
+        const names = Array.from(new Set(AUTH_TABLE.map(r => r.username).filter(Boolean)));
+        names.sort((a,b)=>a.localeCompare(b, "zh-Hant"));
+        names.forEach(name => {
+          const opt = document.createElement("option");
+          opt.value = name;
+          opt.textContent = name;
+          usernameSel.appendChild(opt);
         });
 
-        loginForm.addEventListener("submit", (e) => {
-          e.preventDefault();
-          const username = usernameSel.value;
-          const password = $("#password").value;
+        refreshUsernamePicker();
+      }
 
-          if(!username){ loginError.textContent = "請先選擇使用者名稱。"; return; }
-          const user = AUTH_TABLE.find(row => row.username === username && row.password === password);
-          if(!user){ loginError.textContent = "帳號或密碼錯誤，請再試一次。"; return; }
+      function showLogin(){
+        document.body.classList.add("locked");
+        loginOverlay.style.display = "flex";
+        loginError.textContent = "";
+        loginSub.textContent = "";
+        $("#password").value = "";
 
-          loginError.textContent = "";
-          applyUser(user);
-          $("#password").value = "";
-        });
+        populateUserSelect();
+        resetButtonsForLogout();
 
-        btnForceRelogin.addEventListener("click", () => {
-          clearSession();
-          loginSub.textContent = "請重新輸入密碼登入";
-          loginError.textContent = "";
-          const pwd = $("#password");
-          pwd.value = "";
-          pwd.focus();
-          scheduleAll();
-        });
+        userInfo.textContent = "目前使用者：未登入";
+        userInfo.setAttribute("data-text", "目前使用者：未登入");
 
-        btnSwitch.addEventListener("click", () => {
-          clearSession();
-          localStorage.removeItem(CURRENT_KEY);
-          CURRENT_USER = null;
-          showLogin();
-          scheduleExport("switchUser");
-          scheduleAll();
-        });
+        autoEnterIfSessionValid();
+        scheduleAll();
 
-        btnTogglePwd.addEventListener("click", () => {
-          const pwd = $("#password");
-          pwd.type = (pwd.type === "password") ? "text" : "password";
-        });
+        setTimeout(() => { try{ usernameDisplay && usernameDisplay.focus(); }catch(e){} }, 0);
+      }
 
-        btnExport.addEventListener("click", () => {
-          exportBackupNow("manual:button", { download:true });
-        });
+      function autoEnterIfSessionValid(){
+        const sess = getSession();
+        if(!sess) return;
 
-        window.addEventListener("resize", () => { _toneDirty = true; scheduleAll(); }, { passive:true });
-        if(window.visualViewport){
-          window.visualViewport.addEventListener("resize", () => { _toneDirty = true; scheduleAll(); }, { passive:true });
-
-          let _vvScrollTick = 0;
-          window.visualViewport.addEventListener("scroll", () => {
-            const now = (performance && performance.now) ? performance.now() : Date.now();
-            if(now - _vvScrollTick < 120) return;
-            _vvScrollTick = now;
-            scheduleAll();
-          }, { passive:true });
+        const u = AUTH_TABLE.find(r => r.username === sess.user);
+        if(!u){ clearSession(); return; }
+        if(String(u.level||"").toLowerCase() !== String(sess.role||"").toLowerCase()){
+          clearSession(); return;
         }
+
+        loginSub.textContent = `已登入：${u.username}（${u.level}）… 正在進入`;
+        setTimeout(() => {
+          if(!getSession()) return;
+          applyUser(u);
+        }, 150);
+      }
+
+      function applyUser(user){
+        document.body.classList.remove("locked");
+        loginOverlay.style.display = "none";
+        loginSub.textContent = "";
+
+        setSession(user);
+        localStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: user.level }));
+
+        CURRENT_USER = user;
+
+        const t = `目前使用者：${user.username} (${user.level})`;
+        userInfo.textContent = t;
+        userInfo.setAttribute("data-text", t);
+
+        refreshButtonsForCurrentUser();
+        scheduleExport("login:applyUser");
+
+        // ✅登入後掛雲端（readOnly 依角色）
+        ensureCloudMounted(user).catch(()=>{});
+
+        scheduleAll();
+      }
+
+      /* =========================
+         ✅攔截 localStorage 寫入：自動備份 + 自動雲端合併寫入
+         ========================= */
+      (function patchLocalStorageOnce(){
+        try{
+          if(localStorage.__tasun_patched__) return;
+          Object.defineProperty(localStorage, "__tasun_patched__", { value: true, enumerable:false });
+
+          const _set = localStorage.setItem.bind(localStorage);
+          const _remove = localStorage.removeItem.bind(localStorage);
+
+          localStorage.setItem = function(k, v){
+            _set(k, v);
+            scheduleExport("save:setItem:" + k);
+
+            if(CLOUD_KEY_SET.has(String(k))){
+              const ro = !!(cloudCtrl && cloudCtrl.__readOnly__);
+              scheduleCloudSave(ro);
+            }
+          };
+          localStorage.removeItem = function(k){
+            _remove(k);
+            scheduleExport("save:removeItem:" + k);
+
+            if(CLOUD_KEY_SET.has(String(k))){
+              const ro = !!(cloudCtrl && cloudCtrl.__readOnly__);
+              scheduleCloudSave(ro);
+            }
+          };
+        }catch(e){}
       })();
+
+      /* =========================
+         ✅啟動
+         ========================= */
+      const scheduleLayout = rafDebounce(layoutButtons);
+      function scheduleAll(){ scheduleLayout(); }
+
+      AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+      buildMainButtonsDOM();
+
+      // ✅未登入也先 pull 雲端（readOnly）
+      ensureCloudMounted(null).catch(()=>{});
+
+      showLogin();
+
+      if(zenImg){
+        zenImg.addEventListener("load", () => { scheduleAll(); }, { once:false });
+      }
+
+      requestAnimationFrame(() => {
+        document.body.classList.remove("booting");
+        scheduleAll();
+        onFontsReady(() => scheduleAll());
+      });
+
+      /* ===== login events ===== */
+      loginForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const username = usernameSel.value;
+        const password = $("#password").value;
+
+        if(!username){ loginError.textContent = "請先選擇使用者名稱。"; return; }
+        const user = AUTH_TABLE.find(row => row.username === username && row.password === password);
+        if(!user){ loginError.textContent = "帳號或密碼錯誤，請再試一次。"; return; }
+
+        loginError.textContent = "";
+        applyUser(user);
+        $("#password").value = "";
+      });
+
+      btnForceRelogin.addEventListener("click", () => {
+        clearSession();
+        loginSub.textContent = "請重新輸入密碼登入";
+        loginError.textContent = "";
+        const pwd = $("#password");
+        pwd.value = "";
+        pwd.focus();
+        scheduleAll();
+      });
+
+      btnSwitch.addEventListener("click", () => {
+        clearSession();
+        localStorage.removeItem(CURRENT_KEY);
+        CURRENT_USER = null;
+        showLogin();
+        scheduleExport("switchUser");
+        scheduleAll();
+      });
+
+      btnTogglePwd.addEventListener("click", () => {
+        const pwd = $("#password");
+        pwd.type = (pwd.type === "password") ? "text" : "password";
+      });
+
+      btnExport.addEventListener("click", () => {
+        exportBackupNow("manual:button", { download:true });
+      });
+
+      // ✅避免 resize 連續重排卡頓：只排程 rAF
+      window.addEventListener("resize", () => scheduleAll(), { passive:true });
+      if(window.visualViewport){
+        window.visualViewport.addEventListener("resize", () => scheduleAll(), { passive:true });
+        // scroll 只做排程，不做重度計算
+        let _vvTick = 0;
+        window.visualViewport.addEventListener("scroll", () => {
+          const now = (performance && performance.now) ? performance.now() : Date.now();
+          if(now - _vvTick < 140) return;
+          _vvTick = now;
+          scheduleAll();
+        }, { passive:true });
+      }
     }
 
     if(window.TasunLoader && typeof window.TasunLoader.ready === "function"){
