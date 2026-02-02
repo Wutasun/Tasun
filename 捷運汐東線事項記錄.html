@@ -242,7 +242,7 @@
       }
     }
 
-    /* ✅ 修正：Modal 標題「新增/編輯」加亮（比照 index 金色描邊/陰影，避免不清晰） */
+    /* ✅ 修正：Modal 標題「新增/編輯」加亮 */
     .goldCrystalModal{
       color: var(--goldText);
       background:
@@ -835,6 +835,99 @@
       font-weight:var(--wUI);
       text-align:center;
     }
+
+    /* =========================
+       ✅ 閱讀模式：Cards / Table 切換 + 可展開
+       ========================= */
+    body.readMode #tbl{ display:none; }
+    body.readMode #cards{ display:block !important; padding:10px 6px; }
+
+    body:not(.readMode) #tbl{ display:table; }
+    body:not(.readMode) #cards{ display:none !important; }
+
+    #cards{
+      display:none;
+      overflow:auto;
+      max-height:100%;
+    }
+
+    .noteCard{
+      border-radius:16px;
+      border:1px solid rgba(246,214,150,.22);
+      background: linear-gradient(180deg, rgba(18,22,20,.78), rgba(12,16,14,.66));
+      box-shadow: 0 14px 26px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.06);
+      padding:12px 12px;
+      margin:10px 4px;
+      color: rgba(246,214,150,.96);
+      cursor:pointer;
+    }
+    .noteCard.sel{
+      outline: 2px solid rgba(246,214,150,.28);
+      box-shadow: 0 18px 34px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.08);
+    }
+
+    .noteHead{
+      display:flex;
+      gap:10px;
+      align-items:flex-start;
+      justify-content:space-between;
+      flex-wrap:wrap;
+    }
+
+    .noteMeta{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      align-items:center;
+      font-weight:900;
+      letter-spacing:.05em;
+    }
+
+    .noteTag{
+      padding:6px 10px;
+      border-radius:999px;
+      border:1px solid rgba(246,214,150,.18);
+      background: rgba(255,255,255,.06);
+      color: rgba(255,242,210,.98);
+      font-size:13px;
+      white-space:nowrap;
+    }
+
+    .noteNo{
+      font-family:"Noto Serif TC","Noto Sans TC",serif;
+      font-weight:900;
+      letter-spacing:.06em;
+      color: rgba(255,242,210,.98);
+      white-space:nowrap;
+    }
+
+    .noteBody{
+      margin-top:10px;
+      line-height:1.78;
+      font-size: var(--readBody);
+      text-shadow: 0 1px 1.6px rgba(0,0,0,.22);
+      white-space:pre-wrap;
+      word-break:break-word;
+    }
+
+    /* 收合時：先顯示 3 行摘要 */
+    .noteCard:not(.open) .noteBody{
+      display:-webkit-box;
+      -webkit-line-clamp:3;
+      -webkit-box-orient:vertical;
+      overflow:hidden;
+    }
+
+    .noteMore{ margin-top:10px; display:none; opacity:.92; }
+    .noteCard.open .noteMore{ display:block; }
+
+    .noteActions{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+      align-items:center;
+    }
   </style>
 </head>
 
@@ -1156,8 +1249,18 @@
       var cloud = null;
       var cloudInited = false;
 
+      // ✅ 最近同步時間（用於提示列確認跨設備是否在同步）
+      var lastCloudSyncAt = 0;
+
       var $ = function(id){ return document.getElementById(id); };
       var norm = function(s){ return (s===undefined||s===null) ? "" : String(s).trim(); };
+
+      function pad2(n){ return String(n).padStart(2,"0"); }
+      function fmtClock(ts){
+        if(!ts) return "";
+        var d = new Date(ts);
+        return pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+      }
 
       function uuid(){
         var a = Math.random().toString(16).slice(2);
@@ -1575,34 +1678,6 @@
         saveTradeSysMap(map);
       }
 
-      function systemsByTradeFromDB(trade){
-        var t = norm(trade);
-        var set = new Set();
-        if(!t) return [];
-        for(var i=0;i<db.length;i++){
-          if(norm(db[i].trade) !== t) continue;
-          var s = norm(db[i].system);
-          if(s) set.add(s);
-        }
-        var arr = Array.from(set);
-        arr.sort(function(a,b){ return a.localeCompare(b, "zh-Hant"); });
-        return arr;
-      }
-
-      function systemsByTrade(trade){
-        var t = norm(trade);
-        if(!t) return [];
-        var set = new Set();
-        var map = loadTradeSysMap();
-        if(Array.isArray(map[t])) map[t].forEach(function(x){
-          x = norm(x); if(x) set.add(x);
-        });
-        systemsByTradeFromDB(t).forEach(function(x){ set.add(x); });
-        var arr = Array.from(set);
-        arr.sort(function(a,b){ return a.localeCompare(b, "zh-Hant"); });
-        return arr;
-      }
-
       // ===============================
       // ✅ Cloud payload helpers (v1 merge-table 相容)
       // ===============================
@@ -1810,6 +1885,10 @@
               }
 
               importPayload(payload, info);
+
+              // ✅ 記錄最近同步時間（讓你確認跨設備是否在同步）
+              lastCloudSyncAt = Date.now();
+
               if(info && info.conflicts){
                 toast("雲端合併完成（衝突已另存快照）");
               }
@@ -1878,7 +1957,7 @@
         var on = !document.body.classList.contains("readMode");
         localStorage.setItem(READ_MODE_KEY, on ? "1" : "0");
         applyReadMode(on);
-        toast(on ? "已切換為閱讀模式（摘要點一下展開/收合）" : "已切換為表格模式");
+        toast(on ? "已切換為閱讀模式（點卡片可展開/收合）" : "已切換為表格模式");
       }
 
       function uniqueFromDB(field){
@@ -1890,10 +1969,18 @@
         return set;
       }
 
-      function unionOptions(field, dictKey){
-        var set = uniqueFromDB(field);
-        var dict = loadDict(dictKey);
-        for(var i=0;i<dict.length;i++) set.add(dict[i]);
+      // ===============================
+      // ✅ 重要修正：工種/系統「下拉篩選」只抓本頁資料欄位不重複
+      // ===============================
+      function uniqueFieldArrFromDB(field, tradeFilter){
+        var set = new Set();
+        var t = norm(tradeFilter);
+        for(var i=0;i<db.length;i++){
+          var r = db[i];
+          if(t && norm(r.trade) !== t) continue;
+          var v = norm(r && r[field]);
+          if(v) set.add(v);
+        }
         var arr = Array.from(set);
         arr.sort(function(a,b){ return a.localeCompare(b, "zh-Hant"); });
         return arr;
@@ -1906,26 +1993,32 @@
         var keepT = norm(tSel.value);
         var keepS = norm(sSel.value);
 
-        var trades = unionOptions("trade", TRADE_DICT_KEY);
+        // ✅ 工種：只取本頁資料不重複
+        var trades = uniqueFieldArrFromDB("trade", "");
         tSel.innerHTML = '<option value="">全部</option>' + trades.map(function(v){
           return '<option value="'+escHtml(v)+'">'+escHtml(v)+'</option>';
         }).join("");
-        tSel.value = trades.includes(keepT) ? keepT : "";
+
+        if(trades.length === 0){
+          tSel.value = "";
+          tSel.disabled = true;
+        }else{
+          tSel.disabled = false;
+          tSel.value = trades.includes(keepT) ? keepT : "";
+        }
 
         var pickedTrade = norm(tSel.value);
 
-        var systems = [];
-        if(pickedTrade){
-          systems = systemsByTrade(pickedTrade);
-        }else{
-          systems = unionOptions("system", SYS_DICT_KEY);
-        }
+        // ✅ 系統：若已選工種 → 只取該工種下 system 不重複；否則取全體 system 不重複
+        var systems = pickedTrade
+          ? uniqueFieldArrFromDB("system", pickedTrade)
+          : uniqueFieldArrFromDB("system", "");
 
         sSel.innerHTML = '<option value="">全部</option>' + systems.map(function(v){
           return '<option value="'+escHtml(v)+'">'+escHtml(v)+'</option>';
         }).join("");
 
-        if(pickedTrade && systems.length === 0){
+        if(systems.length === 0){
           sSel.value = "";
           sSel.disabled = true;
         }else{
@@ -1964,16 +2057,18 @@
         });
       }
 
+      // ✅ 同步選取狀態：表格 + 閱讀卡片
       function applySelectionToDOM(){
         document.querySelectorAll("tr.sel").forEach(function(el){ el.classList.remove("sel"); });
+        document.querySelectorAll(".noteCard.sel").forEach(function(el){ el.classList.remove("sel"); });
         if(!selectedUid) return;
         var tr = document.querySelector('tr[data-uid="'+selectedUid+'"]');
         if(tr) tr.classList.add("sel");
+        var card = document.querySelector('.noteCard[data-uid="'+selectedUid+'"]');
+        if(card) card.classList.add("sel");
       }
 
       function renderHint(rowsCount){
-        var pickedTrade = norm($("fTrade").value);
-        var sysDisabled = $("fSys").disabled;
         var modeText = Auth.canWrite() ? "可維護模式" : "唯讀模式";
 
         $("btnAdd").style.display  = Auth.canWrite() ? "inline-block" : "none";
@@ -1988,13 +2083,13 @@
 
         var cloudText = hasDropboxToken()
           ? '<span style="color:rgba(92,66,22,.86)">雲端：</span><b style="color:var(--goldText)">'+escHtml(getDropboxTokenMasked())+'</b>'
+            + (lastCloudSyncAt ? '（最近同步 <b style="color:var(--goldText)">'+escHtml(fmtClock(lastCloudSyncAt))+'</b>）' : '')
           : '<span style="color:rgba(92,66,22,.86)">雲端：</span><b style="color:rgba(170,60,60,.90)">未設定Token</b>' + (Auth.isAdmin() ? '（可按右上「設定Token」）' : '');
 
         $("hint").innerHTML =
           '目前為 <b style="color:var(--goldText)">'+modeText+'</b>（role: '+escHtml(Auth.role())+'）。' +
           ' 筆數：<b style="color:var(--goldText)">'+rowsCount+'</b>。 ' +
           cloudText +
-          (pickedTrade && sysDisabled ? ' <span style="color:rgba(124,88,30,.86)">（此工種尚無系統可篩選）</span>' : '') +
           (selectedUid ? ' 已選取：<b style="color:var(--goldText)">'+escHtml(selText)+'</b>' : '（請先點選一筆，再按右上「顯示畫面 / 編輯」）');
       }
 
@@ -2010,15 +2105,43 @@
       }
 
       function rebuildModalTradeOptions(selected){
-        var trades = unionOptions("trade", TRADE_DICT_KEY);
+        var trades = Array.from(uniqueFromDB("trade"));
+        // modal 仍保留字典/擴充：避免空白時不能新增第一筆
+        loadDict(TRADE_DICT_KEY).forEach(function(x){ if(x) trades.push(x); });
+        trades = Array.from(new Set(trades.map(norm).filter(Boolean)));
+        trades.sort(function(a,b){ return a.localeCompare(b, "zh-Hant"); });
+
         fillDropdown("mTradeSel", trades, "（請先新增工種）");
         var v = norm(selected);
         if(v && trades.includes(v)) $("mTradeSel").value = v;
       }
 
+      function systemsByTradeFromMapAndDB(trade){
+        var t = norm(trade);
+        if(!t) return [];
+        var set = new Set();
+
+        // map
+        var map = loadTradeSysMap();
+        if(Array.isArray(map[t])) map[t].forEach(function(x){
+          x = norm(x); if(x) set.add(x);
+        });
+
+        // db
+        for(var i=0;i<db.length;i++){
+          if(norm(db[i].trade) !== t) continue;
+          var s = norm(db[i].system);
+          if(s) set.add(s);
+        }
+
+        var arr = Array.from(set);
+        arr.sort(function(a,b){ return a.localeCompare(b, "zh-Hant"); });
+        return arr;
+      }
+
       function rebuildModalSystemOptions(trade, selected){
         var t = norm(trade);
-        var systems = t ? systemsByTrade(t) : [];
+        var systems = t ? systemsByTradeFromMapAndDB(t) : [];
         fillDropdown("mSysSel", systems, t ? "（此工種尚無系統：請按「新增系統」）" : "（請先選擇工種）");
         var v = norm(selected);
         if(v && systems.includes(v)) $("mSysSel").value = v;
@@ -2170,7 +2293,7 @@
         promptMode = null;
       }
 
-      // ✅ 修正：新增系統時，如果系統名稱「已存在於系統字典」，不要擋掉；改成「綁定」到目前工種並顯示
+      // ✅ 新增系統：若系統已存在於字典 → 不擋，改成綁定到目前工種
       function addOption(){
         if(!Auth.canWrite()) return;
 
@@ -2178,10 +2301,10 @@
         if(!v){ toast("不可空白"); $("pInput").focus(); return; }
 
         if(promptMode === "trade"){
-          var existsTrade = unionOptions("trade", TRADE_DICT_KEY).map(function(x){ return x.toLowerCase(); });
+          var dictT = loadDict(TRADE_DICT_KEY);
+          var existsTrade = dictT.map(function(x){ return x.toLowerCase(); });
           if(existsTrade.includes(v.toLowerCase())){ toast("已存在相同工種"); return; }
 
-          var dictT = loadDict(TRADE_DICT_KEY);
           dictT.push(v);
           dictT.sort(function(a,b){ return a.localeCompare(b, "zh-Hant"); });
           saveDict(TRADE_DICT_KEY, dictT);
@@ -2214,14 +2337,9 @@
           saveDict(SYS_DICT_KEY, sysDict);
         }
 
-        // ✅ 一律綁到目前工種（重複就提示）
-        var before = systemsByTrade(curTrade).map(function(x){ return x.toLowerCase(); });
-        if(before.includes(v.toLowerCase())){
-          toast("此工種已有該系統");
-        }else{
-          addTradeSysLink(curTrade, v);
-          toast(inSysDict ? "已綁定系統到目前工種" : "已新增並綁定系統");
-        }
+        // 綁到目前工種
+        addTradeSysLink(curTrade, v);
+        toast(inSysDict ? "已綁定系統到目前工種" : "已新增並綁定系統");
 
         rebuildModalSystemOptions(curTrade, v);
         $("mSysSel").disabled = false;
@@ -2233,12 +2351,7 @@
         cloudSave("dict");
       }
 
-      function render(){
-        rebuildFilters();
-
-        var rows = filteredRows();
-        if(selectedUid && !rows.some(function(r){ return r.uid===selectedUid; })) selectedUid = null;
-
+      function renderTable(rows){
         var tbody = $("tbody");
         tbody.innerHTML = rows.map(function(r){
           var isSel = (selectedUid === r.uid);
@@ -2264,6 +2377,60 @@
         }).join("") || (
           '<tr><td colspan="8" class="muted" style="padding:18px;">尚無資料（write/admin 可用右上「新增」建立第一筆）</td></tr>'
         );
+      }
+
+      function renderCards(rows){
+        var c = $("cards");
+        c.innerHTML = rows.map(function(r){
+          var att = norm(r.attach||"");
+          var date = norm(r.date||"") || "—";
+          var t = norm(r.trade||"") || "—";
+          var s = norm(r.system||"") || "—";
+          var text = (r.text ?? "").toString();
+          var remark = (r.remark ?? "").toString();
+
+          var actions = ''
+            + '<div class="noteActions">'
+            +   (att ? '<button class="attBtn" data-act="att" data-uid="'+escHtml(r.uid)+'"><span class="t">附件</span></button>' : '')
+            +   '<button class="btn ghost small" data-act="view" data-uid="'+escHtml(r.uid)+'"><span class="t">顯示畫面</span></button>'
+            + '</div>';
+
+          return ''
+            + '<div class="noteCard" data-uid="'+escHtml(r.uid)+'">'
+            +   '<div class="noteHead">'
+            +     '<div class="noteMeta">'
+            +       '<span class="noteNo">#'+escHtml(String(r.id ?? "—"))+'</span>'
+            +       '<span class="noteTag">工種：'+escHtml(t)+'</span>'
+            +       '<span class="noteTag">系統：'+escHtml(s)+'</span>'
+            +       '<span class="noteTag">日期：'+escHtml(date)+'</span>'
+            +     '</div>'
+            +     actions
+            +   '</div>'
+            +   '<div class="noteBody">'+escHtml(text)+'</div>'
+            +   '<div class="noteMore">'
+            +     '<div class="noteBody"><b>備註：</b>'+(remark ? escHtml(remark) : '<span class="muted">—</span>')+'</div>'
+            +   '</div>'
+            + '</div>';
+        }).join("") || (
+          '<div class="muted" style="padding:18px;">尚無資料（write/admin 可用右上「新增」建立第一筆）</div>'
+        );
+      }
+
+      function render(){
+        rebuildFilters();
+
+        var rows = filteredRows();
+        if(selectedUid && !rows.some(function(r){ return r.uid===selectedUid; })) selectedUid = null;
+
+        var isRead = document.body.classList.contains("readMode");
+        $("cards").style.display = isRead ? "block" : "none";
+        $("tbl").style.display = isRead ? "none" : "table";
+
+        if(isRead){
+          renderCards(rows);
+        }else{
+          renderTable(rows);
+        }
 
         applySelectionToDOM();
         renderHint(rows.length);
@@ -2341,7 +2508,6 @@
           return;
         }
 
-        /* ✅ 若 cloud-kit 支援動態更新 token，就嘗試呼叫（不支援也不會壞） */
         try{
           if(window.TasunCloudKit && typeof window.TasunCloudKit.setToken === "function"){
             window.TasunCloudKit.setToken(t);
@@ -2354,7 +2520,6 @@
         closeTokenMask();
         toast("已儲存 Token，將嘗試同步雲端…");
 
-        // 若已初始化雲端，直接拉；否則初始化
         if(!cloudInited) initCloudOnce();
         try{
           if(cloud && cloud.pullNow) cloud.pullNow();
@@ -2412,7 +2577,10 @@
         };
 
         $("qText").addEventListener("input", scheduleRender);
-        $("fTrade").addEventListener("change", scheduleRender);
+        $("fTrade").addEventListener("change", function(){
+          // ✅ 工種變更後：系統需重新依工種計算，不保留不相符值
+          scheduleRender();
+        });
         $("fSys").addEventListener("change", scheduleRender);
 
         $("btnClear").onclick = function(){
@@ -2456,6 +2624,7 @@
           else $("mSysSel").disabled = false;
         });
 
+        // 表格：點選 / 附件 / 顯示畫面
         $("tbody").addEventListener("click", function(e){
           var viewBtn = e.target.closest("button[data-act='view']");
           if(viewBtn){
@@ -2477,6 +2646,40 @@
           var uid3 = norm(tr.getAttribute("data-uid"));
           if(!uid3) return;
           selectedUid = uid3;
+          applySelectionToDOM();
+          renderHint(filteredRows().length);
+        });
+
+        // 閱讀模式：卡片點選/展開/附件/顯示畫面
+        $("cards").addEventListener("click", function(e){
+          var btn = e.target.closest("button[data-act]");
+          if(btn){
+            var act = btn.getAttribute("data-act");
+            var uid = norm(btn.getAttribute("data-uid"));
+            if(!uid) return;
+            if(act === "view"){
+              openModal(uid, false);
+              return;
+            }
+            if(act === "att"){
+              var item = db.find(function(x){ return x.uid === uid; });
+              var href = norm(item && item.attach ? item.attach : "");
+              if(!href){ toast("此筆尚未設定附件"); return; }
+              openAttachment(href);
+              return;
+            }
+          }
+
+          var card = e.target.closest(".noteCard[data-uid]");
+          if(!card) return;
+
+          var uid2 = norm(card.getAttribute("data-uid"));
+          if(!uid2) return;
+          selectedUid = uid2;
+
+          // 點一下展開/收合
+          card.classList.toggle("open");
+
           applySelectionToDOM();
           renderHint(filteredRows().length);
         });
