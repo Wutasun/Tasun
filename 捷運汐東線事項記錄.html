@@ -1031,6 +1031,10 @@
       var EXPORT_LAST_KEY = DB_KEY + "__export_last_v1";
       var LEAVE_SNAP_KEY  = DB_KEY + "__leave_snapshot_v1";
 
+      // ✅ 安全快照：避免被「空雲端」覆寫後，又被 beforeunload 把備份洗成空
+      var SAFETY_SNAPSHOT_KEY = DB_KEY + "__safety_snapshot_v1";
+      var PROTECT_EMPTY_REMOTE_KEY = "tasun_protect_empty_remote__" + DB_KEY;
+
       var LEGACY_DB_KEYS = [
         "tasunSxdhNotes_v1","tasunSxdhNotes_v0","tasunSxdhNotes",
         "tasunXidongNotes_v1","tasunXidongNotes_v0","tasunXidongNotes",
@@ -1054,7 +1058,9 @@
       // ✅ Cloud resource binding
       // ===============================
       var CLOUD_RESOURCE_KEY = "sxdh-notes";
-      var CLOUD_PK = "uid";
+
+      // ✅ 修復：雲端沿用 v1 merge-table 格式 {id,k,v}，pk 必須用 k 才能讀到舊資料
+      var CLOUD_PK = "k";
       var SETTINGS_UID = "__settings__";
 
       var db = [];
@@ -1099,6 +1105,11 @@
         return (h >>> 0).toString(16).padStart(8, "0");
       }
 
+      function safeParseJSON(raw){
+        if(!raw) return null;
+        try{ return JSON.parse(raw); }catch(e){ return null; }
+      }
+
       function rotateBackups(snapshotArr){
         var snap = { ts: Date.now(), db: snapshotArr };
         try{
@@ -1111,11 +1122,52 @@
         }catch(e){}
       }
 
+      function getSafetySnapshotDb(){
+        try{
+          var obj = safeParseJSON(localStorage.getItem(SAFETY_SNAPSHOT_KEY));
+          if(obj && typeof obj === "object" && Array.isArray(obj.db) && obj.db.length>0) return obj.db;
+        }catch(e){}
+        return null;
+      }
+
+      function saveSafetySnapshot(reason){
+        try{
+          if(!Array.isArray(db) || db.length===0) return;
+          var cur = safeParseJSON(localStorage.getItem(SAFETY_SNAPSHOT_KEY));
+          var curLen = (cur && Array.isArray(cur.db)) ? cur.db.length : 0;
+          if(db.length >= curLen){
+            localStorage.setItem(SAFETY_SNAPSHOT_KEY, JSON.stringify({ ts: Date.now(), reason: reason||"", db: db }));
+          }
+        }catch(e){}
+      }
+
+      function restoreFromSafetySnapshot(quiet){
+        quiet = !!quiet;
+        var safeDb = getSafetySnapshotDb();
+        if(!Array.isArray(safeDb) || safeDb.length===0) return false;
+        db = safeDb.map(normalizeRow).filter(Boolean);
+        if(db.length===0) return false;
+        try{
+          rotateBackups(db);
+          localStorage.setItem(DB_KEY, JSON.stringify(db));
+        }catch(e){}
+        if(!quiet) toast("已由安全快照自動還原資料");
+        return true;
+      }
+
+      // ✅ 防呆：不要在 db 變空時把備份洗成空（尤其是雲端回傳空資料時）
       function backupOnExit(reason){
         try{
-          if(!Array.isArray(db)) return;
-          rotateBackups(db);
-          localStorage.setItem(LEAVE_SNAP_KEY, JSON.stringify({ ts: Date.now(), reason: reason || "exit", db: db }));
+          var snapDb = Array.isArray(db) ? db : [];
+          if(snapDb.length===0){
+            var safeDb = getSafetySnapshotDb();
+            if(safeDb && safeDb.length>0){
+              localStorage.setItem(LEAVE_SNAP_KEY, JSON.stringify({ ts: Date.now(), reason: reason || "exit", db: safeDb, note:"protected_empty_db" }));
+              return;
+            }
+          }
+          rotateBackups(snapDb);
+          localStorage.setItem(LEAVE_SNAP_KEY, JSON.stringify({ ts: Date.now(), reason: reason || "exit", db: snapDb }));
         }catch(e){}
       }
 
@@ -1141,15 +1193,24 @@
         if(document.visibilityState === "hidden") backupOnExit("visibility_hidden");
       });
 
-      function safeParseJSON(raw){
-        if(!raw) return null;
-        try{ return JSON.parse(raw); }catch(e){ return null; }
-      }
-
       function normalizeRow(x){
         if(!x || typeof x !== "object") return null;
 
-        var uid = norm(x.uid ?? x._uid ?? x.pk ?? "");
+        // ✅ 相容 v1 merge-table：{id,k,v}（真正資料在 v）
+        if("v" in x && (x.k !== undefined || x.key !== undefined)){
+          var inner = x.v;
+          if(typeof inner === "string"){
+            var p = safeParseJSON(inner);
+            if(p && typeof p === "object") inner = p;
+          }
+          if(inner && typeof inner === "object"){
+            // 把 v 裡面的欄位展開成一列
+            x = Object.assign({}, inner, x);
+            if(!x.uid) x.uid = x.k || x.key || "";
+          }
+        }
+
+        var uid = norm(x.uid ?? x._uid ?? x.pk ?? x.k ?? x.key ?? "");
         var idRaw = (x.id ?? x.no ?? x.idx ?? x.key);
         var id = Number(idRaw);
         if(!Number.isFinite(id) || id <= 0) id = null;
@@ -1185,7 +1246,7 @@
       }
 
       function readBackupCandidates(){
-        var keys = [BACKUP_KEY, BK1_KEY, BK2_KEY, BK3_KEY];
+        var keys = [BACKUP_KEY, BK1_KEY, BK2_KEY, BK3_KEY, SAFETY_SNAPSHOT_KEY];
         for(var i=0;i<keys.length;i++){
           var raw = localStorage.getItem(keys[i]);
           var obj = safeParseJSON(raw);
@@ -1283,7 +1344,8 @@
         db = cleaned;
 
         try{
-          rotateBackups(db);
+          if(db.length>0) saveSafetySnapshot("repair");
+          if(db.length>0) rotateBackups(db);
           localStorage.setItem(DB_KEY, JSON.stringify(db));
           ensureCounterAtLeast(maxId);
         }catch(e){}
@@ -1307,29 +1369,46 @@
             var merged = mergeFromLegacyKeys();
             if(merged.db.length > 0){
               db = merged.db;
-              rotateBackups(db);
+              if(db.length>0){
+                saveSafetySnapshot("load_legacy_merge");
+                rotateBackups(db);
+              }
               localStorage.setItem(DB_KEY, JSON.stringify(db));
               if(!quiet) toast("已自動找回既有資料並合併到本頁");
             }else{
               var backup = readBackupCandidates();
               if(Array.isArray(backup) && backup.length>0){
                 db = backup.map(normalizeRow).filter(Boolean);
-                rotateBackups(db);
+                if(db.length>0){
+                  saveSafetySnapshot("load_backup_restore");
+                  rotateBackups(db);
+                }
                 localStorage.setItem(DB_KEY, JSON.stringify(db));
                 if(!quiet) toast("主資料異常，已由備份自動還原");
+              }else{
+                // 最後再試安全快照
+                restoreFromSafetySnapshot(quiet);
               }
             }
           }else{
-            rotateBackups(db);
+            if(db.length>0){
+              saveSafetySnapshot("load_ok");
+              rotateBackups(db);
+            }
           }
         }catch(e){
           db = [];
           var backup2 = readBackupCandidates();
           if(Array.isArray(backup2) && backup2.length>0){
             db = backup2.map(normalizeRow).filter(Boolean);
-            rotateBackups(db);
+            if(db.length>0){
+              saveSafetySnapshot("load_fail_restore");
+              rotateBackups(db);
+            }
             localStorage.setItem(DB_KEY, JSON.stringify(db));
             if(!quiet) toast("主資料讀取失敗，已由備份自動還原");
+          }else{
+            restoreFromSafetySnapshot(quiet);
           }
         }
 
@@ -1341,10 +1420,16 @@
         ensureCounterAtLeast(Math.max(maxId, legacyCounter));
 
         repairDBIfNeeded();
+
+        // ✅ 若修復後仍空，最後再嘗試安全快照
+        if(Array.isArray(db) && db.length===0){
+          restoreFromSafetySnapshot(quiet);
+        }
       }
 
       function saveDB(){
         try{
+          if(Array.isArray(db) && db.length>0) saveSafetySnapshot("saveDB");
           rotateBackups(db);
           localStorage.setItem(DB_KEY, JSON.stringify(db));
         }catch(e){
@@ -1434,45 +1519,117 @@
       }
 
       // ===============================
-      // ✅ Cloud payload helpers
+      // ✅ Cloud payload helpers (v1 merge-table 相容)
       // ===============================
       function exportDbWithSettings(){
         var rows = (Array.isArray(db)?db:[]).map(function(r){
-          var rr = Object.assign({}, r);
-          rr.uid = norm(rr.uid) || (rr.id ? "legacy_"+String(rr.id) : uuid());
-          return rr;
+          var uid = norm(r.uid) || (r.id ? "legacy_"+String(r.id) : uuid());
+          return {
+            id: Number(r.id||0),
+            k: uid,
+            v: {
+              text: (r.text||""),
+              trade: (r.trade||""),
+              system: (r.system||""),
+              attach: (r.attach||""),
+              remark: (r.remark||""),
+              date: (r.date||"")
+            }
+          };
         });
 
         rows.push({
-          uid: SETTINGS_UID,
           id: 0,
-          tradeDict: loadDict(TRADE_DICT_KEY),
-          sysDict: loadDict(SYS_DICT_KEY),
-          tradeSysMap: loadTradeSysMap()
+          k: SETTINGS_UID,
+          v: {
+            tradeDict: loadDict(TRADE_DICT_KEY),
+            sysDict: loadDict(SYS_DICT_KEY),
+            tradeSysMap: loadTradeSysMap()
+          }
         });
 
         return rows;
       }
 
-      function importPayload(payload){
+      function importPayload(payload, info){
         payload = (payload && typeof payload==="object") ? payload : {};
         var arr = Array.isArray(payload.db) ? payload.db : [];
 
-        var srow = null;
-        for(var i=0;i<arr.length;i++){
-          if(norm(arr[i] && arr[i].uid) === SETTINGS_UID){ srow = arr[i]; break; }
-        }
-        if(srow){
-          if(Array.isArray(srow.tradeDict)) saveDict(TRADE_DICT_KEY, srow.tradeDict.map(norm).filter(Boolean));
-          if(Array.isArray(srow.sysDict)) saveDict(SYS_DICT_KEY, srow.sysDict.map(norm).filter(Boolean));
-          if(srow.tradeSysMap && typeof srow.tradeSysMap==="object") saveTradeSysMap(srow.tradeSysMap);
+        // ✅ 先保留本機快照（避免雲端空白覆寫）
+        var beforeDb = Array.isArray(db) ? db.slice() : [];
+        if(beforeDb.length>0){
+          try{
+            saveSafetySnapshot("before_cloud_apply");
+            rotateBackups(beforeDb);
+          }catch(e){}
         }
 
-        db = arr
-          .filter(function(r){ return norm(r && r.uid) !== SETTINGS_UID; })
+        // settings row 可能是 {k:"__settings__",v:{...}} 或直接物件
+        var srow = null;
+        for(var i=0;i<arr.length;i++){
+          var it = arr[i];
+          var kk = norm(it && (it.k ?? it.uid ?? it.key));
+          if(kk === SETTINGS_UID){ srow = it; break; }
+          if(norm(it && it.uid) === SETTINGS_UID){ srow = it; break; }
+        }
+        if(srow){
+          var sv = (srow && typeof srow==="object") ? (srow.v || srow) : null;
+          if(sv){
+            if(Array.isArray(sv.tradeDict)) saveDict(TRADE_DICT_KEY, sv.tradeDict.map(norm).filter(Boolean));
+            if(Array.isArray(sv.sysDict)) saveDict(SYS_DICT_KEY, sv.sysDict.map(norm).filter(Boolean));
+            if(sv.tradeSysMap && typeof sv.tradeSysMap==="object") saveTradeSysMap(sv.tradeSysMap);
+          }
+        }
+
+        // 把雲端資料列轉回本頁 db（直接列）
+        var incoming = arr
+          .filter(function(r){
+            var kk2 = norm(r && (r.k ?? r.uid ?? r.key));
+            return kk2 !== SETTINGS_UID;
+          })
+          .map(function(r){
+            // v1: {id,k,v}；或直接列
+            if(r && typeof r==="object" && ("v" in r) && (r.k!==undefined || r.key!==undefined)){
+              var inner = r.v;
+              if(typeof inner === "string"){
+                var p = safeParseJSON(inner);
+                if(p && typeof p==="object") inner = p;
+              }
+              if(inner && typeof inner==="object"){
+                var obj = Object.assign({}, inner);
+                obj.uid = norm(r.k ?? r.key ?? obj.uid ?? "");
+                obj.id  = Number(r.id||obj.id||0);
+                obj.text = obj.text ?? obj.content ?? obj.note ?? obj.memo ?? "";
+                return obj;
+              }
+            }
+            return r;
+          })
           .map(normalizeRow)
           .filter(Boolean)
           .filter(function(r){ return r.text && r.text.toString().trim(); });
+
+        var localCount = beforeDb.map(normalizeRow).filter(Boolean).filter(function(r){ return r.text && r.text.toString().trim(); }).length;
+        var incomingCount = incoming.length;
+
+        // ✅ 雲端回來空，但本機有資料：保護本機不被覆寫，並嘗試推回雲端
+        if(incomingCount === 0 && localCount > 0){
+          try{
+            if(!sessionStorage.getItem(PROTECT_EMPTY_REMOTE_KEY)){
+              sessionStorage.setItem(PROTECT_EMPTY_REMOTE_KEY, "1");
+              toast("⚠️ 雲端目前空白：已保護本機資料不覆寫，將嘗試推送合併到雲端…");
+              if(cloud && Auth.canWrite()){
+                setTimeout(function(){
+                  if(!cloud) return;
+                  cloud.ready.then(function(){ return cloud.saveMerged(); }).catch(function(){});
+                }, 0);
+              }
+            }
+          }catch(e){}
+          return;
+        }
+
+        db = incoming;
 
         var maxId2 = 0;
         for(var j=0;j<db.length;j++){
@@ -1483,7 +1640,10 @@
         if(!Number.isFinite(cnt)) cnt = 0;
         ensureCounterAtLeast(Math.max(cnt, maxId2));
 
-        try{ localStorage.setItem(DB_KEY, JSON.stringify(db)); }catch(e){}
+        try{
+          if(Array.isArray(db) && db.length>0) saveSafetySnapshot("after_cloud_apply");
+          localStorage.setItem(DB_KEY, JSON.stringify(db));
+        }catch(e){}
       }
 
       function cloudSave(reason){
@@ -1540,6 +1700,7 @@
               return { db: exportDbWithSettings(), counter: getCounter() };
             },
             apply: function(payload, info){
+              // ✅ 第一次套用：若本機有資料且可寫，先推合併到雲端（避免遠端空白覆寫）
               if(firstApply){
                 firstApply = false;
                 if(localHadData && Auth.canWrite()){
@@ -1547,21 +1708,22 @@
                   setTimeout(function(){
                     if(!cloud) return;
                     cloud.ready.then(function(){ return cloud.saveMerged(); })
-                      .catch(function(e){
-                        toast("雲端合併失敗（已保留本機資料）");
-                      });
+                      .catch(function(){ toast("雲端合併失敗（已保留本機資料）"); });
                   }, 0);
                   return;
                 }
               }
 
-              importPayload(payload);
+              importPayload(payload, info);
               if(info && info.conflicts){
                 toast("雲端合併完成（衝突已另存快照）");
               }
               scheduleRender();
             }
           });
+
+          // ✅ 立即拉一次（避免只等 watch）
+          if(cloud && cloud.pullNow) cloud.pullNow();
 
         }catch(e){
           toast("雲端初始化失敗：" + (e && e.message ? e.message : String(e||"")));
