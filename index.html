@@ -315,6 +315,9 @@
       /* ✅（手機用）左右列留中間空白：預設值（JS 會再依螢幕調整） */
       --midGap: 64px;
       --btnColGap: 10px;
+
+      /* ✅（手機 keepout stack）JS 會寫入 */
+      --stackMaxW: 340px;
     }
 
     *{ box-sizing:border-box; margin:0; padding:0; }
@@ -1190,6 +1193,57 @@
       :root{ --side-op: 0.60; }
       .zw-side-col{ padding: 8px 10px; }
     }
+
+    /* ==========================================================
+       ✅極小手機：真正「蓮花禁區 keep-out」
+       - 偵測可用高度不足：改 stack（仍不壓蓮花）+ 再降透明度
+       - stack 可選：上方區 / 下方區 / 左側或右側窄版（由 JS 決定）
+       ========================================================== */
+    @media (max-width: 520px){
+      /* ✅僅降玻璃（可搭配 stack / grid3），不改位置 */
+      .nav-area.phone-compact-glass{
+        --btn-glass-a: 0.028;
+        --btn-glass-b: 0.024;
+        --btn-body-a: rgba(255, 248, 232, 0.030);
+        --btn-body-b: rgba(30, 22, 14, 0.040);
+        --btn-border: rgba(246, 211, 122, 0.58);
+        --btn-border-hi: rgba(255, 244, 210, 0.84);
+      }
+      .nav-area.phone-compact-glass .nav-btn::after{ opacity: .10; }
+
+      /* ✅側邊窄版 stack（JS 會設 --stackMaxW 與左右方向 class） */
+      .nav-area.phone-compact-stack{
+        right: auto;                 /* 覆蓋 inset 的右側，讓 width 生效 */
+        width: min(var(--stackMaxW), 340px);
+        max-width: min(var(--stackMaxW), 340px);
+        padding-left: 12px;
+        padding-right: 8px;
+      }
+      .nav-area.phone-compact-stack.phone-compact-right{
+        left: auto;                  /* 右側窄版 */
+        right: var(--frame-inset);
+        padding-left: 8px;
+        padding-right: 12px;
+      }
+
+      /* ✅側邊窄版 stack：再降透明度（更不遮蓮花） */
+      .nav-area.phone-compact-stack{
+        --btn-glass-a: 0.024;
+        --btn-glass-b: 0.020;
+        --btn-body-a: rgba(255, 248, 232, 0.026);
+        --btn-body-b: rgba(30, 22, 14, 0.036);
+        --btn-border: rgba(246, 211, 122, 0.54);
+        --btn-border-hi: rgba(255, 244, 210, 0.82);
+      }
+      .nav-area.phone-compact-stack .nav-btn{
+        box-shadow:
+          0 12px 34px rgba(0,0,0,0.22),
+          0 0 26px rgba(246,211,122,0.10),
+          inset 0 1px 0 rgba(255,255,255,0.08),
+          inset 0 -8px 14px rgba(0,0,0,0.04);
+      }
+      .nav-area.phone-compact-stack .nav-btn::after{ opacity: .08; }
+    }
   </style>
 
   <!-- ===== Login Overlay ===== -->
@@ -1336,6 +1390,7 @@
       const zwBottomLine = $("#zwBottomLine");
       const zenImg       = document.getElementById("zenImg");
       const heroInner    = $("#heroInner");
+      const lotusStage   = $("#lotusStage");
 
       const usernameWrap = document.getElementById("usernameWrap");
       const usernameSel = document.getElementById("username");
@@ -1788,7 +1843,8 @@
 
       function resetButtonsForLogout(){
         mainNavBtns.forEach(btn => btn.style.display = "none");
-        navArea.classList.remove("stack","grid2","grid3","sides");
+        navArea.classList.remove("stack","grid2","grid3","sides","phone-compact-stack","phone-compact-right","phone-compact-glass");
+        navArea.style.removeProperty("--stackMaxW");
         scheduleAll();
       }
 
@@ -1882,7 +1938,85 @@
         }catch(e){}
       }
 
-      /* ✅FIX: 手機 6 顆（含 system）必定「縮小塞進螢幕內、不滾動」 */
+      /* ==========================================================
+         ✅真正的「蓮花禁區 keep-out」(ellipse)：
+         - 用 lotusStage 作為基準（更貼近底圖）
+         - 檢測按鍵是否壓到禁區：rect vs ellipse 最近點判定
+         ========================================================== */
+      function computeLotusKeepout(heroRect, stageRect, topBound, bottomBound, isPhone){
+        try{
+          const W = Math.max(1, heroRect.width);
+          const H = Math.max(1, heroRect.height);
+
+          const s = stageRect || heroRect;
+          const sLeft = (s.left - heroRect.left);
+          const sTop  = (s.top  - heroRect.top);
+          const sW = Math.max(1, s.width);
+          const sH = Math.max(1, s.height);
+
+          // center（跟隨手機時 zen-posY=60%）
+          const cxRel = sLeft + sW * 0.50;
+          const cyBase = sTop + sH * (isPhone ? 0.60 : 0.56);
+
+          const avail = Math.max(1, bottomBound - topBound);
+          const yMargin = clamp(Math.round(avail * 0.20), 84, 150);
+          const cyRel = clamp(cyBase, topBound + yMargin, bottomBound - yMargin);
+
+          // ellipse 半徑：手機較小（留左右空間），但仍保護蓮花本體
+          const rx = clamp(sW * (isPhone ? 0.19 : 0.20), 56, 170);
+          const ry = clamp(sH * (isPhone ? 0.29 : 0.32), 140, 360);
+
+          const pad = isPhone ? 12 : 14;
+
+          const abs = {
+            cx: heroRect.left + cxRel,
+            cy: heroRect.top  + cyRel,
+            rx: rx + pad,
+            ry: ry + pad
+          };
+
+          const rel = {
+            cx: cxRel,
+            cy: cyRel,
+            rx: rx + pad,
+            ry: ry + pad
+          };
+
+          // grid3 中間留空至少覆蓋禁區寬度（再加一點緩衝）
+          const midGapMin = Math.round(rel.rx * 2 + 18);
+
+          return {
+            abs, rel,
+            top: rel.cy - rel.ry,
+            bottom: rel.cy + rel.ry,
+            left: rel.cx - rel.rx,
+            right: rel.cx + rel.rx,
+            midGapMin
+          };
+        }catch(e){
+          return null;
+        }
+      }
+
+      function rectIntersectsEllipseAbs(rect, ellAbs){
+        // 最近點法：若矩形到橢圓中心的最近點落在橢圓內 → 相交（視為壓到禁區）
+        const nx = clamp(ellAbs.cx, rect.left, rect.right);
+        const ny = clamp(ellAbs.cy, rect.top, rect.bottom);
+        const dx = (nx - ellAbs.cx) / Math.max(1, ellAbs.rx);
+        const dy = (ny - ellAbs.cy) / Math.max(1, ellAbs.ry);
+        return (dx*dx + dy*dy) <= 1;
+      }
+
+      function anyKeepoutHit(btns, keepout){
+        if(!keepout || !keepout.abs) return false;
+        for(const btn of btns){
+          const r = btn.getBoundingClientRect();
+          if(rectIntersectsEllipseAbs(r, keepout.abs)) return true;
+        }
+        return false;
+      }
+
+      /* ✅FIX: 手機 6 顆（含 system）必定「縮小塞進螢幕內、不滾動」+ ✅真正 keep-out */
       function layoutButtons(){
         if(!navArea || !heroInner) return;
         const visible = getVisibleButtons();
@@ -1930,6 +2064,125 @@
           btn.style.gridColumn = "";
         });
 
+        // 清掉手機 keepout/compact 狀態
+        navArea.classList.remove("phone-compact-stack","phone-compact-right","phone-compact-glass");
+        navArea.style.removeProperty("--stackMaxW");
+
+        const stageRect = lotusStage ? lotusStage.getBoundingClientRect() : null;
+        const keepout = (isNarrow && isPhone) ? computeLotusKeepout(rect, stageRect, topBound, bottomBound, true) : null;
+
+        // 小工具：套用 stack（可指定區域 top/bottom），並控制透明度
+        const applyStackInZone = (zoneTop, zoneBottom, opts)=>{
+          const o = opts || {};
+          const zoneAvail = Math.max(1, zoneBottom - zoneTop);
+          const btns = getVisibleButtons();
+          const n = btns.length;
+          if(!n) return false;
+
+          // 最低可用（非常小的機型）
+          const minH = 22;
+          const minGap = 4;
+          if(zoneAvail < (n*minH + (n-1)*minGap)) return false;
+
+          navArea.classList.remove("grid2","grid3","sides");
+          navArea.classList.add("stack");
+          if(o.glass) navArea.classList.add("phone-compact-glass");
+
+          navArea.style.setProperty("--navTop", Math.round(zoneTop) + "px");
+          navArea.style.setProperty("--navBottom", Math.round(H - zoneBottom) + "px");
+
+          // systemBtn 置底
+          const sys = btns.find(b => b.id === "systemBtn") || null;
+          if(sys){
+            const others = btns.filter(b => b !== sys);
+            others.forEach(b=>navArea.appendChild(b));
+            navArea.appendChild(sys);
+          }
+
+          let gapS = clamp(Math.round(zoneAvail * 0.042), 4, 10);
+          let hS = Math.floor((zoneAvail - gapS * (n - 1)) / n);
+          hS = clamp(hS, 22, 62);
+
+          let needS = n * hS + gapS * (n - 1);
+          if (needS > zoneAvail) {
+            const s = clamp(zoneAvail / needS, 0.72, 1.0);
+            gapS = Math.max(4, Math.round(gapS * s));
+            hS = Math.max(22, Math.round(hS * s));
+          }
+
+          navArea.style.setProperty("--btnGap", gapS + "px");
+          navArea.style.setProperty("--btnH", hS + "px");
+          navArea.style.setProperty("--btnScale", String(clamp((hS / 74) * 0.96, 0.34, 0.92)));
+
+          fitButtonTextPhone(getVisibleButtons());
+          return true;
+        };
+
+        // 小工具：套用側邊窄版 stack（左右擇優），並確保不壓 keepout
+        const applySideCompactStack = ()=>{
+          if(!keepout) return false;
+
+          const padX = 10;
+          const leftMax = Math.floor(keepout.left - padX);
+          const rightMax = Math.floor(W - keepout.right - padX);
+
+          // 避免太窄：太窄反而字更難看
+          const MIN_SIDE_W = 150;
+
+          let side = (rightMax > leftMax) ? "right" : "left";
+          let maxW = (side === "right") ? rightMax : leftMax;
+
+          // 如果選到的那邊太窄，嘗試另一邊
+          if(maxW < MIN_SIDE_W){
+            const altSide = (side === "right") ? "left" : "right";
+            const altW = (altSide === "right") ? rightMax : leftMax;
+            if(altW > maxW){
+              side = altSide;
+              maxW = altW;
+            }
+          }
+
+          if(maxW < MIN_SIDE_W) return false;
+
+          navArea.classList.add("phone-compact-stack");
+          navArea.classList.toggle("phone-compact-right", side === "right");
+          navArea.style.setProperty("--stackMaxW", maxW + "px");
+
+          // 全區 stack（高度仍用原本 topBound/bottomBound）
+          const ok = applyStackInZone(topBound, bottomBound, { glass:false });
+          if(!ok) return false;
+
+          // 再驗證一次：真的沒壓到 keepout
+          const btns = getVisibleButtons();
+          if(anyKeepoutHit(btns, keepout)){
+            // 回復
+            navArea.classList.remove("phone-compact-stack","phone-compact-right");
+            navArea.style.removeProperty("--stackMaxW");
+            return false;
+          }
+          return true;
+        };
+
+        // 小工具：若壓到 keepout，優先嘗試「上區 / 下區」stack，其次側邊窄版 stack
+        const resolveKeepoutForStack = ()=>{
+          if(!keepout) return false;
+
+          const gapY = 10;
+          const topZoneBottom = Math.min(bottomBound, keepout.top - gapY);
+          const bottomZoneTop = Math.max(topBound, keepout.bottom + gapY);
+
+          // ✅優先：把 stack 放到「禁區上方」(通常最不影響蓮花)
+          if(applyStackInZone(topBound, topZoneBottom, { glass:true })) return true;
+
+          // ✅其次：放到「禁區下方」
+          if(applyStackInZone(bottomZoneTop, bottomBound, { glass:true })) return true;
+
+          // ✅最後：側邊窄版（左右擇優）
+          if(applySideCompactStack()) return true;
+
+          return false;
+        };
+
         if(isNarrow){
           navArea.classList.remove("sides");
           navArea.style.setProperty("--navTop", Math.round(topBound) + "px");
@@ -1957,8 +2210,14 @@
             const otherCount = hasSys ? (v3.length - 1) : v3.length;
             const rows = (hasSys ? Math.ceil(otherCount / 2) + 1 : Math.ceil(v3.length / 2));
 
-            // 中間留空寬度（依螢幕自動）
-            const midGap = clamp(Math.round(W * 0.18), 44, 110);
+            // 中間留空寬度（依螢幕自動 + ✅keepout 最小值）
+            const baseMid = clamp(Math.round(W * 0.18), 44, 110);
+            const midNeed = keepout ? Math.max(baseMid, keepout.midGapMin) : baseMid;
+
+            const minCol = 118; // 讓左右欄不至於太窄
+            const midMax = Math.max(44, Math.round(W - 32 - 2 * minCol)); // 32 = navArea padding L/R
+            const midGap = clamp(midNeed, 44, midMax);
+
             const colGap = clamp(Math.round(W * 0.02), 8, 14);
             navArea.style.setProperty("--midGap", midGap + "px");
             navArea.style.setProperty("--btnColGap", colGap + "px");
@@ -1992,6 +2251,34 @@
 
             // ✅手機：文字再依按鍵高度做一次自動微調（更清晰舒服）
             fitButtonTextPhone(v3);
+
+            // ✅(1) 高度不足 → 改 stack + 更透明（且不壓蓮花禁區）
+            const MIN_H_GRID = 44;
+            const tooShortForGrid =
+              isPhone && (
+                h < MIN_H_GRID ||
+                avail < (rows * MIN_H_GRID + (rows - 1) * 6) ||
+                H < 560 || W < 360
+              );
+
+            if(tooShortForGrid){
+              // 先嘗試：真正不壓禁區的 stack（上區/下區/側邊）
+              if(resolveKeepoutForStack()) return;
+
+              // 真的無法 stack 時：保留 grid3，但再降透明度，確保蓮花可見
+              navArea.classList.add("phone-compact-glass");
+              fitButtonTextPhone(getVisibleButtons());
+              return;
+            }
+
+            // ✅(2) 若仍偵測到壓到禁區（極端字換行/某些字型），先再降透明度 + 再嘗試 stack 解決
+            if(keepout && anyKeepoutHit(v3, keepout)){
+              // 優先增加透明度避免視覺壓到
+              navArea.classList.add("phone-compact-glass");
+
+              // 再嘗試 stack（確保「完全不壓到蓮花本體」）
+              if(resolveKeepoutForStack()) return;
+            }
 
             return;
           }
@@ -2032,6 +2319,12 @@
 
             if(isPhone) fitButtonTextPhone(v2);
 
+            // ✅grid2 若壓到蓮花禁區：改 stack（不壓禁區）或至少降透明度
+            if(keepout && anyKeepoutHit(v2, keepout)){
+              if(resolveKeepoutForStack()) return;
+              navArea.classList.add("phone-compact-glass");
+            }
+
             return;
           }
 
@@ -2047,11 +2340,18 @@
 
           if(isPhone) fitButtonTextPhone(visible);
 
+          // ✅stack 仍壓到禁區 → 移到上區/下區/側邊，確保「完全不壓蓮花本體」
+          if(keepout && anyKeepoutHit(visible, keepout)){
+            if(resolveKeepoutForStack()) return;
+            navArea.classList.add("phone-compact-glass");
+          }
+
           return;
         }
 
         // ✅桌機：左右側邊（維持）
-        navArea.classList.remove("stack","grid2","grid3");
+        navArea.classList.remove("stack","grid2","grid3","phone-compact-stack","phone-compact-right","phone-compact-glass");
+        navArea.style.removeProperty("--stackMaxW");
         navArea.classList.add("sides");
 
         const left = [];
