@@ -1,9 +1,11 @@
 /* =========================================================
- * tasun-cloud-kit.js  (Drop-in replacement)
+ * tasun-cloud-kit.js  (Drop-in replacement - upgraded)
  * - Dropbox JSON DB + lock (optional)
- * - Auto-create db/lock if missing
+ * - Auto-create db/lock if missing (with folder)
+ * - Protect local when remote is empty (seed/merge back once)
  * - Local-only fallback if no token
- * - Minimal stable API: init(), mount(), ctrl.pullNow(), ctrl.saveMerged(), ctrl.status(), ctrl.destroy()
+ * - Minimal stable API:
+ *   init(), mount(), ctrl.pullNow(), ctrl.saveMerged(), ctrl.status(), ctrl.destroy()
  * ========================================================= */
 (function(){
   "use strict";
@@ -17,6 +19,7 @@
     resourcesUrl: "tasun-resources.json",
     ui: { enabled:true, hideLockButtons:true, position:"bottom-right" },
     lock: { enabled:false, auto:false },
+
     _resourcesCache: null,
     _resourcesUrlCacheKey: "",
     _uiMounted: false,
@@ -36,11 +39,9 @@
     if(!url || !v) return url;
     try{
       var u = new URL(url, location.href);
-      // 若已帶 v，就不覆蓋（避免外部 already withV）
       if(!u.searchParams.get("v")) u.searchParams.set("v", v);
       return u.toString();
     }catch(e){
-      // fallback
       return url + (url.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(v);
     }
   }
@@ -60,6 +61,35 @@
     var o = {};
     for(var k in x){ if(Object.prototype.hasOwnProperty.call(x,k)) o[k]=x[k]; }
     return o;
+  }
+
+  function ensureLeadingSlash(p){
+    p = norm(p);
+    if(!p) return "";
+    if(p[0] !== "/") p = "/" + p;
+    return p;
+  }
+
+  // ✅ row 內容穩定比對（避免 key 順序不同造成誤判衝突）
+  function stableRowString(x){
+    if(x === null) return "null";
+    var t = typeof x;
+    if(t === "string") return JSON.stringify(x);
+    if(t === "number" || t === "boolean") return String(x);
+    if(t !== "object") return JSON.stringify(x);
+
+    if(Array.isArray(x)){
+      var a = new Array(x.length);
+      for(var i=0;i<x.length;i++) a[i] = stableRowString(x[i]);
+      return "[" + a.join(",") + "]";
+    }
+    var keys = Object.keys(x).sort();
+    var parts = [];
+    for(var k=0;k<keys.length;k++){
+      var key = keys[k];
+      parts.push(JSON.stringify(key) + ":" + stableRowString(x[key]));
+    }
+    return "{" + parts.join(",") + "}";
   }
 
   // -------------------------------
@@ -206,7 +236,6 @@
   }
 
   async function dbxUpload(path, contentText, mode){
-    // mode: "add" or "overwrite"
     var token = getDropboxToken();
     if(!token) throw new Error("NO_DROPBOX_TOKEN");
 
@@ -274,14 +303,18 @@
    * ✅ 핵심：確保遠端 db / lock 存在，不存在就建立
    * - 無 Token：略過（走本機模式）
    * - 會自動建立父資料夾（例如 /Tasun）
+   * - seedDb 預設用標準結構 {counter:0, db:[]}
    */
   async function ensureRemoteDbLock(dbPath, lockPath, opt){
     opt = opt || {};
-    var seedDb   = (opt.seedDb   !== undefined) ? opt.seedDb   : {};
-    var seedLock = (opt.seedLock !== undefined) ? opt.seedLock : {};
+    var seedDb   = (opt.seedDb   !== undefined) ? opt.seedDb   : { counter:0, db:[] };
+    var seedLock = (opt.seedLock !== undefined) ? opt.seedLock : { locked:false, by:"", ts:0 };
 
     var token = getDropboxToken();
     if(!token) return false;
+
+    dbPath = ensureLeadingSlash(dbPath);
+    lockPath = ensureLeadingSlash(lockPath);
 
     // folder
     var f1 = parentFolderOf(dbPath);
@@ -334,6 +367,9 @@
       throw new Error("Failed to load resources: " + url);
     }
 
+    // ✅ 相容兩種格式： { key:{db:{path...}} } 或 { resources:{ key:{...} } }
+    if(json.resources && typeof json.resources==="object") json = json.resources;
+
     _S._resourcesCache = json;
     _S._resourcesUrlCacheKey = cacheKey;
     return json;
@@ -348,8 +384,7 @@
   }
 
   function rowEquals(a,b){
-    // 簡易比對：用 JSON 字串（足夠可靠且快速）
-    try{ return JSON.stringify(a) === JSON.stringify(b); }catch(e){ return false; }
+    try{ return stableRowString(a) === stableRowString(b); }catch(e){ return false; }
   }
 
   function stashConflicts(resourceKey, conflicts){
@@ -359,7 +394,6 @@
       var arr = safeJSONParse(localStorage.getItem(key)) || [];
       if(!Array.isArray(arr)) arr = [];
       arr = arr.concat(conflicts);
-      // 限制長度避免爆
       if(arr.length > 40) arr = arr.slice(arr.length - 40);
       localStorage.setItem(key, JSON.stringify(arr));
     }catch(e){}
@@ -369,7 +403,11 @@
     p = (p && typeof p==="object") ? p : {};
     var counter = Number(p.counter || 0);
     if(!Number.isFinite(counter)) counter = 0;
+
     var db = Array.isArray(p.db) ? p.db : [];
+    // 允許 rows
+    if(!Array.isArray(db) && Array.isArray(p.rows)) db = p.rows;
+
     return { counter: counter, db: db };
   }
 
@@ -409,7 +447,6 @@
       if(a && !b){ mergedDb.push(a); return; }
       if(!a && b){ mergedDb.push(b); return; }
 
-      // both exist
       if(rowEquals(a,b)){
         mergedDb.push(a);
         return;
@@ -432,9 +469,7 @@
       conflicts.push({ ts: Date.now(), pk: k, policy:"stash-remote", local:a, remote:b });
     });
 
-    // counter：取最大
     var counter = Math.max(L.counter||0, R.counter||0);
-
     return { payload: { counter: counter, db: mergedDb }, conflicts: conflicts };
   }
 
@@ -444,19 +479,24 @@
   async function remoteReadJson(path){
     var raw = await dbxDownload(path);
     var obj = safeJSONParse(raw);
-    if(!obj || typeof obj!=="object"){
-      // 若檔案內容不是 JSON，避免整個流程掛掉：當作空
+
+    if(!obj){
+      // 非 JSON：當作空
       return { counter:0, db:[] };
     }
-    // 允許遠端直接存 array：轉成 {db:[]}
+
+    // 允許遠端直接存 array
     if(Array.isArray(obj)) return { counter:0, db: obj };
-    // 若有 db 欄位就照用，否則包一下
+
+    if(typeof obj !== "object") return { counter:0, db:[] };
+
+    // 允許 rows
     if(!Array.isArray(obj.db) && Array.isArray(obj.rows)) obj.db = obj.rows;
+
     return normalizePayload(obj);
   }
 
   async function remoteWriteJson(path, payload){
-    // 寫入附加 meta，方便辨識
     var out = shallowClone(payload);
     out._meta = {
       app: "TasunCloudKit",
@@ -473,7 +513,6 @@
   function init(cfg){
     cfg = (cfg && typeof cfg==="object") ? cfg : {};
 
-    // idempotent: 覆蓋設定但不重建多次 UI
     if(cfg.appVer !== undefined) _S.appVer = norm(cfg.appVer);
     if(cfg.resourcesUrl !== undefined) _S.resourcesUrl = norm(cfg.resourcesUrl) || "tasun-resources.json";
 
@@ -492,22 +531,25 @@
 
   function mount(cfg){
     cfg = (cfg && typeof cfg==="object") ? cfg : {};
-    if(!_S.inited) init({}); // 允許不呼叫 init 也可用
+    if(!_S.inited) init({});
 
     uiEnsure();
 
-    var resourceKey  = norm(cfg.resourceKey);
-    var pkField      = norm(cfg.pk || "k");
+    var resourceKey   = norm(cfg.resourceKey);
+    var pkField       = norm(cfg.pk || "k");
     var mergeCfg      = cfg.merge || { conflictPolicy:"stash-remote", lock:"none" };
     var watchCfg      = cfg.watch || { intervalSec: 0 };
     var getLocal      = (typeof cfg.getLocal === "function") ? cfg.getLocal : function(){ return { counter:0, db:[] }; };
     var apply         = (typeof cfg.apply === "function") ? cfg.apply : function(){};
 
-    var idField       = norm(cfg.idField || "id");
     var counterField  = norm(cfg.counterField || "counter");
 
+    // ✅ 預設開：確保遠端不存在就建立
+    var ensureRemote  = (cfg.ensureRemote !== undefined) ? !!cfg.ensureRemote : true;
+    // ✅ 預設開：遠端空白保護
+    var protectEmptyRemote = (mergeCfg && mergeCfg.protectEmptyRemote !== undefined) ? !!mergeCfg.protectEmptyRemote : true;
+
     var destroyed = false;
-    var pulling = false;
     var timer = null;
     var lastStatus = {
       mode: "init",
@@ -516,14 +558,31 @@
       lockPath: "",
       lastPullAt: 0,
       lastSaveAt: 0,
-      lastError: ""
+      lastError: "",
+      hasToken: !!getDropboxToken(),
+      watchSec: Number((watchCfg && watchCfg.intervalSec) || 0),
+      appVer: norm(_S.appVer),
+      resourcesUrl: norm(_S.resourcesUrl)
     };
 
     var readyResolve;
-    var readyReject;
-    var ready = new Promise(function(res, rej){ readyResolve = res; readyReject = rej; });
+    var ready = new Promise(function(res){ readyResolve = res; });
+
+    // ✅ 互斥排隊：避免 pull/save/watch 同時執行
+    var _chain = Promise.resolve();
+    function enqueue(fn){
+      _chain = _chain.then(function(){
+        if(destroyed) return;
+        return fn();
+      }).catch(function(e){
+        // 不讓鏈斷
+        lastStatus.lastError = (e && e.message) ? String(e.message) : String(e||"");
+      });
+      return _chain;
+    }
 
     function status(){
+      lastStatus.hasToken = !!getDropboxToken();
       return shallowClone(lastStatus);
     }
 
@@ -541,39 +600,54 @@
       if(!entry || !entry.db || !entry.db.path){
         throw new Error("Resource not found in resources.json: " + resourceKey);
       }
-      var dbPath = norm(entry.db.path);
-      var lockPath = entry.lock && entry.lock.path ? norm(entry.lock.path) : "";
+
+      var dbPath = ensureLeadingSlash(entry.db.path);
+      var lockPath = (entry.lock && entry.lock.path) ? ensureLeadingSlash(entry.lock.path) : "";
+
       lastStatus.dbPath = dbPath;
       lastStatus.lockPath = lockPath;
 
-      // ✅ 這裡做「不存在就建立」
-      try{
-        await ensureRemoteDbLock(dbPath, lockPath, { seedDb:{}, seedLock:{} });
-      }catch(e){
-        // 不中斷：避免造成表格空白
-        lastStatus.lastError = (e && e.message) ? String(e.message) : String(e||"");
-        console.warn("[TasunCloudKit] ensureRemoteDbLock failed:", lastStatus.lastError);
+      if(ensureRemote){
+        try{
+          await ensureRemoteDbLock(dbPath, lockPath, {
+            seedDb: { counter:0, db:[] },
+            seedLock: { locked:false, by:"", ts:0 }
+          });
+        }catch(e){
+          lastStatus.lastError = (e && e.message) ? String(e.message) : String(e||"");
+          console.warn("[TasunCloudKit] ensureRemoteDbLock failed:", lastStatus.lastError);
+        }
       }
 
       return { dbPath: dbPath, lockPath: lockPath };
     }
 
-    async function pullNow(){
-      if(destroyed) return;
-      if(pulling) return;
-      pulling = true;
+    function isEmptyPayload(p){
+      p = normalizePayload(p);
+      return (!p.counter || p.counter===0) && (!p.db || p.db.length===0);
+    }
 
+    function safeApply(payload, info){
       try{
+        // 兼容 counterField
+        if(counterField !== "counter"){
+          payload[counterField] = payload.counter;
+        }
+        apply(payload, info || {});
+      }catch(e){}
+    }
+
+    function pullNow(){
+      return enqueue(async function(){
+        if(destroyed) return;
+
         lastStatus.lastError = "";
+        lastStatus.hasToken = !!getDropboxToken();
+
         var token = getDropboxToken();
         if(!token){
-          // ✅ 無 token：直接套用本機（避免空白）
           var localOnly = getLocal() || {};
-          // 兼容 counterField / db field 名稱（但通常 getLocal 已回 {counter,db}）
-          if(localOnly[counterField] !== undefined && localOnly.counter === undefined) localOnly.counter = localOnly[counterField];
-          if(localOnly.db === undefined && localOnly.rows !== undefined) localOnly.db = localOnly.rows;
-
-          apply(localOnly, { source:"local-only", reason:"no-token" });
+          safeApply(localOnly, { source:"local-only", reason:"no-token" });
           lastStatus.mode = "local-only";
           lastStatus.lastPullAt = Date.now();
           uiSet("CloudKit: local-only (no token)");
@@ -581,109 +655,121 @@
           return;
         }
 
-        var paths = await ensureAndResolvePaths();
-        var remoteP = await remoteReadJson(paths.dbPath);
-
-        // 確保欄位名稱一致（counterField）
-        if(counterField !== "counter"){
-          remoteP[counterField] = remoteP.counter;
-        }
-
-        apply(remoteP, { source:"remote", fetchedAt: Date.now() });
-        lastStatus.mode = "synced";
-        lastStatus.lastPullAt = Date.now();
-        uiSet("CloudKit: pulled " + resourceKey);
-        uiPulse(true);
-      }catch(e){
-        lastStatus.lastError = (e && e.message) ? String(e.message) : String(e||"");
-        lastStatus.mode = "error";
-        uiSet("CloudKit: error");
-        uiPulse(false);
-        console.warn("[TasunCloudKit] pullNow error:", lastStatus.lastError);
-
-        // 失敗也要套用本機，避免 UI 空白
         try{
-          var localFallback = getLocal() || {};
-          apply(localFallback, { source:"local-fallback", error:lastStatus.lastError });
-        }catch(_e){}
-      }finally{
-        pulling = false;
-      }
+          var paths = await ensureAndResolvePaths();
+          var remoteP = await remoteReadJson(paths.dbPath);
+
+          // ✅ 遠端空白保護：遠端空 & 本機有 → 不覆寫，改推回雲端一次
+          if(protectEmptyRemote){
+            var localP = normalizePayload(getLocal() || { counter:0, db:[] });
+            if(isEmptyPayload(remoteP) && !isEmptyPayload(localP)){
+              var seedKey = "tasunCloudKit_seeded__" + norm(resourceKey||"") + "__" + norm(_S.appVer||"");
+              if(!sessionStorage.getItem(seedKey)){
+                sessionStorage.setItem(seedKey, "1");
+                // 先維持本機
+                safeApply(localP, { source:"remote-empty-protected", reason:"keep-local" });
+                lastStatus.mode = "remote-empty-protected";
+                lastStatus.lastPullAt = Date.now();
+                uiSet("CloudKit: remote empty → keep local");
+                uiPulse(true);
+
+                // 再推回雲端合併一次（把本機資料寫上去）
+                // 注意：用 enqueue 會接在這次 pull 後面執行，不會打架
+                saveMerged({ reason:"seed-empty-remote" });
+                return;
+              }
+            }
+          }
+
+          safeApply(remoteP, { source:"remote", fetchedAt: Date.now() });
+          lastStatus.mode = "synced";
+          lastStatus.lastPullAt = Date.now();
+          uiSet("CloudKit: pulled " + resourceKey);
+          uiPulse(true);
+
+        }catch(e){
+          lastStatus.lastError = (e && e.message) ? String(e.message) : String(e||"");
+          lastStatus.mode = "error";
+          uiSet("CloudKit: error");
+          uiPulse(false);
+          console.warn("[TasunCloudKit] pullNow error:", lastStatus.lastError);
+
+          // 失敗仍套用本機，避免 UI 空白
+          try{
+            var localFallback = getLocal() || {};
+            safeApply(localFallback, { source:"local-fallback", error:lastStatus.lastError });
+          }catch(_e){}
+        }
+      });
     }
 
-    async function saveMerged(opts){
+    function saveMerged(opts){
       opts = opts || {};
-      if(destroyed) return;
+      return enqueue(async function(){
+        if(destroyed) return false;
 
-      try{
         lastStatus.lastError = "";
+        lastStatus.hasToken = !!getDropboxToken();
+
         var token = getDropboxToken();
         if(!token){
-          // 無 token：只能存本機，不做遠端
           uiSet("CloudKit: local-only (cannot save remote)");
           uiPulse(false);
           return false;
         }
 
-        var paths = await ensureAndResolvePaths();
-
-        var localP = getLocal() || { counter:0, db:[] };
-        var remoteP = await remoteReadJson(paths.dbPath);
-
-        // 支援不同名稱欄位（理論上頁面回的就是 counter/db）
-        // 仍把它 normalize 成 {counter,db}
-        localP = normalizePayload(localP);
-        remoteP = normalizePayload(remoteP);
-
-        // ✅ 合併（預設 stash-remote）
-        var merged = mergePayload(localP, remoteP, { pk: pkField, merge: mergeCfg });
-        if(merged.conflicts && merged.conflicts.length){
-          stashConflicts(resourceKey, merged.conflicts);
-        }
-
-        // counterField / idField：保持基本一致（不強制改 row）
-        var out = merged.payload;
-        out.counter = Math.max(Number(out.counter||0), Number(localP.counter||0), Number(remoteP.counter||0));
-
-        await remoteWriteJson(paths.dbPath, out);
-
-        lastStatus.mode = "saved";
-        lastStatus.lastSaveAt = Date.now();
-        uiSet("CloudKit: saved " + resourceKey);
-        uiPulse(true);
-
-        // 寫完後回推一次到頁面（讓頁面立即一致）
         try{
-          apply(out, { source:"merged-local-remote", conflicts:(merged.conflicts||[]).length });
-        }catch(e){}
+          var paths = await ensureAndResolvePaths();
 
-        return true;
-      }catch(e){
-        lastStatus.lastError = (e && e.message) ? String(e.message) : String(e||"");
-        lastStatus.mode = "error";
-        uiSet("CloudKit: save error");
-        uiPulse(false);
-        console.warn("[TasunCloudKit] saveMerged error:", lastStatus.lastError);
-        return false;
-      }
+          var localP = normalizePayload(getLocal() || { counter:0, db:[] });
+          var remoteP = await remoteReadJson(paths.dbPath);
+          remoteP = normalizePayload(remoteP);
+
+          var merged = mergePayload(localP, remoteP, { pk: pkField, merge: mergeCfg });
+          if(merged.conflicts && merged.conflicts.length){
+            stashConflicts(resourceKey, merged.conflicts);
+          }
+
+          var out = merged.payload;
+          out.counter = Math.max(Number(out.counter||0), Number(localP.counter||0), Number(remoteP.counter||0));
+
+          await remoteWriteJson(paths.dbPath, out);
+
+          lastStatus.mode = "saved";
+          lastStatus.lastSaveAt = Date.now();
+          uiSet("CloudKit: saved " + resourceKey);
+          uiPulse(true);
+
+          // 寫完後回推一次到頁面
+          safeApply(out, { source:"merged-local-remote", conflicts:(merged.conflicts||[]).length, reason: norm(opts.reason||"") });
+
+          return true;
+        }catch(e){
+          lastStatus.lastError = (e && e.message) ? String(e.message) : String(e||"");
+          lastStatus.mode = "error";
+          uiSet("CloudKit: save error");
+          uiPulse(false);
+          console.warn("[TasunCloudKit] saveMerged error:", lastStatus.lastError);
+          return false;
+        }
+      });
     }
 
     // init async
     (async function(){
       try{
         if(!resourceKey) throw new Error("mount() missing resourceKey");
+
         uiSet("CloudKit: mounting " + resourceKey);
 
-        // ✅ mount 完成時也至少套用一次本機（避免空白）
+        // ✅ mount 先至少套一次本機，避免空白
         try{
           var localFirst = getLocal() || {};
-          apply(localFirst, { source:"local-initial" });
+          safeApply(localFirst, { source:"local-initial" });
         }catch(e){}
 
-        // 若有 token：立刻 pull
         await pullNow();
 
-        // watch
         var sec = Number((watchCfg && watchCfg.intervalSec) || 0);
         if(Number.isFinite(sec) && sec > 0){
           timer = setInterval(function(){
@@ -700,12 +786,11 @@
         uiSet("CloudKit: mount error");
         uiPulse(false);
         console.warn("[TasunCloudKit] mount error:", lastStatus.lastError);
-        // 即使 mount error，也 resolve，避免頁面卡死（頁面會靠本機）
         try{ readyResolve(false); }catch(_e){}
       }
     })();
 
-    // controller
+    // controller (minimal stable API)
     return {
       ready: ready,
       pullNow: pullNow,
@@ -718,14 +803,12 @@
   // -------------------------------
   // Export global
   // -------------------------------
-  var api = {
+  window.TasunCloudKit = {
     init: init,
     mount: mount,
     _debug: {
       state: function(){ return shallowClone(_S); }
     }
   };
-
-  window.TasunCloudKit = api;
 
 })();
