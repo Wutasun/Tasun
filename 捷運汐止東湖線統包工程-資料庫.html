@@ -842,5 +842,87 @@ window.TasunAuth = (function(){
 
     start();
   </script>
+
+  <!-- ✅✅✅ [新增段落 #1] tasun-cloud-kit.js（最穩兼容版，版本需與本頁 APP_VER 一致） -->
+  <script src="tasun-cloud-kit.js?v=20260126_01"></script>
+
+  <!-- ✅✅✅ [新增段落 #2] 10 行接雲端：resourcesUrl 固定 tasun-resources.json、resourceKey 固定 tasun-index-db、pk 固定 id -->
+  <script>
+  (function(){
+    var APP_VER = (window.__CACHE_V || (new URL(location.href)).searchParams.get("v") || "").trim();
+    // 本頁現有資料來源：localStorage（至少 AUTH / CURRENT；其餘為全站共用設定，維持兼容）
+    var KEYS = ["tasunAuthTable_v1","tasunCurrentUser_v1","tasunPermMatrix_v1","tasunNavButtons_v1","tasunRoutes_v1","tasunEntrySelected_v1","tasunButtonMeta_v1"];
+    var lastHash = 0;
+
+    function getLocal(){
+      var out = [];
+      for(var i=0;i<KEYS.length;i++){
+        var k = KEYS[i], v = localStorage.getItem(k);
+        if(v == null) continue;
+        out.push({ id:"ls:"+k, k:k, v:String(v), ts:Date.now() });
+      }
+      return out;
+    }
+
+    function apply(rows){
+      if(!Array.isArray(rows)) return;
+      var touched = [];
+      for(var i=0;i<rows.length;i++){
+        var r = rows[i];
+        if(!r || typeof r.k !== "string") continue;
+        if(r.v == null){ localStorage.removeItem(r.k); touched.push(r.k); continue; }
+        localStorage.setItem(r.k, String(r.v)); touched.push(r.k);
+      }
+      // 讓本頁登入/顯示即時更新（若沒有就保留擴充點）
+      try{ if(window.TasunAuth && typeof TasunAuth.validateSession==="function") TasunAuth.validateSession(); }catch(e){}
+      try{ if(typeof syncUserUI==="function") syncUserUI(); else console.log("[cloud] applied keys:", touched); }catch(e){}
+      // 避免剛 apply 完就立刻被 hash 機制判定「有變更」反覆上傳
+      try{ lastHash = hashNow(); }catch(e){}
+      // 觸發同頁監聽（storage 事件在同分頁不會自動觸發）
+      for(var j=0;j<touched.length;j++){
+        var key = touched[j];
+        try{ window.dispatchEvent(new StorageEvent("storage",{ key:key, storageArea:localStorage })); }
+        catch(e){ try{ window.dispatchEvent(new Event("storage")); }catch(_){ } }
+      }
+    }
+
+    function hashNow(){
+      var h = 2166136261>>>0;
+      for(var i=0;i<KEYS.length;i++){
+        var s = (localStorage.getItem(KEYS[i]) || "");
+        for(var c=0;c<s.length;c++){ h ^= s.charCodeAt(c); h = Math.imul(h,16777619)>>>0; }
+        h ^= KEYS[i].length;
+      }
+      return h>>>0;
+    }
+
+    if(!window.TasunCloudKit || !window.TasunCloudKit.init || !window.TasunCloudKit.mount){
+      console.warn("[捷運汐止東湖線統包工程-資料庫] TasunCloudKit not found.");
+      return;
+    }
+
+    window.TasunCloudKit.init({
+      appVer: APP_VER,
+      resourcesUrl: "tasun-resources.json",
+      resourceKey: "tasun-index-db",
+      pk: "id",
+      ui: { enabled:false },
+      lock: { enabled:false },
+      getLocal: getLocal,
+      apply: apply
+    });
+
+    var ctrl = window.TasunCloudKit.mount();
+    try{ ctrl && ctrl.pullNow && setTimeout(function(){ try{ ctrl.pullNow(); }catch(_){ } }, 300); }catch(_){}
+    try{ lastHash = hashNow(); }catch(_){}
+    setInterval(function(){
+      var h = 0; try{ h = hashNow(); }catch(e){ return; }
+      if(h !== lastHash){
+        lastHash = h;
+        try{ ctrl && ctrl.saveMerged && ctrl.saveMerged(); }catch(e){}
+      }
+    }, 10000);
+  })();
+  </script>
 </body>
 </html>
