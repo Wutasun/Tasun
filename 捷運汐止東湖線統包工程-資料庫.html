@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!DOCTYPE html> 
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
@@ -901,9 +901,15 @@ window.TasunAuth = (function(){
       return;
     }
 
-    // ✅✅✅ 核心修正：固定 resourceKey，且 mount 時也明確傳入（兼容不同 kit 版本）
+    // ✅✅✅ 核心修正：保證 mount 絕不會以空 key 執行（不再允許 mount() 空參數）
     var RK = "tasun-index-db";
+    if(!RK || !String(RK).trim()){
+      console.error("[TasunCloudKit] invalid resourceKey:", RK);
+      return;
+    }
+    RK = String(RK).trim();
 
+    // init 仍保留（兼容不同 kit 版本：有些看 init、有些看 mount）
     window.TasunCloudKit.init({
       appVer: APP_VER,
       resourcesUrl: "tasun-resources.json",
@@ -915,18 +921,33 @@ window.TasunAuth = (function(){
       apply: apply
     });
 
-    // ✅ 先用 mount(RK)（最通用），失敗再 fallback
-    var ctrl = (function(){
-      try{ return window.TasunCloudKit.mount(RK); }catch(e1){
-        try{ return window.TasunCloudKit.mount({ resourceKey: RK }); }catch(e2){
-          return window.TasunCloudKit.mount();
-        }
-      }
-    })();
+    // ✅✅✅ 只 mount 一次：一定帶 resourceKey（若失敗就停止，不再 fallback 到 mount()）
+    var ctrl = null;
+    try{
+      // 盡量把關鍵參數都帶進 mount（兼容「只看 mount 參數」的 kit）
+      ctrl = window.TasunCloudKit.mount({
+        resourceKey: RK,
+        resourcesUrl: "tasun-resources.json",
+        pk: "id",
+        getLocal: getLocal,
+        apply: apply
+      });
+    }catch(e){
+      console.error("[TasunCloudKit] mount failed. resourceKey =", RK, e);
+      return;
+    }
+
+    if(!ctrl){
+      console.error("[TasunCloudKit] mount returned null/undefined. resourceKey =", RK);
+      return;
+    }
+
     try{ console.log("[TasunCloudKit] mounted resourceKey =", RK); }catch(_){}
 
+    // ✅ 只有 mount 成功才會 pull / sync
     try{ ctrl && ctrl.pullNow && setTimeout(function(){ try{ ctrl.pullNow(); }catch(_){ } }, 300); }catch(_){}
     try{ lastHash = hashNow(); }catch(_){}
+
     setInterval(function(){
       var h = 0; try{ h = hashNow(); }catch(e){ return; }
       if(h !== lastHash){
