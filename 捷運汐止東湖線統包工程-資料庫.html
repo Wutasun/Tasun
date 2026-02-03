@@ -843,6 +843,96 @@ window.TasunAuth = (function(){
     start();
   </script>
 
+  <!-- ✅✅✅ [新增段落 #0] mount 攔截注入（一定先於 tasun-cloud-kit.js 載入） -->
+  <script>
+  (function(){
+    var RK = "tasun-index-db";
+    RK = (RK == null) ? "" : String(RK).trim();
+    if(!RK){
+      console.error("[TasunCloudKit] injector: empty RK, aborted.");
+      return;
+    }
+    window.__TASUN_CK_RK = RK;
+
+    var warned = false;
+    function needFixKey(k){ return (k == null) || !String(k).trim(); }
+
+    function wrapKit(kit){
+      if(!kit || typeof kit !== "object") return kit;
+      if(kit.__rk_patched__ === RK) return kit;
+
+      // wrap init (保險：有人 init 時沒給 resourceKey)
+      if(typeof kit.init === "function" && !kit.__init_wrapped__){
+        var _init = kit.init;
+        kit.init = function(opts){
+          try{
+            if(opts && typeof opts === "object" && needFixKey(opts.resourceKey)){
+              opts.resourceKey = RK;
+              if(!warned){ warned=true; console.warn("[TasunCloudKit] injector: fixed init.resourceKey =>", RK); }
+            }
+          }catch(e){}
+          return _init.apply(this, arguments);
+        };
+        kit.__init_wrapped__ = true;
+      }
+
+      // wrap mount (核心：任何 mount() 空參數 / 空 key 都補 RK)
+      if(typeof kit.mount === "function" && !kit.__mount_wrapped__){
+        var _mount = kit.mount;
+        kit.mount = function(){
+          var args = Array.prototype.slice.call(arguments);
+          try{
+            if(args.length === 0){
+              args = [{ resourceKey: RK }];
+              if(!warned){ warned=true; console.warn("[TasunCloudKit] injector: fixed mount() =>", RK); }
+            }else{
+              var a0 = args[0];
+              if(typeof a0 === "string"){
+                if(needFixKey(a0)){
+                  args[0] = RK;
+                  if(!warned){ warned=true; console.warn("[TasunCloudKit] injector: fixed mount('') =>", RK); }
+                }
+              }else if(a0 && typeof a0 === "object"){
+                if(needFixKey(a0.resourceKey)){
+                  a0.resourceKey = RK;
+                  if(!warned){ warned=true; console.warn("[TasunCloudKit] injector: fixed mount({resourceKey:''}) =>", RK); }
+                }
+              }else{
+                args[0] = { resourceKey: RK };
+                if(!warned){ warned=true; console.warn("[TasunCloudKit] injector: fixed mount(<invalid>) =>", RK); }
+              }
+            }
+          }catch(e){}
+          return _mount.apply(this, args);
+        };
+        kit.__mount_wrapped__ = true;
+      }
+
+      kit.__rk_patched__ = RK;
+      return kit;
+    }
+
+    // 用 accessor 攔截「賦值 TasunCloudKit」：確保 kit 一被載入就立刻 wrap（包含 kit 內部若有自動 mount）
+    var _val;
+    try{
+      Object.defineProperty(window, "TasunCloudKit", {
+        configurable: true,
+        get: function(){ return _val; },
+        set: function(v){ _val = wrapKit(v); }
+      });
+    }catch(e){
+      // 若 defineProperty 失敗（極少數情況），就退回：等載入後再 wrap
+    }
+
+    // 若先前已存在（例如有快取腳本先載），也補 wrap
+    try{
+      if(window.TasunCloudKit){
+        _val = wrapKit(window.TasunCloudKit);
+      }
+    }catch(e){}
+  })();
+  </script>
+
   <!-- ✅✅✅ [新增段落 #1] tasun-cloud-kit.js（最穩兼容版，版本需與本頁 APP_VER 一致） -->
   <script src="tasun-cloud-kit.js?v=20260126_01"></script>
 
@@ -850,6 +940,13 @@ window.TasunAuth = (function(){
   <script>
   (function(){
     var APP_VER = (window.__CACHE_V || (new URL(location.href)).searchParams.get("v") || "").trim();
+    var RK = (window.__TASUN_CK_RK || "tasun-index-db");
+    RK = (RK == null) ? "" : String(RK).trim();
+    if(!RK){
+      console.error("[TasunCloudKit] invalid RK (empty).");
+      return;
+    }
+
     // 本頁現有資料來源：localStorage（至少 AUTH / CURRENT；其餘為全站共用設定，維持兼容）
     var KEYS = ["tasunAuthTable_v1","tasunCurrentUser_v1","tasunPermMatrix_v1","tasunNavButtons_v1","tasunRoutes_v1","tasunEntrySelected_v1","tasunButtonMeta_v1"];
     var lastHash = 0;
@@ -901,15 +998,7 @@ window.TasunAuth = (function(){
       return;
     }
 
-    // ✅✅✅ 核心修正：保證 mount 絕不會以空 key 執行（不再允許 mount() 空參數）
-    var RK = "tasun-index-db";
-    if(!RK || !String(RK).trim()){
-      console.error("[TasunCloudKit] invalid resourceKey:", RK);
-      return;
-    }
-    RK = String(RK).trim();
-
-    // init 仍保留（兼容不同 kit 版本：有些看 init、有些看 mount）
+    // init：照規格固定 resourcesUrl / resourceKey / pk
     window.TasunCloudKit.init({
       appVer: APP_VER,
       resourcesUrl: "tasun-resources.json",
@@ -921,10 +1010,9 @@ window.TasunAuth = (function(){
       apply: apply
     });
 
-    // ✅✅✅ 只 mount 一次：一定帶 resourceKey（若失敗就停止，不再 fallback 到 mount()）
+    // ✅ mount：即使有人 mount() 空參數，也已被前面的 injector 自動補 RK
     var ctrl = null;
     try{
-      // 盡量把關鍵參數都帶進 mount（兼容「只看 mount 參數」的 kit）
       ctrl = window.TasunCloudKit.mount({
         resourceKey: RK,
         resourcesUrl: "tasun-resources.json",
@@ -944,7 +1032,6 @@ window.TasunAuth = (function(){
 
     try{ console.log("[TasunCloudKit] mounted resourceKey =", RK); }catch(_){}
 
-    // ✅ 只有 mount 成功才會 pull / sync
     try{ ctrl && ctrl.pullNow && setTimeout(function(){ try{ ctrl.pullNow(); }catch(_){ } }, 300); }catch(_){}
     try{ lastHash = hashNow(); }catch(_){}
 
