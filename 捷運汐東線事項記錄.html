@@ -114,15 +114,15 @@
       --ink:#1f2422;
 
       /* ✅ 去霧化：把「乳白玻璃層」變清澈（少白、少霧） */
-      --glassTop: rgba(255,255,255,.86);
-      --glassMid: rgba(255,255,255,.44);
-      --glassBot: rgba(255,255,255,.16);
+      --glassTop: rgba(255,255,255,.70);
+      --glassMid: rgba(255,255,255,.22);
+      --glassBot: rgba(255,255,255,.08);
 
-      --stageTopA: rgba(255,252,245,.86);
-      --stageTopB: rgba(240,214,160,.22);
+      --stageTopA: rgba(255,252,245,.72);
+      --stageTopB: rgba(240,214,160,.14);
 
-      --stageBotA: rgba(250,255,253,.78);
-      --stageBotB: rgba(190,235,225,.18);
+      --stageBotA: rgba(250,255,253,.60);
+      --stageBotB: rgba(190,235,225,.12);
 
       --r:18px;
       --shadow: 0 18px 50px rgba(32,26,18,.16);
@@ -357,7 +357,7 @@
       padding:10px 14px;
       border-radius:999px;
       border:1px solid rgba(132,84,18,.24);
-      background:linear-gradient(180deg, rgba(255,255,255,.38), rgba(255,255,255,.14));
+      background:linear-gradient(180deg, rgba(255,255,255,.20), rgba(255,255,255,.08));
       font-size:14px;
       color: rgba(120,86,28,.86);
       display:flex; gap:8px; align-items:center; white-space:nowrap;
@@ -447,7 +447,7 @@
       background:
         radial-gradient(120% 170% at 22% 14%, var(--stageBotA), transparent 64%),
         radial-gradient(160% 190% at 80% 22%, var(--stageBotB), transparent 72%),
-        linear-gradient(180deg, rgba(255,255,255,.50), rgba(255,255,255,.22) 60%, rgba(255,255,255,.12));
+        linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,.14) 60%, rgba(255,255,255,.08));
       box-shadow: var(--shadow);
       padding:16px;
       overflow:hidden;
@@ -1168,59 +1168,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-
-  <!-- ======================================================
-       ✅✅✅ 最穩兼容版：只在 </body> 前新增兩段（不改 UI / CSS / 結構 / 按鈕）
-       1) tasun-cloud-kit.js?v=APP_VER
-       2) 強制注入：resourcesUrl=tasun-resources.json、resourceKey=tasun-index-db、pk=id
-       ====================================================== -->
-  <script src="tasun-cloud-kit.js?v=APP_VER"></script>
-  <script>
-  (function(){
-    "use strict";
-    var FIX = { resourcesUrl:"tasun-resources.json", resourceKey:"tasun-index-db", pk:"id" };
-
-    function patchKit(kit){
-      if(!kit || kit.__tasun_fixed_indexdb_v1) return;
-      var _init  = (typeof kit.init  === "function") ? kit.init  : null;
-      var _mount = (typeof kit.mount === "function") ? kit.mount : null;
-
-      if(_init){
-        kit.init = function(cfg){
-          cfg = (cfg && typeof cfg==="object") ? cfg : {};
-          cfg.resourcesUrl = FIX.resourcesUrl;                 // ✅ 固定 resourcesUrl
-          return _init.call(kit, cfg);
-        };
-      }
-      if(_mount){
-        kit.mount = function(opts){
-          opts = (opts && typeof opts==="object") ? opts : {};
-          opts.resourceKey = FIX.resourceKey;                  // ✅ 強制 tasun-index-db
-          opts.pk = FIX.pk;                                    // ✅ 固定 pk=id
-          return _mount.call(kit, opts);
-        };
-      }
-      kit.__tasun_fixed_indexdb_v1 = true;
-    }
-
-    // ✅ 立即 patch；若尚未載入則攔截 setter（最穩兼容）
-    if(window.TasunCloudKit){
-      patchKit(window.TasunCloudKit);
-      return;
-    }
-    try{
-      Object.defineProperty(window, "TasunCloudKit", {
-        configurable: true,
-        get: function(){ return undefined; },
-        set: function(v){
-          Object.defineProperty(window, "TasunCloudKit", { value: v, writable: true, configurable: true });
-          patchKit(v);
-        }
-      });
-    }catch(e){}
-  })();
-  </script>
-
   <script>
   (function(){
     "use strict";
@@ -1287,10 +1234,10 @@
       // ===============================
       // ✅ Cloud resource binding
       // ===============================
-      var CLOUD_RESOURCE_KEY = "sxdh-notes";
+      var CLOUD_RESOURCE_KEY = "tasun-index-db";
 
-      // ✅ 修復：雲端沿用 v1 merge-table 格式 {id,k,v}，pk 必須用 k 才能讀到舊資料
-      var CLOUD_PK = "k";
+      // ✅ 雲端主 pk= id（各頁共用 tasun-index-db），仍相容舊 {id,k,v} 轉換
+      var CLOUD_PK = "id";
       var SETTINGS_UID = "__settings__";
 
       var db = [];
@@ -1735,18 +1682,31 @@
       // ===============================
       function exportDbWithSettings(){
         var rows = (Array.isArray(db)?db:[]).map(function(r){
-          var uid = norm(r.uid) || (r.id ? "legacy_"+String(r.id) : uuid());
+          var uid = norm(r.uid) || (r.id ? ("legacy_"+String(r.id)) : uuid());
           return {
             id: Number(r.id||0),
-            k: uid,
-            v: {
-              text: (r.text||""),
-              trade: (r.trade||""),
-              system: (r.system||""),
-              attach: (r.attach||""),
-              remark: (r.remark||""),
-              date: (r.date||"")
-            }
+            uid: uid,
+            text: (r.text||""),
+            trade: (r.trade||""),
+            system: (r.system||""),
+            attach: (r.attach||""),
+            remark: (r.remark||""),
+            date: (r.date||"")
+          };
+        });
+
+        // ✅ settings row (id=0) — 和記事一起存在雲端（其他頁也可共用）
+        rows.push({
+          id: 0,
+          uid: SETTINGS_UID,
+          tradeDict: loadDict(TRADE_DICT_KEY),
+          sysDict: loadDict(SYS_DICT_KEY),
+          tradeSysMap: loadTradeSysMap()
+        });
+
+        return rows;
+      }
+
           };
         });
 
@@ -1780,9 +1740,12 @@
         var srow = null;
         for(var i=0;i<arr.length;i++){
           var it = arr[i];
-          var kk = norm(it && (it.k ?? it.uid ?? it.key));
-          if(kk === SETTINGS_UID){ srow = it; break; }
-          if(norm(it && it.uid) === SETTINGS_UID){ srow = it; break; }
+          if(!it) continue;
+          var kk = norm(it && (it.uid ?? it.k ?? it.key));
+          var id0 = Number(it.id);
+          if(kk === SETTINGS_UID || (Number.isFinite(id0) && id0 === 0)){
+            srow = it; break;
+          }
         }
         if(srow){
           var sv = (srow && typeof srow==="object") ? (srow.v || srow) : null;
@@ -1796,8 +1759,12 @@
         // 把雲端資料列轉回本頁 db（直接列）
         var incoming = arr
           .filter(function(r){
-            var kk2 = norm(r && (r.k ?? r.uid ?? r.key));
-            return kk2 !== SETTINGS_UID;
+            if(!r) return false;
+            var kk2 = norm(r && (r.uid ?? r.k ?? r.key));
+            var id0 = Number(r.id);
+            if(kk2 === SETTINGS_UID) return false;
+            if(Number.isFinite(id0) && id0 === 0) return false;
+            return true;
           })
           .map(function(r){
             // v1: {id,k,v}；或直接列
@@ -1904,7 +1871,7 @@
         try{
           window.TasunCloudKit.init({
             appVer: window.TASUN_APP_VER,
-            resourcesUrl: withV("tasun-resources.json"),
+            resourcesUrl: "tasun-resources.json",
             ui: { enabled:true, hideLockButtons:true }
           });
 
