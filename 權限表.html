@@ -12,10 +12,10 @@
   <script>
   (function () {
     /**
-     * ✅你每次更新本頁，只要改 APP_VER（例如：20260126_01 → 20260130_01）
+     * ✅你每次更新本頁，只要改 APP_VER（例如：20260130_01 → 20260203_01）
      * 全部使用者會自動跳到 ?v=APP_VER，保證同步最新版。
      */
-    const APP_VER = "20260130_01";  // ←←← 每次改版請改這裡（建議與首頁/管理表一致）
+    const APP_VER = "20260203_01";  // ←←← 每次改版請改這裡（建議與首頁/管理表一致）
     const VER_KEY = "tasun_app_ver_auth_v1";
     const TAB_GUARD = "tasun_tab_replaced_once_auth_v1";
 
@@ -580,9 +580,10 @@
         <h1>Tasun 權限表</h1>
         <p>
           只有 <b>admin</b> 可以編輯；其他權限只能查看。<br>
-          ✅ 入口網頁下拉選單：依你提供的檔名清單建立。選擇入口網頁後，下方欄位與預覽會切換到該入口頁。<br>
+          ✅ 入口網頁下拉選單：會自動合併三個來源（內建清單 + resources.json(auth-table.entries/entryButtons) + routes/registry）。<br>
           ✅ btn1～btn5 欄位標題仍會自動抓取首頁按鍵名稱（localStorage：<b>tasunNavButtons_v1</b>）。<br>
           ✅ admin 也可在本頁「按鍵名稱設定」直接改名，並同步到首頁。<br>
+          ✅ 永遠自動上雲端：本頁任何變更都會觸發 TasunCloudKit 自動同步（若已設定 Token）。<br>
           雲端模式（App folder）：<b>/權限表.json</b>
         </p>
       </div>
@@ -604,8 +605,9 @@
             </div>
 
             <div class="entryHint">
-              說明：先選擇「入口網頁」，下方會出現預覽方塊（沿用 index 的玻璃金色按鍵語感）顯示該入口頁按鍵。<br>
-              勾選的權限會存到 localStorage：<b>tasunPermMatrix_v1</b>（不破壞原本 tasunAuthTable_v1）。
+              說明：先選擇「入口網頁」，下方會出現預覽方塊顯示該入口頁按鍵。<br>
+              勾選的權限會存到 localStorage：<b>tasunPermMatrix_v1</b>（不破壞原本 tasunAuthTable_v1）。<br>
+              新增頁面要自動出現在此清單：建議新增到 <b>tasun-resources.json</b> 的 auth-table.entries / auth-table.entryButtons，或讓新頁把自己的資訊寫進 <b>tasunEntryRegistry_v1</b>（本頁會自動合併）。
             </div>
 
             <div class="previewStage">
@@ -638,10 +640,11 @@
         <div class="actions">
           <div class="left">
             <button class="btn" id="addBtn">＋ 新增一列</button>
-            <button class="btn" id="saveLocalBtn">只儲存本機</button>
+            <button class="btn" id="saveLocalBtn">儲存（同步雲端）</button>
           </div>
           <div class="status">
             <div class="pill" id="tokenState">狀態：未設定 Token</div>
+            <div class="pill" id="cloudState">雲端：待機</div>
             <div class="pill" id="localState">本機：未儲存</div>
           </div>
         </div>
@@ -687,6 +690,18 @@
 
 <script>
 (() => {
+  /**
+   * ✅本次優化重點（不改功能/架構，只補齊「永遠自動上雲端」與「好維護」）：
+   * 1) 任何變更（表格/卡片/入口切換/按鍵名稱）都會 debounce 觸發 TasunCloudKit.saveMerged()
+   * 2) 入口頁清單與按鍵定義，會自動合併：
+   *    - 內建 DEFAULT_ENTRY_FILES / DEFAULT_ENTRY_BUTTONS（保留你提供順序）
+   *    - tasun-resources.json 的 auth-table.entries / auth-table.entryButtons（建議未來改這裡就好）
+   *    - tasunRoutes_v1 裡的 *.html（若你有在 routes 裡新增頁面，本頁會自動加入）
+   *    - tasunEntryRegistry_v1（未來新頁面可自動註冊，不用改本頁）
+   * 3) 「儲存（同步雲端）」按鈕：仍會儲存本機 + 立即同步雲端（若 Token OK）
+   * 4) 原本「雲端下載 / 儲存並上傳」維持，仍對 /權限表.json 生效（admin-only）
+   */
+
   const AUTH_KEY     = 'tasunAuthTable_v1';
   const CURRENT_KEY  = 'tasunCurrentUser_v1';
   const TOKEN_KEY    = 'tasunDropboxToken_v1';
@@ -697,6 +712,9 @@
 
   const ENTRY_SELECTED_KEY = 'tasunEntrySelected_v1';
   const PERM_MATRIX_KEY    = 'tasunPermMatrix_v1';
+
+  // ✅ 新增：入口頁註冊表（未來新頁面可自動加入權限表）
+  const ENTRY_REGISTRY_KEY = 'tasunEntryRegistry_v1';
 
   // ✅ 改為支援 tasun-resources.json（新增 auth-table）
   const RESOURCES_URL  = 'tasun-resources.json';
@@ -713,6 +731,57 @@
   const METRO_FIXED_HREF = '汐東工程管理表.html';
   const roleOptions = ['admin','write','read'];
 
+  // ====== 入口頁清單（保留你提供順序，未來建議改 resources.json） ======
+  const DEFAULT_ENTRY_FILES = [
+    'index.html',
+    '工程資料庫.html',
+    '工程資料明細表.html',
+    '工程資料查詢.html',
+    '工程資料登錄.html',
+    '捷運汐東線審查文件管制查詢表-水環組.html',
+    '捷運汐東線審查文件管制登錄表-水環組.html',
+    '捷運汐東線審查文件管制表-水環組.html',
+    '捷運汐東線權責分工精簡版.html',
+    '捷運汐東線記事.html',
+    '捷運汐止東湖線統包工程-資料庫.html',
+    '捷運汐止東湖線統包工程-資料明細表.html',
+    '捷運汐止東湖線統包工程-資料明細表查詢.html',
+    '捷運汐止東湖線統包工程-資料明細表登錄.html',
+    '權限表.html',
+    '汐東工程管理表.html',
+    '甄鼎quality.html',
+    '臻鼎工程審核明細查詢.html',
+    '臻鼎工程審核明細登錄.html',
+    '臻鼎工程審核明細表.html',
+    '臻鼎管理表.html'
+  ];
+
+  // 入口頁 → 按鍵定義（沒有定義的入口頁，會用 btn1~btn5 通用欄位顯示）
+  const DEFAULT_ENTRY_BUTTONS = {
+    '汐東工程管理表.html': [
+      { key:'xidong_record', name:'捷運汐東線事項記錄' },
+      { key:'xidong_db',     name:'工程資料庫' },
+      { key:'xidong_auth',   name:'系統／權限' },
+      { key:'xidong_cloud',  name:'雲端檔案' }
+    ],
+    '工程資料庫.html': [
+      { key:'db_reg',   name:'工程資料登錄' },
+      { key:'db_query', name:'工程資料查詢' },
+      { key:'db_list',  name:'工程資料明細表' },
+      { key:'db_cloud', name:'雲端資料庫入口' }
+    ],
+    '權限表.html': [
+      { key:'auth_navname', name:'按鍵名稱設定' },
+      { key:'auth_token',   name:'設定 Token' },
+      { key:'auth_down',    name:'雲端下載' },
+      { key:'auth_up',      name:'儲存並上傳' }
+    ]
+  };
+
+  // ✅ resources.json / registry / routes 合併後的動態結果
+  let dynEntryFiles = DEFAULT_ENTRY_FILES.slice();
+  let dynEntryButtons = safeJsonParse(JSON.stringify(DEFAULT_ENTRY_BUTTONS), {});
+
   const el = (id) => document.getElementById(id);
 
   const whoDesk   = el('whoDesk');
@@ -724,6 +793,7 @@
 
   const msg       = el('msg');
   const tokenState= el('tokenState');
+  const cloudState= el('cloudState');
   const localState= el('localState');
 
   const addBtn    = el('addBtn');
@@ -780,52 +850,12 @@
   let tokenExpired = false;
   let tokenInvalid = false;
 
-  // ✅✅✅ 入口網頁清單（完全依你提供順序）
-  const ENTRY_FILES = [
-    'index.html',
-    '工程資料庫.html',
-    '工程資料明細表.html',
-    '工程資料查詢.html',
-    '工程資料登錄.html',
-    '捷運汐東線審查文件管制查詢表-水環組.html',
-    '捷運汐東線審查文件管制登錄表-水環組.html',
-    '捷運汐東線審查文件管制表-水環組.html',
-    '捷運汐東線權責分工精簡版.html',
-    '捷運汐東線記事.html',
-    '捷運汐止東湖線統包工程-資料庫.html',
-    '捷運汐止東湖線統包工程-資料明細表.html',
-    '捷運汐止東湖線統包工程-資料明細表查詢.html',
-    '捷運汐止東湖線統包工程-資料明細表登錄.html',
-    '權限表.html',
-    '汐東工程管理表.html',
-    '甄鼎quality.html',
-    '臻鼎工程審核明細查詢.html',
-    '臻鼎工程審核明細登錄.html',
-    '臻鼎工程審核明細表.html',
-    '臻鼎管理表.html'
-  ];
-
-  // 入口頁 → 按鍵定義（沒有定義的入口頁，會用 btn1~btn5 通用欄位顯示）
-  const ENTRY_BUTTONS = {
-    '汐東工程管理表.html': [
-      { key:'xidong_record', name:'捷運汐東線事項記錄' },
-      { key:'xidong_db',     name:'工程資料庫' },
-      { key:'xidong_auth',   name:'系統／權限' },
-      { key:'xidong_cloud',  name:'雲端檔案' }
-    ],
-    '工程資料庫.html': [
-      { key:'db_reg',   name:'工程資料登錄' },
-      { key:'db_query', name:'工程資料查詢' },
-      { key:'db_list',  name:'工程資料明細表' },
-      { key:'db_cloud', name:'雲端資料庫入口' }
-    ],
-    '權限表.html': [
-      { key:'auth_navname', name:'按鍵名稱設定' },
-      { key:'auth_token',   name:'設定 Token' },
-      { key:'auth_down',    name:'雲端下載' },
-      { key:'auth_up',      name:'儲存並上傳' }
-    ]
-  };
+  // ====== Auto cloud sync (TasunCloudKit) ======
+  let _cloudPushTimer = 0;
+  let _cloudPullTimer = 0;
+  let _cloudLastPushAt = 0;
+  let _cloudLastPullAt = 0;
+  let _cloudBusy = false;
 
   function safeJsonParse(s, fallback){
     try{ return JSON.parse(s); }catch(e){ return fallback; }
@@ -845,7 +875,82 @@
   }
   function userKey(name){ return String(name||'').trim().toLowerCase(); }
 
-  // ✅ 讀取 tasun-resources.json 的 auth-table 路徑（若沒有就用預設）
+  function setCloudState(text, isError=false){
+    if(!cloudState) return;
+    cloudState.textContent = text || '雲端：待機';
+    cloudState.style.color = isError ? 'rgba(255,170,170,.95)' : 'rgba(246,211,122,.92)';
+  }
+
+  function getCloudCtrl(){
+    // 由底下的 10 行接雲端段落掛上來
+    return (window.__TASUN_AUTH_CLOUD_CTRL || null);
+  }
+
+  function canAutoCloud(){
+    const t = getToken();
+    if(!t) return false;
+    if(tokenExpired || tokenInvalid) return false;
+    if(!isTokenLooksValid(t)) return false;
+    return true;
+  }
+
+  function scheduleCloudPull(reason){
+    const ctrl = getCloudCtrl();
+    if(!ctrl || !ctrl.pullNow) return;
+    if(!canAutoCloud()) return;
+
+    const now = Date.now();
+    if(now - _cloudLastPullAt < 3000) return; // 短時間別狂拉
+
+    clearTimeout(_cloudPullTimer);
+    _cloudPullTimer = setTimeout(() => {
+      const c = getCloudCtrl();
+      if(!c || !c.pullNow) return;
+      if(!canAutoCloud()) return;
+
+      _cloudLastPullAt = Date.now();
+      setCloudState('雲端：同步中…');
+      Promise.resolve().then(() => c.pullNow()).then(() => {
+        setCloudState('雲端：已同步');
+      }).catch(() => {
+        // pull 失敗不打擾（token/網路問題由 cloud kit 自己處理）
+        setCloudState('雲端：同步失敗', true);
+      });
+    }, 500);
+  }
+
+  function scheduleCloudPush(reason){
+    const ctrl = getCloudCtrl();
+    if(!ctrl || !ctrl.saveMerged) return;
+    if(!canAutoCloud()) return;
+
+    // admin 才可能變更資料（但 entrySelect / 顯示也會變，不影響同步）
+    // 仍允許同步，以利跨裝置一致。
+    clearTimeout(_cloudPushTimer);
+    _cloudPushTimer = setTimeout(() => {
+      const c = getCloudCtrl();
+      if(!c || !c.saveMerged) return;
+      if(!canAutoCloud()) return;
+
+      const now = Date.now();
+      // 節流：避免連續打 API
+      if(now - _cloudLastPushAt < 2500) return;
+
+      _cloudLastPushAt = now;
+      _cloudBusy = true;
+      setCloudState('雲端：上傳中…');
+
+      Promise.resolve().then(() => c.saveMerged()).then(() => {
+        _cloudBusy = false;
+        setCloudState('雲端：已同步');
+      }).catch(() => {
+        _cloudBusy = false;
+        setCloudState('雲端：同步失敗', true);
+      });
+    }, 900);
+  }
+
+  // ✅ 讀取 tasun-resources.json 的 auth-table 設定（路徑 + entries/entryButtons）
   async function loadResourcesForAuthTable(){
     try{
       const url = (window.__withV ? window.__withV(RESOURCES_URL) : RESOURCES_URL);
@@ -853,14 +958,133 @@
       if(!res.ok) throw new Error('HTTP ' + res.status);
       const json = await res.json();
       const node = json && json[RESOURCE_KEY];
+
+      // path / lock
       const dbPath = node?.db?.path;
       const lkPath = node?.lock?.path;
-
       if(typeof dbPath === 'string' && dbPath.trim()) DROPBOX_PATH = dbPath.trim();
       if(typeof lkPath === 'string' && lkPath.trim()) DROPBOX_LOCK_PATH = lkPath.trim();
+
+      // entries / entryButtons（可選）
+      const entries = node?.entries;
+      if(Array.isArray(entries) && entries.length){
+        mergeEntryFiles(entries);
+      }
+      const entryButtons = node?.entryButtons;
+      if(entryButtons && typeof entryButtons === 'object'){
+        mergeEntryButtons(entryButtons);
+      }
     }catch(_){
-      // 靜默：保持預設路徑即可
+      // 靜默：保持預設即可
     }
+  }
+
+  function uniqPush(arr, v){
+    v = stripInvisibles(v);
+    if(!v) return;
+    if(arr.indexOf(v) !== -1) return;
+    arr.push(v);
+  }
+
+  function mergeEntryFiles(files){
+    if(!Array.isArray(files)) return;
+    files.forEach(f => {
+      f = stripInvisibles(f);
+      if(!f) return;
+      if(!/\.html?$/i.test(f)) return;
+      // 追加到 dynEntryFiles 尾端（不破壞你原本順序）
+      if(dynEntryFiles.indexOf(f) === -1) dynEntryFiles.push(f);
+    });
+  }
+
+  function mergeEntryButtons(map){
+    if(!map || typeof map !== 'object') return;
+    for(const k of Object.keys(map)){
+      const file = stripInvisibles(k);
+      const list = map[k];
+      if(!file || !Array.isArray(list)) continue;
+      if(!dynEntryButtons[file] || !Array.isArray(dynEntryButtons[file])) dynEntryButtons[file] = [];
+      // 以 resources 為主：同 key 覆蓋 name
+      const cur = dynEntryButtons[file];
+      const idxMap = new Map(cur.map((x,i)=>[String(x.key||''), i]));
+      list.forEach(it => {
+        if(!it) return;
+        const kk = stripInvisibles(it.key);
+        const nm = stripInvisibles(it.name || it.key);
+        if(!kk) return;
+        const hit = idxMap.get(kk);
+        if(hit === undefined){
+          cur.push({ key: kk, name: nm || kk });
+          idxMap.set(kk, cur.length-1);
+        }else{
+          cur[hit] = { key: kk, name: nm || kk };
+        }
+      });
+    }
+  }
+
+  function mergeFromRoutes(){
+    const routes = safeJsonParse(localStorage.getItem(ROUTE_KEY) || 'null', null);
+    if(!routes || typeof routes !== 'object') return;
+    for(const k of Object.keys(routes)){
+      const href = stripInvisibles(routes[k]);
+      if(!href) continue;
+      // 僅收集相對路徑 *.html
+      if(/^https?:\/\//i.test(href)) continue;
+      const m = href.match(/[^?#]+\.html?/i);
+      if(!m) continue;
+      const file = m[0];
+      if(dynEntryFiles.indexOf(file) === -1) dynEntryFiles.push(file);
+    }
+  }
+
+  function mergeFromRegistry(){
+    const reg = safeJsonParse(localStorage.getItem(ENTRY_REGISTRY_KEY) || 'null', null);
+    if(!reg) return;
+
+    // 支援兩種格式：
+    // A) { entries:[ {file:'xx.html', buttons:[{key,name}...] } ] }
+    // B) { 'xx.html': { buttons:[...] } , 'yy.html': { buttons:[...] } }
+    if(Array.isArray(reg.entries)){
+      reg.entries.forEach(e => {
+        const file = stripInvisibles(e?.file);
+        if(file) mergeEntryFiles([file]);
+        if(file && Array.isArray(e?.buttons)){
+          mergeEntryButtons({ [file]: e.buttons });
+        }
+      });
+      return;
+    }
+
+    if(typeof reg === 'object'){
+      for(const fileRaw of Object.keys(reg)){
+        const file = stripInvisibles(fileRaw);
+        if(!file) continue;
+        mergeEntryFiles([file]);
+        const node = reg[fileRaw];
+        if(node && Array.isArray(node.buttons)){
+          mergeEntryButtons({ [file]: node.buttons });
+        }
+      }
+    }
+  }
+
+  function rebuildDynEntryData(){
+    // reset to defaults first
+    dynEntryFiles = DEFAULT_ENTRY_FILES.slice();
+    dynEntryButtons = safeJsonParse(JSON.stringify(DEFAULT_ENTRY_BUTTONS), {});
+    // merge from routes + registry (resources 已在外部 merge 過，但這裡也可再保險 merge)
+    mergeFromRoutes();
+    mergeFromRegistry();
+    // 去重（保序）
+    const seen = new Set();
+    dynEntryFiles = dynEntryFiles.filter(f => {
+      const v = stripInvisibles(f);
+      if(!v) return false;
+      if(seen.has(v)) return false;
+      seen.add(v);
+      return true;
+    });
   }
 
   function sanitizeToken(raw){
@@ -917,6 +1141,8 @@
       return cleaned;
     }
     updateStates('已更新 Token。');
+    // token 更新後，建議拉一次雲端，確保一致
+    scheduleCloudPull('token-updated');
     return cleaned;
   }
 
@@ -1001,8 +1227,10 @@
   }
 
   function buildEntrySelect(){
+    rebuildDynEntryData();
+
+    const uniq = dynEntryFiles.slice(); // already de-dup in rebuild
     const opts = [];
-    const uniq = Array.from(new Set(ENTRY_FILES.filter(Boolean)));
     uniq.forEach(f => {
       const vv = f.replace(/"/g,'&quot;');
       opts.push(`<option value="${vv}">${f}</option>`);
@@ -1065,7 +1293,8 @@
       return;
     }
 
-    const list = ENTRY_BUTTONS[entry];
+    // dynEntryButtons（resources/registry 可覆蓋）
+    const list = dynEntryButtons[entry];
     if(Array.isArray(list) && list.length){
       btnMeta = list.map(x => ({ key:String(x.key||'').trim(), name:String(x.name||x.key||'').trim() }));
       return;
@@ -1207,6 +1436,21 @@
     }else{
       tokenState.textContent = token ? '狀態：已設定 Token（可同步）' : '狀態：未設定 Token';
     }
+
+    // cloud pill
+    if(!token){
+      setCloudState('雲端：未設定Token');
+    }else if(tokenExpired){
+      setCloudState('雲端：Token 過期', true);
+    }else if(tokenInvalid){
+      setCloudState('雲端：Token 錯誤', true);
+    }else{
+      // 不強制改掉正在上傳中的文字
+      if(!_cloudBusy && cloudState && /雲端：/.test(cloudState.textContent||'')){
+        // 留現狀，避免閃爍
+      }
+    }
+
     setCloudButtonsEnabled();
     if(text && !tokenExpired && !tokenInvalid) setMsg(text, false);
   }
@@ -1242,6 +1486,7 @@
     auth.push({ user:'', pass:'', role:'read' });
     renderAll();
     setMsg('已新增一列（請填寫使用者/密碼）。');
+    scheduleCloudPush('add-row');
   }
 
   function removeRow(idx){
@@ -1258,6 +1503,7 @@
     renderAll();
     saveLocal();
     setMsg('已刪除一列並儲存本機。');
+    scheduleCloudPush('remove-row');
   }
 
   function onTableInput(e){
@@ -1284,6 +1530,9 @@
 
     if(k === 'user'){ load(); return; }
     renderEntryPreview();
+
+    // ✅任何編輯都觸發雲端同步（debounce）
+    scheduleCloudPush('table-edit');
   }
 
   function onTableClick(e){
@@ -1334,6 +1583,8 @@
 
     if(k === 'user'){ load(); return; }
     renderEntryPreview();
+
+    scheduleCloudPush('card-edit');
   }
 
   function closeMoreMenu(){ moreMenu.classList.remove('show'); }
@@ -1343,13 +1594,16 @@
     if(!e.target.closest('.moreWrap')) moreMenu.classList.remove('show');
   });
 
-  function goHome(){ location.href = 'index.html'; }
+  function goHome(){
+    const href = (window.__withV ? window.__withV('index.html') : 'index.html');
+    location.href = href;
+  }
   backBtnD.addEventListener('click', goHome);
   backBtnM.addEventListener('click', () => { closeMoreMenu(); goHome(); });
 
   function switchAccount(){
     localStorage.removeItem(CURRENT_KEY);
-    location.href = 'index.html';
+    goHome();
   }
   switchBtnD.addEventListener('click', switchAccount);
   switchBtnM.addEventListener('click', () => { closeMoreMenu(); switchAccount(); });
@@ -1399,16 +1653,37 @@
   }
   function jsonToAsciiSafe(obj){ return latin1Safe(JSON.stringify(obj)); }
 
-  downloadBtnD.addEventListener('click', () => { const t = guardTokenOrHint(); if(!t) return; cloudDownload(t); });
-  downloadBtnM.addEventListener('click', () => { closeMoreMenu(); const t = guardTokenOrHint(); if(!t) return; cloudDownload(t); });
+  downloadBtnD.addEventListener('click', () => {
+    const t = guardTokenOrHint(); if(!t) return;
+    // 先 pull 一次（避免拿到舊本機），再下載 /權限表.json
+    scheduleCloudPull('manual-download');
+    cloudDownload(t);
+  });
+  downloadBtnM.addEventListener('click', () => {
+    closeMoreMenu();
+    const t = guardTokenOrHint(); if(!t) return;
+    scheduleCloudPull('manual-download');
+    cloudDownload(t);
+  });
 
-  uploadBtnD.addEventListener('click', () => { const t = guardTokenOrHint(); if(!t) return; saveAndUpload(t); });
-  uploadBtnM.addEventListener('click', () => { closeMoreMenu(); const t = guardTokenOrHint(); if(!t) return; saveAndUpload(t); });
+  uploadBtnD.addEventListener('click', () => {
+    const t = guardTokenOrHint(); if(!t) return;
+    // 先把 localStorage 透過 cloud kit 推上去（永遠自動上雲端）
+    scheduleCloudPush('manual-upload-btn');
+    saveAndUpload(t);
+  });
+  uploadBtnM.addEventListener('click', () => {
+    closeMoreMenu();
+    const t = guardTokenOrHint(); if(!t) return;
+    scheduleCloudPush('manual-upload-btn');
+    saveAndUpload(t);
+  });
 
   saveLocalBtn.addEventListener('click', () => {
     normalizeAuth();
     saveLocal();
-    updateStates('已儲存本機（localStorage）。');
+    updateStates('已儲存本機（localStorage）。\n並已排程同步雲端（若 Token OK）。');
+    scheduleCloudPush('save-btn');
   });
 
   addBtn.addEventListener('click', addRow);
@@ -1428,6 +1703,7 @@
     saveSelectedEntry(v);
     renderAll();
     updateStates(`已切換入口網頁：${v}\n（下方欄位與預覽已同步切換）`);
+    scheduleCloudPush('entry-changed');
   }
   entrySelect.addEventListener('change', onEntryChanged);
   entryCustom.addEventListener('input', () => { if(entrySelect.value === '__custom__') onEntryChanged(); });
@@ -1536,6 +1812,9 @@
 
       renderAll();
       updateStates('雲端下載完成，已覆蓋本機並更新畫面。');
+
+      // ✅ 下載後也推一次 cloud kit，讓其它裝置一致
+      scheduleCloudPush('after-cloudDownload');
     }catch(err){
       setMsg('雲端下載失敗：' + (err?.message || err), true);
     }
@@ -1608,7 +1887,11 @@
       setMsg('上傳中…');
 
       let r = await doUploadOnce(token);
-      if(r.ok) return;
+      if(r.ok){
+        // ✅ 上傳成功後也推 cloud kit（確保跨裝置）
+        scheduleCloudPush('after-upload');
+        return;
+      }
 
       if(r.retry){
         setMsg('偵測雲端已有更新，正在重新下載並合併後重試上傳…');
@@ -1621,9 +1904,9 @@
         setMsg('合併完成，重試上傳中…');
         r = await doUploadOnce(token);
         if(!r.ok && !r.retry){
-          // doUploadOnce 已顯示訊息
           return;
         }
+        scheduleCloudPush('after-upload-retry');
       }
     }catch(err){
       setMsg('上傳失敗：' + (err?.message || err), true);
@@ -1700,7 +1983,11 @@
     routes[out[1]?.label || 'btn2'] = METRO_FIXED_HREF;
     localStorage.setItem(ROUTE_KEY, JSON.stringify(routes));
 
+    // routes 可能帶來新頁面 → 入口清單更新
+    buildEntrySelect();
+
     renderAll();
+    scheduleCloudPush('nav-rename');
   }
 
   function openNavPanel(){
@@ -1770,7 +2057,7 @@
     buildEntrySelect();
     loadSelectedEntry();
 
-    const inList = ENTRY_FILES.includes(currentEntry);
+    const inList = dynEntryFiles.includes(currentEntry);
     if(inList){
       entrySelect.value = currentEntry;
       entryCustom.value = '';
@@ -1782,12 +2069,17 @@
 
     renderAll();
     updateStates('已載入本機資料。');
+
+    // 可見時嘗試 pull（確保跨裝置一致）
+    scheduleCloudPull('page-load');
   }
 
   window.addEventListener('storage', (e) => {
-    if(e.key === NAV_KEY || e.key === BTN_META_KEY){
+    if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY){
+      // routes/registry 變動 → 入口頁清單可更新
+      buildEntrySelect();
       renderAll();
-      updateStates('已同步首頁按鍵名稱。');
+      updateStates('已同步按鍵/路由設定。');
       return;
     }
     if(e.key === AUTH_KEY || e.key === CURRENT_KEY || e.key === TOKEN_KEY || e.key === PERM_MATRIX_KEY || e.key === ENTRY_SELECTED_KEY){
@@ -1795,12 +2087,138 @@
     }
   });
 
-  // ✅ 先載入 resources → 再 load（確保 DROPBOX_PATH 可從 auth-table 取得）
+  // 視窗回到前台 → 拉一次雲端（不吵、節流）
+  document.addEventListener('visibilitychange', () => {
+    if(document.visibilityState === 'visible'){
+      scheduleCloudPull('visible');
+    }
+  });
+
+  // ✅ 先載入 resources → 再 load（確保 DROPBOX_PATH & entries/entryButtons 可取得）
   (async () => {
     await loadResourcesForAuthTable();
+    // resources 可能提供 entries/buttons → 先融合一次
+    rebuildDynEntryData();
     load();
   })();
+
+  // ======（可選）未來新頁面自動註冊範例（貼到新頁 JS 即可）======
+  // localStorage.setItem('tasunEntryRegistry_v1', JSON.stringify({
+  //   entries:[
+  //     { file:'新頁面.html', buttons:[ {key:'p1',name:'按鍵A'},{key:'p2',name:'按鍵B'} ] }
+  //   ]
+  // }));
 })();
 </script>
+
+<!-- ✅✅✅ [段落 #1] tasun-cloud-kit.js（版本需與本頁 APP_VER 一致） -->
+<script src="tasun-cloud-kit.js?v=20260203_01"></script>
+
+<!-- ✅✅✅ [段落 #2] 永遠自動上雲端（TasunCloudKit）
+     - 同步本頁關鍵 localStorage keys
+     - pullNow：進站/回前景自動拉
+     - saveMerged：偵測變更自動推
+-->
+<script>
+(function(){
+  var APP_VER = (window.__CACHE_V || (new URL(location.href)).searchParams.get('v') || '').trim();
+  var KEYS = [
+    'tasunAuthTable_v1',
+    'tasunPermMatrix_v1',
+    'tasunNavButtons_v1',
+    'tasunRoutes_v1',
+    'tasunEntrySelected_v1',
+    'tasunEntryRegistry_v1'
+  ];
+
+  function getLocal(){
+    var out=[];
+    for(var i=0;i<KEYS.length;i++){
+      var k=KEYS[i], v=localStorage.getItem(k);
+      if(v==null) continue;
+      out.push({ id:'ls:'+k, k:k, v:String(v), ts:Date.now() });
+    }
+    return out;
+  }
+
+  function apply(rows){
+    if(!Array.isArray(rows)) return;
+    var touched=[];
+    for(var i=0;i<rows.length;i++){
+      var r=rows[i];
+      if(!r||typeof r.k!=='string') continue;
+      if(r.v==null){
+        localStorage.removeItem(r.k);
+        touched.push(r.k);
+        continue;
+      }
+      localStorage.setItem(r.k, String(r.v));
+      touched.push(r.k);
+    }
+    // 觸發頁面內的監聽（用 storage event 模擬）
+    for(var j=0;j<touched.length;j++){
+      var key=touched[j];
+      try{ window.dispatchEvent(new StorageEvent('storage',{ key:key, storageArea:localStorage })); }
+      catch(e){ try{ window.dispatchEvent(new Event('storage')); }catch(_){ } }
+    }
+  }
+
+  if(!window.TasunCloudKit || !window.TasunCloudKit.init || !window.TasunCloudKit.mount){
+    console.warn('[權限表] TasunCloudKit not found.');
+    return;
+  }
+
+  window.TasunCloudKit.init({
+    appVer: APP_VER,
+    resourcesUrl: 'tasun-resources.json',
+    resourceKey: 'tasun-index-db',
+    pk: 'id',
+    ui: { enabled:false },
+    lock: { enabled:false },
+    getLocal: getLocal,
+    apply: apply
+  });
+
+  var ctrl = window.TasunCloudKit.mount();
+  // 讓主程式可以拿到 ctrl，做到「按鈕儲存也立即同步」
+  window.__TASUN_AUTH_CLOUD_CTRL = ctrl;
+
+  // 進站先拉一次
+  try{
+    ctrl && ctrl.pullNow && setTimeout(function(){ try{ ctrl.pullNow(); }catch(_){ } }, 250);
+  }catch(_){}
+
+  // 變更偵測（hash）→ 自動推（保底機制）
+  var lastHash = 0;
+  function hashNow(){
+    var h=2166136261>>>0;
+    for(var i=0;i<KEYS.length;i++){
+      var s=(localStorage.getItem(KEYS[i])||'');
+      for(var c=0;c<s.length;c++){
+        h^=s.charCodeAt(c);
+        h=Math.imul(h,16777619)>>>0;
+      }
+      h^=KEYS[i].length;
+    }
+    return h>>>0;
+  }
+
+  setInterval(function(){
+    var h=hashNow();
+    if(h!==lastHash){
+      lastHash=h;
+      try{ ctrl && ctrl.saveMerged && ctrl.saveMerged(); }catch(e){ }
+    }
+  }, 10000);
+
+  // 回前景自動拉（避免別台剛更新）
+  document.addEventListener('visibilitychange', function(){
+    if(document.visibilityState==='visible'){
+      try{ ctrl && ctrl.pullNow && ctrl.pullNow(); }catch(_){}
+    }
+  });
+})();
+</script>
+
 </body>
 </html>
