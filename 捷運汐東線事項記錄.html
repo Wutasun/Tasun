@@ -659,6 +659,9 @@
     }
     .mHead .btn{ grid-column:3; justify-self:end; }
 
+    /* ✅ 新增：彈窗上方「儲存」按鈕放在左側格（不影響既有 footer 儲存） */
+    .mHead .btnSaveTopWrap{ grid-column:1; justify-self:start; }
+
     .mBody{ padding:14px 16px 16px; color: rgba(243,227,194,.96); }
     .modal .label{ color: rgba(246,214,150,.94); text-shadow: 0 1px 0 rgba(0,0,0,.12); }
 
@@ -676,6 +679,7 @@
       .mHead{ grid-template-columns: 1fr auto; }
       .mTitle{ grid-column:1; justify-self:start; }
       .mHead .btn{ grid-column:2; }
+      .mHead .btnSaveTopWrap{ grid-column:1; }
     }
 
     .miniHint{font-size:12px; line-height:1.6; font-weight:var(--wUI); color: rgba(243,227,194,.72); text-align:center;}
@@ -959,6 +963,8 @@
             <div class="label">搜尋（記事內容：可下拉或手動輸入）</div>
             <input id="qText" list="textList" placeholder="例如：送審、會議、現勘...（可下拉選擇）" />
             <datalist id="textList"></datalist>
+            <!-- ✅ 新增：出處下拉清單（不重複） -->
+            <datalist id="sourceList"></datalist>
           </div>
 
           <div class="field">
@@ -1011,7 +1017,10 @@
   <div class="mask" id="mask">
     <div class="modal">
       <div class="mHead">
-        <div></div>
+        <!-- ✅ 標示1：新增上方「儲存」按鈕（編輯/新增時顯示） -->
+        <div class="btnSaveTopWrap">
+          <button class="btn small" id="btnSaveTop" style="display:none;" type="button"><span class="t">儲存</span></button>
+        </div>
         <div class="mTitle goldCrystalModal" id="mTitle">查看</div>
         <button class="btn ghost small" id="btnClose"><span class="t">關閉</span></button>
       </div>
@@ -1043,14 +1052,19 @@
 
           <div class="field span2">
             <div class="label">附件（超連結）</div>
-            <input id="mAttach" placeholder="貼上連結，例如：https://... / Dropbox 連結 / file:///..." />
+            <!-- ✅ 標示2：附件旁新增「網路硬碟」按鈕 -->
+            <div class="inline2">
+              <input id="mAttach" placeholder="貼上連結，例如：https://... / Dropbox 連結 / file:///..." />
+              <button class="btn ghost small" id="btnNetDisk" type="button"><span class="t">網路硬碟</span></button>
+            </div>
             <div class="miniHint">可留空。若是相對網址（同網站檔案），會自動帶 v 並可開啟。</div>
           </div>
 
           <div class="field span2">
             <div class="label">出處</div>
-            <input id="mSource" placeholder="例如：會議紀錄 / 公文 / Email / 現勘 / 口頭指示..." />
-            <div class="miniHint">文字欄位；write/admin 可修改並儲存。</div>
+            <!-- ✅ 標示3：改成可下拉（datalist：不重複出處 + 仍可手打） -->
+            <input id="mSource" list="sourceList" placeholder="例如：會議紀錄 / 公文 / Email / 現勘 / 口頭指示..." />
+            <div class="miniHint">下拉項目為「既有出處」不重複整理；也可手動輸入新出處（儲存後會自動納入下拉）。</div>
           </div>
 
           <div class="field span2">
@@ -1216,7 +1230,8 @@
       var TRADE_SYS_MAP_KEY = "tasunSxdhNotes_tradeSysMap_v1";
       var READ_MODE_KEY  = "tasunSxdhNotes_readMode_v1";
 
-      var CLOUD_URL = "https://www.dropbox.com/scl/fo/glb4s65934h195bxuyuqm/AH5ClZ2u4MtPMvmgtfOUAa4?rlkey=tfxkpbpw8k9bctshx5xvuge8h&st=guo88r98&dl=0";
+      // ✅ 你指定的新網路硬碟網址
+      var CLOUD_URL = "https://www.dropbox.com/scl/fo/glb4s65934h195bxuyuqm/AH5ClZ2u4MtPMvmgtfOUAa4?rlkey=tfxkpbpw8k9bctshx5xvuge8h&st=ftjb6wtg&dl=0";
 
       var DROPBOX_TOKEN_KEY = "tasunDropboxToken_v1";
 
@@ -1366,7 +1381,7 @@
       });
 
       // ===============================
-      // ✅ Row normalize (新增 source 相容)
+      // ✅ Row normalize（補強：中文欄位相容 + 多形 payload 相容）
       // ===============================
       function normalizeRow(x){
         if(!x || typeof x !== "object") return null;
@@ -1384,18 +1399,19 @@
           }
         }
 
-        var uid = norm(x.uid ?? x._uid ?? x.pk ?? x.k ?? x.key ?? "");
-        var idRaw = (x.id ?? x.no ?? x.idx ?? x.key);
+        var uid = norm(x.uid ?? x._uid ?? x.pk ?? x.k ?? x.key ?? x.UUID ?? x.uuid ?? "");
+        var idRaw = (x.id ?? x.no ?? x.idx ?? x.key ?? x["項次"] ?? x["序號"] ?? x["編號"]);
         var id = Number(idRaw);
         if(!Number.isFinite(id) || id <= 0) id = null;
 
-        var text   = (x.text ?? x.content ?? x.note ?? x.memo ?? "").toString();
-        var trade  = norm(x.trade ?? x.kind ?? x.type ?? x.work ?? "");
-        var system = norm(x.system ?? x.sys ?? x.category ?? "");
-        var attach = norm(x.attach ?? x.attachment ?? x.file ?? x.link ?? "");
-        var source = norm(x.source ?? x.origin ?? x.from ?? x.src ?? "");
-        var remark = (x.remark ?? x.note2 ?? x.desc ?? "").toString();
-        var date   = norm(x.date ?? x.day ?? x.created ?? x.createdAt ?? "");
+        // ✅ 補強：舊版中文鍵名相容
+        var text   = (x.text ?? x.content ?? x.note ?? x.memo ?? x["記事內容"] ?? x["內容"] ?? x["記錄"] ?? "").toString();
+        var trade  = norm(x.trade ?? x.kind ?? x.type ?? x.work ?? x["工種"] ?? "");
+        var system = norm(x.system ?? x.sys ?? x.category ?? x["系統"] ?? "");
+        var attach = norm(x.attach ?? x.attachment ?? x.file ?? x.link ?? x["附件"] ?? "");
+        var source = norm(x.source ?? x.origin ?? x.from ?? x.src ?? x["出處"] ?? "");
+        var remark = (x.remark ?? x.note2 ?? x.desc ?? x["備註"] ?? "").toString();
+        var date   = norm(x.date ?? x.day ?? x.created ?? x.createdAt ?? x["登錄日期"] ?? x["日期"] ?? "");
 
         if(date){
           if(!/^\d{4}-\d{2}-\d{2}$/.test(date)){
@@ -1422,7 +1438,8 @@
       }
 
       function readBackupCandidates(){
-        var keys = [BACKUP_KEY, BK1_KEY, BK2_KEY, BK3_KEY, SAFETY_SNAPSHOT_KEY];
+        // ✅ 補強：把離開快照、最後匯出也納入候選
+        var keys = [BACKUP_KEY, BK1_KEY, BK2_KEY, BK3_KEY, SAFETY_SNAPSHOT_KEY, LEAVE_SNAP_KEY, EXPORT_LAST_KEY];
         for(var i=0;i<keys.length;i++){
           var raw = localStorage.getItem(keys[i]);
           var obj = safeParseJSON(raw);
@@ -1694,9 +1711,57 @@
         return rows;
       }
 
+      // ✅ 新增：把 payload 可能的各種形狀都抽出 rows + counter
+      function extractCloudRows(payload){
+        var cnt = 0;
+        var arr = [];
+
+        if(Array.isArray(payload)){
+          arr = payload;
+        }else if(payload && typeof payload === "object"){
+          // 常見欄位
+          if(Array.isArray(payload.db)) arr = payload.db;
+          else if(Array.isArray(payload.rows)) arr = payload.rows;
+          else if(Array.isArray(payload.items)) arr = payload.items;
+          else if(Array.isArray(payload.data)) arr = payload.data;
+          else if(payload.v && typeof payload.v === "object"){
+            if(Array.isArray(payload.v.db)) arr = payload.v.db;
+            else if(Array.isArray(payload.v.rows)) arr = payload.v.rows;
+            else if(Array.isArray(payload.v.items)) arr = payload.v.items;
+          }
+
+          // 若只有一層包裝：[{db:[...], counter:...}] 這種
+          if(Array.isArray(arr) && arr.length===1 && arr[0] && typeof arr[0]==="object" && Array.isArray(arr[0].db)){
+            arr = arr[0].db;
+          }
+
+          // 猜測：找第一個像 rows 的 array 欄位
+          if(!Array.isArray(arr) || arr.length===0){
+            for(var k in payload){
+              if(!Object.prototype.hasOwnProperty.call(payload,k)) continue;
+              var v = payload[k];
+              if(Array.isArray(v) && v.length && typeof v[0] === "object"){
+                var e0 = v[0] || {};
+                if(("id" in e0) || ("uid" in e0) || ("k" in e0) || ("key" in e0) || ("text" in e0) || ("content" in e0) || ("記事內容" in e0)){
+                  arr = v;
+                  break;
+                }
+              }
+            }
+          }
+
+          cnt = Number(payload.counter ?? payload.count ?? payload._counter ?? (payload.meta && payload.meta.counter) ?? (payload.v && payload.v.counter) ?? 0);
+          if(!Number.isFinite(cnt)) cnt = 0;
+        }
+
+        if(!Array.isArray(arr)) arr = [];
+        return { rows: arr, counter: cnt };
+      }
+
       function importPayload(payload, info){
-        payload = (payload && typeof payload==="object") ? payload : {};
-        var arr = Array.isArray(payload.db) ? payload.db : [];
+        payload = (payload && typeof payload==="object") ? payload : payload;
+        var ex = extractCloudRows(payload);
+        var arr = ex.rows;
 
         var beforeDb = Array.isArray(db) ? db.slice() : [];
         if(beforeDb.length>0){
@@ -1706,6 +1771,16 @@
           }catch(e){}
         }
 
+        // ✅ 也相容：字典直接在 payload 上（舊版可能這樣存）
+        try{
+          if(payload && typeof payload==="object"){
+            if(Array.isArray(payload.tradeDict)) saveDict(TRADE_DICT_KEY, payload.tradeDict.map(norm).filter(Boolean));
+            if(Array.isArray(payload.sysDict)) saveDict(SYS_DICT_KEY, payload.sysDict.map(norm).filter(Boolean));
+            if(payload.tradeSysMap && typeof payload.tradeSysMap==="object") saveTradeSysMap(payload.tradeSysMap);
+          }
+        }catch(e){}
+
+        // settings row
         var srow = null;
         for(var i=0;i<arr.length;i++){
           var it = arr[i];
@@ -1735,6 +1810,7 @@
             return true;
           })
           .map(function(r){
+            // merge-table wrapper
             if(r && typeof r==="object" && ("v" in r) && (r.k!==undefined || r.key!==undefined)){
               var inner = r.v;
               if(typeof inner === "string"){
@@ -1745,7 +1821,7 @@
                 var obj = Object.assign({}, inner);
                 obj.uid = norm(r.k ?? r.key ?? obj.uid ?? "");
                 obj.id  = Number(r.id||obj.id||0);
-                obj.text = obj.text ?? obj.content ?? obj.note ?? obj.memo ?? "";
+                obj.text = obj.text ?? obj.content ?? obj.note ?? obj.memo ?? obj["記事內容"] ?? "";
                 return obj;
               }
             }
@@ -1762,7 +1838,7 @@
           try{
             if(!sessionStorage.getItem(PROTECT_EMPTY_REMOTE_KEY)){
               sessionStorage.setItem(PROTECT_EMPTY_REMOTE_KEY, "1");
-              toast("⚠️ 雲端目前空白：已保護本機資料不覆寫，將嘗試推送合併到雲端…");
+              toast("⚠️ 雲端目前空白或格式不符：已保護本機資料不覆寫，將嘗試推送合併到雲端…");
               if(cloud && Auth.canWrite()){
                 setTimeout(function(){
                   if(!cloud) return;
@@ -1781,7 +1857,9 @@
           var n = Number(db[j].id||0);
           if(Number.isFinite(n) && n>maxId2) maxId2 = n;
         }
-        var cnt = Number(payload.counter||0);
+
+        // counter：優先用 payload/抽取的 counter，其次 maxId
+        var cnt = Number(ex.counter || 0);
         if(!Number.isFinite(cnt)) cnt = 0;
         ensureCounterAtLeast(Math.max(cnt, maxId2));
 
@@ -1970,14 +2048,37 @@
         for(var i=0;i<db.length;i++){
           var txt = (db[i] && db[i].text ? String(db[i].text) : "").trim();
           if(!txt) continue;
-          // 取第一行作為建議值，避免太長難選
           var firstLine = txt.split(/\r?\n/)[0].trim();
           if(!firstLine) continue;
           if(firstLine.length > 80) firstLine = firstLine.slice(0,80) + "…";
           set.add(firstLine);
-          if(set.size >= 250) break; // 避免過多
+          if(set.size >= 250) break;
         }
         var arr = Array.from(set);
+        arr.sort(function(a,b){ return a.localeCompare(b, "zh-Hant"); });
+        dl.innerHTML = arr.map(function(v){
+          return '<option value="'+escHtml(v)+'"></option>';
+        }).join("");
+      }
+
+      // ✅ 新增：出處 datalist（不重複 + 可拆分 / 、 ，）
+      function rebuildSourceDatalist(){
+        var dl = $("sourceList");
+        if(!dl) return;
+
+        var set = new Set(["會議紀錄","公文","Email","現勘","口頭指示","LINE","電話","圖說","會勘"]);
+        for(var i=0;i<db.length;i++){
+          var v = norm(db[i] && db[i].source);
+          if(!v) continue;
+          var parts = v.split(/[\/／、,，;；]+/).map(function(x){ return norm(x); }).filter(Boolean);
+          if(parts.length>1){
+            parts.forEach(function(p){ if(p) set.add(p); });
+          }else{
+            set.add(v);
+          }
+          if(set.size >= 160) break;
+        }
+        var arr = Array.from(set).filter(Boolean);
         arr.sort(function(a,b){ return a.localeCompare(b, "zh-Hant"); });
         dl.innerHTML = arr.map(function(v){
           return '<option value="'+escHtml(v)+'"></option>';
@@ -2147,6 +2248,8 @@
       }
 
       function setModalEditable(editable){
+        // ✅ 顯示兩個儲存：上方 btnSaveTop + footer btnSave
+        $("btnSaveTop").style.display = editable ? "inline-block" : "none";
         $("btnSave").style.display = editable ? "inline-block" : "none";
         $("btnDelete").style.display = (editable && Auth.isAdmin() && editingUid != null) ? "inline-block" : "none";
 
@@ -2421,6 +2524,7 @@
 
       function render(){
         rebuildTextDatalist();
+        rebuildSourceDatalist();
         rebuildFilters();
 
         var rows = filteredRows();
@@ -2575,6 +2679,9 @@
           doExportBackup();
         };
 
+        // ✅ 標示2：網路硬碟按鈕（附件旁）
+        $("btnNetDisk").onclick = function(){ openAttachment(CLOUD_URL); };
+
         $("btnView").onclick = function(){
           if(!selectedUid){ toast("請先點選一筆，再按顯示畫面"); return; }
           openModal(selectedUid, false);
@@ -2606,6 +2713,9 @@
         $("btnClose").onclick = closeModal;
         $("btnCancel").onclick = closeModal;
         $("mask").addEventListener("click", function(e){ if(e.target === $("mask")) closeModal(); });
+
+        // ✅ 標示1：上方儲存
+        $("btnSaveTop").onclick = saveItem;
 
         $("btnSave").onclick = saveItem;
         $("btnDelete").onclick = deleteItem;
