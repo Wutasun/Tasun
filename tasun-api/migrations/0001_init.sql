@@ -1,20 +1,13 @@
 -- 0001_init.sql
-PRAGMA foreign_keys = ON;
-
-CREATE TABLE IF NOT EXISTS resources (
-  resource_key TEXT PRIMARY KEY,
-  rev INTEGER NOT NULL DEFAULT 0,
-  updated_at TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS records (
+  resource    TEXT NOT NULL,          -- 例：tasun-index-db（你固定用這個）
+  id          TEXT NOT NULL,          -- pk: id
+  data        TEXT NOT NULL,          -- JSON 字串（整筆列資料）
+  updated_at  INTEGER NOT NULL,       -- ms epoch
+  created_at  INTEGER NOT NULL,       -- ms epoch
+  deleted     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (resource, id)
 );
 
-CREATE TABLE IF NOT EXISTS items (
-  resource_key TEXT NOT NULL,
-  id TEXT NOT NULL,
-  json TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  PRIMARY KEY (resource_key, id),
-  FOREIGN KEY (resource_key) REFERENCES resources(resource_key) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_items_resource_updated
-ON items(resource_key, updated_at);
+CREATE INDEX IF NOT EXISTS idx_records_resource_updated
+ON records(resource, updated_at);
