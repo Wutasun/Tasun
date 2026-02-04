@@ -1285,6 +1285,155 @@
           .replaceAll("'","&#39;");
       }
 
+      // ===============================
+      // ✅ Attachment helpers (兼容舊資料 + 防止被空白覆蓋)
+      // ===============================
+      function isEmptyLike(v){
+        var s = norm(v);
+        if(!s) return true;
+        var sl = s.toLowerCase();
+        return (sl==="-"||sl==="—"||sl==="–"||sl==="n/a"||sl==="na"||sl==="none"||sl==="null"||sl==="無");
+      }
+
+      function sanitizeLink(v){
+        var s = norm(v);
+        if(isEmptyLike(s)) return "";
+        // 去掉零寬字元（有時複製連結會帶進來）
+        s = s.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
+        if(/^www\./i.test(s)) s = "https://" + s;
+        return s;
+      }
+
+      function extractFirstUrl(text){
+        var s = (text ?? "").toString();
+        var m = s.match(/(https?:\/\/[^\s<>"']+|file:\/\/\/[^\s<>"']+|mailto:[^\s<>"']+)/i);
+        if(m) return m[1];
+        m = s.match(/(www\.[^\s<>"']+)/i);
+        if(m) return "https://" + m[1];
+        return "";
+      }
+
+      // 從物件中找出各種「附件」可能存放的位置（含中文 key、陣列、物件）
+      function pickAttachFromObj(x){
+        if(!x || typeof x !== "object") return "";
+
+        var keys = [
+          "attach","attachment","attachmentUrl","attachmentURL","file","fileUrl","fileURL","link","url","href",
+          "download","dl","dropbox","gdrive","drive","share",
+          "附件","附件連結","附件網址","檔案","檔案連結","連結","網址","超連結","linkUrl","linkURL","att","attUrl","attURL"
+        ];
+
+        for(var i=0;i<keys.length;i++){
+          var k = keys[i];
+          if(x[k] === undefined || x[k] === null) continue;
+          var v = x[k];
+
+          if(Array.isArray(v)){
+            for(var j=0;j<v.length;j++){
+              var vv = v[j];
+              if(typeof vv === "string" && !isEmptyLike(vv)) return String(vv);
+              if(vv && typeof vv === "object"){
+                var v2 = vv.url || vv.href || vv.link || vv.path;
+                if(v2 && !isEmptyLike(v2)) return String(v2);
+              }
+            }
+            continue;
+          }
+
+          if(v && typeof v === "object"){
+            var o2 = v.url || v.href || v.link || v.path;
+            if(o2 && !isEmptyLike(o2)) return String(o2);
+            continue;
+          }
+
+          if(typeof v === "string" || typeof v === "number") return String(v);
+        }
+
+        // 常見容器欄位：attachments/files/links
+        var containers = ["attachments","files","links","附件列表","檔案列表"];
+        for(var c=0;c<containers.length;c++){
+          var ck = containers[c];
+          var arr = x[ck];
+          if(!Array.isArray(arr)) continue;
+          for(var a=0;a<arr.length;a++){
+            var it = arr[a];
+            if(typeof it === "string" && !isEmptyLike(it)) return String(it);
+            if(it && typeof it === "object"){
+              var h = it.url || it.href || it.link || it.path;
+              if(h && !isEmptyLike(h)) return String(h);
+            }
+          }
+        }
+
+        return "";
+      }
+
+      function isLinkish(href){
+        var h = sanitizeLink(href);
+        if(!h) return false;
+
+        if(/^https?:\/\//i.test(h) || /^mailto:/i.test(h) || /^file:/i.test(h)) return true;
+        if(/^[./]/.test(h)) return true; // 相對路徑
+        if(/^[A-Za-z0-9_\-\/]+\.html(\?|#|$)/i.test(h)) return true;
+
+        // 像「dropbox.com/...」這種沒 scheme 的
+        if(/^[a-z0-9.-]+\.[a-z]{2,}\/.+/i.test(h) && !/^[a-z]+:/i.test(h)) return true;
+
+        return false;
+      }
+
+      // 若雲端回來欄位是空，但本機之前（或安全快照/備份）有值：自動補回（避免被空白覆蓋）
+      function patchMissingFieldsFromLocal(incomingArr, baseArr){
+        if(!Array.isArray(incomingArr) || incomingArr.length===0) return incomingArr;
+
+        if(!Array.isArray(baseArr) || baseArr.length===0){
+          // 嘗試從安全快照 / 備份拿一份來補
+          var safe = getSafetySnapshotDb();
+          if(Array.isArray(safe) && safe.length) baseArr = safe;
+          else{
+            var bk = readBackupCandidates();
+            if(Array.isArray(bk) && bk.length) baseArr = bk;
+          }
+        }
+        if(!Array.isArray(baseArr) || baseArr.length===0) return incomingArr;
+
+        var uidMap = new Map();
+        var idMap  = new Map();
+
+        baseArr.map(normalizeRow).filter(Boolean).forEach(function(r){
+          if(r.uid) uidMap.set(r.uid, r);
+          if(r.id)  idMap.set(String(r.id), r);
+        });
+
+        for(var i=0;i<incomingArr.length;i++){
+          var r0 = normalizeRow(incomingArr[i]);
+          if(!r0) continue;
+
+          var src = null;
+          if(r0.uid && uidMap.has(r0.uid)) src = uidMap.get(r0.uid);
+          else if(r0.id && idMap.has(String(r0.id))) src = idMap.get(String(r0.id));
+
+          if(src){
+            ["attach","source","remark","trade","system","date"].forEach(function(f){
+              if(isEmptyLike(r0[f]) && !isEmptyLike(src[f])) r0[f] = src[f];
+            });
+            if(isEmptyLike(r0.text) && !isEmptyLike(src.text)) r0.text = src.text;
+          }
+
+          // 若仍沒附件，嘗試從文字/備註/出處抽 URL
+          if(isEmptyLike(r0.attach)){
+            var u = sanitizeLink(extractFirstUrl(r0.text) || extractFirstUrl(r0.remark) || extractFirstUrl(r0.source));
+            if(u) r0.attach = u;
+          }else{
+            r0.attach = sanitizeLink(r0.attach);
+          }
+
+          incomingArr[i] = r0;
+        }
+
+        return incomingArr;
+      }
+
       function fnv1a(str2){
         var h = 0x811c9dc5;
         for(var i=0;i<str2.length;i++){
@@ -1364,14 +1513,24 @@
         location.href = withV(href);
       }
 
+      // ✅（步驟②）替換：openAttachment 更穩（支援 www / 無 scheme 的連結）
       function openAttachment(href){
-        var h = (href ?? "").toString().trim();
+        var h = sanitizeLink(href);
         if(!h) return;
+
+        // dropbox.com/... 或 www.... 沒 scheme 的補 https
+        if(/^www\./i.test(h)) h = "https://" + h;
+        if(/^[a-z0-9.-]+\.[a-z]{2,}\/.+/i.test(h) && !/^[a-z]+:/i.test(h)){
+          h = "https://" + h;
+        }
+
         if(/^https?:\/\//i.test(h) || /^mailto:/i.test(h) || /^file:/i.test(h)){
           backupOnExit("open_attachment");
           window.open(h, "_blank", "noopener");
           return;
         }
+
+        // 相對連結（站內檔案）
         go(h);
       }
 
@@ -1384,6 +1543,7 @@
       // ===============================
       // ✅ Row normalize (新增 source 相容)
       // ===============================
+      // ✅（步驟③）替換：normalizeRow 擴充附件相容 + 從文字抽 URL
       function normalizeRow(x){
         if(!x || typeof x !== "object") return null;
 
@@ -1408,10 +1568,17 @@
         var text   = (x.text ?? x.content ?? x.note ?? x.memo ?? "").toString();
         var trade  = norm(x.trade ?? x.kind ?? x.type ?? x.work ?? "");
         var system = norm(x.system ?? x.sys ?? x.category ?? "");
-        var attach = norm(x.attach ?? x.attachment ?? x.file ?? x.link ?? "");
-        var source = norm(x.source ?? x.origin ?? x.from ?? x.src ?? "");
-        var remark = (x.remark ?? x.note2 ?? x.desc ?? "").toString();
-        var date   = norm(x.date ?? x.day ?? x.created ?? x.createdAt ?? "");
+        var source = norm(x.source ?? x.origin ?? x.from ?? x.src ?? x["出處"] ?? "");
+        var remark = (x.remark ?? x.note2 ?? x.desc ?? x["備註"] ?? "").toString();
+        var date   = norm(x.date ?? x.day ?? x.created ?? x.createdAt ?? x["登錄日期"] ?? "");
+
+        // ✅ 附件：吃更多 key / 陣列 / 物件 / 中文欄位
+        var attach = sanitizeLink(pickAttachFromObj(x));
+
+        // 若附件欄位沒有，但文字/備註內有貼 URL → 自動抽出
+        if(isEmptyLike(attach)){
+          attach = sanitizeLink(extractFirstUrl(text) || extractFirstUrl(remark) || extractFirstUrl(source));
+        }
 
         if(date){
           if(!/^\d{4}-\d{2}-\d{2}$/.test(date)){
@@ -1426,7 +1593,17 @@
           else uid = uuid();
         }
 
-        return { uid: uid, id: id, text: text, trade: trade, system: system, attach: attach, source: source, remark: remark, date: date };
+        return {
+          uid: uid,
+          id: id,
+          text: text,
+          trade: trade,
+          system: system,
+          attach: attach,
+          source: source,
+          remark: remark,
+          date: date
+        };
       }
 
       function rowKey(r){
@@ -1879,6 +2056,9 @@
           .map(normalizeRow)
           .filter(Boolean)
           .filter(function(r){ return r.text && r.text.toString().trim(); });
+
+        // ✅（步驟④）新增：補回附件/欄位，避免雲端空白覆蓋
+        incoming = patchMissingFieldsFromLocal(incoming, beforeDb);
 
         var localCount = beforeDb.map(normalizeRow).filter(Boolean).filter(function(r){ return r.text && r.text.toString().trim(); }).length;
         var incomingCount = incoming.length;
