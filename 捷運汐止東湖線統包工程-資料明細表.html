@@ -687,12 +687,34 @@
 
   <div class="toast" id="toast"></div>
 
+  <!-- ✅✅✅ CloudKit Loader（D1 + Access + CORS + 合併寫入：由 tasun-cloud-kit.js 內部處理） -->
+  <script>
+  (function(){
+    try{
+      if(document.querySelector('script[data-tasun="cloud-kit"]')) return;
+      var src = (typeof window.__withV === "function")
+        ? window.__withV("tasun-cloud-kit.js")
+        : ("tasun-cloud-kit.js" + ((window.__CACHE_V||"") ? ("?v="+encodeURIComponent(window.__CACHE_V)) : ""));
+      var s = document.createElement("script");
+      s.src = src;
+      s.async = true;
+      s.dataset.tasun = "cloud-kit";
+      document.head.appendChild(s);
+    }catch(e){}
+  })();
+  </script>
+
   <script>
     const CURRENT_KEY = "tasunCurrentUser_v1";
     const AUTH_KEY = "tasunAuthTable_v1";
 
     // ✅ 本頁資料庫 Keys（獨立於工程資料明細表）
     const DB_KEY = "tasunSxdhDetail_v1";
+
+    // ✅ Cloud 資源設定（請確保 tasun-resources.json 內有這個 resourceKey）
+    const RESOURCES_URL = "tasun-resources.json";
+    const RESOURCE_KEY = "sxdh-detail";   // ← 若你 resources.json 用別的 key，就只改這行
+    const PK = "id";
 
     // ✅「新增…」選項固定值
     const ADD_VALUE = "__add__";
@@ -701,6 +723,10 @@
     let db = [];
     let editingId = null;
     let _watchStarted = false;
+
+    // ===== Cloud control (merge-write) =====
+    let cloudCtrl = null;
+    let _applyingFromCloud = false;
 
     const $ = (id) => document.getElementById(id);
     const norm = (s) => (s ?? "").toString().trim();
@@ -990,7 +1016,12 @@
         if(!Array.isArray(db)) db = [];
       }catch(e){ db = []; }
     }
-    function saveDB(){ localStorage.setItem(DB_KEY, JSON.stringify(db)); }
+
+    // ✅ 允許跳過雲端寫入（避免雲端 pull->apply 又觸發 saveMerged 造成回寫循環）
+    function saveDB(skipCloud){
+      localStorage.setItem(DB_KEY, JSON.stringify(db));
+      if(!skipCloud && !_applyingFromCloud) scheduleCloudSave();
+    }
 
     function uniqueOptions(field){
       const set = new Set();
@@ -1339,8 +1370,16 @@
       const idx = db.findIndex(x => Number(x.id) === Number(editingId));
       if(idx < 0){ toast("找不到資料"); return; }
 
-      db[idx] = { id: editingId, docName, system, trade, regDate, fileUrl, note };
-      saveDB();
+      // ✅ 可選：加入更新資訊（不影響 UI；利於雲端合併）
+      const nowISO = new Date().toISOString();
+      db[idx] = {
+        id: editingId,
+        docName, system, trade, regDate, fileUrl, note,
+        updatedAt: nowISO,
+        updatedBy: norm(currentUser?.user || "")
+      };
+
+      saveDB(false);
 
       closeModal();
       render();
@@ -1359,7 +1398,7 @@
       if(!confirm("確定刪除這筆資料？")) return;
 
       db = db.filter(x => Number(x.id) !== Number(editingId));
-      saveDB();
+      saveDB(false);
 
       closeModal();
       render();
@@ -1426,10 +1465,82 @@
       }, DB_WATCH_MS);
     }
 
+    // ===== Cloud: 合併寫入（saveMerged） =====
+    function scheduleCloudSave(){
+      if(!cloudCtrl || typeof cloudCtrl.saveMerged !== "function") return;
+      clearTimeout(scheduleCloudSave._t);
+      scheduleCloudSave._t = setTimeout(()=>{
+        try{ cloudCtrl.saveMerged(); }catch(e){}
+      }, 280);
+    }
+
+    function cloudMountOnce(){
+      if(cloudCtrl) return cloudCtrl;
+
+      const rk = norm(RESOURCE_KEY);
+      const pk = norm(PK);
+
+      // ✅ 防呆：絕不以空 key / 空 pk mount
+      if(!rk || !pk) return null;
+
+      const kit = window.TasunCloudKit;
+      if(!kit || typeof kit.init !== "function" || typeof kit.mount !== "function") return null;
+
+      try{
+        kit.init({
+          appVer: norm(window.__CACHE_V || window.__APP_VER || window.TASUN_APP_VER || ""),
+          resourcesUrl: RESOURCES_URL,
+          ui: { enabled:true, hideLockButtons:true, position:"bottom-right" },
+          lock: { enabled:false, auto:false }
+        });
+
+        cloudCtrl = kit.mount({
+          resourcesUrl: RESOURCES_URL,
+          resourceKey: rk,
+          pk: pk,
+          getLocal: function(){
+            loadDB();
+            return Array.isArray(db) ? db : [];
+          },
+          apply: function(rows){
+            _applyingFromCloud = true;
+            db = Array.isArray(rows) ? rows : [];
+            saveDB(true);   // ✅ 不回寫雲端（避免循環）
+            _applyingFromCloud = false;
+            render();
+          }
+        });
+
+        if(cloudCtrl && typeof cloudCtrl.pullNow === "function"){
+          try{ cloudCtrl.pullNow(); }catch(e){}
+        }
+
+        return cloudCtrl;
+      }catch(e){
+        cloudCtrl = null;
+        return null;
+      }
+    }
+
+    // ✅ CloudKit 是 async loader：載入晚了也要能 mount
+    function watchCloudKitReady(){
+      const t0 = Date.now();
+      (function tick(){
+        if(cloudCtrl) return;
+        cloudMountOnce();
+        if(cloudCtrl) return;
+        if(Date.now() - t0 > 8000) return;
+        setTimeout(tick, 120);
+      })();
+    }
+
     function start(){
       if(!ensureLoggedIn()) return;
 
       loadDB();
+
+      // ✅ 只要 kit 已就緒就 mount；未就緒也不影響本機使用
+      cloudMountOnce();
 
       $("navHome").onclick = () => go("index.html");
       $("navReg").onclick  = () => go("捷運汐止東湖線統包工程-資料明細表登錄.html");
@@ -1499,8 +1610,10 @@
       });
     })();
 
+    // ✅ 啟動
     startSessionWatch();
     start();
+    watchCloudKitReady();
   </script>
 </body>
 </html>
