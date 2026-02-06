@@ -2,7 +2,7 @@
  * tasun-api/worker.js
  * - D1 JSON records store
  * - Cloudflare Access JWT verify (Cf-Access-Jwt-Assertion)
- * - CORS allow credentials for GitHub Pages origin
+ * - CORS allow GitHub Pages origin (echo preflight requested headers)
  */
 
 const JWKS_CACHE = { at: 0, jwks: null }; // in-memory cache
@@ -17,18 +17,33 @@ function getOrigin(req) {
   return req.headers.get("Origin") || "";
 }
 
-function corsify(req, env, res) {
+/** ✅ CORS: match Cloudflare Dashboard 版（echo Access-Control-Request-Headers） */
+function buildCors(req, env) {
   const origin = getOrigin(req);
-  const allow = env.ALLOWED_ORIGIN || "";
-  const h = new Headers(res.headers);
+  const reqHdrs = req.headers.get("Access-Control-Request-Headers") || "";
 
-  if (origin && allow && origin === allow) {
-    h.set("Access-Control-Allow-Origin", origin);
-    h.set("Vary", "Origin");
-    h.set("Access-Control-Allow-Credentials", "true");
-    h.set("Access-Control-Allow-Headers", "content-type, cf-access-jwt-assertion");
-    h.set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  }
+  // ✅ 若 env.ALLOWED_ORIGIN 沒設，預設放行 GitHub Pages
+  const allowOrigin = (env && env.ALLOWED_ORIGIN) ? String(env.ALLOWED_ORIGIN) : "https://wutasun.github.io";
+
+  // ✅ 只讓 GitHub Pages 讀得到：若來源不是 allowOrigin，就回 allowOrigin（瀏覽器會擋住非白名單來源）
+  const outOrigin = (origin && origin === allowOrigin) ? origin : allowOrigin;
+
+  return {
+    "Access-Control-Allow-Origin": outOrigin,
+    "Vary": "Origin",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    // ✅ 讓 preflight 要求的自訂標頭通過（cf-access-*, x-tasun-*）
+    "Access-Control-Allow-Headers": reqHdrs || "content-type, cf-access-jwt-assertion, cf-access-client-id, cf-access-client-secret, x-tasun-appver, x-tasun-page, x-tasun-role, x-tasun-user",
+    "Access-Control-Max-Age": "86400",
+    // 若你前端有用 fetch(...,{credentials:'include'}) 才需要；留著不會壞
+    "Access-Control-Allow-Credentials": "true",
+  };
+}
+
+function corsify(req, env, res) {
+  const h = new Headers(res.headers);
+  const cors = buildCors(req, env);
+  for (const [k, v] of Object.entries(cors)) h.set(k, v);
   return new Response(res.body, { status: res.status, headers: h });
 }
 
@@ -135,7 +150,6 @@ async function listRows(env, resource, sinceMs) {
   const rs = await env.DB.prepare(sql).bind(...args).all();
   const rows = (rs.results || []).map(x => {
     const obj = JSON.parse(x.data);
-    // 保留原資料，補上必要欄位（不影響你 UI 的欄位）
     obj.id = x.id;
     obj.updatedAt = x.updated_at;
     obj.createdAt = x.created_at;
@@ -179,9 +193,9 @@ async function upsertRows(env, resource, incoming) {
 
 export default {
   async fetch(req, env) {
-    // preflight
+    // ✅ 1) preflight 一定先處理（會 echo Access-Control-Request-Headers）
     if (req.method === "OPTIONS") {
-      return corsify(req, env, new Response(null, { status: 204 }));
+      return corsify(req, env, new Response("", { status: 204 }));
     }
 
     try {
@@ -192,10 +206,32 @@ export default {
       const url = new URL(req.url);
       const pathname = url.pathname.replace(/\/+$/, "");
 
-      if (pathname === "/api/health") {
+      if (pathname === "/api/health" || pathname === "/api/healthz") {
         return corsify(req, env, json({ ok: true, ts: nowMs() }));
       }
 
+      // ✅ 相容你前端正在打的 API：
+      // GET /api/tasun/pull?key=sxdh-notes&since=123&_=cacheBust
+      if (req.method === "GET" && pathname === "/api/tasun/pull") {
+        const key = url.searchParams.get("key") || "";
+        if (!key) return corsify(req, env, json({ ok: false, error: "Missing key" }, { status: 400 }));
+        const since = Number(url.searchParams.get("since") || 0) || 0;
+        const out = await listRows(env, key, since);
+        return corsify(req, env, json({ ok: true, key, ...out, serverTime: nowMs() }));
+      }
+
+      // POST /api/tasun/merge?key=sxdh-notes  body: { rows:[...] }
+      if (req.method === "POST" && pathname === "/api/tasun/merge") {
+        const key = url.searchParams.get("key") || "";
+        if (!key) return corsify(req, env, json({ ok: false, error: "Missing key" }, { status: 400 }));
+        const body = await req.json().catch(() => ({}));
+        const rows = Array.isArray(body.rows) ? body.rows : [];
+        await upsertRows(env, key, rows);
+        const out = await listRows(env, key, 0);
+        return corsify(req, env, json({ ok: true, key, ...out, serverTime: nowMs() }));
+      }
+
+      // ✅ 你原本的 API 仍保留：
       // GET /api/db/:resource?since=123
       const m1 = pathname.match(/^\/api\/db\/([^\/]+)$/);
       if (req.method === "GET" && m1) {
@@ -211,10 +247,8 @@ export default {
         const resource = decodeURIComponent(m2[1]);
         const body = await req.json().catch(() => ({}));
         const rows = Array.isArray(body.rows) ? body.rows : [];
-
         await upsertRows(env, resource, rows);
         const out = await listRows(env, resource, 0);
-
         return corsify(req, env, json({ ok: true, resource, ...out, serverTime: nowMs() }));
       }
 
