@@ -1,7 +1,7 @@
 /**
  * tasun-api/worker.js
  * - D1 JSON records store
- * - Cloudflare Access JWT verify (Cf-Access-Jwt-Assertion)
+ * - Cloudflare Access JWT verify (Cf-Access-Jwt-Assertion or CF_Authorization cookie)
  * - CORS allow GitHub Pages origin (echo preflight requested headers)
  */
 
@@ -17,25 +17,37 @@ function getOrigin(req) {
   return req.headers.get("Origin") || "";
 }
 
-/** ✅ CORS: match Cloudflare Dashboard 版（echo Access-Control-Request-Headers） */
+function getCookie(req, name) {
+  const c = req.headers.get("Cookie") || "";
+  if (!c) return "";
+  const parts = c.split(/;\s*/);
+  for (const p of parts) {
+    const i = p.indexOf("=");
+    if (i <= 0) continue;
+    const k = p.slice(0, i).trim();
+    if (k === name) return p.slice(i + 1).trim();
+  }
+  return "";
+}
+
+/** ✅ CORS: echo Access-Control-Request-Headers */
 function buildCors(req, env) {
   const origin = getOrigin(req);
   const reqHdrs = req.headers.get("Access-Control-Request-Headers") || "";
 
-  // ✅ 若 env.ALLOWED_ORIGIN 沒設，預設放行 GitHub Pages
-  const allowOrigin = (env && env.ALLOWED_ORIGIN) ? String(env.ALLOWED_ORIGIN) : "https://wutasun.github.io";
+  // 若 env.ALLOWED_ORIGIN 沒設，預設放行 GitHub Pages
+  const allowOrigin = (env && env.ALLOWED_ORIGIN)
+    ? String(env.ALLOWED_ORIGIN)
+    : "https://wutasun.github.io";
 
-  // ✅ 只讓 GitHub Pages 讀得到：若來源不是 allowOrigin，就回 allowOrigin（瀏覽器會擋住非白名單來源）
   const outOrigin = (origin && origin === allowOrigin) ? origin : allowOrigin;
 
   return {
     "Access-Control-Allow-Origin": outOrigin,
     "Vary": "Origin",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    // ✅ 讓 preflight 要求的自訂標頭通過（cf-access-*, x-tasun-*）
-    "Access-Control-Allow-Headers": reqHdrs || "content-type, cf-access-jwt-assertion, cf-access-client-id, cf-access-client-secret, x-tasun-appver, x-tasun-page, x-tasun-role, x-tasun-user",
+    "Access-Control-Allow-Headers": reqHdrs || "content-type",
     "Access-Control-Max-Age": "86400",
-    // 若你前端有用 fetch(...,{credentials:'include'}) 才需要；留著不會壞
     "Access-Control-Allow-Credentials": "true",
   };
 }
@@ -81,8 +93,13 @@ async function fetchJwks(env) {
 }
 
 async function verifyAccess(req, env) {
-  const token = req.headers.get("Cf-Access-Jwt-Assertion");
-  if (!token) return { ok: false, status: 401, msg: "Missing Cf-Access-Jwt-Assertion (need Cloudflare Access login)" };
+  // ✅ 先吃 header（Access 注入），沒有再吃 cookie（很多環境會用 CF_Authorization）
+  let token = req.headers.get("Cf-Access-Jwt-Assertion") || "";
+  if (!token) token = getCookie(req, "CF_Authorization");
+
+  if (!token) {
+    return { ok: false, status: 401, msg: "Missing Access token (need Cf-Access-Jwt-Assertion or CF_Authorization cookie). Try login Access, and frontend fetch must use credentials:'include'." };
+  }
 
   let header, payload, sig, signed;
   try {
@@ -149,7 +166,8 @@ async function listRows(env, resource, sinceMs) {
 
   const rs = await env.DB.prepare(sql).bind(...args).all();
   const rows = (rs.results || []).map(x => {
-    const obj = JSON.parse(x.data);
+    let obj = {};
+    try { obj = JSON.parse(x.data || "{}"); } catch { obj = {}; }
     obj.id = x.id;
     obj.updatedAt = x.updated_at;
     obj.createdAt = x.created_at;
@@ -193,7 +211,7 @@ async function upsertRows(env, resource, incoming) {
 
 export default {
   async fetch(req, env) {
-    // ✅ 1) preflight 一定先處理（會 echo Access-Control-Request-Headers）
+    // ✅ preflight 一定先處理
     if (req.method === "OPTIONS") {
       return corsify(req, env, new Response("", { status: 204 }));
     }
@@ -210,8 +228,7 @@ export default {
         return corsify(req, env, json({ ok: true, ts: nowMs() }));
       }
 
-      // ✅ 相容你前端正在打的 API：
-      // GET /api/tasun/pull?key=sxdh-notes&since=123&_=cacheBust
+      // ✅ 相容前端：GET /api/tasun/pull?key=xxx&since=123
       if (req.method === "GET" && pathname === "/api/tasun/pull") {
         const key = url.searchParams.get("key") || "";
         if (!key) return corsify(req, env, json({ ok: false, error: "Missing key" }, { status: 400 }));
@@ -220,7 +237,7 @@ export default {
         return corsify(req, env, json({ ok: true, key, ...out, serverTime: nowMs() }));
       }
 
-      // POST /api/tasun/merge?key=sxdh-notes  body: { rows:[...] }
+      // ✅ 相容前端：POST /api/tasun/merge?key=xxx  body:{rows:[...]}
       if (req.method === "POST" && pathname === "/api/tasun/merge") {
         const key = url.searchParams.get("key") || "";
         if (!key) return corsify(req, env, json({ ok: false, error: "Missing key" }, { status: 400 }));
@@ -231,8 +248,7 @@ export default {
         return corsify(req, env, json({ ok: true, key, ...out, serverTime: nowMs() }));
       }
 
-      // ✅ 你原本的 API 仍保留：
-      // GET /api/db/:resource?since=123
+      // ✅ 原本 API 仍保留：GET /api/db/:resource?since=123
       const m1 = pathname.match(/^\/api\/db\/([^\/]+)$/);
       if (req.method === "GET" && m1) {
         const resource = decodeURIComponent(m1[1]);
@@ -241,7 +257,7 @@ export default {
         return corsify(req, env, json({ ok: true, resource, ...out, serverTime: nowMs() }));
       }
 
-      // POST /api/db/:resource/merge  body: { rows:[...] }
+      // ✅ 原本 API：POST /api/db/:resource/merge
       const m2 = pathname.match(/^\/api\/db\/([^\/]+)\/merge$/);
       if (req.method === "POST" && m2) {
         const resource = decodeURIComponent(m2[1]);
