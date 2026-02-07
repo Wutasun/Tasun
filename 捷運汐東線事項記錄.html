@@ -727,6 +727,7 @@
       }
 
       var PAGE_KEY = "sxdh-notes";
+      var RESOURCES_URL = "tasun-resources.json"; // ✅ 用於自動取得 API_BASE（跨設備免重設）
       Core.init({ pageKey: PAGE_KEY, forceUrlV:true, forceVersionSync:true, patchResources:true, networkToast:false, appHeightVar:false });
 
       var Auth = Core.Auth;
@@ -746,6 +747,8 @@
       var D1_API_BASE_KEY = "tasunD1ApiBase_v1";
       var ACCESS_ST_KEY   = "tasunAccessServiceToken_v1";
       var PROTECT_EMPTY_REMOTE_KEY = "tasun_protect_empty_remote__" + DB_KEY;
+
+      var DEFAULT_API_BASE = "https://tasun-api.wutasun.workers.dev"; // ✅ 預設 API_BASE（所有裝置免手動設定）
 
       // ===== API paths =====
       var CLOUD_RESOURCE_KEY = PAGE_KEY;
@@ -796,7 +799,7 @@
         if(b) return b.replace(/\/+$/,"");
         try{ b = norm(sessionStorage.getItem(D1_API_BASE_KEY)); if(b) return b.replace(/\/+$/,""); }catch(e){}
         try{ b = norm(localStorage.getItem(D1_API_BASE_KEY)); if(b) return b.replace(/\/+$/,""); }catch(e){}
-        return "";
+        return DEFAULT_API_BASE;
       }
       function setApiBase(v){
         v = norm(v).replace(/\/+$/,"");
@@ -804,6 +807,81 @@
         try{ v ? sessionStorage.setItem(D1_API_BASE_KEY, v) : sessionStorage.removeItem(D1_API_BASE_KEY); }catch(e){}
         try{ v ? localStorage.setItem(D1_API_BASE_KEY, v) : localStorage.removeItem(D1_API_BASE_KEY); }catch(e){}
       }
+
+      // ===== Auto discover API_BASE from tasun-resources.json (cross-device) =====
+      async function discoverApiBaseFromResources(){
+        try{
+          var APP = String(window.TASUN_APP_VER||"").trim();
+          var url = RESOURCES_URL + (RESOURCES_URL.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(APP) + "&_=" + Date.now();
+          var res = await fetch(url, { cache:"no-store" });
+          if(!res.ok) return "";
+          var j = await res.json();
+
+          function pick(obj, path){
+            try{
+              var cur = obj;
+              for(var i=0;i<path.length;i++){
+                if(!cur || typeof cur!=="object") return "";
+                cur = cur[path[i]];
+              }
+              return (typeof cur==="string") ? cur.trim() : "";
+            }catch(e){ return ""; }
+          }
+          function findByKey(obj, keyRe){
+            var q = [obj];
+            while(q.length){
+              var x = q.shift();
+              if(!x || typeof x!=="object") continue;
+              for(var k in x){
+                if(!Object.prototype.hasOwnProperty.call(x,k)) continue;
+                var v = x[k];
+                if(keyRe.test(String(k))){
+                  if(typeof v==="string" && /^https?:\/\//i.test(v.trim())) return v.trim();
+                }
+                if(v && typeof v==="object") q.push(v);
+              }
+            }
+            return "";
+          }
+
+          // ✅ 優先：明確欄位
+          var cands = [
+            pick(j, ["cloud","apiBase"]),
+            pick(j, ["cloud","d1ApiBase"]),
+            pick(j, ["cloud","API_BASE"]),
+            pick(j, ["d1","apiBase"]),
+            pick(j, ["d1","base"]),
+            (typeof j.apiBase==="string"?j.apiBase.trim():""),
+            (typeof j.d1ApiBase==="string"?j.d1ApiBase.trim():""),
+            (typeof j.D1_API_BASE==="string"?j.D1_API_BASE.trim():""),
+            pick(j, ["config","apiBase"]),
+            pick(j, ["config","d1ApiBase"])
+          ].filter(Boolean);
+
+          // ✅ 次選：遞迴搜尋 key 名稱
+          if(!cands.length){
+            cands.push(findByKey(j, /^(apiBase|api_base|d1ApiBase|d1_api_base|cloudApiBase)$/i));
+          }
+
+          for(var i=0;i<cands.length;i++){
+            var b = (cands[i]||"").trim().replace(/\/+$/,"");
+            if(b && /^https?:\/\//i.test(b)) return b;
+          }
+        }catch(e){}
+        return "";
+      }
+
+      async function ensureApiBaseReady(){
+        var b = getApiBase();
+        if(b) return b;
+        var d = await discoverApiBaseFromResources();
+        if(d){
+          setApiBase(d);
+          return getApiBase();
+        }
+        return "";
+      }
+
       function parseStoredToken(raw){
         raw = norm(raw);
         if(!raw) return null;
@@ -888,11 +966,56 @@
         }
         apiLastStatus = res.status;
         var ct = (res.headers.get("content-type")||"").toLowerCase();
-        if(ct.includes("application/json")) return await res.json();
-        var txt = await res.text();
-        try{ return JSON.parse(txt); }catch(e){ return { ok:true, raw:txt }; }
-      }
+        if(ct.includes("application/json") || ct.includes("+json")){
+          var data = await res.json();
+          // ✅ 後端若以 200 回傳 {ok:false,...} 也視為錯誤（避免被當成空資料套用）
+          if(data && typeof data==="object" && data.ok===false){
+            var msg = data.error || data.message || "API_ERROR";
+            var errJ = new Error(msg);
+            errJ.status = res.status;
+            try{ errJ.body = JSON.stringify(data); }catch(_e){ errJ.body = ""; }
+            var lowM = String(msg||"").toLowerCase();
+            errJ.code = (lowM.includes("missing access") || lowM.includes("access token") || lowM.includes("cf-access")) ? "ACCESS_DENY" : "API_FAIL";
+            throw errJ;
+          }
+          return data;
+        }
 
+        // ✅ Access/反向代理有時會回 HTML 登入頁（200 OK），不可當成空資料
+        var txt = await res.text();
+        var low = (txt||"").slice(0, 900).toLowerCase();
+        if(low.includes("<html") && (low.includes("cloudflare access") || low.includes("cf-access") || low.includes("access login"))){
+          var errH = new Error("ACCESS_HTML");
+          errH.status = res.status;
+          errH.body = (txt||"").slice(0, 4000);
+          errH.code = "ACCESS_DENY";
+          throw errH;
+        }
+
+        try{
+          var j = JSON.parse(txt);
+          if(j && typeof j==="object" && j.ok===false){
+            var msg2 = j.error || j.message || "API_ERROR";
+            var errJ2 = new Error(msg2);
+            errJ2.status = res.status;
+            errJ2.body = (txt||"").slice(0, 4000);
+            var lowM2 = String(msg2||"").toLowerCase();
+            errJ2.code = (lowM2.includes("missing access") || lowM2.includes("access token") || lowM2.includes("cf-access")) ? "ACCESS_DENY" : "API_FAIL";
+            throw errJ2;
+          }
+          return j;
+        }catch(e){
+          if(e && (e.code==="ACCESS_DENY" || e.code==="API_FAIL")) throw e;
+          var err3 = new Error("BAD_RESPONSE");
+          err3.status = res.status;
+          err3.body = (txt||"").slice(0, 4000);
+          err3.code = "BAD_RESPONSE";
+          if(low.includes("<html") || low.includes("cloudflare access") || low.includes("cf-access") || low.includes("access login")){
+            err3.code = "ACCESS_DENY";
+          }
+          throw err3;
+        }
+      }
       function unwrap(resp){
         var info = (resp && typeof resp==="object") ? (resp.info || resp.meta || {}) : {};
         var p = resp;
@@ -949,11 +1072,24 @@
         var rdb = Array.isArray(payload.db) ? payload.db : [];
         var rc = Number(payload.counter||0); if(!Number.isFinite(rc) || rc<0) rc=0;
 
-        // ✅ protect: remote 空但 local 有 → 先保護一次
+        // ✅ protect / seed：remote 空但 local 有
         var protectOnce = false;
         try{ protectOnce = !sessionStorage.getItem(PROTECT_EMPTY_REMOTE_KEY); }catch(e){}
         if(rdb.length===0 && db.length>0 && protectOnce){
+          // 第一次連上雲端時，如果雲端還是空的，且本機已有資料：
+          // - write/admin：自動用「合併寫入」把本機資料建立到雲端，讓多設備馬上同步一致
+          // - read：僅保護本機，避免誤覆蓋
+          var canWrite = Auth.canWrite ? Auth.canWrite() : (Auth.role && /^(admin|write)$/i.test(Auth.role()||""));
           try{ sessionStorage.setItem(PROTECT_EMPTY_REMOTE_KEY, "1"); }catch(e){}
+          if(canWrite && !lastSyncAt){
+            toast("☁️ 雲端尚無資料：已用本機資料建立雲端（合併寫入）。");
+            cloudState = "ok";
+            lastSyncAt = Date.now();
+            renderHint();
+            var self = this;
+            setTimeout(function(){ try{ self.saveMerged(); }catch(e){} }, 0);
+            return;
+          }
           toast("⚠️ 雲端回傳空資料：已先保護本機資料（避免誤覆蓋）。");
           cloudState = "ok";
           lastSyncAt = Date.now();
@@ -976,7 +1112,23 @@
           var u = unwrap(resp);
           self.apply(u.payload, u.info||{});
           return true;
-        }).catch(function(e){ self._err(e); return false; });
+        }).catch(function(e){
+          // ✅ 雲端尚未建立（404/NOT_FOUND）→ write/admin 自動建立空 DB（或帶本機資料）
+          if(e && (e.status===404 || e.code==="NOT_FOUND")){
+            cloudState = "ok";
+            lastSyncAt = Date.now();
+            renderHint();
+            var canWrite = Auth.canWrite ? Auth.canWrite() : (Auth.role && /^(admin|write)$/i.test(Auth.role()||""));
+            if(canWrite){
+              toast("☁️ 雲端尚未建立此資料：正在建立…");
+              return self.saveMerged().then(function(){ return true; });
+            }
+            toast("☁️ 雲端尚未建立資料（唯讀模式無法建立）。");
+            return false;
+          }
+          self._err(e); 
+          return false;
+        });
       };
       CloudCtrl.prototype.saveMerged = function(){
         var self = this;
@@ -1631,7 +1783,8 @@
         el.type = (el.type==="password") ? "text" : "password";
       }
 
-      function openCloudPortal(){
+      async function openCloudPortal(){
+        await ensureApiBaseReady();
         var u = portalUrl();
         if(!u || u===D1_PING_PATH){ toast("尚未設定 API_BASE"); return; }
         window.open(u, "_blank", "noopener");
@@ -1639,14 +1792,19 @@
 
       function startCloud(forceNow){
         if(!cloud) cloud = new CloudCtrl();
-        var base = getApiBase();
-        if(!base){
-          cloudState = "noapi";
-          renderHint();
-          return;
-        }
-        cloud.startWatch(10);
-        if(forceNow) cloud.pullNow();
+        (async function(){
+          // ✅ 1) 先確保 API_BASE（本機 / session / local；沒有就從 tasun-resources.json 自動讀取）
+          var base = await ensureApiBaseReady();
+          if(!base){
+            cloudState = "noapi";
+            renderHint();
+            return;
+          }
+          // ✅ 2) 自動輪詢拉取（多設備一致）
+          cloud.startWatch(10);
+          // ✅ 3) 立即拉取一次（開頁就先抓雲端）
+          if(forceNow) cloud.pullNow();
+        })();
       }
 
       // ===== Auth integration =====
