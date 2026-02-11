@@ -15,9 +15,12 @@
  * - pk is FORCED to "id" for ALL pages (no pk="k" allowed).
  * - Any mount({pk:"k"}) will be ignored to keep D1 merge fully consistent.
  * - Backward-compat: if item.id missing but item.k / item.key exists, we set item.id = item.k/key.
+ * - Server-compat: POST body sends BOTH {items:[...]} and {rows:[...]} to match different workers.
  * ========================================================= */
 (function () {
   "use strict";
+
+  var GLOBAL_PK = "id";
 
   // -------------------------------
   // Internal state (singleton)
@@ -90,7 +93,6 @@
       }
       return u.toString();
     } catch (e) {
-      // naive fallback (only for 'key')
       if (kv && kv.key && url.indexOf("key=") < 0) {
         return url + (url.indexOf("?") >= 0 ? "&" : "?") + "key=" + encodeURIComponent(String(kv.key));
       }
@@ -145,22 +147,16 @@
 
   function uiSet(text) {
     if (!_S._uiMsgEl) return;
-    try {
-      _S._uiMsgEl.textContent = String(text || "");
-    } catch (e) {}
+    try { _S._uiMsgEl.textContent = String(text || ""); } catch (e) {}
   }
 
   function uiPulse(ok) {
     if (!_S._uiEl) return;
     try {
       var dot = _S._uiEl.firstChild;
-      if (dot && dot.style) {
-        dot.style.background = ok ? "rgba(120,255,190,.75)" : "rgba(255,160,160,.75)";
-      }
+      if (dot && dot.style) dot.style.background = ok ? "rgba(120,255,190,.75)" : "rgba(255,160,160,.75)";
       setTimeout(function () {
-        if (dot && dot.style) {
-          dot.style.background = "rgba(255,255,255,.35)";
-        }
+        if (dot && dot.style) dot.style.background = "rgba(255,255,255,.35)";
       }, 550);
     } catch (e) {}
   }
@@ -169,7 +165,6 @@
   // Resources loader (tasun-resources.json)
   // -------------------------------
   async function loadResources() {
-    // inline first (if provided)
     if (_S.resourcesInline && typeof _S.resourcesInline === "object") {
       if (!_S._resourcesCache) {
         _S._resourcesCache = _S.resourcesInline;
@@ -181,9 +176,7 @@
     var url = addV(_S.resourcesUrl || "tasun-resources.json");
     var cacheKey = url;
 
-    if (_S._resourcesCache && _S._resourcesUrlCacheKey === cacheKey) {
-      return _S._resourcesCache;
-    }
+    if (_S._resourcesCache && _S._resourcesUrlCacheKey === cacheKey) return _S._resourcesCache;
 
     var resp, text, json;
     try {
@@ -191,16 +184,12 @@
       text = await resp.text();
       json = safeJSONParse(text);
     } catch (e) {
-      // file:// may fail: fallback to inline if exists
       if (_S.resourcesInline && typeof _S.resourcesInline === "object") return _S.resourcesInline;
       throw new Error("Failed to load resources (fetch): " + url);
     }
 
-    if (!resp || !resp.ok || !json || typeof json !== "object") {
-      throw new Error("Failed to load resources: " + url);
-    }
+    if (!resp || !resp.ok || !json || typeof json !== "object") throw new Error("Failed to load resources: " + url);
 
-    // Compatible: { resources:{...} } or direct { key:{...} }
     if (json.resources && typeof json.resources === "object") json = json.resources;
 
     _S._resourcesCache = json;
@@ -213,17 +202,13 @@
     var out = shallowClone(entry) || {};
     out.resourceKey = resourceKey;
 
-    // normalize apiBase
-    if (out.apiBase && typeof out.apiBase === "string") {
-      out.apiBase = out.apiBase.trim().replace(/\/+$/, "");
-    }
+    if (out.apiBase && typeof out.apiBase === "string") out.apiBase = out.apiBase.trim().replace(/\/+$/, "");
 
-    // normalize endpoints
     var ep = (out.endpoints && typeof out.endpoints === "object") ? shallowClone(out.endpoints) : {};
     out.endpoints = {
       health: norm(ep.health || "/health"),
-      read: norm(ep.read || "/api/read"),
-      merge: norm(ep.merge || "/api/merge"),
+      read:   norm(ep.read   || "/api/read"),
+      merge:  norm(ep.merge  || "/api/merge"),
     };
 
     return out;
@@ -236,38 +221,28 @@
       if (Array.isArray(any.db)) return any.db;
       if (Array.isArray(any.rows)) return any.rows;
       if (Array.isArray(any.data)) return any.data;
-      // allow single object
       return [any];
     }
     return [];
   }
 
-  // ✅ pk is forced to "id". We still support stable id fallback for key-value items.
+  // ✅ pk forced to "id"; still support legacy keys to build id
   function ensureId(item) {
     if (!item || typeof item !== "object") return item;
 
-    // already has id
-    if (item.id !== undefined && item.id !== null && norm(item.id) !== "") return item;
+    if (item[GLOBAL_PK] !== undefined && item[GLOBAL_PK] !== null && norm(item[GLOBAL_PK]) !== "") return item;
 
-    // fallback order (backward compat)
     var cand =
-      (item.k !== undefined && item.k !== null && norm(item.k) !== "") ? item.k :
+      (item.k   !== undefined && item.k   !== null && norm(item.k)   !== "") ? item.k :
       (item.key !== undefined && item.key !== null && norm(item.key) !== "") ? item.key :
-      (item.pk !== undefined && item.pk !== null && norm(item.pk) !== "") ? item.pk :
+      (item.pk  !== undefined && item.pk  !== null && norm(item.pk)  !== "") ? item.pk :
       (item._id !== undefined && item._id !== null && norm(item._id) !== "") ? item._id :
       "";
 
-    if (norm(cand)) {
-      item.id = String(cand).trim();
-      return item;
-    }
+    if (norm(cand)) { item[GLOBAL_PK] = String(cand).trim(); return item; }
 
-    // generate
-    try {
-      item.id = crypto.randomUUID();
-    } catch (e) {
-      item.id = String(Date.now()) + "_" + Math.random().toString(16).slice(2);
-    }
+    try { item[GLOBAL_PK] = crypto.randomUUID(); }
+    catch (e) { item[GLOBAL_PK] = String(Date.now()) + "_" + Math.random().toString(16).slice(2); }
     return item;
   }
 
@@ -277,7 +252,6 @@
       ver: remoteObj && remoteObj.ver !== undefined ? remoteObj.ver : 1,
       updatedAt: (remoteObj && remoteObj.updatedAt) ? remoteObj.updatedAt : nowISO(),
       items: items,
-      // compat aliases:
       db: items,
       rows: items,
       counter: items.length
@@ -285,7 +259,7 @@
   }
 
   // -------------------------------
-  // Access helpers (cookie or Service Token headers)
+  // Access helpers
   // -------------------------------
   function parseTokenRaw(raw) {
     raw = norm(raw);
@@ -327,15 +301,8 @@
     } catch (e2) {}
 
     storageKey = norm(storageKey) || "tasunAccessServiceToken_v1";
-    try {
-      var s1 = parseTokenRaw(sessionStorage.getItem(storageKey));
-      if (s1) return s1;
-    } catch (e3) {}
-    try {
-      var s2 = parseTokenRaw(localStorage.getItem(storageKey));
-      if (s2) return s2;
-    } catch (e4) {}
-
+    try { var s1 = parseTokenRaw(sessionStorage.getItem(storageKey)); if (s1) return s1; } catch (e3) {}
+    try { var s2 = parseTokenRaw(localStorage.getItem(storageKey));  if (s2) return s2; } catch (e4) {}
     return null;
   }
 
@@ -344,9 +311,9 @@
     h["Accept"] = "application/json";
     if (meta && typeof meta === "object") {
       if (meta.appVer) h["X-Tasun-AppVer"] = String(meta.appVer);
-      if (meta.page) h["X-Tasun-Page"] = String(meta.page);
-      if (meta.user) h["X-Tasun-User"] = String(meta.user);
-      if (meta.role) h["X-Tasun-Role"] = String(meta.role);
+      if (meta.page)  h["X-Tasun-Page"]   = String(meta.page);
+      if (meta.user)  h["X-Tasun-User"]   = String(meta.user);
+      if (meta.role)  h["X-Tasun-Role"]   = String(meta.role);
     }
     if (accessToken && accessToken.clientId && accessToken.clientSecret) {
       h["CF-Access-Client-Id"] = accessToken.clientId;
@@ -358,6 +325,26 @@
     return h;
   }
 
+  async function fetchJson(url, opt) {
+    var r = await fetch(url, opt);
+    var t = await r.text();
+    var j = safeJSONParse(t);
+    return { r: r, text: t, json: j };
+  }
+
+  function altReadPath(p) {
+    p = norm(p);
+    if (p === "/api/read") return "/api/tasun/pull";
+    if (p === "/api/tasun/pull") return "/api/read";
+    return "";
+  }
+  function altMergePath(p) {
+    p = norm(p);
+    if (p === "/api/merge") return "/api/tasun/merge";
+    if (p === "/api/tasun/merge") return "/api/merge";
+    return "";
+  }
+
   // -------------------------------
   // Worker API
   // -------------------------------
@@ -365,63 +352,71 @@
     var apiBase = norm(entry.apiBase);
     var ep = (entry.endpoints && typeof entry.endpoints === "object") ? entry.endpoints : {};
     var readPath = norm(ep.read || "/api/read");
-    var url = joinUrl(apiBase, readPath);
-    url = withQuery(url, { key: resourceKey });
 
-    var r = await fetch(url, {
-      method: "GET",
-      mode: "cors",
-      cache: "no-store",
-      credentials: (accessToken && accessToken.clientId) ? "omit" : "include",
-      headers: buildHeaders(null, accessToken, meta)
-    });
-
-    var t = await r.text();
-    var j = safeJSONParse(t);
-
-    if (!r.ok) {
-      throw new Error("Worker read failed: " + r.status + " " + (t || ""));
+    async function doRead(path) {
+      var url = joinUrl(apiBase, path);
+      url = withQuery(url, { key: resourceKey });
+      return fetchJson(url, {
+        method: "GET",
+        mode: "cors",
+        cache: "no-store",
+        credentials: (accessToken && accessToken.clientId) ? "omit" : "include",
+        headers: buildHeaders(null, accessToken, meta)
+      });
     }
-    if (!j) {
-      return { ver: 1, updatedAt: nowISO(), items: [] };
+
+    var out = await doRead(readPath);
+
+    // 404 fallback to /api/tasun/pull (or reverse)
+    if (!out.r.ok && out.r.status === 404) {
+      var alt = altReadPath(readPath);
+      if (alt) out = await doRead(alt);
     }
-    return j;
+
+    if (!out.r.ok) throw new Error("Worker read failed: " + out.r.status + " " + (out.text || ""));
+    return out.json || { ver: 1, updatedAt: nowISO(), items: [] };
   }
 
   async function workerMerge(entry, resourceKey, items, accessToken, meta) {
     var apiBase = norm(entry.apiBase);
     var ep = (entry.endpoints && typeof entry.endpoints === "object") ? entry.endpoints : {};
     var mergePath = norm(ep.merge || "/api/merge");
-    var url = joinUrl(apiBase, mergePath);
 
-    // ✅ pk forced to "id"
-    var body = {
-      key: resourceKey,
-      pk: "id",
-      items: items,
-      client: {
-        ts: Date.now(),
-        appVer: norm(_S.appVer) || norm(window.TASUN_APP_VER),
-        ua: (typeof navigator !== "undefined" ? navigator.userAgent : "")
-      }
-    };
+    async function doMerge(path) {
+      var url = joinUrl(apiBase, path);
+      var body = {
+        key: resourceKey,
+        pk: GLOBAL_PK,      // ✅ forced
+        items: items,       // ✅ for workers expecting items
+        rows: items,        // ✅ for D1 worker expecting rows
+        db: items,          // ✅ extra compat
+        client: {
+          ts: Date.now(),
+          appVer: norm(_S.appVer) || norm(window.TASUN_APP_VER),
+          ua: (typeof navigator !== "undefined" ? navigator.userAgent : "")
+        }
+      };
 
-    var r = await fetch(url, {
-      method: "POST",
-      mode: "cors",
-      cache: "no-store",
-      credentials: (accessToken && accessToken.clientId) ? "omit" : "include",
-      headers: buildHeaders({ "Content-Type": "application/json" }, accessToken, meta),
-      body: JSON.stringify(body),
-    });
-
-    var t = await r.text();
-    var j = safeJSONParse(t);
-
-    if (!r.ok) {
-      throw new Error("Worker merge failed: " + r.status + " " + (t || ""));
+      return fetchJson(url, {
+        method: "POST",
+        mode: "cors",
+        cache: "no-store",
+        credentials: (accessToken && accessToken.clientId) ? "omit" : "include",
+        headers: buildHeaders({ "Content-Type": "application/json" }, accessToken, meta),
+        body: JSON.stringify(body),
+      });
     }
-    return j || { ok: true };
+
+    var out = await doMerge(mergePath);
+
+    // 404 fallback to /api/tasun/merge (or reverse)
+    if (!out.r.ok && out.r.status === 404) {
+      var alt = altMergePath(mergePath);
+      if (alt) out = await doMerge(alt);
+    }
+
+    if (!out.r.ok) throw new Error("Worker merge failed: " + out.r.status + " " + (out.text || ""));
+    return out.json || { ok: true };
   }
 
   // -------------------------------
@@ -488,10 +483,10 @@
     // ✅FORCE pk/id rule (ignore cfg.pk / cfg.pkField)
     if (cfg.pk !== undefined || cfg.pkField !== undefined) {
       try {
-        // non-breaking warning (helps you find pages still using pk:"k")
         console.warn("[TasunCloudKit] pk is forced to 'id'. Please remove pk from mount() on page:", resourceKey, "pk=", cfg.pk || cfg.pkField);
       } catch (e) {}
     }
+
     var watchCfg = cfg.watch || { intervalSec: 0 };
     var getLocal = (typeof cfg.getLocal === "function") ? cfg.getLocal : function () { return { items: [] }; };
     var apply = (typeof cfg.apply === "function") ? cfg.apply : function () {};
@@ -525,7 +520,7 @@
       resourcesUrl: norm(_S.resourcesUrl),
       access: accessToken ? "token" : "cookie",
       accessKey: accessKey,
-      pk: "id"
+      pk: GLOBAL_PK
     };
 
     var readyResolve;
@@ -553,9 +548,7 @@
     }
 
     function safeApply(anyPayload, info) {
-      try {
-        apply(toApplyPayload(anyPayload), info || {});
-      } catch (e) {}
+      try { apply(toApplyPayload(anyPayload), info || {}); } catch (e) {}
     }
 
     async function resolveEntry() {
@@ -599,11 +592,7 @@
                 uiSet("CloudKit: remote empty → keep local");
                 uiPulse(true);
 
-                try {
-                  if (canSeed()) {
-                    saveMerged({ reason: "seed-empty-remote" });
-                  }
-                } catch (_e) {}
+                try { if (canSeed()) saveMerged({ reason: "seed-empty-remote" }); } catch (_e) {}
                 return;
               }
             }
@@ -621,9 +610,7 @@
           uiPulse(false);
           console.warn("[TasunCloudKit] pullNow error:", lastStatus.lastError);
 
-          try {
-            safeApply(getLocal() || { items: [] }, { source: "local-fallback", error: lastStatus.lastError });
-          } catch (_e2) {}
+          try { safeApply(getLocal() || { items: [] }, { source: "local-fallback", error: lastStatus.lastError }); } catch (_e2) {}
         }
       });
     }
@@ -644,7 +631,7 @@
 
           for (var i = 0; i < items.length; i++) {
             if (items[i] && typeof items[i] === "object") {
-              ensureId(items[i]); // ✅ id forced
+              ensureId(items[i]);
               if (!items[i].createdAt) items[i].createdAt = nowISO();
               items[i].updatedAt = nowISO();
             }
