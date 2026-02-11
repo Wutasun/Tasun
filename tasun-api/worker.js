@@ -1,8 +1,20 @@
 /**
- * tasun-api/worker.js
- * - D1 JSON records store
+ * tasun-api/worker.js  (Cloud D1 + Access, pk locked to "id")
+ * - D1 JSON records store (resource + id)
  * - Cloudflare Access JWT verify (Cf-Access-Jwt-Assertion or CF_Authorization cookie)
  * - CORS allow GitHub Pages origin (echo preflight requested headers)
+ *
+ * ✅ Added endpoints to match tasun-cloud-kit.js + tasun-resources.json:
+ *   GET  /health
+ *   GET  /api/read?key=RESOURCE_KEY&since=MS(optional)
+ *   POST /api/merge      body:{ key, pk:"id", items:[...] }
+ *
+ * ✅ Backward compatible endpoints kept:
+ *   GET  /api/health, /api/healthz
+ *   GET  /api/tasun/pull?key=...&since=...
+ *   POST /api/tasun/merge?key=... body:{ rows:[...] }
+ *   GET  /api/db/:resource?since=...
+ *   POST /api/db/:resource/merge  body:{ rows:[...] }
  */
 
 const JWKS_CACHE = { at: 0, jwks: null }; // in-memory cache
@@ -98,7 +110,11 @@ async function verifyAccess(req, env) {
   if (!token) token = getCookie(req, "CF_Authorization");
 
   if (!token) {
-    return { ok: false, status: 401, msg: "Missing Access token (need Cf-Access-Jwt-Assertion or CF_Authorization cookie). Try login Access, and frontend fetch must use credentials:'include'." };
+    return {
+      ok: false,
+      status: 401,
+      msg: "Missing Access token (need Cf-Access-Jwt-Assertion or CF_Authorization cookie). Try login Access, and frontend fetch must use credentials:'include' (cookie) or pass Access Service Token through Access (then Access injects JWT)."
+    };
   }
 
   let header, payload, sig, signed;
@@ -142,14 +158,46 @@ async function verifyAccess(req, env) {
 
 function nowMs() { return Date.now(); }
 
+function toMs(v) {
+  if (v === undefined || v === null) return 0;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  const s = String(v).trim();
+  if (!s) return 0;
+  // numeric string
+  if (/^\d{10,}$/.test(s)) {
+    const n = Number(s);
+    return Number.isFinite(n) ? n : 0;
+  }
+  // ISO date string
+  const d = Date.parse(s);
+  return Number.isFinite(d) ? d : 0;
+}
+
+function iso(ms) {
+  try { return new Date(ms).toISOString(); } catch { return new Date().toISOString(); }
+}
+
+function extractItems(body) {
+  if (Array.isArray(body)) return body;
+  if (body && typeof body === "object") {
+    if (Array.isArray(body.items)) return body.items;
+    if (Array.isArray(body.rows)) return body.rows;
+    if (Array.isArray(body.db)) return body.db;
+    if (Array.isArray(body.data)) return body.data;
+  }
+  return [];
+}
+
 function normRow(r) {
   if (!r || typeof r !== "object") return null;
   const id = String(r.id || "").trim();
   if (!id) return null;
-  const updatedAt = Number(r.updatedAt || r._updatedAt || 0) || 0;
-  const createdAt = Number(r.createdAt || r._createdAt || 0) || 0;
+
+  const updatedAtMs = toMs(r.updatedAt || r._updatedAtMs || r.updated_at || r._updatedAt || 0);
+  const createdAtMs = toMs(r.createdAt || r._createdAtMs || r.created_at || r._createdAt || 0);
+
   const deleted = r.deleted ? 1 : 0;
-  return { id, updatedAt, createdAt, deleted, raw: r };
+  return { id, updatedAtMs, createdAtMs, deleted, raw: r };
 }
 
 async function listRows(env, resource, sinceMs) {
@@ -165,18 +213,27 @@ async function listRows(env, resource, sinceMs) {
   sql += ` ORDER BY updated_at ASC`;
 
   const rs = await env.DB.prepare(sql).bind(...args).all();
+
   const rows = (rs.results || []).map(x => {
     let obj = {};
     try { obj = JSON.parse(x.data || "{}"); } catch { obj = {}; }
+
+    // always enforce id
     obj.id = x.id;
-    obj.updatedAt = x.updated_at;
-    obj.createdAt = x.created_at;
+
+    // keep ISO in payload (frontend-friendly)
+    const uMs = Number(x.updated_at || 0) || 0;
+    const cMs = Number(x.created_at || 0) || 0;
+    obj.updatedAt = obj.updatedAt ? String(obj.updatedAt) : (uMs ? iso(uMs) : iso(nowMs()));
+    obj.createdAt = obj.createdAt ? String(obj.createdAt) : (cMs ? iso(cMs) : iso(nowMs()));
     if (x.deleted) obj.deleted = true;
+
     return obj;
   });
 
-  const maxUpdatedAt = rows.reduce((m, r) => Math.max(m, Number(r.updatedAt || 0) || 0), 0);
-  return { rows, maxUpdatedAt };
+  const maxUpdatedAtMs = (rs.results || []).reduce((m, r) => Math.max(m, Number(r.updated_at || 0) || 0), 0);
+
+  return { rows, maxUpdatedAtMs };
 }
 
 async function upsertRows(env, resource, incoming) {
@@ -186,13 +243,15 @@ async function upsertRows(env, resource, incoming) {
     const n = normRow(r);
     if (!n) continue;
 
-    const updated = n.updatedAt > 0 ? n.updatedAt : t;
-    const created = n.createdAt > 0 ? n.createdAt : t;
+    const updated = n.updatedAtMs > 0 ? n.updatedAtMs : t;
+    const created = n.createdAtMs > 0 ? n.createdAtMs : t;
 
     const dataObj = { ...n.raw };
     dataObj.id = n.id;
-    dataObj.updatedAt = updated;
-    dataObj.createdAt = created;
+
+    // store ISO strings in JSON (consistent with frontend)
+    dataObj.updatedAt = iso(updated);
+    dataObj.createdAt = iso(created);
     if (n.deleted) dataObj.deleted = true;
 
     const data = JSON.stringify(dataObj);
@@ -206,6 +265,30 @@ async function upsertRows(env, resource, incoming) {
         deleted = excluded.deleted
       WHERE excluded.updated_at >= records.updated_at
     `).bind(resource, n.id, data, updated, created, n.deleted).run();
+  }
+}
+
+function requirePkId(pk) {
+  const v = String(pk || "id").trim();
+  if (v !== "id") {
+    const err = new Error(`pk must be "id" (received: "${v}")`);
+    err.status = 400;
+    throw err;
+  }
+  return "id";
+}
+
+function requireAllHaveId(items) {
+  let bad = 0;
+  for (const it of items) {
+    if (!it || typeof it !== "object") { bad++; continue; }
+    const id = String(it.id || "").trim();
+    if (!id) bad++;
+  }
+  if (bad > 0) {
+    const err = new Error(`All items must include non-empty "id". Invalid count: ${bad}`);
+    err.status = 400;
+    throw err;
   }
 }
 
@@ -224,28 +307,94 @@ export default {
       const url = new URL(req.url);
       const pathname = url.pathname.replace(/\/+$/, "");
 
+      // ===== health (new + old) =====
+      if (pathname === "/health") {
+        return corsify(req, env, json({ ok: true, ts: nowMs() }));
+      }
       if (pathname === "/api/health" || pathname === "/api/healthz") {
         return corsify(req, env, json({ ok: true, ts: nowMs() }));
       }
+
+      // ===== NEW: GET /api/read?key=xxx&since=ms =====
+      if (req.method === "GET" && pathname === "/api/read") {
+        const key = url.searchParams.get("key") || "";
+        if (!key) return corsify(req, env, json({ ok: false, error: "Missing key" }, { status: 400 }));
+
+        const since = Number(url.searchParams.get("since") || 0) || 0;
+        const out = await listRows(env, key, since);
+
+        const ver = out.maxUpdatedAtMs || 1;
+        const updatedAt = out.maxUpdatedAtMs ? iso(out.maxUpdatedAtMs) : iso(nowMs());
+
+        return corsify(req, env, json({
+          ok: true,
+          key,
+          ver,
+          updatedAt,
+          items: out.rows,    // ✅ for tasun-cloud-kit.js
+          rows: out.rows,     // ✅ compat
+          db: out.rows,       // ✅ compat
+          counter: out.rows.length,
+          serverTime: nowMs()
+        }));
+      }
+
+      // ===== NEW: POST /api/merge  body:{key, pk:"id", items:[...]} =====
+      if (req.method === "POST" && pathname === "/api/merge") {
+        const body = await req.json().catch(() => ({}));
+        const key = String(body.key || url.searchParams.get("key") || "").trim();
+        if (!key) return corsify(req, env, json({ ok: false, error: "Missing key" }, { status: 400 }));
+
+        requirePkId(body.pk || "id");
+
+        const items = extractItems(body) || [];
+        requireAllHaveId(items);
+
+        await upsertRows(env, key, items);
+
+        const out = await listRows(env, key, 0);
+        const ver = out.maxUpdatedAtMs || 1;
+        const updatedAt = out.maxUpdatedAtMs ? iso(out.maxUpdatedAtMs) : iso(nowMs());
+
+        return corsify(req, env, json({
+          ok: true,
+          key,
+          ver,
+          updatedAt,
+          items: out.rows,
+          rows: out.rows,
+          db: out.rows,
+          counter: out.rows.length,
+          serverTime: nowMs()
+        }));
+      }
+
+      // ===== Backward compatible endpoints =====
 
       // ✅ 相容前端：GET /api/tasun/pull?key=xxx&since=123
       if (req.method === "GET" && pathname === "/api/tasun/pull") {
         const key = url.searchParams.get("key") || "";
         if (!key) return corsify(req, env, json({ ok: false, error: "Missing key" }, { status: 400 }));
         const since = Number(url.searchParams.get("since") || 0) || 0;
+
         const out = await listRows(env, key, since);
-        return corsify(req, env, json({ ok: true, key, ...out, serverTime: nowMs() }));
+        return corsify(req, env, json({ ok: true, key, rows: out.rows, serverTime: nowMs() }));
       }
 
       // ✅ 相容前端：POST /api/tasun/merge?key=xxx  body:{rows:[...]}
       if (req.method === "POST" && pathname === "/api/tasun/merge") {
         const key = url.searchParams.get("key") || "";
         if (!key) return corsify(req, env, json({ ok: false, error: "Missing key" }, { status: 400 }));
+
         const body = await req.json().catch(() => ({}));
         const rows = Array.isArray(body.rows) ? body.rows : [];
+
+        // 強制 id（避免舊頁用 k 造成污染）
+        requireAllHaveId(rows);
+
         await upsertRows(env, key, rows);
         const out = await listRows(env, key, 0);
-        return corsify(req, env, json({ ok: true, key, ...out, serverTime: nowMs() }));
+        return corsify(req, env, json({ ok: true, key, rows: out.rows, serverTime: nowMs() }));
       }
 
       // ✅ 原本 API 仍保留：GET /api/db/:resource?since=123
@@ -254,7 +403,7 @@ export default {
         const resource = decodeURIComponent(m1[1]);
         const since = Number(url.searchParams.get("since") || 0) || 0;
         const out = await listRows(env, resource, since);
-        return corsify(req, env, json({ ok: true, resource, ...out, serverTime: nowMs() }));
+        return corsify(req, env, json({ ok: true, resource, rows: out.rows, serverTime: nowMs() }));
       }
 
       // ✅ 原本 API：POST /api/db/:resource/merge
@@ -263,14 +412,19 @@ export default {
         const resource = decodeURIComponent(m2[1]);
         const body = await req.json().catch(() => ({}));
         const rows = Array.isArray(body.rows) ? body.rows : [];
+
+        // 強制 id（避免舊頁用 k 造成污染）
+        requireAllHaveId(rows);
+
         await upsertRows(env, resource, rows);
         const out = await listRows(env, resource, 0);
-        return corsify(req, env, json({ ok: true, resource, ...out, serverTime: nowMs() }));
+        return corsify(req, env, json({ ok: true, resource, rows: out.rows, serverTime: nowMs() }));
       }
 
       return corsify(req, env, json({ ok: false, error: "Not found" }, { status: 404 }));
     } catch (e) {
-      return corsify(req, env, json({ ok: false, error: String(e && e.message ? e.message : e) }, { status: 500 }));
+      const status = Number(e && e.status) || 500;
+      return corsify(req, env, json({ ok: false, error: String(e && e.message ? e.message : e) }, { status }));
     }
   }
 };
