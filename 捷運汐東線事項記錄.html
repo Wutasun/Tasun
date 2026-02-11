@@ -11,7 +11,7 @@
   <meta http-equiv="Expires" content="0">
 
   <!-- ✅ 全站版本：要與 tasun-version.json 一致 -->
-  <script>window.TASUN_APP_VER="20260129_03";</script>
+  <script>window.TASUN_APP_VER="20260127_05";</script>
 
   <!-- ✅ 進站必鎖定最新版 ?v=APP_VER（避免不同裝置卡舊版） -->
   <script>
@@ -727,7 +727,7 @@
       }
 
       var PAGE_KEY = "sxdh-notes";
-      var RESOURCES_URL = "tasun-resources.json"; // ✅ 用於自動取得 apiBase / endpoints（跨設備免重設）
+      var RESOURCES_URL = "tasun-resources.json"; // ✅ 用於自動取得 API_BASE（跨設備免重設）
       Core.init({ pageKey: PAGE_KEY, forceUrlV:true, forceVersionSync:true, patchResources:true, networkToast:false, appHeightVar:false });
 
       var Auth = Core.Auth;
@@ -748,17 +748,15 @@
       var ACCESS_ST_KEY   = "tasunAccessServiceToken_v1";
       var PROTECT_EMPTY_REMOTE_KEY = "tasun_protect_empty_remote__" + DB_KEY;
 
-      // ✅ 預設 apiBase（若檔案用 file:// 無法 fetch resources，也能用這個跑起來）
-      var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
+      var DEFAULT_API_BASE = "https://tasun-api.wutasun.workers.dev"; // ✅ 預設 API_BASE（所有裝置免手動設定）
 
-      // ===== API paths (會被 resources.json 的 endpoints 覆寫) =====
+      // ===== API paths =====
       var CLOUD_RESOURCE_KEY = PAGE_KEY;
       var CLOUD_PK = "k";
 
-      // ✅ 預設先對齊你 resources.json：health/read/merge
-      var D1_PING_PATH  = "/health";
-      var D1_PULL_PATH  = "/api/read";
-      var D1_MERGE_PATH = "/api/merge";
+      var D1_PING_PATH  = "/api/tasun/ping";
+      var D1_PULL_PATH  = "/api/tasun/pull";
+      var D1_MERGE_PATH = "/api/tasun/merge";
 
       var NET_DISK_URL = "https://www.dropbox.com/scl/fo/glb4s65934h195bxuyuqm/AH5ClZ2u4MtPMvmgtfOUAa4?rlkey=tfxkpbpw8k9bctshx5xvuge8h&st=9deaoqpw&dl=0";
       var CLOUD_NETDISK_URL = "https://www.dropbox.com/developers/apps";
@@ -810,47 +808,78 @@
         try{ v ? localStorage.setItem(D1_API_BASE_KEY, v) : localStorage.removeItem(D1_API_BASE_KEY); }catch(e){}
       }
 
-      // ✅ 從 tasun-resources.json 讀取「本頁」的 apiBase / endpoints（避免抓錯別的 key）
-      async function applyCloudConfigFromResources(pageKey){
+      // ===== Auto discover API_BASE from tasun-resources.json (cross-device) =====
+      async function discoverApiBaseFromResources(){
         try{
-          pageKey = String(pageKey || "").trim();
-          if(!pageKey) return false;
+          var APP = String(window.TASUN_APP_VER||"").trim();
+          var url = RESOURCES_URL + (RESOURCES_URL.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(APP) + "&_=" + Date.now();
+          var res = await fetch(url, { cache:"no-store" });
+          if(!res.ok) return "";
+          var j = await res.json();
 
-          const appVer = String(window.TASUN_APP_VER || "").trim();
-          const url = RESOURCES_URL + (RESOURCES_URL.indexOf("?")>=0 ? "&" : "?")
-            + "v=" + encodeURIComponent(appVer) + "&_=" + Date.now();
-
-          const res = await fetch(url, { cache:"no-store" });
-          if(!res.ok) return false;
-
-          const j = await res.json();
-          const cfg = j && j[pageKey];
-          if(!cfg || typeof cfg !== "object") return false;
-
-          if(cfg.apiBase && typeof cfg.apiBase === "string"){
-            const b = cfg.apiBase.trim().replace(/\/+$/,"");
-            if(b && /^https?:\/\//i.test(b)) setApiBase(b);
+          function pick(obj, path){
+            try{
+              var cur = obj;
+              for(var i=0;i<path.length;i++){
+                if(!cur || typeof cur!=="object") return "";
+                cur = cur[path[i]];
+              }
+              return (typeof cur==="string") ? cur.trim() : "";
+            }catch(e){ return ""; }
           }
-          if(cfg.endpoints && typeof cfg.endpoints === "object"){
-            D1_PING_PATH  = cfg.endpoints.health || D1_PING_PATH;
-            D1_PULL_PATH  = cfg.endpoints.read   || D1_PULL_PATH;
-            D1_MERGE_PATH = cfg.endpoints.merge  || D1_MERGE_PATH;
+          function findByKey(obj, keyRe){
+            var q = [obj];
+            while(q.length){
+              var x = q.shift();
+              if(!x || typeof x!=="object") continue;
+              for(var k in x){
+                if(!Object.prototype.hasOwnProperty.call(x,k)) continue;
+                var v = x[k];
+                if(keyRe.test(String(k))){
+                  if(typeof v==="string" && /^https?:\/\//i.test(v.trim())) return v.trim();
+                }
+                if(v && typeof v==="object") q.push(v);
+              }
+            }
+            return "";
           }
-          return true;
-        }catch(e){
-          // file:// 或讀不到就維持預設值
-          return false;
-        }
+
+          // ✅ 優先：明確欄位
+          var cands = [
+            pick(j, ["cloud","apiBase"]),
+            pick(j, ["cloud","d1ApiBase"]),
+            pick(j, ["cloud","API_BASE"]),
+            pick(j, ["d1","apiBase"]),
+            pick(j, ["d1","base"]),
+            (typeof j.apiBase==="string"?j.apiBase.trim():""),
+            (typeof j.d1ApiBase==="string"?j.d1ApiBase.trim():""),
+            (typeof j.D1_API_BASE==="string"?j.D1_API_BASE.trim():""),
+            pick(j, ["config","apiBase"]),
+            pick(j, ["config","d1ApiBase"])
+          ].filter(Boolean);
+
+          // ✅ 次選：遞迴搜尋 key 名稱
+          if(!cands.length){
+            cands.push(findByKey(j, /^(apiBase|api_base|d1ApiBase|d1_api_base|cloudApiBase)$/i));
+          }
+
+          for(var i=0;i<cands.length;i++){
+            var b = (cands[i]||"").trim().replace(/\/+$/,"");
+            if(b && /^https?:\/\//i.test(b)) return b;
+          }
+        }catch(e){}
+        return "";
       }
 
-      // ✅ 只套用一次（避免每次輪詢都 fetch resources）
-      var _RES_APPLIED_ONCE = false;
       async function ensureApiBaseReady(){
-        if(!_RES_APPLIED_ONCE){
-          _RES_APPLIED_ONCE = true;
-          await applyCloudConfigFromResources(CLOUD_RESOURCE_KEY);
+        var b = getApiBase();
+        if(b) return b;
+        var d = await discoverApiBaseFromResources();
+        if(d){
+          setApiBase(d);
+          return getApiBase();
         }
-        return getApiBase();
+        return "";
       }
 
       function parseStoredToken(raw){
@@ -939,6 +968,7 @@
         var ct = (res.headers.get("content-type")||"").toLowerCase();
         if(ct.includes("application/json") || ct.includes("+json")){
           var data = await res.json();
+          // ✅ 後端若以 200 回傳 {ok:false,...} 也視為錯誤（避免被當成空資料套用）
           if(data && typeof data==="object" && data.ok===false){
             var msg = data.error || data.message || "API_ERROR";
             var errJ = new Error(msg);
@@ -951,6 +981,7 @@
           return data;
         }
 
+        // ✅ Access/反向代理有時會回 HTML 登入頁（200 OK），不可當成空資料
         var txt = await res.text();
         var low = (txt||"").slice(0, 900).toLowerCase();
         if(low.includes("<html") && (low.includes("cloudflare access") || low.includes("cf-access") || low.includes("access login"))){
@@ -1024,7 +1055,11 @@
         return await httpJSON(url, { method:"POST", headers: { "Content-Type":"application/json" }, body: JSON.stringify(body) });
       }
 
-      function CloudCtrl(){ this._timer = 0; this._saving = false; this._pending = false; }
+      function CloudCtrl(){
+        this._timer = 0;
+        this._saving = false;
+        this._pending = false;
+      }
       CloudCtrl.prototype._err = function(e){
         if(!e) return;
         if(e.code==="NO_API_BASE"){ cloudState="noapi"; toast("⚠️ 尚未設定 API_BASE：請按右上「雲端設定」。"); return; }
@@ -1037,9 +1072,13 @@
         var rdb = Array.isArray(payload.db) ? payload.db : [];
         var rc = Number(payload.counter||0); if(!Number.isFinite(rc) || rc<0) rc=0;
 
+        // ✅ protect / seed：remote 空但 local 有
         var protectOnce = false;
         try{ protectOnce = !sessionStorage.getItem(PROTECT_EMPTY_REMOTE_KEY); }catch(e){}
         if(rdb.length===0 && db.length>0 && protectOnce){
+          // 第一次連上雲端時，如果雲端還是空的，且本機已有資料：
+          // - write/admin：自動用「合併寫入」把本機資料建立到雲端，讓多設備馬上同步一致
+          // - read：僅保護本機，避免誤覆蓋
           var canWrite = Auth.canWrite ? Auth.canWrite() : (Auth.role && /^(admin|write)$/i.test(Auth.role()||""));
           try{ sessionStorage.setItem(PROTECT_EMPTY_REMOTE_KEY, "1"); }catch(e){}
           if(canWrite && !lastSyncAt){
@@ -1074,6 +1113,7 @@
           self.apply(u.payload, u.info||{});
           return true;
         }).catch(function(e){
+          // ✅ 雲端尚未建立（404/NOT_FOUND）→ write/admin 自動建立空 DB（或帶本機資料）
           if(e && (e.status===404 || e.code==="NOT_FOUND")){
             cloudState = "ok";
             lastSyncAt = Date.now();
@@ -1086,7 +1126,7 @@
             toast("☁️ 雲端尚未建立資料（唯讀模式無法建立）。");
             return false;
           }
-          self._err(e);
+          self._err(e); 
           return false;
         });
       };
@@ -1113,6 +1153,7 @@
       };
       CloudCtrl.prototype.destroy = function(){ clearInterval(this._timer); };
 
+      // ===== Local load/save =====
       function normalizeRow(x){
         if(!x || typeof x!=="object") return null;
         var uid = norm(x.uid ?? x._uid ?? x.pk ?? x.k ?? x.key ?? "");
@@ -1145,7 +1186,9 @@
           if(Number.isFinite(c) && c>0) counter = c;
         }catch(e){}
         counter = Math.max(counter, maxId(db));
-        if(db.length>0){ saveLocal(); }
+        if(db.length>0){
+          saveLocal(); // normalize persist
+        }
       }
       function saveLocal(){
         try{ localStorage.setItem(DB_KEY, JSON.stringify(db)); }catch(e){}
@@ -1160,6 +1203,7 @@
         return m;
       }
 
+      // ===== Dictionaries =====
       function loadDict(key, fallback){
         try{
           var obj = safeJSON(localStorage.getItem(key));
@@ -1204,6 +1248,7 @@
         saveDict(SYS_DICT_KEY, sysDict);
         saveDict(SOURCE_DICT_KEY, sourceDict);
       }
+
       function bindSystemToTrade(trade, system){
         trade = norm(trade); system = norm(system);
         if(!trade || !system) return;
@@ -1213,6 +1258,7 @@
         saveDict(TRADE_SYS_MAP_KEY, tradeSysMap);
       }
 
+      // ===== UI =====
       function setReadMode(on){
         on = !!on;
         document.body.classList.toggle("readMode", on);
@@ -1223,7 +1269,10 @@
         try{ return (localStorage.getItem(READ_MODE_KEY)||"") === "1"; }catch(e){}
         return false;
       }
-      function currentUser(){ return Auth.current ? Auth.current() : null; }
+
+      function currentUser(){
+        return Auth.current ? Auth.current() : null;
+      }
 
       function updateTopbar(){
         var u = currentUser();
@@ -1240,8 +1289,10 @@
         var qt = norm($("qText").value).toLowerCase();
         var ft = norm($("fTrade").value);
         var fs = norm($("fSys").value);
+
         if(ft && r.trade !== ft) return false;
         if(fs && r.system !== fs) return false;
+
         if(qt){
           var blob = ((r.text||"") + " " + (r.remark||"") + " " + (r.source||"")).toLowerCase();
           if(blob.indexOf(qt) < 0) return false;
@@ -1260,12 +1311,14 @@
       }
 
       function renderFilters(){
+        // trade options
         var trades = uniqSorted(dictToList(tradeDict).concat(db.map(function(r){return r.trade;})));
         var tradeSel = $("fTrade");
         var curT = tradeSel.value;
         tradeSel.innerHTML = '<option value="">全部</option>' + trades.map(function(t){ return '<option value="'+escHtml(t)+'">'+escHtml(t)+'</option>'; }).join("");
         tradeSel.value = trades.indexOf(curT)>=0 ? curT : "";
 
+        // sys options (global, but if trade selected -> only those bound)
         var curTrade = norm(tradeSel.value);
         var sysList = [];
         if(curTrade && Array.isArray(tradeSysMap[curTrade]) && tradeSysMap[curTrade].length){
@@ -1305,6 +1358,7 @@
         }
         tbody.innerHTML = html || '<tr><td colspan="9" style="text-align:center; padding:18px; color:rgba(0,0,0,.55); font-weight:900;">（目前沒有資料）</td></tr>';
 
+        // wire attachments
         var btns = tbody.querySelectorAll('button[data-att]');
         for(i=0;i<btns.length;i++){
           btns[i].addEventListener("click", function(ev){
@@ -1425,7 +1479,11 @@
         renderCards(rows);
         renderHint();
       }
-      function selectUid(uid){ selectedUid = uid; renderAll(); }
+
+      function selectUid(uid){
+        selectedUid = uid;
+        renderAll();
+      }
 
       function openAttachment(href){
         var h = (href ?? "").toString().trim();
@@ -1437,6 +1495,7 @@
         location.href = withV(h);
       }
 
+      // ===== Modal =====
       function setModalVisible(on){ $("mask").style.display = on ? "flex" : "none"; }
       function setModalEditable(editable){
         editable = !!editable;
@@ -1454,6 +1513,7 @@
         $("btnSave").style.display = editable ? "inline-block" : "none";
         $("btnCancel").style.display = editable ? "inline-block" : "none";
 
+        // ✅ delete：write/admin 都可刪（read 不可）
         var canWrite = Auth.canWrite ? Auth.canWrite() : false;
         $("btnDelete").style.display = (editable && canWrite && editingUid != null) ? "inline-block" : "none";
       }
@@ -1476,6 +1536,7 @@
         if(!tSel.innerHTML) tSel.innerHTML = '<option value=""></option>';
         if(trades.indexOf(curTrade)>=0) tSel.value = curTrade;
 
+        // systems filtered by trade
         var sysList = [];
         if(curTrade && Array.isArray(tradeSysMap[curTrade]) && tradeSysMap[curTrade].length){
           sysList = tradeSysMap[curTrade].slice();
@@ -1581,7 +1642,7 @@
         var idx = db.findIndex(function(x){ return x.uid === editingUid; });
         if(idx<0){ toast("找不到資料"); return; }
 
-        db.splice(idx,1);
+        var removed = db.splice(idx,1)[0];
         saveLocal();
         ensureDictFromDb();
         selectedUid = db.length ? db[Math.max(0, Math.min(db.length-1, idx))].uid : null;
@@ -1592,6 +1653,7 @@
         if(cloud) cloud.saveMerged();
       }
 
+      // ===== Prompt add dict =====
       function openPrompt(mode){
         promptMode = mode; // trade | sys | source
         $("pMask").style.display = "flex";
@@ -1635,6 +1697,7 @@
         toast("已新增");
       }
 
+      // ===== Export =====
       function exportBackup(){
         var payload = { ts: Date.now(), page: PAGE_KEY, db: db, counter: counter };
         var blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json;charset=utf-8" });
@@ -1647,6 +1710,7 @@
         toast("已匯出備份");
       }
 
+      // ===== Cloud settings modal =====
       function parseCloudCfgInput(raw){
         raw = norm(raw);
         if(!raw) return null;
@@ -1670,6 +1734,7 @@
           .replace(/\s+/g," ")
           .trim()
           .split(/[\s|,;]+/).map(norm).filter(Boolean);
+        // remove URL if captured
         if(!apiBase){
           for(var i=0;i<parts.length;i++){
             if(/^https?:\/\//i.test(parts[i])){ apiBase = parts[i]; parts.splice(i,1); break; }
@@ -1728,18 +1793,23 @@
       function startCloud(forceNow){
         if(!cloud) cloud = new CloudCtrl();
         (async function(){
+          // ✅ 1) 先確保 API_BASE（本機 / session / local；沒有就從 tasun-resources.json 自動讀取）
           var base = await ensureApiBaseReady();
           if(!base){
             cloudState = "noapi";
             renderHint();
             return;
           }
+          // ✅ 2) 自動輪詢拉取（多設備一致）
           cloud.startWatch(10);
+          // ✅ 3) 立即拉取一次（開頁就先抓雲端）
           if(forceNow) cloud.pullNow();
         })();
       }
 
+      // ===== Auth integration =====
       function wireLoginUI(){
+        // Basic glue for core auth modal: keep DOM, but use Core.Auth APIs
         $("btnView").addEventListener("click", function(){ Auth.openLogin && Auth.openLogin(); });
         $("loginClose").addEventListener("click", function(){ Auth.closeLogin && Auth.closeLogin(); });
         $("loginToAuth").addEventListener("click", function(){ location.href = withV("權限表.html"); });
@@ -1754,6 +1824,7 @@
         });
       }
 
+      // ===== Events =====
       function wireEvents(){
         $("navBack").addEventListener("click", function(){ location.href = withV("汐東工程管理表.html"); });
         $("mBack").addEventListener("click", function(){ location.href = withV("汐東工程管理表.html"); });
@@ -1787,6 +1858,7 @@
 
         $("btnCloud").addEventListener("click", function(){
           openCloudPortal();
+          // also try immediate pull to show status
           if(cloud) cloud.pullNow();
         });
 
@@ -1805,6 +1877,7 @@
 
         $("qText").addEventListener("input", function(){ renderAll(); });
         $("fTrade").addEventListener("change", function(){
+          // trade changed -> refresh sys options (bound)
           renderFilters();
           renderAll();
         });
@@ -1832,12 +1905,14 @@
         $("tokenToggle").addEventListener("click", toggleTokenInput);
         $("tokenNetDisk").addEventListener("click", function(){ window.open(CLOUD_NETDISK_URL, "_blank", "noopener"); });
 
+        // modal dependent: when trade changes -> update sys list for that trade
         $("mTradeSel").addEventListener("change", function(){
           var trade = norm($("mTradeSel").value);
           renderModalSelects(trade, "", $("mSourceSel").value);
         });
       }
 
+      // ===== Boot =====
       loadLocal();
       ensureDictFromDb();
 
@@ -1845,15 +1920,19 @@
       wireEvents();
 
       setReadMode(getReadMode());
+
+      // initial render
       renderAll();
 
+      // auth listeners
       Auth.onChange && Auth.onChange(function(){
         updateTopbar();
         renderAll();
-        startCloud(true);
+        startCloud(true); // read/write/admin all pull latest
       });
       updateTopbar();
 
+      // start cloud if configured
       startCloud(true);
     }
 
