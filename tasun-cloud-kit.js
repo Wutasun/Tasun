@@ -1,11 +1,15 @@
 /* =========================================================
  * tasun-cloud-kit.js  (Most compatible - Worker first)
  * - Read config from: tasun-resources.json (default)
- * - Prefer Cloudflare Worker API (apiBase + endpoints.read/merge)
+ * - Prefer Cloudflare Worker API (apiBase + endpoints.health/read/merge)
+ * - Supports Access (cookie or Service Token headers)
  * - Compatible apply payload: { items, db, rows, counter, ver, updatedAt }
  * - Minimal stable API:
  *   TasunCloudKit.init(), TasunCloudKit.mount()
  *   ctrl.pullNow(), ctrl.saveMerged(), ctrl.status(), ctrl.destroy()
+ * - Extra helpers:
+ *   TasunCloudKit.getConfig(resourceKey)
+ *   TasunCloudKit.applyCloudConfigFromResources(pageKey, hooks)
  * ========================================================= */
 (function () {
   "use strict";
@@ -17,6 +21,7 @@
     inited: false,
     appVer: "",
     resourcesUrl: "tasun-resources.json",
+    resourcesInline: null, // optional object (for file:// fallback)
     ui: { enabled: true, position: "bottom-right" },
 
     _resourcesCache: null,
@@ -37,7 +42,7 @@
   }
   function addV(url) {
     url = norm(url);
-    var v = norm(_S.appVer);
+    var v = norm(_S.appVer) || norm(window.TASUN_APP_VER);
     if (!url || !v) return url;
     try {
       var u = new URL(url, location.href);
@@ -62,13 +67,30 @@
     for (var k in x) if (Object.prototype.hasOwnProperty.call(x, k)) o[k] = x[k];
     return o;
   }
-
   function joinUrl(base, path) {
     base = norm(base).replace(/\/+$/, "");
     path = norm(path);
     if (!path) return base;
     if (path[0] !== "/") path = "/" + path;
     return base + path;
+  }
+  function withQuery(url, kv) {
+    try {
+      var u = new URL(url, location.href);
+      for (var k in kv) {
+        if (!Object.prototype.hasOwnProperty.call(kv, k)) continue;
+        if (!u.searchParams.get(k) && kv[k] !== undefined && kv[k] !== null && String(kv[k]).trim() !== "") {
+          u.searchParams.set(k, String(kv[k]));
+        }
+      }
+      return u.toString();
+    } catch (e) {
+      // naive fallback (only for 'key')
+      if (kv && kv.key && url.indexOf("key=") < 0) {
+        return url + (url.indexOf("?") >= 0 ? "&" : "?") + "key=" + encodeURIComponent(String(kv.key));
+      }
+      return url;
+    }
   }
 
   // -------------------------------
@@ -142,6 +164,15 @@
   // Resources loader (tasun-resources.json)
   // -------------------------------
   async function loadResources() {
+    // inline first (if provided)
+    if (_S.resourcesInline && typeof _S.resourcesInline === "object") {
+      if (!_S._resourcesCache) {
+        _S._resourcesCache = _S.resourcesInline;
+        _S._resourcesUrlCacheKey = "inline";
+      }
+      return _S._resourcesCache;
+    }
+
     var url = addV(_S.resourcesUrl || "tasun-resources.json");
     var cacheKey = url;
 
@@ -149,11 +180,18 @@
       return _S._resourcesCache;
     }
 
-    var resp = await fetch(url, { cache: "no-store" });
-    var text = await resp.text();
-    var json = safeJSONParse(text);
+    var resp, text, json;
+    try {
+      resp = await fetch(url, { cache: "no-store" });
+      text = await resp.text();
+      json = safeJSONParse(text);
+    } catch (e) {
+      // file:// may fail: fallback to inline if exists
+      if (_S.resourcesInline && typeof _S.resourcesInline === "object") return _S.resourcesInline;
+      throw new Error("Failed to load resources (fetch): " + url);
+    }
 
-    if (!resp.ok || !json || typeof json !== "object") {
+    if (!resp || !resp.ok || !json || typeof json !== "object") {
       throw new Error("Failed to load resources: " + url);
     }
 
@@ -163,6 +201,27 @@
     _S._resourcesCache = json;
     _S._resourcesUrlCacheKey = cacheKey;
     return json;
+  }
+
+  function normalizeEntry(resourceKey, entry) {
+    entry = (entry && typeof entry === "object") ? entry : {};
+    var out = shallowClone(entry) || {};
+    out.resourceKey = resourceKey;
+
+    // normalize apiBase
+    if (out.apiBase && typeof out.apiBase === "string") {
+      out.apiBase = out.apiBase.trim().replace(/\/+$/, "");
+    }
+
+    // normalize endpoints
+    var ep = (out.endpoints && typeof out.endpoints === "object") ? shallowClone(out.endpoints) : {};
+    out.endpoints = {
+      health: norm(ep.health || "/health"),
+      read: norm(ep.read || "/api/read"),
+      merge: norm(ep.merge || "/api/merge"),
+    };
+
+    return out;
   }
 
   function extractItems(any) {
@@ -180,7 +239,8 @@
 
   function ensureId(item, pkField) {
     if (!item || typeof item !== "object") return item;
-    if (item.id) return item;
+    if (item.id !== undefined && item.id !== null && String(item.id).trim() !== "") return item;
+
     pkField = norm(pkField || "id");
     if (pkField && item[pkField] !== undefined && item[pkField] !== null && String(item[pkField]).trim() !== "") {
       item.id = String(item[pkField]).trim();
@@ -209,15 +269,100 @@
   }
 
   // -------------------------------
+  // Access helpers (cookie or Service Token headers)
+  // -------------------------------
+  function parseTokenRaw(raw) {
+    raw = norm(raw);
+    if (!raw) return null;
+    var obj = safeJSONParse(raw);
+    if (obj && typeof obj === "object") {
+      var id = norm(obj.clientId || obj.id || obj.client_id || "");
+      var sec = norm(obj.clientSecret || obj.secret || obj.client_secret || "");
+      if (id && sec) return { clientId: id, clientSecret: sec };
+    }
+    var parts = raw.split(/[\s|,;]+/).map(norm).filter(Boolean);
+    if (parts.length >= 2) return { clientId: parts[0], clientSecret: parts[1] };
+    return null;
+  }
+
+  function resolveAccessToken(storageKey, forceToken) {
+    // forceToken can be {clientId, clientSecret} or raw string
+    try {
+      if (forceToken) {
+        if (typeof forceToken === "string") return parseTokenRaw(forceToken);
+        if (forceToken && typeof forceToken === "object") {
+          var idf = norm(forceToken.clientId || forceToken.id || forceToken.client_id || "");
+          var secf = norm(forceToken.clientSecret || forceToken.secret || forceToken.client_secret || "");
+          if (idf && secf) return { clientId: idf, clientSecret: secf };
+        }
+      }
+    } catch (e) {}
+
+    // window.TASUN_ACCESS_SERVICE_TOKEN
+    try {
+      var w = window.TASUN_ACCESS_SERVICE_TOKEN;
+      if (w && typeof w === "object") {
+        var idw = norm(w.clientId || w.client_id || "");
+        var secw = norm(w.clientSecret || w.client_secret || "");
+        if (idw && secw) return { clientId: idw, clientSecret: secw };
+      }
+      if (typeof w === "string") {
+        var t = parseTokenRaw(w);
+        if (t) return t;
+      }
+    } catch (e2) {}
+
+    // storage
+    storageKey = norm(storageKey) || "tasunAccessServiceToken_v1";
+    try {
+      var s1 = parseTokenRaw(sessionStorage.getItem(storageKey));
+      if (s1) return s1;
+    } catch (e3) {}
+    try {
+      var s2 = parseTokenRaw(localStorage.getItem(storageKey));
+      if (s2) return s2;
+    } catch (e4) {}
+
+    return null;
+  }
+
+  function buildHeaders(extra, accessToken, meta) {
+    var h = {};
+    h["Accept"] = "application/json";
+    if (meta && typeof meta === "object") {
+      if (meta.appVer) h["X-Tasun-AppVer"] = String(meta.appVer);
+      if (meta.page) h["X-Tasun-Page"] = String(meta.page);
+      if (meta.user) h["X-Tasun-User"] = String(meta.user);
+      if (meta.role) h["X-Tasun-Role"] = String(meta.role);
+    }
+    if (accessToken && accessToken.clientId && accessToken.clientSecret) {
+      h["CF-Access-Client-Id"] = accessToken.clientId;
+      h["CF-Access-Client-Secret"] = accessToken.clientSecret;
+    }
+    if (extra && typeof extra === "object") {
+      for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) h[k] = extra[k];
+    }
+    return h;
+  }
+
+  // -------------------------------
   // Worker API
   // -------------------------------
-  async function workerRead(entry) {
+  async function workerRead(entry, resourceKey, accessToken, meta) {
     var apiBase = norm(entry.apiBase);
     var ep = (entry.endpoints && typeof entry.endpoints === "object") ? entry.endpoints : {};
     var readPath = norm(ep.read || "/api/read");
     var url = joinUrl(apiBase, readPath);
+    url = withQuery(url, { key: resourceKey });
 
-    var r = await fetch(url, { cache: "no-store" });
+    var r = await fetch(url, {
+      method: "GET",
+      mode: "cors",
+      cache: "no-store",
+      credentials: (accessToken && accessToken.clientId) ? "omit" : "include",
+      headers: buildHeaders(null, accessToken, meta)
+    });
+
     var t = await r.text();
     var j = safeJSONParse(t);
 
@@ -231,17 +376,29 @@
     return j;
   }
 
-  async function workerMerge(entry, items) {
+  async function workerMerge(entry, resourceKey, items, pkField, accessToken, meta) {
     var apiBase = norm(entry.apiBase);
     var ep = (entry.endpoints && typeof entry.endpoints === "object") ? entry.endpoints : {};
     var mergePath = norm(ep.merge || "/api/merge");
     var url = joinUrl(apiBase, mergePath);
 
-    var body = { items: items };
+    var body = {
+      key: resourceKey,
+      pk: norm(pkField || "id"),
+      items: items,
+      client: {
+        ts: Date.now(),
+        appVer: norm(_S.appVer) || norm(window.TASUN_APP_VER),
+        ua: (typeof navigator !== "undefined" ? navigator.userAgent : "")
+      }
+    };
 
     var r = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      mode: "cors",
+      cache: "no-store",
+      credentials: (accessToken && accessToken.clientId) ? "omit" : "include",
+      headers: buildHeaders({ "Content-Type": "application/json" }, accessToken, meta),
       body: JSON.stringify(body),
     });
 
@@ -255,13 +412,55 @@
   }
 
   // -------------------------------
+  // Public helpers
+  // -------------------------------
+  async function getConfig(resourceKey, opt) {
+    opt = (opt && typeof opt === "object") ? opt : {};
+    if (!_S.inited) init({});
+
+    // allow one-shot override
+    if (opt.resourcesUrl !== undefined) _S.resourcesUrl = norm(opt.resourcesUrl) || "tasun-resources.json";
+    if (opt.resourcesInline && typeof opt.resourcesInline === "object") _S.resourcesInline = opt.resourcesInline;
+
+    var resources = await loadResources();
+    var entry = resources && resources[resourceKey];
+    if (!entry) throw new Error("Resource not found in tasun-resources.json: " + resourceKey);
+    return normalizeEntry(resourceKey, entry);
+  }
+
+  // Signature like the one you pasted earlier:
+  // applyCloudConfigFromResources(pageKey, { setApiBase, setEndpoints, resourcesUrl })
+  async function applyCloudConfigFromResources(pageKey, hooks) {
+    hooks = (hooks && typeof hooks === "object") ? hooks : {};
+    pageKey = norm(pageKey);
+    if (!pageKey) return false;
+
+    try {
+      var cfg = await getConfig(pageKey, { resourcesUrl: hooks.resourcesUrl, resourcesInline: hooks.resourcesInline });
+      if (typeof hooks.setApiBase === "function" && cfg.apiBase) hooks.setApiBase(cfg.apiBase);
+
+      // if you want to override endpoint variables, pass a setter:
+      // setEndpoints({health,read,merge})
+      if (typeof hooks.setEndpoints === "function" && cfg.endpoints) hooks.setEndpoints(shallowClone(cfg.endpoints));
+
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // -------------------------------
   // Public API
   // -------------------------------
   function init(cfg) {
     cfg = (cfg && typeof cfg === "object") ? cfg : {};
 
+    // default appVer from window
+    if (!_S.appVer) _S.appVer = norm(window.TASUN_APP_VER);
+
     if (cfg.appVer !== undefined) _S.appVer = norm(cfg.appVer);
     if (cfg.resourcesUrl !== undefined) _S.resourcesUrl = norm(cfg.resourcesUrl) || "tasun-resources.json";
+    if (cfg.resourcesInline && typeof cfg.resourcesInline === "object") _S.resourcesInline = cfg.resourcesInline;
     if (cfg.ui && typeof cfg.ui === "object") _S.ui = Object.assign({}, _S.ui, cfg.ui);
 
     _S.inited = true;
@@ -276,6 +475,10 @@
 
     uiEnsure();
 
+    // allow per-mount override of resourcesUrl
+    if (cfg.resourcesUrl !== undefined) _S.resourcesUrl = norm(cfg.resourcesUrl) || "tasun-resources.json";
+    if (cfg.resourcesInline && typeof cfg.resourcesInline === "object") _S.resourcesInline = cfg.resourcesInline;
+
     var resourceKey = norm(cfg.resourceKey);
     var pkField = norm(cfg.pk || cfg.pkField || "id"); // used to derive id if missing
     var watchCfg = cfg.watch || { intervalSec: 0 };
@@ -283,6 +486,22 @@
     var apply = (typeof cfg.apply === "function") ? cfg.apply : function () {};
 
     var protectEmptyRemote = (cfg.protectEmptyRemote !== undefined) ? !!cfg.protectEmptyRemote : true;
+    var canSeed = (typeof cfg.canSeed === "function") ? cfg.canSeed : function () { return true; };
+
+    // Access token support
+    var accessKey = norm(cfg.accessTokenKey || cfg.accessKey || "tasunAccessServiceToken_v1");
+    var accessToken = resolveAccessToken(accessKey, cfg.accessToken || null);
+
+    // optional meta headers
+    var meta = {
+      appVer: norm(_S.appVer) || norm(window.TASUN_APP_VER),
+      page: resourceKey,
+      user: (typeof cfg.user === "function") ? (cfg.user() || "") : norm(cfg.user || ""),
+      role: (typeof cfg.role === "function") ? (cfg.role() || "") : norm(cfg.role || ""),
+    };
+
+    // optional apiBase override (admin config)
+    var apiBaseOverride = (typeof cfg.apiBase === "function") ? cfg.apiBase : function () { return norm(cfg.apiBase || ""); };
 
     var destroyed = false;
     var timer = null;
@@ -296,6 +515,8 @@
       watchSec: Number((watchCfg && watchCfg.intervalSec) || 0),
       appVer: norm(_S.appVer),
       resourcesUrl: norm(_S.resourcesUrl),
+      access: accessToken ? "token" : "cookie",
+      accessKey: accessKey
     };
 
     var readyResolve;
@@ -330,12 +551,11 @@
     }
 
     async function resolveEntry() {
-      var resources = await loadResources();
-      var entry = resources && resources[resourceKey];
-      if (!entry) throw new Error("Resource not found in resources.json: " + resourceKey);
-      if (!entry.apiBase) throw new Error("Resource missing apiBase: " + resourceKey);
-      lastStatus.apiBase = norm(entry.apiBase);
-      return entry;
+      var cfg0 = await getConfig(resourceKey);
+      var o = apiBaseOverride ? norm(apiBaseOverride()) : "";
+      if (o && /^https?:\/\//i.test(o)) cfg0.apiBase = o.replace(/\/+$/, "");
+      lastStatus.apiBase = norm(cfg0.apiBase);
+      return cfg0;
     }
 
     function isRemoteEmpty(remoteObj) {
@@ -357,13 +577,13 @@
 
         try {
           var entry = await resolveEntry();
-          var remote = await workerRead(entry);
+          var remote = await workerRead(entry, resourceKey, accessToken, meta);
 
-          // protect empty remote: keep local, then seed once
+          // protect empty remote: keep local, then seed once (only if canSeed())
           if (protectEmptyRemote) {
             var local = getLocal() || { items: [] };
             if (isRemoteEmpty(remote) && isLocalNotEmpty(local)) {
-              var seedKey = "tasunCloudKit_seeded__" + resourceKey + "__" + norm(_S.appVer || "");
+              var seedKey = "tasunCloudKit_seeded__" + resourceKey + "__" + norm(_S.appVer || "") + "__v2";
               if (!sessionStorage.getItem(seedKey)) {
                 sessionStorage.setItem(seedKey, "1");
                 safeApply(local, { source: "remote-empty-protected", reason: "keep-local" });
@@ -372,8 +592,12 @@
                 uiSet("CloudKit: remote empty → keep local");
                 uiPulse(true);
 
-                // seed to remote (non-blocking in queue)
-                saveMerged({ reason: "seed-empty-remote" });
+                // seed to remote for writer only
+                try {
+                  if (canSeed()) {
+                    saveMerged({ reason: "seed-empty-remote" });
+                  }
+                } catch (_e) {}
                 return;
               }
             }
@@ -394,7 +618,7 @@
           // fallback apply local to avoid blank
           try {
             safeApply(getLocal() || { items: [] }, { source: "local-fallback", error: lastStatus.lastError });
-          } catch (_e) {}
+          } catch (_e2) {}
         }
       });
     }
@@ -413,7 +637,8 @@
           // local -> items
           var localObj = getLocal() || { items: [] };
           var items = extractItems(localObj) || [];
-          // ensure id
+
+          // ensure id + timestamps (non-breaking)
           for (var i = 0; i < items.length; i++) {
             if (items[i] && typeof items[i] === "object") {
               ensureId(items[i], pkField);
@@ -423,7 +648,7 @@
           }
 
           // merge on server
-          var result = await workerMerge(entry, items);
+          var result = await workerMerge(entry, resourceKey, items, pkField, accessToken, meta);
 
           lastStatus.mode = "saved";
           lastStatus.lastSaveAt = Date.now();
@@ -452,7 +677,7 @@
         uiSet("CloudKit: mounting " + resourceKey);
 
         // apply local once first
-        try { safeApply(getLocal() || { items: [] }, { source: "local-initial" }); } catch (e) {}
+        try { safeApply(getLocal() || { items: [] }, { source: "local-initial" }); } catch (e0) {}
 
         await pullNow();
 
@@ -489,6 +714,8 @@
   window.TasunCloudKit = {
     init: init,
     mount: mount,
+    getConfig: getConfig,
+    applyCloudConfigFromResources: applyCloudConfigFromResources,
     _debug: {
       state: function () { return shallowClone(_S); }
     }
