@@ -10,6 +10,11 @@
  * - Extra helpers:
  *   TasunCloudKit.getConfig(resourceKey)
  *   TasunCloudKit.applyCloudConfigFromResources(pageKey, hooks)
+ *
+ * ✅IMPORTANT (Global rule):
+ * - pk is FORCED to "id" for ALL pages (no pk="k" allowed).
+ * - Any mount({pk:"k"}) will be ignored to keep D1 merge fully consistent.
+ * - Backward-compat: if item.id missing but item.k / item.key exists, we set item.id = item.k/key.
  * ========================================================= */
 (function () {
   "use strict";
@@ -237,15 +242,27 @@
     return [];
   }
 
-  function ensureId(item, pkField) {
+  // ✅ pk is forced to "id". We still support stable id fallback for key-value items.
+  function ensureId(item) {
     if (!item || typeof item !== "object") return item;
-    if (item.id !== undefined && item.id !== null && String(item.id).trim() !== "") return item;
 
-    pkField = norm(pkField || "id");
-    if (pkField && item[pkField] !== undefined && item[pkField] !== null && String(item[pkField]).trim() !== "") {
-      item.id = String(item[pkField]).trim();
+    // already has id
+    if (item.id !== undefined && item.id !== null && norm(item.id) !== "") return item;
+
+    // fallback order (backward compat)
+    var cand =
+      (item.k !== undefined && item.k !== null && norm(item.k) !== "") ? item.k :
+      (item.key !== undefined && item.key !== null && norm(item.key) !== "") ? item.key :
+      (item.pk !== undefined && item.pk !== null && norm(item.pk) !== "") ? item.pk :
+      (item._id !== undefined && item._id !== null && norm(item._id) !== "") ? item._id :
+      "";
+
+    if (norm(cand)) {
+      item.id = String(cand).trim();
       return item;
     }
+
+    // generate
     try {
       item.id = crypto.randomUUID();
     } catch (e) {
@@ -255,7 +272,6 @@
   }
 
   function toApplyPayload(remoteObj) {
-    // remoteObj may be {ver, updatedAt, items} or others
     var items = extractItems(remoteObj);
     return {
       ver: remoteObj && remoteObj.ver !== undefined ? remoteObj.ver : 1,
@@ -286,7 +302,6 @@
   }
 
   function resolveAccessToken(storageKey, forceToken) {
-    // forceToken can be {clientId, clientSecret} or raw string
     try {
       if (forceToken) {
         if (typeof forceToken === "string") return parseTokenRaw(forceToken);
@@ -298,7 +313,6 @@
       }
     } catch (e) {}
 
-    // window.TASUN_ACCESS_SERVICE_TOKEN
     try {
       var w = window.TASUN_ACCESS_SERVICE_TOKEN;
       if (w && typeof w === "object") {
@@ -312,7 +326,6 @@
       }
     } catch (e2) {}
 
-    // storage
     storageKey = norm(storageKey) || "tasunAccessServiceToken_v1";
     try {
       var s1 = parseTokenRaw(sessionStorage.getItem(storageKey));
@@ -370,21 +383,21 @@
       throw new Error("Worker read failed: " + r.status + " " + (t || ""));
     }
     if (!j) {
-      // allow empty or non-json
       return { ver: 1, updatedAt: nowISO(), items: [] };
     }
     return j;
   }
 
-  async function workerMerge(entry, resourceKey, items, pkField, accessToken, meta) {
+  async function workerMerge(entry, resourceKey, items, accessToken, meta) {
     var apiBase = norm(entry.apiBase);
     var ep = (entry.endpoints && typeof entry.endpoints === "object") ? entry.endpoints : {};
     var mergePath = norm(ep.merge || "/api/merge");
     var url = joinUrl(apiBase, mergePath);
 
+    // ✅ pk forced to "id"
     var body = {
       key: resourceKey,
-      pk: norm(pkField || "id"),
+      pk: "id",
       items: items,
       client: {
         ts: Date.now(),
@@ -418,7 +431,6 @@
     opt = (opt && typeof opt === "object") ? opt : {};
     if (!_S.inited) init({});
 
-    // allow one-shot override
     if (opt.resourcesUrl !== undefined) _S.resourcesUrl = norm(opt.resourcesUrl) || "tasun-resources.json";
     if (opt.resourcesInline && typeof opt.resourcesInline === "object") _S.resourcesInline = opt.resourcesInline;
 
@@ -428,8 +440,6 @@
     return normalizeEntry(resourceKey, entry);
   }
 
-  // Signature like the one you pasted earlier:
-  // applyCloudConfigFromResources(pageKey, { setApiBase, setEndpoints, resourcesUrl })
   async function applyCloudConfigFromResources(pageKey, hooks) {
     hooks = (hooks && typeof hooks === "object") ? hooks : {};
     pageKey = norm(pageKey);
@@ -438,11 +448,7 @@
     try {
       var cfg = await getConfig(pageKey, { resourcesUrl: hooks.resourcesUrl, resourcesInline: hooks.resourcesInline });
       if (typeof hooks.setApiBase === "function" && cfg.apiBase) hooks.setApiBase(cfg.apiBase);
-
-      // if you want to override endpoint variables, pass a setter:
-      // setEndpoints({health,read,merge})
       if (typeof hooks.setEndpoints === "function" && cfg.endpoints) hooks.setEndpoints(shallowClone(cfg.endpoints));
-
       return true;
     } catch (e) {
       return false;
@@ -455,7 +461,6 @@
   function init(cfg) {
     cfg = (cfg && typeof cfg === "object") ? cfg : {};
 
-    // default appVer from window
     if (!_S.appVer) _S.appVer = norm(window.TASUN_APP_VER);
 
     if (cfg.appVer !== undefined) _S.appVer = norm(cfg.appVer);
@@ -475,12 +480,18 @@
 
     uiEnsure();
 
-    // allow per-mount override of resourcesUrl
     if (cfg.resourcesUrl !== undefined) _S.resourcesUrl = norm(cfg.resourcesUrl) || "tasun-resources.json";
     if (cfg.resourcesInline && typeof cfg.resourcesInline === "object") _S.resourcesInline = cfg.resourcesInline;
 
     var resourceKey = norm(cfg.resourceKey);
-    var pkField = norm(cfg.pk || cfg.pkField || "id"); // used to derive id if missing
+
+    // ✅FORCE pk/id rule (ignore cfg.pk / cfg.pkField)
+    if (cfg.pk !== undefined || cfg.pkField !== undefined) {
+      try {
+        // non-breaking warning (helps you find pages still using pk:"k")
+        console.warn("[TasunCloudKit] pk is forced to 'id'. Please remove pk from mount() on page:", resourceKey, "pk=", cfg.pk || cfg.pkField);
+      } catch (e) {}
+    }
     var watchCfg = cfg.watch || { intervalSec: 0 };
     var getLocal = (typeof cfg.getLocal === "function") ? cfg.getLocal : function () { return { items: [] }; };
     var apply = (typeof cfg.apply === "function") ? cfg.apply : function () {};
@@ -488,11 +499,9 @@
     var protectEmptyRemote = (cfg.protectEmptyRemote !== undefined) ? !!cfg.protectEmptyRemote : true;
     var canSeed = (typeof cfg.canSeed === "function") ? cfg.canSeed : function () { return true; };
 
-    // Access token support
     var accessKey = norm(cfg.accessTokenKey || cfg.accessKey || "tasunAccessServiceToken_v1");
     var accessToken = resolveAccessToken(accessKey, cfg.accessToken || null);
 
-    // optional meta headers
     var meta = {
       appVer: norm(_S.appVer) || norm(window.TASUN_APP_VER),
       page: resourceKey,
@@ -500,7 +509,6 @@
       role: (typeof cfg.role === "function") ? (cfg.role() || "") : norm(cfg.role || ""),
     };
 
-    // optional apiBase override (admin config)
     var apiBaseOverride = (typeof cfg.apiBase === "function") ? cfg.apiBase : function () { return norm(cfg.apiBase || ""); };
 
     var destroyed = false;
@@ -516,13 +524,13 @@
       appVer: norm(_S.appVer),
       resourcesUrl: norm(_S.resourcesUrl),
       access: accessToken ? "token" : "cookie",
-      accessKey: accessKey
+      accessKey: accessKey,
+      pk: "id"
     };
 
     var readyResolve;
     var ready = new Promise(function (res) { readyResolve = res; });
 
-    // serialize ops
     var _chain = Promise.resolve();
     function enqueue(fn) {
       _chain = _chain.then(function () {
@@ -579,7 +587,6 @@
           var entry = await resolveEntry();
           var remote = await workerRead(entry, resourceKey, accessToken, meta);
 
-          // protect empty remote: keep local, then seed once (only if canSeed())
           if (protectEmptyRemote) {
             var local = getLocal() || { items: [] };
             if (isRemoteEmpty(remote) && isLocalNotEmpty(local)) {
@@ -592,7 +599,6 @@
                 uiSet("CloudKit: remote empty → keep local");
                 uiPulse(true);
 
-                // seed to remote for writer only
                 try {
                   if (canSeed()) {
                     saveMerged({ reason: "seed-empty-remote" });
@@ -615,7 +621,6 @@
           uiPulse(false);
           console.warn("[TasunCloudKit] pullNow error:", lastStatus.lastError);
 
-          // fallback apply local to avoid blank
           try {
             safeApply(getLocal() || { items: [] }, { source: "local-fallback", error: lastStatus.lastError });
           } catch (_e2) {}
@@ -634,28 +639,24 @@
         try {
           var entry = await resolveEntry();
 
-          // local -> items
           var localObj = getLocal() || { items: [] };
           var items = extractItems(localObj) || [];
 
-          // ensure id + timestamps (non-breaking)
           for (var i = 0; i < items.length; i++) {
             if (items[i] && typeof items[i] === "object") {
-              ensureId(items[i], pkField);
+              ensureId(items[i]); // ✅ id forced
               if (!items[i].createdAt) items[i].createdAt = nowISO();
               items[i].updatedAt = nowISO();
             }
           }
 
-          // merge on server
-          var result = await workerMerge(entry, resourceKey, items, pkField, accessToken, meta);
+          var result = await workerMerge(entry, resourceKey, items, accessToken, meta);
 
           lastStatus.mode = "saved";
           lastStatus.lastSaveAt = Date.now();
           uiSet("CloudKit: saved " + resourceKey);
           uiPulse(true);
 
-          // refresh remote -> apply
           await pullNow();
           return result;
         } catch (e) {
@@ -669,14 +670,12 @@
       });
     }
 
-    // init async
     (async function () {
       try {
         if (!resourceKey) throw new Error("mount() missing resourceKey");
 
         uiSet("CloudKit: mounting " + resourceKey);
 
-        // apply local once first
         try { safeApply(getLocal() || { items: [] }, { source: "local-initial" }); } catch (e0) {}
 
         await pullNow();
@@ -710,7 +709,6 @@
     };
   }
 
-  // export
   window.TasunCloudKit = {
     init: init,
     mount: mount,
