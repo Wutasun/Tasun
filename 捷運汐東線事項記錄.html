@@ -961,11 +961,27 @@
       }
 
       async function ensureApiBaseReady(){
-        var b = getApiBase();
-        if(b) return b;
+        // ✅ 1) 先用已設定/已儲存（避免每次都去抓 resources）
+        var b = "";
+        try{ b = norm(window.TASUN_D1_API_BASE); }catch(e){ b=""; }
+        if(b){ b = b.replace(/\/+$/,""); setApiBase(b); return b; }
+
+        try{ b = norm(sessionStorage.getItem(D1_API_BASE_KEY)); }catch(e){ b=""; }
+        if(b){ b = b.replace(/\/+$/,""); setApiBase(b); return b; }
+
+        try{ b = norm(localStorage.getItem(D1_API_BASE_KEY)); }catch(e){ b=""; }
+        if(b){ b = b.replace(/\/+$/,""); setApiBase(b); return b; }
+
+        // ✅ 2) 跨設備自動發現（tasun-resources.json）
         var d = await discoverApiBaseFromResources();
         if(d){
           setApiBase(d);
+          return getApiBase();
+        }
+
+        // ✅ 3) 最後才回退到預設（並寫入，讓後續頁也直接可用）
+        if(DEFAULT_API_BASE && /^https?:\/\//i.test(DEFAULT_API_BASE)){
+          setApiBase(DEFAULT_API_BASE);
           return getApiBase();
         }
         return "";
@@ -1023,86 +1039,164 @@
 
       async function httpJSON(url, opt){
         opt = opt || {};
-        opt.mode = "cors";
-        opt.cache = "no-store";
-        opt.credentials = hasAccessToken() ? "omit" : "include";
-        opt.headers = Object.assign(
-          { "Accept":"application/json" },
-          opt.headers||{},
-          accessHeaders(),
-          {
-            "X-Tasun-AppVer": String(window.TASUN_APP_VER||""),
-            "X-Tasun-Page": PAGE_KEY,
-            "X-Tasun-User": (Auth.current() && Auth.current().username) ? String(Auth.current().username) : "",
-            "X-Tasun-Role": String(Auth.role()||"")
+        var baseHeaders = opt.headers || {};
+
+        function cleanHeaders(h){
+          var out = {};
+          for(var k in h){
+            if(!Object.prototype.hasOwnProperty.call(h,k)) continue;
+            var v = h[k];
+            if(v===undefined || v===null) continue;
+            v = String(v);
+            if(!v.trim()) continue;
+            out[k] = v;
           }
-        );
-        var res;
-        try{ res = await fetch(url, opt); }
-        catch(err){
-          var e2 = new Error(err && err.message ? err.message : "Failed to fetch");
-          e2.status = 0; e2.code = "FETCH_FAIL";
-          throw e2;
-        }
-        if(!res.ok){
-          var body = "";
-          try{ body = await res.text(); }catch(e){}
-          var err2 = new Error("HTTP "+res.status+" "+res.statusText);
-          err2.status = res.status;
-          err2.body = body;
-          if(res.status===401 || res.status===403) err2.code = "ACCESS_DENY";
-          throw err2;
-        }
-        apiLastStatus = res.status;
-        var ct = (res.headers.get("content-type")||"").toLowerCase();
-        if(ct.includes("application/json") || ct.includes("+json")){
-          var data = await res.json();
-          if(data && typeof data==="object" && data.ok===false){
-            var msg = data.error || data.message || "API_ERROR";
-            var errJ = new Error(msg);
-            errJ.status = res.status;
-            try{ errJ.body = JSON.stringify(data); }catch(_e){ errJ.body = ""; }
-            var lowM = String(msg||"").toLowerCase();
-            errJ.code = (lowM.includes("missing access") || lowM.includes("access token") || lowM.includes("cf-access")) ? "ACCESS_DENY" : "API_FAIL";
-            throw errJ;
-          }
-          return data;
+          return out;
         }
 
-        var txt = await res.text();
-        var low = (txt||"").slice(0, 900).toLowerCase();
-        if(low.includes("<html") && (low.includes("cloudflare access") || low.includes("cf-access") || low.includes("access login"))){
-          var errH = new Error("ACCESS_HTML");
-          errH.status = res.status;
-          errH.body = (txt||"").slice(0, 4000);
-          errH.code = "ACCESS_DENY";
-          throw errH;
+        function buildHeaders(authMode){
+          // ✅ 盡量保持「簡單請求」：少送自訂 Header，降低 CORS/OPTIONS 失敗機率
+          var h = { "Accept":"application/json" };
+          for(var k in baseHeaders){
+            if(Object.prototype.hasOwnProperty.call(baseHeaders,k)) h[k] = baseHeaders[k];
+          }
+          // ❌ 不強制送 X- 自訂 Header（常見導致 preflight 被擋）
+          delete h["X-Tasun-AppVer"]; delete h["X-Tasun-Page"]; delete h["X-Tasun-User"]; delete h["X-Tasun-Role"];
+          delete h["x-tasun-appver"]; delete h["x-tasun-page"]; delete h["x-tasun-user"]; delete h["x-tasun-role"];
+
+          if(authMode === "token"){
+            var a = accessHeaders();
+            for(var k2 in a){
+              if(Object.prototype.hasOwnProperty.call(a,k2)) h[k2] = a[k2];
+            }
+          }
+          return cleanHeaders(h);
         }
 
-        try{
-          var j = JSON.parse(txt);
-          if(j && typeof j==="object" && j.ok===false){
-            var msg2 = j.error || j.message || "API_ERROR";
-            var errJ2 = new Error(msg2);
-            errJ2.status = res.status;
-            errJ2.body = (txt||"").slice(0, 4000);
-            var lowM2 = String(msg2||"").toLowerCase();
-            errJ2.code = (lowM2.includes("missing access") || lowM2.includes("access token") || lowM2.includes("cf-access")) ? "ACCESS_DENY" : "API_FAIL";
-            throw errJ2;
-          }
-          return j;
-        }catch(e){
-          if(e && (e.code==="ACCESS_DENY" || e.code==="API_FAIL")) throw e;
-          var err3 = new Error("BAD_RESPONSE");
-          err3.status = res.status;
-          err3.body = (txt||"").slice(0, 4000);
-          err3.code = "BAD_RESPONSE";
-          if(low.includes("<html") || low.includes("cloudflare access") || low.includes("cf-access") || low.includes("access login")){
-            err3.code = "ACCESS_DENY";
-          }
-          throw err3;
+        function looksLikeAccessHTML(txt){
+          var low = (txt||"").slice(0, 2000).toLowerCase();
+          if(!low) return false;
+          if(low.indexOf("cloudflare access") >= 0) return true;
+          if(low.indexOf("cf-access") >= 0) return true;
+          if(low.indexOf("access login") >= 0) return true;
+          if(low.indexOf("<html") >= 0 && low.indexOf("access") >= 0 && low.indexOf("login") >= 0) return true;
+          return false;
         }
+
+        async function doFetch(authMode){
+          var fo = {};
+          for(var p in opt){
+            if(!Object.prototype.hasOwnProperty.call(opt,p)) continue;
+            if(p === "headers") continue;
+            fo[p] = opt[p];
+          }
+          fo.mode = "cors";
+          fo.cache = "no-store";
+          fo.credentials = (authMode === "token") ? "omit" : "include";
+          fo.headers = buildHeaders(authMode);
+          try{
+            return await fetch(url, fo);
+          }catch(err){
+            var e2 = new Error(err && err.message ? err.message : "Failed to fetch");
+            e2.status = 0; e2.code = "FETCH_FAIL";
+            throw e2;
+          }
+        }
+
+        // ✅ 先用 cookie（Access 互動登入）→ 不行再用 Service Token（若已設定）
+        for(var attempt=0; attempt<2; attempt++){
+          var mode = (attempt===0) ? "cookie" : "token";
+          if(mode==="token" && !hasAccessToken()) break;
+
+          var res = await doFetch(mode);
+
+          // cookie 模式遇到 401/403，若有 token 再試一次（避免一直卡在未登入狀態）
+          if((res.status===401 || res.status===403) && mode==="cookie" && hasAccessToken()){
+            continue;
+          }
+
+          var ct = (res.headers.get("content-type")||"").toLowerCase();
+          var isJson = (ct.indexOf("application/json")>=0 || ct.indexOf("+json")>=0);
+
+          var txt = "";
+          var j = null;
+
+          if(isJson){
+            try{ j = await res.json(); }
+            catch(e){ try{ txt = await res.text(); }catch(_e){ txt=""; } }
+          }else{
+            try{ txt = await res.text(); }catch(e){ txt=""; }
+          }
+
+          // Access HTML：cookie 模式先改用 token 再試一次
+          if(!isJson && looksLikeAccessHTML(txt) && mode==="cookie" && hasAccessToken()){
+            continue;
+          }
+
+          if(!res.ok){
+            if(j && typeof j==="object"){
+              var msg = j.error || j.message || ("HTTP "+res.status+" "+res.statusText);
+              var errJ = new Error(msg);
+              errJ.status = res.status;
+              try{ errJ.body = JSON.stringify(j).slice(0,4000); }catch(e){ errJ.body=""; }
+              errJ.code = (res.status===401 || res.status===403) ? "ACCESS_DENY" : "API_FAIL";
+              throw errJ;
+            }
+            var err2 = new Error("HTTP "+res.status+" "+res.statusText);
+            err2.status = res.status;
+            err2.body = (txt||"").slice(0,4000);
+            err2.code = (res.status===401 || res.status===403 || looksLikeAccessHTML(txt)) ? "ACCESS_DENY" : "HTTP_FAIL";
+            throw err2;
+          }
+
+          apiLastStatus = res.status;
+
+          if(j && typeof j==="object"){
+            if(j.ok===false){
+              var msg2 = j.error || j.message || "API_ERROR";
+              var errJ2 = new Error(msg2);
+              errJ2.status = res.status;
+              try{ errJ2.body = JSON.stringify(j).slice(0,4000); }catch(e){ errJ2.body=""; }
+              errJ2.code = "API_FAIL";
+              throw errJ2;
+            }
+            return j;
+          }
+
+          // text -> json
+          try{
+            var j2 = JSON.parse(txt || "null");
+            if(j2 && typeof j2==="object" && j2.ok===false){
+              var msg3 = j2.error || j2.message || "API_ERROR";
+              var errJ3 = new Error(msg3);
+              errJ3.status = res.status;
+              errJ3.body = (txt||"").slice(0,4000);
+              errJ3.code = "API_FAIL";
+              throw errJ3;
+            }
+            return j2;
+          }catch(e){
+            if(looksLikeAccessHTML(txt)){
+              var errH = new Error("ACCESS_HTML");
+              errH.status = res.status;
+              errH.body = (txt||"").slice(0,4000);
+              errH.code = "ACCESS_DENY";
+              throw errH;
+            }
+            var err3 = new Error("BAD_RESPONSE");
+            err3.status = res.status;
+            err3.body = (txt||"").slice(0,4000);
+            err3.code = "BAD_RESPONSE";
+            throw err3;
+          }
+        }
+
+        var eLast = new Error("ACCESS_DENY");
+        eLast.status = 401;
+        eLast.code = "ACCESS_DENY";
+        throw eLast;
       }
+
       function unwrap(resp){
         var info = (resp && typeof resp==="object") ? (resp.info || resp.meta || {}) : {};
         var p = resp;
@@ -1146,12 +1240,42 @@
         this._timer = 0;
         this._saving = false;
         this._pending = false;
+        this._lastErrCode = "";
+        this._lastErrAt = 0;
       }
       CloudCtrl.prototype._err = function(e){
         if(!e) return;
-        if(e.code==="NO_API_BASE"){ cloudState="noapi"; toast("⚠️ 尚未設定 API_BASE：請按右上「雲端設定」。"); return; }
-        if(e.code==="FETCH_FAIL" || e.status===0){ cloudState="neterr"; toast("⚠️ 雲端連線失敗：請確認 API_BASE / CORS / 網路。"); return; }
-        if(e.code==="ACCESS_DENY" || e.status===401 || e.status===403){ cloudState="deny"; toast("⚠️ 雲端驗證未通過：請按「雲端檔案」先登入，或在「雲端設定」貼 Service Token。"); return; }
+
+        var code = (e.code||"");
+        if(code==="NO_API_BASE"){ cloudState="noapi"; }
+        else if(code==="FETCH_FAIL" || e.status===0){ cloudState="neterr"; }
+        else if(code==="ACCESS_DENY" || e.status===401 || e.status===403){ cloudState="deny"; }
+        else { cloudState="neterr"; }
+
+        try{ renderHint(); }catch(_e){}
+
+        // ✅ 避免輪詢時一直彈同樣的提示（12秒內同錯誤不重複 toast）
+        var now = Date.now();
+        if(code && code===this._lastErrCode && (now - this._lastErrAt) < 12000){
+          return;
+        }
+        this._lastErrCode = code;
+        this._lastErrAt = now;
+
+        if(code==="NO_API_BASE"){
+          toast("⚠️ 尚未設定 API_BASE：請按右上「雲端設定」。");
+          return;
+        }
+        if(code==="FETCH_FAIL" || e.status===0){
+          var base = "";
+          try{ base = getApiBase(); }catch(_e2){ base=""; }
+          toast("⚠️ 雲端連線失敗：可能是 CORS/網路/網址。請確認 API_BASE=" + (base||"") + "（伺服器需允許 CORS/OPTIONS）。");
+          return;
+        }
+        if(code==="ACCESS_DENY" || e.status===401 || e.status===403){
+          toast("⚠️ 雲端驗證未通過：請按「雲端檔案」完成 Access 登入，或在「雲端設定」貼 Service Token。");
+          return;
+        }
         toast("雲端錯誤：" + (e.message ? e.message : String(e)));
       };
       CloudCtrl.prototype.apply = function(payload, info){
@@ -1268,7 +1392,7 @@
         if(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T/.test(date)) date = date.slice(0,10);
       }
 
-      return { uid:uid, id:id, text:text, trade:trade, system:system, source:source, attach:attach, remark:remark, date:date };
+      return { uid:uid, k:uid, id:id, text:text, trade:trade, system:system, source:source, attach:attach, remark:remark, date:date };
     }      function loadLocal(){
         db = [];
         counter = 0;
@@ -1701,12 +1825,15 @@
           counter = Math.max(counter, maxId(db));
           var id = counter + 1;
           counter = id;
-          var row = { uid: uuid(), id:id, text:text, trade:trade, system:system, source:source, attach:attach, remark:remark, date:date };
+          var _uid = uuid();
+          var row = { uid:_uid, k:_uid, id:id, text:text, trade:trade, system:system, source:source, attach:attach, remark:remark, date:date };
           db.push(row);
           selectedUid = row.uid;
         }else{
           var r = db.find(function(x){ return x.uid === editingUid; });
           if(!r){ toast("找不到資料"); return; }
+          r.k = r.k || r.uid || uuid();
+          r.uid = r.uid || r.k;
           r.text = text; r.trade = trade; r.system = system; r.source = source; r.attach = attach; r.remark = remark; r.date = date;
           selectedUid = r.uid;
         }
