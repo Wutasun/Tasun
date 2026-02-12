@@ -1,5 +1,5 @@
 /* =========================================================
- * tasun-cloud-kit.js  (Most compatible - Worker first)
+ * tasun-cloud-kit.js  (Most compatible - Worker first)  [STANDARD v1]
  * - Read config from: tasun-resources.json (default)
  * - Prefer Cloudflare Worker API (apiBase + endpoints.health/read/merge)
  * - Supports Access (cookie or Service Token headers)
@@ -11,16 +11,22 @@
  *   TasunCloudKit.getConfig(resourceKey)
  *   TasunCloudKit.applyCloudConfigFromResources(pageKey, hooks)
  *
- * ✅IMPORTANT (Global rule):
- * - pk is FORCED to "id" for ALL pages (no pk="k" allowed).
- * - Any mount({pk:"k"}) will be ignored to keep D1 merge fully consistent.
- * - Backward-compat: if item.id missing but item.k / item.key exists, we set item.id = item.k/key.
- * - Server-compat: POST body sends BOTH {items:[...]} and {rows:[...]} to match different workers.
+ * ✅STANDARD v1 (Global rule):
+ * - pk is FORCED to "uid" for ALL pages (uuid-based, stable).
+ * - Any mount({pk:"k"/"id"}) will be ignored.
+ * - Required fields ensured: uid, rev, updatedAt, deleted
+ * - id is display only (never forced / never auto UUID).
+ * - Backward-compat:
+ *   - If uid missing, we generate a STABLE uid by hashing row content
+ *     (prevents multi-device id collisions from overwriting).
+ * - Server-compat:
+ *   - POST body sends {items, rows, db} and also {local:{items,rows,db,counter}}
  * ========================================================= */
 (function () {
   "use strict";
 
-  var GLOBAL_PK = "id";
+  // ✅ Global PK (STANDARD v1)
+  var GLOBAL_PK = "uid";
 
   // -------------------------------
   // Internal state (singleton)
@@ -36,18 +42,15 @@
     _resourcesUrlCacheKey: "",
     _uiMounted: false,
     _uiEl: null,
-    _uiMsgEl: null,
+    _uiMsgEl: null
   };
 
   // -------------------------------
   // Utils
   // -------------------------------
-  function norm(s) {
-    return s === undefined || s === null ? "" : String(s).trim();
-  }
-  function nowISO() {
-    return new Date().toISOString();
-  }
+  function norm(s) { return (s === undefined || s === null) ? "" : String(s).trim(); }
+  function nowISO() { return new Date().toISOString(); }
+
   function addV(url) {
     url = norm(url);
     var v = norm(_S.appVer) || norm(window.TASUN_APP_VER);
@@ -60,14 +63,12 @@
       return url + (url.indexOf("?") >= 0 ? "&" : "?") + "v=" + encodeURIComponent(v);
     }
   }
+
   function safeJSONParse(text) {
     if (!text) return null;
-    try {
-      return JSON.parse(text);
-    } catch (e) {
-      return null;
-    }
+    try { return JSON.parse(text); } catch (e) { return null; }
   }
+
   function shallowClone(x) {
     if (!x || typeof x !== "object") return x;
     if (Array.isArray(x)) return x.slice();
@@ -75,6 +76,7 @@
     for (var k in x) if (Object.prototype.hasOwnProperty.call(x, k)) o[k] = x[k];
     return o;
   }
+
   function joinUrl(base, path) {
     base = norm(base).replace(/\/+$/, "");
     path = norm(path);
@@ -82,12 +84,13 @@
     if (path[0] !== "/") path = "/" + path;
     return base + path;
   }
+
   function withQuery(url, kv) {
     try {
       var u = new URL(url, location.href);
       for (var k in kv) {
         if (!Object.prototype.hasOwnProperty.call(kv, k)) continue;
-        if (!u.searchParams.get(k) && kv[k] !== undefined && kv[k] !== null && String(kv[k]).trim() !== "") {
+        if (!u.searchParams.get(k) && kv[k] !== undefined && kv[k] !== null && norm(kv[k]) !== "") {
           u.searchParams.set(k, String(kv[k]));
         }
       }
@@ -98,6 +101,63 @@
       }
       return url;
     }
+  }
+
+  function mkErr(code, msg, status, body) {
+    var e = new Error(msg || code || "ERROR");
+    e.code = code || "ERROR";
+    if (status !== undefined) e.status = status;
+    if (body !== undefined) e.body = body;
+    return e;
+  }
+
+  // fnv1a hash (stable, ES5)
+  function fnv1a(str) {
+    str = String(str || "");
+    var h = 0x811c9dc5;
+    for (var i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0).toString(16).padStart(8, "0");
+  }
+
+  // stable stringify with sorted keys (small + deterministic)
+  function stableStringify(obj, depth) {
+    depth = (depth === undefined) ? 6 : depth;
+    if (depth <= 0) return '"[depth]"';
+
+    if (obj === null) return "null";
+    var t = typeof obj;
+
+    if (t === "string") return JSON.stringify(obj);
+    if (t === "number" || t === "boolean") return String(obj);
+    if (t !== "object") return JSON.stringify(String(obj));
+
+    if (Array.isArray(obj)) {
+      var a = [];
+      for (var i = 0; i < obj.length; i++) a.push(stableStringify(obj[i], depth - 1));
+      return "[" + a.join(",") + "]";
+    }
+
+    var keys = [];
+    for (var k in obj) if (Object.prototype.hasOwnProperty.call(obj, k)) keys.push(k);
+    keys.sort();
+
+    var parts = [];
+    for (var j = 0; j < keys.length; j++) {
+      var kk = keys[j];
+      parts.push(JSON.stringify(kk) + ":" + stableStringify(obj[kk], depth - 1));
+    }
+    return "{" + parts.join(",") + "}";
+  }
+
+  function firstNonEmpty() {
+    for (var i = 0; i < arguments.length; i++) {
+      var v = norm(arguments[i]);
+      if (v) return v;
+    }
+    return "";
   }
 
   // -------------------------------
@@ -185,10 +245,10 @@
       json = safeJSONParse(text);
     } catch (e) {
       if (_S.resourcesInline && typeof _S.resourcesInline === "object") return _S.resourcesInline;
-      throw new Error("Failed to load resources (fetch): " + url);
+      throw mkErr("RES_FETCH_FAIL", "Failed to load resources (fetch): " + url);
     }
 
-    if (!resp || !resp.ok || !json || typeof json !== "object") throw new Error("Failed to load resources: " + url);
+    if (!resp || !resp.ok || !json || typeof json !== "object") throw mkErr("RES_BAD", "Failed to load resources: " + url, resp ? resp.status : 0, text);
 
     if (json.resources && typeof json.resources === "object") json = json.resources;
 
@@ -208,53 +268,119 @@
     out.endpoints = {
       health: norm(ep.health || "/health"),
       read:   norm(ep.read   || "/api/read"),
-      merge:  norm(ep.merge  || "/api/merge"),
+      merge:  norm(ep.merge  || "/api/merge")
     };
 
     return out;
   }
 
+  // Unwrap remote formats: {payload|data|result} / direct
+  function unwrapRemote(obj) {
+    if (!obj || typeof obj !== "object") return obj;
+    var p = obj;
+    if (p && typeof p === "object") {
+      if (p.payload && typeof p.payload === "object") p = p.payload;
+      else if (p.data && typeof p.data === "object") p = p.data;
+      else if (p.result && typeof p.result === "object") p = p.result;
+    }
+    return p;
+  }
+
   function extractItems(any) {
     if (Array.isArray(any)) return any;
+    any = unwrapRemote(any);
     if (any && typeof any === "object") {
       if (Array.isArray(any.items)) return any.items;
       if (Array.isArray(any.db)) return any.db;
       if (Array.isArray(any.rows)) return any.rows;
       if (Array.isArray(any.data)) return any.data;
-      return [any];
+      return [];
     }
     return [];
   }
 
-  // ✅ pk forced to "id"; still support legacy keys to build id
-  function ensureId(item) {
+  // -------------------------------
+  // STANDARD v1: ensure uid/rev/updatedAt/deleted
+  // -------------------------------
+  function buildStableUid(item) {
+    // Prefer existing legacy identifiers if they exist, but make it collision-safe.
+    // We hash a stable signature so multi-device "same id different content" won't overwrite.
+    var legacyId = firstNonEmpty(item.uid, item.id, item.k, item.key, item.pk, item._id);
+    var text = firstNonEmpty(item.text, item.content, item.note, item.body);
+    var date = firstNonEmpty(item.date, item.day, item.createdAt, item.created, item.updatedAt);
+    var trade = firstNonEmpty(item.trade, item.kind);
+    var system = firstNonEmpty(item.system, item.sys);
+    var source = firstNonEmpty(item.source, item.origin);
+    var attach = firstNonEmpty(item.attach, item.attachment, item.link);
+    var remark = firstNonEmpty(item.remark, item.note2);
+
+    var sig = "v1|" +
+      "legacy=" + String(legacyId || "") + "|" +
+      "text=" + String(text || "") + "|" +
+      "date=" + String(date || "") + "|" +
+      "trade=" + String(trade || "") + "|" +
+      "system=" + String(system || "") + "|" +
+      "source=" + String(source || "") + "|" +
+      "attach=" + String(attach || "") + "|" +
+      "remark=" + String(remark || "");
+
+    return "u_" + fnv1a(sig);
+  }
+
+  function randomUid() {
+    try { return (crypto && crypto.randomUUID) ? crypto.randomUUID() : ""; } catch (e) {}
+    return "u" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2);
+  }
+
+  function ensureStandardFields(item, nowIso) {
     if (!item || typeof item !== "object") return item;
 
-    if (item[GLOBAL_PK] !== undefined && item[GLOBAL_PK] !== null && norm(item[GLOBAL_PK]) !== "") return item;
+    // uid
+    var u = norm(item.uid);
+    if (!u) {
+      // stable derived uid (best effort)
+      u = buildStableUid(item) || randomUid();
+      item.uid = u;
+    }
 
-    var cand =
-      (item.k   !== undefined && item.k   !== null && norm(item.k)   !== "") ? item.k :
-      (item.key !== undefined && item.key !== null && norm(item.key) !== "") ? item.key :
-      (item.pk  !== undefined && item.pk  !== null && norm(item.pk)  !== "") ? item.pk :
-      (item._id !== undefined && item._id !== null && norm(item._id) !== "") ? item._id :
-      "";
+    // deleted (tombstone)
+    if (item.deleted === undefined || item.deleted === null) item.deleted = false;
+    item.deleted = !!item.deleted;
 
-    if (norm(cand)) { item[GLOBAL_PK] = String(cand).trim(); return item; }
+    // createdAt / updatedAt
+    if (!item.createdAt) item.createdAt = nowIso;
+    if (!item.updatedAt) item.updatedAt = nowIso;
 
-    try { item[GLOBAL_PK] = crypto.randomUUID(); }
-    catch (e) { item[GLOBAL_PK] = String(Date.now()) + "_" + Math.random().toString(16).slice(2); }
+    // rev (number)
+    var rv = Number(item.rev);
+    if (!isFinite(rv) || rv < 0) rv = 0;
+    item.rev = rv;
+
     return item;
   }
 
+  // fingerprint to decide whether to bump rev/updatedAt
+  function fingerprintItem(item) {
+    if (!item || typeof item !== "object") return "";
+    // Exclude volatile fields from fingerprint
+    var clone = shallowClone(item) || {};
+    delete clone.updatedAt;
+    delete clone.createdAt;
+    delete clone.rev;
+    // keep deleted in fingerprint (deletion is a change)
+    return fnv1a(stableStringify(clone, 6));
+  }
+
   function toApplyPayload(remoteObj) {
+    remoteObj = unwrapRemote(remoteObj) || remoteObj;
     var items = extractItems(remoteObj);
     return {
-      ver: remoteObj && remoteObj.ver !== undefined ? remoteObj.ver : 1,
+      ver: (remoteObj && remoteObj.ver !== undefined) ? remoteObj.ver : 1,
       updatedAt: (remoteObj && remoteObj.updatedAt) ? remoteObj.updatedAt : nowISO(),
       items: items,
       db: items,
       rows: items,
-      counter: items.length
+      counter: (remoteObj && remoteObj.counter !== undefined) ? remoteObj.counter : items.length
     };
   }
 
@@ -327,9 +453,16 @@
 
   async function fetchJson(url, opt) {
     var r = await fetch(url, opt);
-    var t = await r.text();
+    var t = "";
+    try { t = await r.text(); } catch (e) { t = ""; }
     var j = safeJSONParse(t);
-    return { r: r, text: t, json: j };
+
+    // Detect Access HTML login page even with 200 OK
+    var low = (t || "").slice(0, 1200).toLowerCase();
+    var looksHtml = low.indexOf("<html") >= 0 || low.indexOf("<!doctype") >= 0;
+    var looksAccess = looksHtml && (low.indexOf("cloudflare access") >= 0 || low.indexOf("cf-access") >= 0 || low.indexOf("access login") >= 0);
+
+    return { r: r, text: t, json: j, looksAccessHtml: looksAccess };
   }
 
   function altReadPath(p) {
@@ -367,31 +500,54 @@
 
     var out = await doRead(readPath);
 
-    // 404 fallback to /api/tasun/pull (or reverse)
+    // 404 fallback
     if (!out.r.ok && out.r.status === 404) {
       var alt = altReadPath(readPath);
       if (alt) out = await doRead(alt);
     }
 
-    if (!out.r.ok) throw new Error("Worker read failed: " + out.r.status + " " + (out.text || ""));
+    if (out.looksAccessHtml) throw mkErr("ACCESS_DENY", "Access login required (HTML).", out.r.status, out.text);
+
+    // Some workers return {ok:false,...} with 200
+    if (out.r.ok && out.json && typeof out.json === "object" && out.json.ok === false) {
+      throw mkErr("API_FAIL", (out.json.error || out.json.message || "API_FAIL"), out.r.status, out.text);
+    }
+
+    if (!out.r.ok) throw mkErr("READ_FAIL", "Worker read failed: " + out.r.status, out.r.status, out.text);
+
     return out.json || { ver: 1, updatedAt: nowISO(), items: [] };
   }
 
-  async function workerMerge(entry, resourceKey, items, accessToken, meta) {
+  async function workerMerge(entry, resourceKey, localPayload, accessToken, meta) {
     var apiBase = norm(entry.apiBase);
     var ep = (entry.endpoints && typeof entry.endpoints === "object") ? entry.endpoints : {};
     var mergePath = norm(ep.merge || "/api/merge");
 
     async function doMerge(path) {
       var url = joinUrl(apiBase, path);
+
+      // Accept both styles:
+      // - items/rows/db at root
+      // - local:{items,rows,db,counter}
       var body = {
         key: resourceKey,
-        pk: GLOBAL_PK,      // ✅ forced
-        items: items,       // ✅ for workers expecting items
-        rows: items,        // ✅ for D1 worker expecting rows
-        db: items,          // ✅ extra compat
+        pk: GLOBAL_PK,         // ✅ forced
+        pkField: GLOBAL_PK,    // ✅ for servers that look for pkField
+        idField: "id",         // display-only hint
+        counterField: "counter",
+        items: localPayload.items,
+        rows: localPayload.items,
+        db: localPayload.items,
+        counter: localPayload.counter,
+        local: {
+          items: localPayload.items,
+          rows: localPayload.items,
+          db: localPayload.items,
+          counter: localPayload.counter
+        },
         client: {
           ts: Date.now(),
+          requestId: localPayload.requestId || "",
           appVer: norm(_S.appVer) || norm(window.TASUN_APP_VER),
           ua: (typeof navigator !== "undefined" ? navigator.userAgent : "")
         }
@@ -403,19 +559,26 @@
         cache: "no-store",
         credentials: (accessToken && accessToken.clientId) ? "omit" : "include",
         headers: buildHeaders({ "Content-Type": "application/json" }, accessToken, meta),
-        body: JSON.stringify(body),
+        body: JSON.stringify(body)
       });
     }
 
     var out = await doMerge(mergePath);
 
-    // 404 fallback to /api/tasun/merge (or reverse)
+    // 404 fallback
     if (!out.r.ok && out.r.status === 404) {
       var alt = altMergePath(mergePath);
       if (alt) out = await doMerge(alt);
     }
 
-    if (!out.r.ok) throw new Error("Worker merge failed: " + out.r.status + " " + (out.text || ""));
+    if (out.looksAccessHtml) throw mkErr("ACCESS_DENY", "Access login required (HTML).", out.r.status, out.text);
+
+    if (out.r.ok && out.json && typeof out.json === "object" && out.json.ok === false) {
+      throw mkErr("API_FAIL", (out.json.error || out.json.message || "API_FAIL"), out.r.status, out.text);
+    }
+
+    if (!out.r.ok) throw mkErr("MERGE_FAIL", "Worker merge failed: " + out.r.status, out.r.status, out.text);
+
     return out.json || { ok: true };
   }
 
@@ -431,7 +594,7 @@
 
     var resources = await loadResources();
     var entry = resources && resources[resourceKey];
-    if (!entry) throw new Error("Resource not found in tasun-resources.json: " + resourceKey);
+    if (!entry) throw mkErr("RES_MISSING", "Resource not found in tasun-resources.json: " + resourceKey);
     return normalizeEntry(resourceKey, entry);
   }
 
@@ -480,10 +643,10 @@
 
     var resourceKey = norm(cfg.resourceKey);
 
-    // ✅FORCE pk/id rule (ignore cfg.pk / cfg.pkField)
+    // ✅FORCE pk/uid rule (ignore cfg.pk / cfg.pkField)
     if (cfg.pk !== undefined || cfg.pkField !== undefined) {
       try {
-        console.warn("[TasunCloudKit] pk is forced to 'id'. Please remove pk from mount() on page:", resourceKey, "pk=", cfg.pk || cfg.pkField);
+        console.warn("[TasunCloudKit] pk is forced to 'uid'. Please remove pk from mount() on page:", resourceKey, "pk=", cfg.pk || cfg.pkField);
       } catch (e) {}
     }
 
@@ -501,15 +664,20 @@
       appVer: norm(_S.appVer) || norm(window.TASUN_APP_VER),
       page: resourceKey,
       user: (typeof cfg.user === "function") ? (cfg.user() || "") : norm(cfg.user || ""),
-      role: (typeof cfg.role === "function") ? (cfg.role() || "") : norm(cfg.role || ""),
+      role: (typeof cfg.role === "function") ? (cfg.role() || "") : norm(cfg.role || "")
     };
 
     var apiBaseOverride = (typeof cfg.apiBase === "function") ? cfg.apiBase : function () { return norm(cfg.apiBase || ""); };
 
     var destroyed = false;
     var timer = null;
+
+    // Local snapshot map for rev/updatedAt bump decision
+    var snap = {}; // uid -> fingerprint
+
     var lastStatus = {
       mode: "init",
+      code: "",
       resourceKey: resourceKey,
       apiBase: "",
       lastPullAt: 0,
@@ -532,6 +700,7 @@
         if (destroyed) return;
         return fn();
       }).catch(function (e) {
+        lastStatus.code = e && e.code ? String(e.code) : "ERROR";
         lastStatus.lastError = (e && e.message) ? String(e.message) : String(e || "");
       });
       return _chain;
@@ -549,6 +718,20 @@
 
     function safeApply(anyPayload, info) {
       try { apply(toApplyPayload(anyPayload), info || {}); } catch (e) {}
+      // after apply, rebuild snapshot from current local
+      try {
+        var cur = getLocal() || {};
+        var items = extractItems(cur) || [];
+        var i;
+        snap = {};
+        for (i = 0; i < items.length; i++) {
+          var it = items[i];
+          if (it && typeof it === "object") {
+            var uid = norm(it.uid);
+            if (uid) snap[uid] = fingerprintItem(it);
+          }
+        }
+      } catch (_e) {}
     }
 
     async function resolveEntry() {
@@ -574,6 +757,7 @@
         if (destroyed) return;
 
         lastStatus.lastError = "";
+        lastStatus.code = "";
         uiSet("CloudKit: pulling " + resourceKey);
 
         try {
@@ -583,7 +767,7 @@
           if (protectEmptyRemote) {
             var local = getLocal() || { items: [] };
             if (isRemoteEmpty(remote) && isLocalNotEmpty(local)) {
-              var seedKey = "tasunCloudKit_seeded__" + resourceKey + "__" + norm(_S.appVer || "") + "__v2";
+              var seedKey = "tasunCloudKit_seeded__" + resourceKey + "__" + norm(_S.appVer || "") + "__v3";
               if (!sessionStorage.getItem(seedKey)) {
                 sessionStorage.setItem(seedKey, "1");
                 safeApply(local, { source: "remote-empty-protected", reason: "keep-local" });
@@ -598,19 +782,29 @@
             }
           }
 
+          // ensure standard fields on remote BEFORE apply (so pages always see uid/rev/updatedAt/deleted)
+          try {
+            var p = unwrapRemote(remote) || remote;
+            var arr = extractItems(p) || [];
+            var nowIso = nowISO();
+            for (var i = 0; i < arr.length; i++) ensureStandardFields(arr[i], nowIso);
+          } catch (_e2) {}
+
           safeApply(remote, { source: "remote", fetchedAt: Date.now() });
           lastStatus.mode = "synced";
           lastStatus.lastPullAt = Date.now();
           uiSet("CloudKit: pulled " + resourceKey);
           uiPulse(true);
         } catch (e) {
+          lastStatus.code = e && e.code ? String(e.code) : "ERROR";
           lastStatus.lastError = (e && e.message) ? String(e.message) : String(e || "");
           lastStatus.mode = "error";
           uiSet("CloudKit: pull error");
           uiPulse(false);
-          console.warn("[TasunCloudKit] pullNow error:", lastStatus.lastError);
+          console.warn("[TasunCloudKit] pullNow error:", lastStatus.code, lastStatus.lastError);
 
-          try { safeApply(getLocal() || { items: [] }, { source: "local-fallback", error: lastStatus.lastError }); } catch (_e2) {}
+          // local fallback (do NOT overwrite UI with empty)
+          try { safeApply(getLocal() || { items: [] }, { source: "local-fallback", error: lastStatus.lastError }); } catch (_e3) {}
         }
       });
     }
@@ -621,6 +815,7 @@
         if (destroyed) return false;
 
         lastStatus.lastError = "";
+        lastStatus.code = "";
         uiSet("CloudKit: saving " + resourceKey);
 
         try {
@@ -629,29 +824,73 @@
           var localObj = getLocal() || { items: [] };
           var items = extractItems(localObj) || [];
 
+          // counter hint (optional)
+          var counter = 0;
+          try {
+            var lo = unwrapRemote(localObj) || localObj;
+            if (lo && typeof lo === "object" && lo.counter !== undefined) counter = Number(lo.counter) || 0;
+          } catch (_ec) {}
+          if (!isFinite(counter) || counter < 0) counter = 0;
+
+          // requestId (optional but helps idempotency)
+          var reqId = "";
+          try {
+            // deviceId can be provided by page; else generate/stash here
+            var didKey = "tasunDeviceId_v1";
+            var did = "";
+            try { did = norm(localStorage.getItem(didKey)); } catch (_e0) {}
+            if (!did) {
+              did = "d_" + randomUid();
+              try { localStorage.setItem(didKey, did); } catch (_e1) {}
+            }
+            reqId = did + "_" + Date.now() + "_" + Math.random().toString(16).slice(2);
+          } catch (_e2) {}
+
+          var nowIso = nowISO();
+
+          // ensure standard fields + bump rev/updatedAt ONLY when changed vs snapshot
           for (var i = 0; i < items.length; i++) {
-            if (items[i] && typeof items[i] === "object") {
-              ensureId(items[i]);
-              if (!items[i].createdAt) items[i].createdAt = nowISO();
-              items[i].updatedAt = nowISO();
+            var it = items[i];
+            if (!it || typeof it !== "object") continue;
+
+            ensureStandardFields(it, nowIso);
+
+            var uid = norm(it.uid);
+            var fp = fingerprintItem(it);
+            var prev = snap[uid];
+
+            // If new or changed -> bump rev + updatedAt
+            if (!prev || prev !== fp) {
+              it.rev = Number(it.rev || 0) + 1;
+              it.updatedAt = nowIso;
+              // keep createdAt if exists; already ensured above
+              snap[uid] = fp;
             }
           }
 
-          var result = await workerMerge(entry, resourceKey, items, accessToken, meta);
+          var localPayload = {
+            items: items,
+            counter: counter,
+            requestId: reqId
+          };
+
+          var result = await workerMerge(entry, resourceKey, localPayload, accessToken, meta);
 
           lastStatus.mode = "saved";
           lastStatus.lastSaveAt = Date.now();
           uiSet("CloudKit: saved " + resourceKey);
           uiPulse(true);
 
+          // always pull full result after merge (server source of truth)
           await pullNow();
           return result;
         } catch (e) {
+          lastStatus.code = e && e.code ? String(e.code) : "ERROR";
           lastStatus.lastError = (e && e.message) ? String(e.message) : String(e || "");
           lastStatus.mode = "error";
           uiSet("CloudKit: save error");
           uiPulse(false);
-          console.warn("[TasunCloudKit] saveMerged error:", lastStatus.lastError);
+          console.warn("[TasunCloudKit] saveMerged error:", lastStatus.code, lastStatus.lastError);
           return false;
         }
       });
@@ -659,16 +898,19 @@
 
     (async function () {
       try {
-        if (!resourceKey) throw new Error("mount() missing resourceKey");
+        if (!resourceKey) throw mkErr("MOUNT_MISSING_KEY", "mount() missing resourceKey");
 
         uiSet("CloudKit: mounting " + resourceKey);
 
+        // local initial apply
         try { safeApply(getLocal() || { items: [] }, { source: "local-initial" }); } catch (e0) {}
 
+        // pull first
         await pullNow();
 
+        // watch pull
         var sec = Number((watchCfg && watchCfg.intervalSec) || 0);
-        if (Number.isFinite(sec) && sec > 0) {
+        if (isFinite(sec) && sec > 0) {
           timer = setInterval(function () {
             if (destroyed) return;
             pullNow();
@@ -676,14 +918,15 @@
         }
 
         lastStatus.mode = "ready";
-        readyResolve(true);
+        try { readyResolve(true); } catch (_e) {}
       } catch (e) {
+        lastStatus.code = e && e.code ? String(e.code) : "ERROR";
         lastStatus.lastError = (e && e.message) ? String(e.message) : String(e || "");
         lastStatus.mode = "error";
         uiSet("CloudKit: mount error");
         uiPulse(false);
-        console.warn("[TasunCloudKit] mount error:", lastStatus.lastError);
-        try { readyResolve(false); } catch (_e) {}
+        console.warn("[TasunCloudKit] mount error:", lastStatus.code, lastStatus.lastError);
+        try { readyResolve(false); } catch (_e2) {}
       }
     })();
 
@@ -692,7 +935,7 @@
       pullNow: pullNow,
       saveMerged: saveMerged,
       status: status,
-      destroy: destroy,
+      destroy: destroy
     };
   }
 
