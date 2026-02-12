@@ -1,5 +1,5 @@
 /* =========================================================
- * tasun-cloud-kit.js  (Most compatible - Worker first)  [STANDARD v1]
+ * tasun-cloud-kit.js  (Most compatible - Worker first)  [STANDARD v1.1 PATCHED]
  * - Read config from: tasun-resources.json (default)
  * - Prefer Cloudflare Worker API (apiBase + endpoints.health/read/merge)
  * - Supports Access (cookie or Service Token headers)
@@ -17,8 +17,9 @@
  * - Required fields ensured: uid, rev, updatedAt, deleted
  * - id is display only (never forced / never auto UUID).
  * - Backward-compat:
- *   - If uid missing, we generate a STABLE uid by hashing row content
- *     (prevents multi-device id collisions from overwriting).
+ *   - If uid missing AND legacy id exists (id/k/key/...), we generate a STABLE uid by hashing legacy + fingerprint
+ *     (prevents multi-device legacy collisions from overwriting).
+ *   - If uid missing AND NO legacy id, treat as NEW record => random uid (prevents multi-device collision).
  * - Server-compat:
  *   - POST body sends {items, rows, db} and also {local:{items,rows,db,counter}}
  * ========================================================= */
@@ -50,6 +51,13 @@
   // -------------------------------
   function norm(s) { return (s === undefined || s === null) ? "" : String(s).trim(); }
   function nowISO() { return new Date().toISOString(); }
+
+  // Math.imul fallback (more compatible)
+  var _imul = Math.imul || function (a, b) {
+    var ah = (a >>> 16) & 0xffff, al = a & 0xffff;
+    var bh = (b >>> 16) & 0xffff, bl = b & 0xffff;
+    return (al * bl + (((ah * bl + al * bh) << 16) >>> 0)) | 0;
+  };
 
   function addV(url) {
     url = norm(url);
@@ -111,15 +119,17 @@
     return e;
   }
 
-  // fnv1a hash (stable, ES5)
+  // fnv1a hash (stable, ES5) — no padStart
   function fnv1a(str) {
     str = String(str || "");
     var h = 0x811c9dc5;
     for (var i = 0; i < str.length; i++) {
       h ^= str.charCodeAt(i);
-      h = Math.imul(h, 0x01000193);
+      h = _imul(h, 0x01000193);
     }
-    return (h >>> 0).toString(16).padStart(8, "0");
+    var hex = (h >>> 0).toString(16);
+    while (hex.length < 8) hex = "0" + hex;
+    return hex;
   }
 
   // stable stringify with sorted keys (small + deterministic)
@@ -302,34 +312,23 @@
   // -------------------------------
   // STANDARD v1: ensure uid/rev/updatedAt/deleted
   // -------------------------------
-  function buildStableUid(item) {
-    // Prefer existing legacy identifiers if they exist, but make it collision-safe.
-    // We hash a stable signature so multi-device "same id different content" won't overwrite.
-    var legacyId = firstNonEmpty(item.uid, item.id, item.k, item.key, item.pk, item._id);
-    var text = firstNonEmpty(item.text, item.content, item.note, item.body);
-    var date = firstNonEmpty(item.date, item.day, item.createdAt, item.created, item.updatedAt);
-    var trade = firstNonEmpty(item.trade, item.kind);
-    var system = firstNonEmpty(item.system, item.sys);
-    var source = firstNonEmpty(item.source, item.origin);
-    var attach = firstNonEmpty(item.attach, item.attachment, item.link);
-    var remark = firstNonEmpty(item.remark, item.note2);
-
-    var sig = "v1|" +
-      "legacy=" + String(legacyId || "") + "|" +
-      "text=" + String(text || "") + "|" +
-      "date=" + String(date || "") + "|" +
-      "trade=" + String(trade || "") + "|" +
-      "system=" + String(system || "") + "|" +
-      "source=" + String(source || "") + "|" +
-      "attach=" + String(attach || "") + "|" +
-      "remark=" + String(remark || "");
-
-    return "u_" + fnv1a(sig);
-  }
-
   function randomUid() {
     try { return (crypto && crypto.randomUUID) ? crypto.randomUUID() : ""; } catch (e) {}
     return "u" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2);
+  }
+
+  // ✅ PATCH: only derive STABLE uid when legacy id exists (migration only)
+  function buildStableUid(item) {
+    // id is "display only", but in migration old pages may have used id/k/key as identifier
+    var legacyId = firstNonEmpty(item.id, item.k, item.key, item.pk, item._id);
+    if (!legacyId) return ""; // ✅ no legacy key => do NOT stable-hash (treat as NEW)
+
+    // include fingerprint so same legacyId with different content becomes different uid (prevents overwrite)
+    var clone = shallowClone(item) || {};
+    delete clone.uid; delete clone.rev; delete clone.updatedAt; delete clone.createdAt;
+    var sig = "v1|legacy=" + String(legacyId) + "|fp=" + stableStringify(clone, 6);
+
+    return "u_" + fnv1a(sig);
   }
 
   function ensureStandardFields(item, nowIso) {
@@ -338,9 +337,8 @@
     // uid
     var u = norm(item.uid);
     if (!u) {
-      // stable derived uid (best effort)
-      u = buildStableUid(item) || randomUid();
-      item.uid = u;
+      var stable = buildStableUid(item);
+      item.uid = stable || randomUid(); // ✅ NEW record => random uid (no collision)
     }
 
     // deleted (tombstone)
@@ -593,8 +591,11 @@
     if (opt.resourcesInline && typeof opt.resourcesInline === "object") _S.resourcesInline = opt.resourcesInline;
 
     var resources = await loadResources();
-    var entry = resources && resources[resourceKey];
+
+    // ✅ PATCH: support default fallback so new pages don't require editing resources.json every time
+    var entry = resources && (resources[resourceKey] || resources.__default || resources["*"] || resources.default);
     if (!entry) throw mkErr("RES_MISSING", "Resource not found in tasun-resources.json: " + resourceKey);
+
     return normalizeEntry(resourceKey, entry);
   }
 
@@ -863,7 +864,6 @@
             if (!prev || prev !== fp) {
               it.rev = Number(it.rev || 0) + 1;
               it.updatedAt = nowIso;
-              // keep createdAt if exists; already ensured above
               snap[uid] = fp;
             }
           }
