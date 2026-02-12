@@ -74,7 +74,6 @@
     (async function(){
       try{
         if(!window.TasunCore) await loadOnce("tasun-core", addV("tasun-core.js"));
-        await loadOnce("tasun-cloud-kit", addV("tasun-cloud-kit.js")); // ✅ Boot 自動 mount 版：先載雲端套件
         await loadOnce("tasun-boot", addV("tasun-boot.js"));
       }catch(e){}
       try{ if(!WAIT.ready) WAIT.flush(); }catch(e){}
@@ -164,7 +163,7 @@
       color: var(--goldDeep);
       text-shadow:
         var(--_olpx) 0 0 var(--_ol), calc(var(--_olpx)*-1) 0 0 var(--_ol),
-        0 var(--_olpx) 0 var(--_ol), 0 calc(var(--_olpx)*-1) 0 var(--_ol),
+        0 var(--_olpx) 0 var(--_ol), 0 calc(var(--_olpx)*-1) 0 0 var(--_ol),
         var(--_olpx) var(--_olpx) 0 var(--_ol), var(--_olpx) calc(var(--_olpx)*-1) 0 var(--_ol),
         calc(var(--_olpx)*-1) var(--_olpx) 0 var(--_ol), calc(var(--_olpx)*-1) calc(var(--_olpx)*-1) 0 var(--_ol);
     }
@@ -719,13 +718,98 @@
   <script>
   (function(){
     "use strict";
+    var APP_VER = (window.TASUN_APP_VER||"").toString().trim();
 
-    function run(){
-      var Core = window.TasunCore;
-      if(!Core || !Core.Auth){
-        console.error("TasunCore/Auth not ready.");
+    function addVHref(href){
+      try{
+        if(!APP_VER) return href;
+        var u = new URL(href, location.href);
+        u.searchParams.set("v", APP_VER);
+        return u.toString();
+      }catch(e){
+        try{
+          if(!APP_VER) return href;
+          return href + (href.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(APP_VER);
+        }catch(e2){ return href; }
+      }
+    }
+
+    function bindBasicNav(){
+      try{
+        var navBack = document.getElementById("navBack");
+        if(navBack && !navBack.__tasunBound){
+          navBack.__tasunBound = true;
+          navBack.addEventListener("click", function(){ location.href = addVHref("汐東工程管理表.html"); });
+        }
+        var mBack = document.getElementById("mBack");
+        if(mBack && !mBack.__tasunBound){
+          mBack.__tasunBound = true;
+          mBack.addEventListener("click", function(){ location.href = addVHref("汐東工程管理表.html"); });
+        }
+        var mMoreBtn = document.getElementById("mMoreBtn");
+        var mMoreMenu = document.getElementById("mMoreMenu");
+        if(mMoreBtn && mMoreMenu && !mMoreBtn.__tasunBound){
+          mMoreBtn.__tasunBound = true;
+          mMoreBtn.addEventListener("click", function(ev){
+            try{ ev.preventDefault(); }catch(e){}
+            var cur = mMoreMenu.style.display;
+            mMoreMenu.style.display = (cur==="none" || !cur) ? "block" : "none";
+          });
+          document.addEventListener("click", function(ev){
+            try{
+              if(ev && (ev.target===mMoreBtn || mMoreMenu.contains(ev.target))) return;
+              mMoreMenu.style.display = "none";
+            }catch(e){}
+          }, true);
+          var items = mMoreMenu.querySelectorAll(".menuItem");
+          for(var i=0;i<items.length;i++){
+            (function(btn){
+              btn.addEventListener("click", function(){
+                var href = btn.getAttribute("data-href") || "";
+                if(!href) return;
+                location.href = addVHref(href);
+              });
+            })(items[i]);
+          }
+        }
+      }catch(e){}
+    }
+    if(document.readyState === "loading"){
+      document.addEventListener("DOMContentLoaded", bindBasicNav);
+    }else{
+      bindBasicNav();
+    }
+
+    var __BOOTED__ = false;
+    var __TRY__ = 0;
+    var __RETRY_TM__ = null;
+
+    function scheduleRetry(){
+      if(__BOOTED__) return;
+      __TRY__++;
+      if(__TRY__ > 90){
+        console.error("TasunCore/Auth still not ready (timeout).");
+        try{
+          var h = document.getElementById("hint");
+          if(h) h.textContent = "⚠️ 核心尚未載入：請重新整理（Ctrl+F5）或檢查 tasun-core.js / tasun-boot.js 是否可正常載入。";
+        }catch(e){}
         return;
       }
+      clearTimeout(__RETRY_TM__);
+      __RETRY_TM__ = setTimeout(run, (__TRY__<10 ? 120 : 220));
+    }
+
+    function run(){
+      if(__BOOTED__) return;
+
+      var Core = window.TasunCore;
+      if(!Core || !Core.Auth){
+        scheduleRetry();
+        return;
+      }
+
+      __BOOTED__ = true;
+      try{
 
       var PAGE_KEY = "sxdh-notes";
       var RESOURCES_URL = "tasun-resources.json"; // ✅ 用於自動取得 API_BASE（跨設備免重設）
@@ -775,18 +859,1158 @@
         toast._tm = setTimeout(function(){ t.style.display="none"; }, 2600);
       }
       function escHtml(s){
-        return (s ?? "").toString()
-          .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
-          .replaceAll('"',"&quot;").replaceAll("'","&#39;");
+        s = (s===undefined || s===null) ? "" : String(s);
+        return s
+          .replace(/&/g,"&amp;")
+          .replace(/</g,"&lt;")
+          .replace(/>/g,"&gt;")
+          .replace(/"/g,"&quot;")
+          .replace(/'/g,"&#39;");
       }
       function todayISO(){ return new Date().toISOString().slice(0,10); }
       function uuid(){ return "u" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2); }
 
-      /* ===== 以下為你原本整合版完整程式（含 D1+Access+CORS+合併寫入 + 全站雲端同步標準 v1 覆蓋區） =====
-         內容較長，已完整保留並與前面 UI 結構相容。
-         你若需要我把這段也拆成「可下載檔」，等我這邊寫檔功能恢復就能直接給你下載連結。 */
+      // ===== Data =====
+      var db = [];
+      var counter = 0;
+      var selectedUid = null;
+      var editingUid = null; // null => add
+      var promptMode = null;
+      var cloud = null;
+      var lastSyncAt = 0;
+      var cloudState = "offline"; // offline | ok | deny | neterr | noapi
+      var apiLastStatus = 0;
 
-      /* ✅ 重要：因聊天長度限制，這份回覆若被平台截斷，請告訴我「回覆有被截斷」，我會改用分段貼給你（每段都可直接拼回同一檔案）。 */
+      // ===== Cloud helpers =====
+      function safeJSON(raw){ if(!raw) return null; try{ return JSON.parse(raw); }catch(e){ return null; } }
+      function getApiBase(){
+        var b = norm(window.TASUN_D1_API_BASE);
+        if(b) return b.replace(/\/+$/,"");
+        try{ b = norm(sessionStorage.getItem(D1_API_BASE_KEY)); if(b) return b.replace(/\/+$/,""); }catch(e){}
+        try{ b = norm(localStorage.getItem(D1_API_BASE_KEY)); if(b) return b.replace(/\/+$/,""); }catch(e){}
+        return DEFAULT_API_BASE;
+      }
+      function setApiBase(v){
+        v = norm(v).replace(/\/+$/,"");
+        try{ window.TASUN_D1_API_BASE = v; }catch(e){}
+        try{ v ? sessionStorage.setItem(D1_API_BASE_KEY, v) : sessionStorage.removeItem(D1_API_BASE_KEY); }catch(e){}
+        try{ v ? localStorage.setItem(D1_API_BASE_KEY, v) : localStorage.removeItem(D1_API_BASE_KEY); }catch(e){}
+      }
+
+      // ===== Auto discover API_BASE from tasun-resources.json (cross-device) =====
+      async function discoverApiBaseFromResources(){
+        try{
+          var APP = String(window.TASUN_APP_VER||"").trim();
+          var url = RESOURCES_URL + (RESOURCES_URL.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(APP) + "&_=" + Date.now();
+          var res = await fetch(url, { cache:"no-store" });
+          if(!res.ok) return "";
+          var j = await res.json();
+
+          function pick(obj, path){
+            try{
+              var cur = obj;
+              for(var i=0;i<path.length;i++){
+                if(!cur || typeof cur!=="object") return "";
+                cur = cur[path[i]];
+              }
+              return (typeof cur==="string") ? cur.trim() : "";
+            }catch(e){ return ""; }
+          }
+          function findByKey(obj, keyRe){
+            var q = [obj];
+            while(q.length){
+              var x = q.shift();
+              if(!x || typeof x!=="object") continue;
+              for(var k in x){
+                if(!Object.prototype.hasOwnProperty.call(x,k)) continue;
+                var v = x[k];
+                if(keyRe.test(String(k))){
+                  if(typeof v==="string" && /^https?:\/\//i.test(v.trim())) return v.trim();
+                }
+                if(v && typeof v==="object") q.push(v);
+              }
+            }
+            return "";
+          }
+
+          // ✅ 優先：明確欄位
+          var cands = [
+            pick(j, ["cloud","apiBase"]),
+            pick(j, ["cloud","d1ApiBase"]),
+            pick(j, ["cloud","API_BASE"]),
+            pick(j, ["d1","apiBase"]),
+            pick(j, ["d1","base"]),
+            (typeof j.apiBase==="string"?j.apiBase.trim():""),
+            (typeof j.d1ApiBase==="string"?j.d1ApiBase.trim():""),
+            (typeof j.D1_API_BASE==="string"?j.D1_API_BASE.trim():""),
+            pick(j, ["config","apiBase"]),
+            pick(j, ["config","d1ApiBase"])
+          ].filter(Boolean);
+
+          // ✅ 次選：遞迴搜尋 key 名稱
+          if(!cands.length){
+            cands.push(findByKey(j, /^(apiBase|api_base|d1ApiBase|d1_api_base|cloudApiBase)$/i));
+          }
+
+          for(var i=0;i<cands.length;i++){
+            var b = (cands[i]||"").trim().replace(/\/+$/,"");
+            if(b && /^https?:\/\//i.test(b)) return b;
+          }
+        }catch(e){}
+        return "";
+      }
+
+      async function ensureApiBaseReady(){
+        var b = getApiBase();
+        if(b) return b;
+        var d = await discoverApiBaseFromResources();
+        if(d){
+          setApiBase(d);
+          return getApiBase();
+        }
+        return "";
+      }
+
+      function parseStoredToken(raw){
+        raw = norm(raw);
+        if(!raw) return null;
+        var obj = safeJSON(raw);
+        if(obj && typeof obj==="object"){
+          var id = norm(obj.clientId || obj.id || obj.client_id || "");
+          var sec = norm(obj.clientSecret || obj.secret || obj.client_secret || "");
+          if(id && sec) return { clientId:id, clientSecret:sec };
+        }
+        var parts = raw.split(/[\s|,;]+/).map(norm).filter(Boolean);
+        if(parts.length>=2) return { clientId:parts[0], clientSecret:parts[1] };
+        return null;
+      }
+      function getAccessToken(){
+        try{
+          var w = window.TASUN_ACCESS_SERVICE_TOKEN;
+          if(w && typeof w==="object"){
+            var idw = norm(w.clientId||w.client_id||"");
+            var secw = norm(w.clientSecret||w.client_secret||"");
+            if(idw && secw) return { clientId:idw, clientSecret:secw };
+          }
+          if(typeof w==="string"){
+            var partsW = w.split(/[\s|,;]+/).map(norm).filter(Boolean);
+            if(partsW.length>=2) return { clientId:partsW[0], clientSecret:partsW[1] };
+          }
+        }catch(e){}
+        try{ var s1 = parseStoredToken(sessionStorage.getItem(ACCESS_ST_KEY)); if(s1) return s1; }catch(e){}
+        try{ var s2 = parseStoredToken(localStorage.getItem(ACCESS_ST_KEY)); if(s2) return s2; }catch(e){}
+        return null;
+      }
+      function hasAccessToken(){ var t = getAccessToken(); return !!(t && t.clientId && t.clientSecret); }
+      function setAccessToken(obj){
+        try{ window.TASUN_ACCESS_SERVICE_TOKEN = obj || null; }catch(e){}
+        try{ obj ? sessionStorage.setItem(ACCESS_ST_KEY, JSON.stringify(obj)) : sessionStorage.removeItem(ACCESS_ST_KEY); }catch(e){}
+        try{ obj ? localStorage.setItem(ACCESS_ST_KEY, JSON.stringify(obj)) : localStorage.removeItem(ACCESS_ST_KEY); }catch(e){}
+      }
+      function accessHeaders(){
+        var t = getAccessToken();
+        if(!t) return {};
+        return { "CF-Access-Client-Id": t.clientId, "CF-Access-Client-Secret": t.clientSecret };
+      }
+      function buildUrl(path){
+        var base = getApiBase();
+        if(/^https?:\/\//i.test(path)) return path;
+        if(!path) path = "/";
+        if(path[0] !== "/") path = "/" + path;
+        return base ? (base + path) : path;
+      }
+      function portalUrl(){ return buildUrl(D1_PING_PATH); }
+
+      async function httpJSON(url, opt){
+        opt = opt || {};
+        opt.mode = "cors";
+        opt.cache = "no-store";
+        opt.credentials = hasAccessToken() ? "omit" : "include";
+        opt.headers = Object.assign(
+          { "Accept":"application/json" },
+          opt.headers||{},
+          accessHeaders(),
+          {
+            "X-Tasun-AppVer": String(window.TASUN_APP_VER||""),
+            "X-Tasun-Page": PAGE_KEY,
+            "X-Tasun-User": (Auth.current() && Auth.current().username) ? String(Auth.current().username) : "",
+            "X-Tasun-Role": String(Auth.role()||"")
+          }
+        );
+        var res;
+        try{ res = await fetch(url, opt); }
+        catch(err){
+          var e2 = new Error(err && err.message ? err.message : "Failed to fetch");
+          e2.status = 0; e2.code = "FETCH_FAIL";
+          throw e2;
+        }
+        if(!res.ok){
+          var body = "";
+          try{ body = await res.text(); }catch(e){}
+          var err2 = new Error("HTTP "+res.status+" "+res.statusText);
+          err2.status = res.status;
+          err2.body = body;
+          if(res.status===401 || res.status===403) err2.code = "ACCESS_DENY";
+          throw err2;
+        }
+        apiLastStatus = res.status;
+        var ct = (res.headers.get("content-type")||"").toLowerCase();
+        if(ct.includes("application/json") || ct.includes("+json")){
+          var data = await res.json();
+          if(data && typeof data==="object" && data.ok===false){
+            var msg = data.error || data.message || "API_ERROR";
+            var errJ = new Error(msg);
+            errJ.status = res.status;
+            try{ errJ.body = JSON.stringify(data); }catch(_e){ errJ.body = ""; }
+            var lowM = String(msg||"").toLowerCase();
+            errJ.code = (lowM.includes("missing access") || lowM.includes("access token") || lowM.includes("cf-access")) ? "ACCESS_DENY" : "API_FAIL";
+            throw errJ;
+          }
+          return data;
+        }
+
+        var txt = await res.text();
+        var low = (txt||"").slice(0, 900).toLowerCase();
+        if(low.includes("<html") && (low.includes("cloudflare access") || low.includes("cf-access") || low.includes("access login"))){
+          var errH = new Error("ACCESS_HTML");
+          errH.status = res.status;
+          errH.body = (txt||"").slice(0, 4000);
+          errH.code = "ACCESS_DENY";
+          throw errH;
+        }
+
+        try{
+          var j = JSON.parse(txt);
+          if(j && typeof j==="object" && j.ok===false){
+            var msg2 = j.error || j.message || "API_ERROR";
+            var errJ2 = new Error(msg2);
+            errJ2.status = res.status;
+            errJ2.body = (txt||"").slice(0, 4000);
+            var lowM2 = String(msg2||"").toLowerCase();
+            errJ2.code = (lowM2.includes("missing access") || lowM2.includes("access token") || lowM2.includes("cf-access")) ? "ACCESS_DENY" : "API_FAIL";
+            throw errJ2;
+          }
+          return j;
+        }catch(e){
+          if(e && (e.code==="ACCESS_DENY" || e.code==="API_FAIL")) throw e;
+          var err3 = new Error("BAD_RESPONSE");
+          err3.status = res.status;
+          err3.body = (txt||"").slice(0, 4000);
+          err3.code = "BAD_RESPONSE";
+          if(low.includes("<html") || low.includes("cloudflare access") || low.includes("cf-access") || low.includes("access login")){
+            err3.code = "ACCESS_DENY";
+          }
+          throw err3;
+        }
+      }
+      function unwrap(resp){
+        var info = (resp && typeof resp==="object") ? (resp.info || resp.meta || {}) : {};
+        var p = resp;
+        if(p && typeof p==="object"){
+          if("payload" in p) p = p.payload;
+          else if("data" in p) p = p.data;
+          else if("result" in p) p = p.result;
+        }
+        var out = (p && typeof p==="object") ? p : {};
+        if(!Array.isArray(out.db)) out.db = [];
+        var c = Number(out.counter||0); if(!Number.isFinite(c) || c<0) c=0;
+        out.counter = c;
+        return { payload: out, info: info };
+      }
+
+      async function apiPull(){
+        if(!getApiBase()){
+          var e0 = new Error("NO_API_BASE"); e0.status = 0; e0.code = "NO_API_BASE"; throw e0;
+        }
+        var url = buildUrl(D1_PULL_PATH) + "?key=" + encodeURIComponent(CLOUD_RESOURCE_KEY) + "&_=" + Date.now();
+        return await httpJSON(url, { method:"GET" });
+      }
+      async function apiMerge(localPayload){
+        if(!getApiBase()){
+          var e0 = new Error("NO_API_BASE"); e0.status = 0; e0.code = "NO_API_BASE"; throw e0;
+        }
+        var url = buildUrl(D1_MERGE_PATH);
+        var body = {
+          key: CLOUD_RESOURCE_KEY,
+          pk: CLOUD_PK,
+          idField: "id",
+          counterField: "counter",
+          local: localPayload,
+          client: { ts: Date.now(), page: PAGE_KEY, user: (Auth.current()&&Auth.current().username)||"", role: String(Auth.role()||""), ua: navigator.userAgent },
+          merge: { conflictPolicy: "stash-remote" }
+        };
+        return await httpJSON(url, { method:"POST", headers: { "Content-Type":"application/json" }, body: JSON.stringify(body) });
+      }
+
+      function CloudCtrl(){
+        this._timer = 0;
+        this._saving = false;
+        this._pending = false;
+      }
+      CloudCtrl.prototype._err = function(e){
+        if(!e) return;
+        if(e.code==="NO_API_BASE"){ cloudState="noapi"; toast("⚠️ 尚未設定 API_BASE：請按右上「雲端設定」。"); return; }
+        if(e.code==="FETCH_FAIL" || e.status===0){ cloudState="neterr"; toast("⚠️ 雲端連線失敗：請確認 API_BASE / CORS / 網路。"); return; }
+        if(e.code==="ACCESS_DENY" || e.status===401 || e.status===403){ cloudState="deny"; toast("⚠️ 雲端驗證未通過：請按「雲端檔案」先登入，或在「雲端設定」貼 Service Token。"); return; }
+        toast("雲端錯誤：" + (e.message ? e.message : String(e)));
+      };
+      CloudCtrl.prototype.apply = function(payload, info){
+        payload = payload || {};
+        var rdb = Array.isArray(payload.db) ? payload.db : [];
+        var rc = Number(payload.counter||0); if(!Number.isFinite(rc) || rc<0) rc=0;
+
+        var protectOnce = false;
+        try{ protectOnce = !sessionStorage.getItem(PROTECT_EMPTY_REMOTE_KEY); }catch(e){}
+        if(rdb.length===0 && db.length>0 && protectOnce){
+          var canWrite = Auth.canWrite ? Auth.canWrite() : (Auth.role && /^(admin|write)$/i.test(Auth.role()||""));
+          try{ sessionStorage.setItem(PROTECT_EMPTY_REMOTE_KEY, "1"); }catch(e){}
+          if(canWrite && !lastSyncAt){
+            toast("☁️ 雲端尚無資料：已用本機資料建立雲端（合併寫入）。");
+            cloudState = "ok";
+            lastSyncAt = Date.now();
+            renderHint();
+            var self = this;
+            setTimeout(function(){ try{ self.saveMerged(); }catch(e){} }, 0);
+            return;
+          }
+          toast("⚠️ 雲端回傳空資料：已先保護本機資料（避免誤覆蓋）。");
+          cloudState = "ok";
+          lastSyncAt = Date.now();
+          renderHint();
+          return;
+        }
+
+        db = rdb.map(normalizeRow).filter(Boolean);
+        counter = Math.max(counter, rc);
+        saveLocal();
+        lastSyncAt = Date.now();
+        cloudState = "ok";
+        renderAll();
+        if(info && info.merged) toast("雲端合併完成");
+      };
+      CloudCtrl.prototype.pullNow = function(){
+        var self = this;
+        return apiPull().then(function(resp){
+          cloudState="ok";
+          var u = unwrap(resp);
+          self.apply(u.payload, u.info||{});
+          return true;
+        }).catch(function(e){
+          if(e && (e.status===404 || e.code==="NOT_FOUND")){
+            cloudState = "ok";
+            lastSyncAt = Date.now();
+            renderHint();
+            var canWrite = Auth.canWrite ? Auth.canWrite() : (Auth.role && /^(admin|write)$/i.test(Auth.role()||""));
+            if(canWrite){
+              toast("☁️ 雲端尚未建立此資料：正在建立…");
+              return self.saveMerged().then(function(){ return true; });
+            }
+            toast("☁️ 雲端尚未建立資料（唯讀模式無法建立）。");
+            return false;
+          }
+          self._err(e); 
+          return false;
+        });
+      };
+      CloudCtrl.prototype.saveMerged = function(){
+        var self = this;
+        if(self._saving){ self._pending = true; return Promise.resolve(false); }
+        self._saving = true; self._pending = false;
+        var localPayload = { db: db, counter: counter };
+        return apiMerge(localPayload).then(function(resp){
+          var u = unwrap(resp);
+          self.apply(u.payload, Object.assign({ merged:true }, u.info||{}));
+          return true;
+        }).catch(function(e){ self._err(e); return false; })
+          .finally(function(){
+            self._saving = false;
+            if(self._pending){ self._pending=false; setTimeout(function(){ self.saveMerged(); }, 0); }
+          });
+      };
+      CloudCtrl.prototype.startWatch = function(sec){
+        var self=this;
+        sec = Number(sec||0); if(!Number.isFinite(sec) || sec<=0) sec = 10;
+        clearInterval(self._timer);
+        self._timer = setInterval(function(){ self.pullNow(); }, sec*1000);
+      };
+      CloudCtrl.prototype.destroy = function(){ clearInterval(this._timer); };
+
+          function pick(){
+      for(var i=0;i<arguments.length;i++){
+        var v = arguments[i];
+        if(v!==undefined && v!==null) return v;
+      }
+      return undefined;
+    }
+    function asStr(v){ return (v===undefined || v===null) ? "" : String(v); }
+
+    function normalizeRow(x){
+      if(!x || typeof x !== "object") return null;
+
+      var uid = norm(asStr(pick(x.uid, x._uid, x.pk, x.k, x.key, "")));
+      if(!uid) uid = uuid();
+
+      var idRaw = pick(x.id, x.no, x.idx, 0);
+      var id = Number(idRaw);
+      if(!Number.isFinite(id) || id<=0) id = null;
+
+      var text   = asStr(pick(x.text, x.content, x.note, ""));
+      var trade  = norm(asStr(pick(x.trade, x.kind, "")));
+      var system = norm(asStr(pick(x.system, x.sys, "")));
+      var source = norm(asStr(pick(x.source, x.origin, "")));
+      var attach = norm(asStr(pick(x.attach, x.attachment, x.link, "")));
+      var remark = asStr(pick(x.remark, x.note2, ""));
+      var date   = norm(asStr(pick(x.date, x.day, x.created, "")));
+
+      // normalize yyyy/mm/dd -> yyyy-mm-dd; ISO -> yyyy-mm-dd
+      if(date){
+        if(/^[0-9]{4}\/\/[0-9]{2}\/\/[0-9]{2}$/.test(date)) date = date.replace(/\//g,"-");
+        if(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T/.test(date)) date = date.slice(0,10);
+      }
+
+      return { uid:uid, id:id, text:text, trade:trade, system:system, source:source, attach:attach, remark:remark, date:date };
+    }      function loadLocal(){
+        db = [];
+        counter = 0;
+        try{
+          var raw = localStorage.getItem(DB_KEY);
+          var arr = safeJSON(raw);
+          if(Array.isArray(arr)) db = arr.map(normalizeRow).filter(Boolean);
+        }catch(e){}
+        try{
+          var c = Number(localStorage.getItem(COUNTER_KEY)||0);
+          if(Number.isFinite(c) && c>0) counter = c;
+        }catch(e){}
+        counter = Math.max(counter, maxId(db));
+        if(db.length>0){
+          saveLocal();
+        }
+      }
+      function saveLocal(){
+        try{ localStorage.setItem(DB_KEY, JSON.stringify(db)); }catch(e){}
+        try{ localStorage.setItem(COUNTER_KEY, String(counter||0)); }catch(e){}
+      }
+      function maxId(arr){
+        var m=0;
+        for(var i=0;i<(arr?arr.length:0);i++){
+          var id = Number(arr[i] && arr[i].id);
+          if(Number.isFinite(id) && id>m) m=id;
+        }
+        return m;
+      }
+
+      function loadDict(key, fallback){
+        try{
+          var obj = safeJSON(localStorage.getItem(key));
+          if(obj && typeof obj==="object") return obj;
+        }catch(e){}
+        return fallback || {};
+      }
+      function saveDict(key, obj){ try{ localStorage.setItem(key, JSON.stringify(obj||{})); }catch(e){} }
+      function dictToList(obj){
+        var out = [];
+        for(var k in (obj||{})){
+          if(Object.prototype.hasOwnProperty.call(obj,k)){
+            var v = norm(obj[k]);
+            if(v) out.push(v);
+          }
+        }
+        return out;
+      }
+      function uniqSorted(list){
+        var set = new Set();
+        for(var i=0;i<list.length;i++){ var v = norm(list[i]); if(v) set.add(v); }
+        return Array.from(set).sort(function(a,b){ return a.localeCompare(b, "zh-Hant"); });
+      }
+
+      var tradeDict = loadDict(TRADE_DICT_KEY, {});
+      var sysDict = loadDict(SYS_DICT_KEY, {});
+      var sourceDict = loadDict(SOURCE_DICT_KEY, {});
+      var tradeSysMap = loadDict(TRADE_SYS_MAP_KEY, {});
+
+      function ensureDictFromDb(){
+        var trades = [], systems = [], sources = [];
+        for(var i=0;i<db.length;i++){
+          if(db[i].trade) trades.push(db[i].trade);
+          if(db[i].system) systems.push(db[i].system);
+          if(db[i].source) sources.push(db[i].source);
+        }
+        var tU = uniqSorted(trades), sU = uniqSorted(systems), soU = uniqSorted(sources);
+        for(i=0;i<tU.length;i++) tradeDict[tU[i]] = tU[i];
+        for(i=0;i<sU.length;i++) sysDict[sU[i]] = sU[i];
+        for(i=0;i<soU.length;i++) sourceDict[soU[i]] = soU[i];
+        saveDict(TRADE_DICT_KEY, tradeDict);
+        saveDict(SYS_DICT_KEY, sysDict);
+        saveDict(SOURCE_DICT_KEY, sourceDict);
+      }
+
+      function bindSystemToTrade(trade, system){
+        trade = norm(trade); system = norm(system);
+        if(!trade || !system) return;
+        var arr = Array.isArray(tradeSysMap[trade]) ? tradeSysMap[trade] : [];
+        if(arr.indexOf(system)<0) arr.push(system);
+        tradeSysMap[trade] = uniqSorted(arr);
+        saveDict(TRADE_SYS_MAP_KEY, tradeSysMap);
+      }
+
+      function setReadMode(on){
+        on = !!on;
+        document.body.classList.toggle("readMode", on);
+        try{ localStorage.setItem(READ_MODE_KEY, on ? "1" : "0"); }catch(e){}
+        $("btnRead").querySelector(".t").textContent = "閱讀模式：" + (on ? "開" : "關");
+      }
+      function getReadMode(){
+        try{ return (localStorage.getItem(READ_MODE_KEY)||"") === "1"; }catch(e){}
+        return false;
+      }
+
+      function currentUser(){
+        return Auth.current ? Auth.current() : null;
+      }
+
+      function updateTopbar(){
+        var u = currentUser();
+        $("uName").textContent = u && u.username ? u.username : "—";
+        $("uRole").textContent = Auth.role ? (Auth.role() || "—") : "—";
+
+        var canWrite = Auth.canWrite ? Auth.canWrite() : (Auth.role && /^(admin|write)$/i.test(Auth.role()||""));
+        $("btnAdd").style.display = canWrite ? "inline-block" : "none";
+        $("btnEdit").style.display = canWrite ? "inline-block" : "none";
+        $("btnToken").style.display = (Auth.isAdmin && Auth.isAdmin()) ? "inline-block" : "none";
+      }
+
+      function rowMatches(r){
+        var qt = norm($("qText").value).toLowerCase();
+        var ft = norm($("fTrade").value);
+        var fs = norm($("fSys").value);
+
+        if(ft && r.trade !== ft) return false;
+        if(fs && r.system !== fs) return false;
+
+        if(qt){
+          var blob = ((r.text||"") + " " + (r.remark||"") + " " + (r.source||"")).toLowerCase();
+          if(blob.indexOf(qt) < 0) return false;
+        }
+        return true;
+      }
+
+      function filteredRows(){
+        var out = [];
+        for(var i=0;i<db.length;i++){
+          var r = db[i];
+          if(rowMatches(r)) out.push(r);
+        }
+        out.sort(function(a,b){ return (a.id||0) - (b.id||0); });
+        return out;
+      }
+
+      function renderFilters(){
+        var trades = uniqSorted(dictToList(tradeDict).concat(db.map(function(r){return r.trade;})));
+        var tradeSel = $("fTrade");
+        var curT = tradeSel.value;
+        tradeSel.innerHTML = '<option value="">全部</option>' + trades.map(function(t){ return '<option value="'+escHtml(t)+'">'+escHtml(t)+'</option>'; }).join("");
+        tradeSel.value = trades.indexOf(curT)>=0 ? curT : "";
+
+        var curTrade = norm(tradeSel.value);
+        var sysList = [];
+        if(curTrade && Array.isArray(tradeSysMap[curTrade]) && tradeSysMap[curTrade].length){
+          sysList = tradeSysMap[curTrade].slice();
+        }else{
+          sysList = uniqSorted(dictToList(sysDict).concat(db.map(function(r){return r.system;})));
+        }
+        var sysSel = $("fSys");
+        var curS = sysSel.value;
+        sysSel.innerHTML = '<option value="">全部</option>' + sysList.map(function(s){ return '<option value="'+escHtml(s)+'">'+escHtml(s)+'</option>'; }).join("");
+        sysSel.value = sysList.indexOf(curS)>=0 ? curS : "";
+      }
+
+      function renderTable(rows){
+        var canWrite = Auth.canWrite ? Auth.canWrite() : false;
+        var tbody = $("tbody");
+        var html = "";
+        for(var i=0;i<rows.length;i++){
+          var r = rows[i];
+          var sel = (r.uid === selectedUid) ? ' class="sel"' : "";
+          var att = r.attach ? ('<button class="attBtn" type="button" data-att="'+escHtml(r.attach)+'"><span class="t">開啟</span></button>') : '<span class="muted">—</span>';
+          var ops = '<button class="btn ghost small" type="button" data-op="view" data-uid="'+escHtml(r.uid)+'"><span class="t">查看</span></button>';
+          if(canWrite){
+            ops += ' <button class="btn small" type="button" data-op="edit" data-uid="'+escHtml(r.uid)+'"><span class="t">編輯</span></button>';
+          }
+          html += '<tr'+sel+' data-uid="'+escHtml(r.uid)+'">'
+            + '<td style="text-align:center; font-weight:900;">'+escHtml(String(r.id||""))+'</td>'
+            + '<td>'+escHtml(r.text||"")+'</td>'
+            + '<td style="text-align:center;">'+escHtml(r.trade||"")+'</td>'
+            + '<td style="text-align:center;">'+escHtml(r.system||"")+'</td>'
+            + '<td style="text-align:center;">'+escHtml(r.source||"")+'</td>'
+            + '<td style="text-align:center;">'+att+'</td>'
+            + '<td>'+escHtml(r.remark||"")+'</td>'
+            + '<td style="text-align:center;">'+escHtml(r.date||"")+'</td>'
+            + '<td style="text-align:center; white-space:nowrap;">'+ops+'</td>'
+            + '</tr>';
+        }
+        tbody.innerHTML = html || '<tr><td colspan="9" style="text-align:center; padding:18px; color:rgba(0,0,0,.55); font-weight:900;">（目前沒有資料）</td></tr>';
+
+        var btns = tbody.querySelectorAll('button[data-att]');
+        for(i=0;i<btns.length;i++){
+          btns[i].addEventListener("click", function(ev){
+            ev.stopPropagation();
+            var href = this.getAttribute("data-att") || "";
+            openAttachment(href);
+          });
+        }
+        var opsBtn = tbody.querySelectorAll('button[data-op]');
+        for(i=0;i<opsBtn.length;i++){
+          opsBtn[i].addEventListener("click", function(ev){
+            ev.stopPropagation();
+            var uid = this.getAttribute("data-uid");
+            var op = this.getAttribute("data-op");
+            if(uid) selectUid(uid);
+            if(op==="view") openModal("view", uid);
+            if(op==="edit") openModal("edit", uid);
+          });
+        }
+        var trs = tbody.querySelectorAll("tr[data-uid]");
+        for(i=0;i<trs.length;i++){
+          trs[i].addEventListener("click", function(){
+            var uid = this.getAttribute("data-uid");
+            if(uid) selectUid(uid);
+          });
+        }
+      }
+
+      function renderCards(rows){
+        var canWrite = Auth.canWrite ? Auth.canWrite() : false;
+        var wrap = $("cards");
+        if(!rows.length){
+          wrap.innerHTML = '<div class="noteCard" style="text-align:center; cursor:default;"><div class="noteBody">（目前沒有資料）</div></div>';
+          return;
+        }
+        var html = "";
+        for(var i=0;i<rows.length;i++){
+          var r = rows[i];
+          var sel = (r.uid === selectedUid) ? " sel" : "";
+          html += '<div class="noteCard'+sel+'" data-uid="'+escHtml(r.uid)+'">'
+            + '<div class="noteHead">'
+              + '<div class="noteMeta">'
+                + '<span class="noteTag">'+escHtml(r.trade||"")+'</span>'
+                + '<span class="noteTag">'+escHtml(r.system||"")+'</span>'
+                + '<span class="noteTag">'+escHtml(r.source||"")+'</span>'
+              + '</div>'
+              + '<div class="noteNo">#'+escHtml(String(r.id||""))+' · '+escHtml(r.date||"")+'</div>'
+            + '</div>'
+            + '<div class="noteBody">'+escHtml(r.text||"")+'</div>'
+            + '<div class="noteMore">'
+              + (r.attach ? '<div style="margin-top:10px;"><button class="attBtn" type="button" data-att="'+escHtml(r.attach)+'"><span class="t">附件</span></button></div>' : '')
+              + (r.remark ? '<div class="noteBody" style="opacity:.86; margin-top:10px;"><b>備註：</b>'+escHtml(r.remark)+'</div>' : '')
+              + '<div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">'
+                + '<button class="btn ghost small" type="button" data-op="view" data-uid="'+escHtml(r.uid)+'"><span class="t">查看</span></button>'
+                + (canWrite ? '<button class="btn small" type="button" data-op="edit" data-uid="'+escHtml(r.uid)+'"><span class="t">編輯</span></button>' : '')
+              + '</div>'
+            + '</div>'
+          + '</div>';
+        }
+        wrap.innerHTML = html;
+
+        var cards = wrap.querySelectorAll(".noteCard");
+        for(i=0;i<cards.length;i++){
+          cards[i].addEventListener("click", function(){
+            var uid = this.getAttribute("data-uid");
+            if(uid) selectUid(uid);
+            this.classList.toggle("open");
+          });
+        }
+        var btnAtt = wrap.querySelectorAll('button[data-att]');
+        for(i=0;i<btnAtt.length;i++){
+          btnAtt[i].addEventListener("click", function(ev){
+            ev.stopPropagation();
+            openAttachment(this.getAttribute("data-att")||"");
+          });
+        }
+        var btnOp = wrap.querySelectorAll('button[data-op]');
+        for(i=0;i<btnOp.length;i++){
+          btnOp[i].addEventListener("click", function(ev){
+            ev.stopPropagation();
+            var uid = this.getAttribute("data-uid");
+            var op = this.getAttribute("data-op");
+            if(uid) selectUid(uid);
+            if(op==="view") openModal("view", uid);
+            if(op==="edit") openModal("edit", uid);
+          });
+        }
+      }
+
+      function renderHint(){
+        var rows = filteredRows();
+        var total = db.length;
+        var shown = rows.length;
+        var u = currentUser();
+        var name = u && u.username ? u.username : "—";
+        var role = Auth.role ? (Auth.role() || "—") : "—";
+
+        var cloudTxt = "離線";
+        if(cloudState==="ok") cloudTxt = "OK";
+        if(cloudState==="deny") cloudTxt = "驗證未通過";
+        if(cloudState==="neterr") cloudTxt = "連線失敗";
+        if(cloudState==="noapi") cloudTxt = "未設定";
+        var syncTxt = lastSyncAt ? fmtClock(lastSyncAt) : "—";
+
+        $("hint").innerHTML =
+          '<span class="hb"><span class="k">使用者</span><span class="v">'+escHtml(name)+'</span></span>'
+          +'<span class="hb"><span class="k">權限</span><span class="v">'+escHtml(role)+'</span></span>'
+          +'<span class="hb"><span class="k">顯示</span><span class="v">'+shown+'</span></span>'
+          +'<span class="hb"><span class="k">總筆數</span><span class="v">'+total+'</span></span>'
+          +'<span class="hb '+((cloudState==="ok")?"":"bad")+'"><span class="k">雲端</span><span class="v">'+escHtml(cloudTxt)+'</span></span>'
+          +'<span class="hb"><span class="k">同步</span><span class="v">'+escHtml(syncTxt)+'</span></span>';
+      }
+
+      function renderAll(){
+        renderFilters();
+        var rows = filteredRows();
+        renderTable(rows);
+        renderCards(rows);
+        renderHint();
+      }
+
+      function selectUid(uid){
+        selectedUid = uid;
+        renderAll();
+      }
+
+      function openAttachment(href){
+        var h = (href===undefined || href===null) ? "" : String(href);
+        h = h.toString().trim();
+        if(!h) return;
+        if(/^https?:\/\//i.test(h) || /^mailto:/i.test(h) || /^file:/i.test(h)){
+          window.open(h, "_blank", "noopener");
+          return;
+        }
+        location.href = withV(h);
+      }
+
+      function setModalVisible(on){ $("mask").style.display = on ? "flex" : "none"; }
+      function setModalEditable(editable){
+        editable = !!editable;
+        $("mText").disabled = !editable;
+        $("mTradeSel").disabled = !editable;
+        $("mSysSel").disabled = !editable;
+        $("mSourceSel").disabled = !editable;
+        $("mAttach").disabled = !editable;
+        $("mRemark").disabled = !editable;
+        $("mDate").disabled = !editable;
+
+        $("btnAddTrade").disabled = !editable;
+        $("btnAddSys").disabled = !editable;
+        $("btnAddSource").disabled = !editable;
+        $("btnSave").style.display = editable ? "inline-block" : "none";
+        $("btnCancel").style.display = editable ? "inline-block" : "none";
+
+        var canWrite = Auth.canWrite ? Auth.canWrite() : false;
+        $("btnDelete").style.display = (editable && canWrite && editingUid != null) ? "inline-block" : "none";
+      }
+
+      function fillModalFromRow(r){
+        $("mText").value = r ? (r.text||"") : "";
+        $("mAttach").value = r ? (r.attach||"") : "";
+        $("mRemark").value = r ? (r.remark||"") : "";
+        $("mDate").value = r ? (r.date||"") : todayISO();
+        $("mNo").value = r ? String(r.id||"") : String(counter + 1);
+      }
+
+      function renderModalSelects(curTrade, curSys, curSource){
+        curTrade = norm(curTrade); curSys = norm(curSys); curSource = norm(curSource);
+        var trades = uniqSorted(dictToList(tradeDict).concat(db.map(function(r){return r.trade;})));
+        var sources = uniqSorted(dictToList(sourceDict).concat(db.map(function(r){return r.source;})));
+
+        var tSel = $("mTradeSel");
+        tSel.innerHTML = trades.map(function(t){ return '<option value="'+escHtml(t)+'">'+escHtml(t)+'</option>'; }).join("");
+        if(!tSel.innerHTML) tSel.innerHTML = '<option value=""></option>';
+        if(trades.indexOf(curTrade)>=0) tSel.value = curTrade;
+
+        var sysList = [];
+        if(curTrade && Array.isArray(tradeSysMap[curTrade]) && tradeSysMap[curTrade].length){
+          sysList = tradeSysMap[curTrade].slice();
+        }else{
+          sysList = uniqSorted(dictToList(sysDict).concat(db.map(function(r){return r.system;})));
+        }
+        var sSel = $("mSysSel");
+        sSel.innerHTML = sysList.map(function(s){ return '<option value="'+escHtml(s)+'">'+escHtml(s)+'</option>'; }).join("");
+        if(!sSel.innerHTML) sSel.innerHTML = '<option value=""></option>';
+        if(sysList.indexOf(curSys)>=0) sSel.value = curSys;
+
+        var soSel = $("mSourceSel");
+        soSel.innerHTML = sources.map(function(s){ return '<option value="'+escHtml(s)+'">'+escHtml(s)+'</option>'; }).join("");
+        if(!soSel.innerHTML) soSel.innerHTML = '<option value=""></option>';
+        if(sources.indexOf(curSource)>=0) soSel.value = curSource;
+      }
+
+      function openModal(mode, uid){
+        var canWrite = Auth.canWrite ? Auth.canWrite() : false;
+        mode = mode || "view";
+        if((mode==="edit" || mode==="add") && !canWrite){
+          toast("唯讀模式不可編輯");
+          mode = "view";
+        }
+
+        var r = null;
+        editingUid = null;
+        if(mode==="add"){
+          editingUid = null;
+          counter = Math.max(counter, maxId(db));
+          $("mTitle").textContent = "新增";
+          renderModalSelects("", "", "");
+          fillModalFromRow(null);
+          setModalEditable(true);
+        }else{
+          r = db.find(function(x){ return x.uid === uid; }) || null;
+          if(!r){ toast("找不到資料"); return; }
+          editingUid = r.uid;
+          $("mTitle").textContent = (mode==="edit") ? "編輯" : "查看";
+          renderModalSelects(r.trade, r.system, r.source);
+          fillModalFromRow(r);
+          setModalEditable(mode==="edit");
+        }
+
+        setModalVisible(true);
+      }
+
+      function closeModal(){ setModalVisible(false); }
+
+      function saveModal(){
+        var canWrite = Auth.canWrite ? Auth.canWrite() : false;
+        if(!canWrite){ toast("唯讀模式不可儲存"); return; }
+
+        var text = $("mText").value.trim();
+        if(!text){ toast("請輸入記事內容"); return; }
+
+        var trade = norm($("mTradeSel").value);
+        var system = norm($("mSysSel").value);
+        var source = norm($("mSourceSel").value);
+        var attach = norm($("mAttach").value);
+        var remark = $("mRemark").value || "";
+        var date = norm($("mDate").value) || todayISO();
+
+        if(trade) tradeDict[trade] = trade;
+        if(system) sysDict[system] = system;
+        if(source) sourceDict[source] = source;
+        saveDict(TRADE_DICT_KEY, tradeDict);
+        saveDict(SYS_DICT_KEY, sysDict);
+        saveDict(SOURCE_DICT_KEY, sourceDict);
+        if(trade && system) bindSystemToTrade(trade, system);
+
+        if(editingUid==null){
+          counter = Math.max(counter, maxId(db));
+          var id = counter + 1;
+          counter = id;
+          var row = { uid: uuid(), id:id, text:text, trade:trade, system:system, source:source, attach:attach, remark:remark, date:date };
+          db.push(row);
+          selectedUid = row.uid;
+        }else{
+          var r = db.find(function(x){ return x.uid === editingUid; });
+          if(!r){ toast("找不到資料"); return; }
+          r.text = text; r.trade = trade; r.system = system; r.source = source; r.attach = attach; r.remark = remark; r.date = date;
+          selectedUid = r.uid;
+        }
+
+        db.sort(function(a,b){ return (a.id||0)-(b.id||0); });
+        counter = Math.max(counter, maxId(db));
+        saveLocal();
+        ensureDictFromDb();
+        renderAll();
+        closeModal();
+
+        if(cloud) cloud.saveMerged();
+        toast("已儲存");
+      }
+
+      function deleteItem(){
+        var canWrite = Auth.canWrite ? Auth.canWrite() : false;
+        if(!canWrite){ toast("唯讀不可刪除"); return; }
+        if(editingUid==null){ toast("這筆尚未存在"); return; }
+        if(!confirm("確定要刪除這筆資料嗎？")) return;
+
+        var idx = db.findIndex(function(x){ return x.uid === editingUid; });
+        if(idx<0){ toast("找不到資料"); return; }
+
+        db.splice(idx,1);
+        saveLocal();
+        ensureDictFromDb();
+        selectedUid = db.length ? db[Math.max(0, Math.min(db.length-1, idx))].uid : null;
+        closeModal();
+        renderAll();
+        toast("已刪除");
+
+        if(cloud) cloud.saveMerged();
+      }
+
+      function openPrompt(mode){
+        promptMode = mode; 
+        $("pMask").style.display = "flex";
+        $("pInput").value = "";
+        $("pInput").type = "text";
+        if(mode==="trade"){
+          $("pTitle").textContent = "新增工種";
+          $("pLabel").textContent = "請輸入工種";
+          $("pHint").textContent = "新增後會加入「工種字典」。";
+        }else if(mode==="sys"){
+          $("pTitle").textContent = "新增系統";
+          $("pLabel").textContent = "請輸入系統";
+          $("pHint").textContent = "新增後會加入「系統字典」，並綁定到目前工種。";
+        }else if(mode==="source"){
+          $("pTitle").textContent = "新增出處";
+          $("pLabel").textContent = "請輸入出處";
+          $("pHint").textContent = "新增後會加入「出處字典」。";
+        }
+        setTimeout(function(){ $("pInput").focus(); }, 0);
+      }
+      function closePrompt(){ $("pMask").style.display = "none"; promptMode = null; }
+      function confirmPrompt(){
+        var v = norm($("pInput").value);
+        if(!v){ toast("請輸入內容"); return; }
+        if(promptMode==="trade"){
+          tradeDict[v]=v; saveDict(TRADE_DICT_KEY, tradeDict);
+          $("mTradeSel").value = v;
+          renderModalSelects(v, $("mSysSel").value, $("mSourceSel").value);
+        }else if(promptMode==="sys"){
+          sysDict[v]=v; saveDict(SYS_DICT_KEY, sysDict);
+          var trade = norm($("mTradeSel").value);
+          if(trade) bindSystemToTrade(trade, v);
+          renderModalSelects(trade, v, $("mSourceSel").value);
+          $("mSysSel").value = v;
+        }else if(promptMode==="source"){
+          sourceDict[v]=v; saveDict(SOURCE_DICT_KEY, sourceDict);
+          renderModalSelects($("mTradeSel").value, $("mSysSel").value, v);
+          $("mSourceSel").value = v;
+        }
+        closePrompt();
+        toast("已新增");
+      }
+
+      function exportBackup(){
+        var payload = { ts: Date.now(), page: PAGE_KEY, db: db, counter: counter };
+        var blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json;charset=utf-8" });
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "sxdh-notes-backup_" + todayISO().replace(/-/g,"") + ".json";
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 0);
+        toast("已匯出備份");
+      }
+
+      function parseCloudCfgInput(raw){
+        raw = norm(raw);
+        if(!raw) return null;
+        var obj = safeJSON(raw);
+        if(obj && typeof obj==="object"){
+          return {
+            apiBase: norm(obj.apiBase || obj.base || obj.url || ""),
+            clientId: norm(obj.clientId || obj.id || obj.client_id || ""),
+            clientSecret: norm(obj.clientSecret || obj.secret || obj.client_secret || "")
+          };
+        }
+        var apiBase = "";
+        var m = raw.match(/https?:\/\/[^\s|,;]+/i);
+        if(m) apiBase = norm(m[0]);
+        var parts = raw
+          .replace(/[①-⑩]/g," ")
+          .replace(/[①②③④⑤⑥⑦⑧⑨]/g," ")
+          .replace(/(API_BASE|CLIENT_ID|CLIENT_SECRET)/gi," ")
+          .replace(/(CF-Access-Client-Id|CF-Access-Client-Secret)/gi," ")
+          .replace(/[=：:]/g," ")
+          .replace(/\s+/g," ")
+          .trim()
+          .split(/[\s|,;]+/).map(norm).filter(Boolean);
+        if(!apiBase){
+          for(var i=0;i<parts.length;i++){
+            if(/^https?:\/\//i.test(parts[i])){ apiBase = parts[i]; parts.splice(i,1); break; }
+          }
+        }else{
+          for(var j=0;j<parts.length;j++){
+            if(parts[j]===apiBase){ parts.splice(j,1); break; }
+          }
+        }
+        return { apiBase: apiBase, clientId: parts[0]||"", clientSecret: parts[1]||"" };
+      }
+
+      function openTokenMask(){
+        if(!(Auth.isAdmin && Auth.isAdmin())){ toast("僅 admin 可設定雲端"); return; }
+        $("tokenMask").style.display = "flex";
+        var base = getApiBase();
+        $("tokenHint").textContent = "目前狀態：API_BASE=" + (base ? base : "未設定") + "，Service Token=" + (hasAccessToken() ? "已設定" : "未設定");
+        $("tokenErr").style.display = "none";
+        $("tokenErr").textContent = "";
+        $("tokenInput").value = "";
+        setTimeout(function(){ $("tokenInput").focus(); }, 0);
+      }
+      function closeTokenMask(){ $("tokenMask").style.display = "none"; }
+      function saveTokenMask(){
+        var cfg = parseCloudCfgInput($("tokenInput").value);
+        if(!cfg){ toast("請貼上內容"); return; }
+        if(cfg.apiBase && /^https?:\/\//i.test(cfg.apiBase)) setApiBase(cfg.apiBase);
+        if(cfg.clientId && cfg.clientSecret){
+          setAccessToken({ clientId: cfg.clientId, clientSecret: cfg.clientSecret });
+        }
+        toast("已儲存雲端設定");
+        closeTokenMask();
+        startCloud(true);
+      }
+      function clearTokenMask(){
+        if(!confirm("確定要清除雲端設定（API_BASE / Service Token）？")) return;
+        setApiBase("");
+        setAccessToken(null);
+        toast("已清除");
+        closeTokenMask();
+        cloudState = "offline";
+        renderHint();
+      }
+      function toggleTokenInput(){
+        var el = $("tokenInput");
+        el.type = (el.type==="password") ? "text" : "password";
+      }
+
+      async function openCloudPortal(){
+        await ensureApiBaseReady();
+        var u = portalUrl();
+        if(!u || u===D1_PING_PATH){ toast("尚未設定 API_BASE"); return; }
+        window.open(u, "_blank", "noopener");
+      }
+
+      function startCloud(forceNow){
+        if(!cloud) cloud = new CloudCtrl();
+        (async function(){
+          var base = await ensureApiBaseReady();
+          if(!base){
+            cloudState = "noapi";
+            renderHint();
+            return;
+          }
+          cloud.startWatch(10);
+          if(forceNow) cloud.pullNow();
+        })();
+      }
+
+      function wireLoginUI(){
+        $("btnView").addEventListener("click", function(){ Auth.openLogin && Auth.openLogin(); });
+        $("loginClose").addEventListener("click", function(){ Auth.closeLogin && Auth.closeLogin(); });
+        $("loginToAuth").addEventListener("click", function(){ location.href = withV("權限表.html"); });
+        $("loginBtn").addEventListener("click", function(){
+          var u = $("loginUser").value;
+          var p = $("loginPass").value;
+          var ok = Auth.login ? Auth.login(u,p) : false;
+          if(!ok){
+            $("loginErr").style.display="block";
+            $("loginErr").textContent="帳號或密碼錯誤";
+          }
+        });
+      }
+
+      function wireEvents(){
+        $("navBack").addEventListener("click", function(){ location.href = withV("汐東工程管理表.html"); });
+        $("mBack").addEventListener("click", function(){ location.href = withV("汐東工程管理表.html"); });
+        $("mMoreBtn").addEventListener("click", function(){
+          var m = $("mMoreMenu");
+          m.style.display = (m.style.display==="none" || !m.style.display) ? "block" : "none";
+        });
+        document.addEventListener("click", function(ev){
+          var menu = $("mMoreMenu");
+          var btn = $("mMoreBtn");
+          if(!menu || menu.style.display!=="block") return;
+          if(ev.target===btn || btn.contains(ev.target)) return;
+          if(menu.contains(ev.target)) return;
+          menu.style.display = "none";
+        });
+        var items = document.querySelectorAll(".menuItem[data-href]");
+        for(var i=0;i<items.length;i++){
+          items[i].addEventListener("click", function(){
+            var href = this.getAttribute("data-href");
+            if(href) location.href = withV(href);
+          });
+        }
+
+        $("btnAdd").addEventListener("click", function(){ openModal("add"); });
+        $("btnEdit").addEventListener("click", function(){
+          if(!selectedUid){ toast("請先點選一筆資料"); return; }
+          openModal("edit", selectedUid);
+        });
+
+        $("btnToken").addEventListener("click", openTokenMask);
+
+        $("btnCloud").addEventListener("click", function(){
+          openCloudPortal();
+          if(cloud) cloud.pullNow();
+        });
+
+        $("btnExport").addEventListener("click", exportBackup);
+
+        $("btnClear").addEventListener("click", function(){
+          $("qText").value = "";
+          $("fTrade").value = "";
+          $("fSys").value = "";
+          renderAll();
+        });
+
+        $("btnRead").addEventListener("click", function(){
+          setReadMode(!document.body.classList.contains("readMode"));
+        });
+
+        $("qText").addEventListener("input", function(){ renderAll(); });
+        $("fTrade").addEventListener("change", function(){
+          renderFilters();
+          renderAll();
+        });
+        $("fSys").addEventListener("change", function(){ renderAll(); });
+
+        $("btnClose").addEventListener("click", closeModal);
+        $("btnCancel").addEventListener("click", closeModal);
+        $("btnSave").addEventListener("click", saveModal);
+        $("btnDelete").addEventListener("click", deleteItem);
+
+        $("btnAddTrade").addEventListener("click", function(){ openPrompt("trade"); });
+        $("btnAddSys").addEventListener("click", function(){ openPrompt("sys"); });
+        $("btnAddSource").addEventListener("click", function(){ openPrompt("source"); });
+
+        $("pClose").addEventListener("click", closePrompt);
+        $("pCancel").addEventListener("click", closePrompt);
+        $("pOk").addEventListener("click", confirmPrompt);
+        $("pInput").addEventListener("keydown", function(ev){ if(ev.key==="Enter"){ ev.preventDefault(); confirmPrompt(); } });
+
+        $("btnNetDisk").addEventListener("click", function(){ window.open(NET_DISK_URL, "_blank", "noopener"); });
+
+        $("tokenClose").addEventListener("click", closeTokenMask);
+        $("tokenSave").addEventListener("click", saveTokenMask);
+        $("tokenClear").addEventListener("click", clearTokenMask);
+        $("tokenToggle").addEventListener("click", toggleTokenInput);
+        $("tokenNetDisk").addEventListener("click", function(){ window.open(CLOUD_NETDISK_URL, "_blank", "noopener"); });
+
+        $("mTradeSel").addEventListener("change", function(){
+          var trade = norm($("mTradeSel").value);
+          renderModalSelects(trade, "", $("mSourceSel").value);
+        });
+      }
+
+      loadLocal();
+      ensureDictFromDb();
+
+      wireLoginUI();
+      wireEvents();
+
+      setReadMode(getReadMode());
+      renderAll();
+
+      Auth.onChange && Auth.onChange(function(){
+        updateTopbar();
+        renderAll();
+        startCloud(true);
+      });
+      updateTopbar();
+
+      startCloud(true);
+      }catch(e){
+        __BOOTED__ = false;
+        console.error(e);
+        scheduleRetry();
+        return;
+      }
     }
 
     if(window.__TASUN_WAIT__ && typeof window.__TASUN_WAIT__.push === "function"){
@@ -794,6 +2018,7 @@
     }else{
       document.addEventListener("DOMContentLoaded", run);
     }
+    try{ window.addEventListener("load", run); }catch(e){}
   })();
   </script>
 </body>
