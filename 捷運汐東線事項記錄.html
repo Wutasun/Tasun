@@ -657,30 +657,30 @@
     </div>
   </div>
 
-  <!-- ✅ 雲端設定（D1 + Access） -->
+  <!-- ✅ 雲端設定（GitHub Repo JSON） -->
   <div class="loginMask" id="tokenMask" aria-hidden="true">
     <div class="loginModal" role="dialog" aria-modal="true" aria-label="雲端設定">
       <div class="loginHead">
         <div></div>
-        <div class="loginTitle goldCrystal" id="cloudCfgTitle">雲端設定（D1 / Access）</div>
+        <div class="loginTitle goldCrystal" id="cloudCfgTitle">雲端設定（GitHub Repo JSON）</div>
         <button class="btn ghost small" id="tokenClose" type="button"><span class="t">關閉</span></button>
       </div>
       <div class="loginBody">
         <div class="field">
-          <div class="label" id="cloudCfgLabel">貼上（可擇一）</div>
-          <input id="tokenInput" type="password" placeholder="① https://API_BASE ② CLIENT_ID ③ CLIENT_SECRET（用空白或 | 分隔）" autocomplete="off" />
+          <div class="label" id="cloudCfgLabel">貼上（擇一）</div>
+          <input id="tokenInput" type="password" placeholder="① OWNER/REPO ② BRANCH ③ PATH ④ GH_TOKEN（用空白或 | 分隔）" autocomplete="off" />
         </div>
         <div class="loginErr" id="tokenErr"></div>
         <div class="loginHint" id="tokenHint">目前狀態：—</div>
         <div class="loginHint">
-          ✅ 可貼：<b>API_BASE|CLIENT_ID|CLIENT_SECRET</b>（或空白/逗號分隔）。也可只貼 <b>CLIENT_ID|CLIENT_SECRET</b>。<br>
-          若使用「互動登入 Access（cookie）」：可不填 token，只要按「雲端檔案」觸發 Access 登入一次即可。
+          ✅ 可貼：<b>owner/repo | branch | path | token</b>（或空白/逗號分隔）。也可只貼 <b>RAW URL</b>（raw.githubusercontent.com/...）。<br>
+          ⚠️ 沒有 token 仍可讀取（公開 repo）；要「上傳/合併寫入」必須提供 GitHub token（建議 fine-grained token：Contents 寫入）。
         </div>
       </div>
       <div class="loginFoot">
         <button class="btn danger" id="tokenClear" type="button"><span class="t">清除</span></button>
         <button class="btn ghost" id="tokenToggle" type="button"><span class="t">顯示/隱藏</span></button>
-        <button class="btn ghost" id="tokenNetDisk" type="button"><span class="t">網路硬碟</span></button>
+        <button class="btn ghost" id="tokenNetDisk" type="button"><span class="t">GitHub</span></button>
         <button class="btn" id="tokenSave" type="button"><span class="t">儲存</span></button>
       </div>
     </div>
@@ -812,7 +812,7 @@
       try{
 
       var PAGE_KEY = "sxdh-notes";
-      var RESOURCES_URL = "tasun-resources.json"; // ✅ 用於自動取得 API_BASE（跨設備免重設）
+      var RESOURCES_URL = "tasun-resources.json"; // ✅ 用於自動取得 GitHub 位置（跨設備免重設）
       Core.init({ pageKey: PAGE_KEY, forceUrlV:true, forceVersionSync:true, patchResources:true, networkToast:false, appHeightVar:false });
 
       var Auth = Core.Auth;
@@ -828,23 +828,21 @@
       var SOURCE_DICT_KEY = "tasunSxdhNotes_sourceDict_v1";
       var TRADE_SYS_MAP_KEY = "tasunSxdhNotes_tradeSysMap_v1";
 
-      // ===== Cloud keys =====
-      var D1_API_BASE_KEY = "tasunD1ApiBase_v1";
-      var ACCESS_ST_KEY   = "tasunAccessServiceToken_v1";
+      // ===== Cloud (GitHub Repo JSON) keys =====
+      var GH_CFG_KEY = "tasunGitHubRepoCfg_v1"; // site-wide (all pages can share)
       var PROTECT_EMPTY_REMOTE_KEY = "tasun_protect_empty_remote__" + DB_KEY;
 
-      var DEFAULT_API_BASE = "https://tasun-api.wutasun.workers.dev"; // ✅ 預設 API_BASE（所有裝置免手動設定）
+      // ===== GitHub defaults (可留空；建議改由 resources 或 admin 設定) =====
+      var DEFAULT_GH = {
+        owner: "",
+        repo: "",
+        branch: "main",
+        path: "tasun-data/sxdh-notes.json",
+        token: "" // optional; required for write
+      };
 
-      // ===== API paths =====
-      var CLOUD_RESOURCE_KEY = PAGE_KEY;
-      var CLOUD_PK = "k";
-
-      var D1_PING_PATH  = "/api/tasun/ping";
-      var D1_PULL_PATH  = "/api/tasun/pull";
-      var D1_MERGE_PATH = "/api/tasun/merge";
-
+      var GITHUB_HELP_URL = "https://github.com/settings/tokens";
       var NET_DISK_URL = "https://www.dropbox.com/scl/fo/glb4s65934h195bxuyuqm/AH5ClZ2u4MtPMvmgtfOUAa4?rlkey=tfxkpbpw8k9bctshx5xvuge8h&st=9deaoqpw&dl=0";
-      var CLOUD_NETDISK_URL = "https://www.dropbox.com/developers/apps";
 
       var $ = function(id){ return document.getElementById(id); };
       var norm = function(s){ return (s===undefined||s===null) ? "" : String(s).trim(); };
@@ -869,6 +867,7 @@
       }
       function todayISO(){ return new Date().toISOString().slice(0,10); }
       function uuid(){ return "u" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2); }
+      function newRev(){ return Date.now().toString(36) + "_" + Math.random().toString(36).slice(2,8); }
 
       // ===== Data =====
       var db = [];
@@ -881,29 +880,109 @@
       var cloudState = "offline"; // offline | ok | deny | neterr | noapi
       var apiLastStatus = 0;
 
-      // ===== Cloud helpers =====
+      // ===== Cloud helpers (GitHub Repo JSON) =====
       function safeJSON(raw){ if(!raw) return null; try{ return JSON.parse(raw); }catch(e){ return null; } }
-      function getApiBase(){
-        var b = norm(window.TASUN_D1_API_BASE);
-        if(b) return b.replace(/\/+$/,"");
-        try{ b = norm(sessionStorage.getItem(D1_API_BASE_KEY)); if(b) return b.replace(/\/+$/,""); }catch(e){}
-        try{ b = norm(localStorage.getItem(D1_API_BASE_KEY)); if(b) return b.replace(/\/+$/,""); }catch(e){}
-        return DEFAULT_API_BASE;
+
+      function clone(obj){ try{ return JSON.parse(JSON.stringify(obj)); }catch(e){ return obj; } }
+
+      function b64ToStr(b64){
+        b64 = (b64||"").replace(/\n/g,"");
+        var bin = "";
+        try{ bin = atob(b64); }catch(e){ return ""; }
+        try{
+          var bytes = new Uint8Array(bin.length);
+          for(var i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+          return new TextDecoder("utf-8").decode(bytes);
+        }catch(e2){
+          try{ return decodeURIComponent(escape(bin)); }catch(e3){ return bin; }
+        }
       }
-      function setApiBase(v){
-        v = norm(v).replace(/\/+$/,"");
-        try{ window.TASUN_D1_API_BASE = v; }catch(e){}
-        try{ v ? sessionStorage.setItem(D1_API_BASE_KEY, v) : sessionStorage.removeItem(D1_API_BASE_KEY); }catch(e){}
-        try{ v ? localStorage.setItem(D1_API_BASE_KEY, v) : localStorage.removeItem(D1_API_BASE_KEY); }catch(e){}
+      function strToB64(str){
+        str = (str===undefined||str===null) ? "" : String(str);
+        try{
+          var bytes = new TextEncoder().encode(str);
+          var bin = "";
+          for(var i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
+          return btoa(bin);
+        }catch(e){
+          try{ return btoa(unescape(encodeURIComponent(str))); }catch(e2){ return ""; }
+        }
       }
 
-      // ===== Auto discover API_BASE from tasun-resources.json (cross-device) =====
-      async function discoverApiBaseFromResources(){
+      function getGhCfgRaw(){
+        // window override
+        try{
+          if(window.TASUN_GITHUB_REPO && typeof window.TASUN_GITHUB_REPO === "object") return clone(window.TASUN_GITHUB_REPO);
+        }catch(e){}
+        // storage
+        try{
+          var raw = localStorage.getItem(GH_CFG_KEY);
+          var j = safeJSON(raw);
+          if(j && typeof j==="object") return j;
+        }catch(e){}
+        return clone(DEFAULT_GH);
+      }
+      function cleanGhCfg(c){
+        c = c || {};
+        var out = {
+          owner: norm(c.owner || c.OWNER || ""),
+          repo: norm(c.repo || c.REPO || ""),
+          branch: norm(c.branch || c.BRANCH || "main") || "main",
+          path: norm(c.path || c.PATH || ""),
+          token: norm(c.token || c.TOKEN || c.ghToken || c.githubToken || "")
+        };
+        // allow repo as "owner/repo"
+        if(out.repo && out.repo.indexOf("/")>=0 && !out.owner){
+          var sp = out.repo.split("/");
+          if(sp.length>=2){ out.owner = norm(sp[0]); out.repo = norm(sp[1]); }
+        }
+        // normalize path
+        out.path = out.path.replace(/^\/+/,"");
+        return out;
+      }
+      function setGhCfg(cfg){
+        cfg = cleanGhCfg(cfg);
+        try{ window.TASUN_GITHUB_REPO = clone(cfg); }catch(e){}
+        try{ localStorage.setItem(GH_CFG_KEY, JSON.stringify(cfg)); }catch(e){}
+        return cfg;
+      }
+
+      function ghReady(cfg){
+        cfg = cleanGhCfg(cfg);
+        return !!(cfg.owner && cfg.repo && cfg.branch && cfg.path);
+      }
+
+      function ghRawUrl(cfg){
+        cfg = cleanGhCfg(cfg);
+        if(!ghReady(cfg)) return "";
+        return "https://raw.githubusercontent.com/" + encodeURIComponent(cfg.owner) + "/" + encodeURIComponent(cfg.repo) + "/" + encodeURIComponent(cfg.branch) + "/" + cfg.path;
+      }
+      function ghBlobUrl(cfg){
+        cfg = cleanGhCfg(cfg);
+        if(!ghReady(cfg)) return "";
+        return "https://github.com/" + encodeURIComponent(cfg.owner) + "/" + encodeURIComponent(cfg.repo) + "/blob/" + encodeURIComponent(cfg.branch) + "/" + cfg.path;
+      }
+      function ghContentsUrl(cfg){
+        cfg = cleanGhCfg(cfg);
+        if(!ghReady(cfg)) return "";
+        return "https://api.github.com/repos/" + encodeURIComponent(cfg.owner) + "/" + encodeURIComponent(cfg.repo) + "/contents/" + cfg.path + "?ref=" + encodeURIComponent(cfg.branch);
+      }
+      function ghAuthHeaders(cfg){
+        cfg = cleanGhCfg(cfg);
+        var h = { "Accept":"application/vnd.github+json" };
+        if(cfg.token){
+          h["Authorization"] = "Bearer " + cfg.token;
+        }
+        return h;
+      }
+
+      async function discoverGhFromResources(){
+        // optional: allow resources to carry github repo location so other devices auto-config
         try{
           var APP = String(window.TASUN_APP_VER||"").trim();
           var url = RESOURCES_URL + (RESOURCES_URL.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(APP) + "&_=" + Date.now();
           var res = await fetch(url, { cache:"no-store" });
-          if(!res.ok) return "";
+          if(!res.ok) return null;
           var j = await res.json();
 
           function pick(obj, path){
@@ -916,511 +995,307 @@
               return (typeof cur==="string") ? cur.trim() : "";
             }catch(e){ return ""; }
           }
-          function findByKey(obj, keyRe){
-            var q = [obj];
-            while(q.length){
-              var x = q.shift();
-              if(!x || typeof x!=="object") continue;
-              for(var k in x){
-                if(!Object.prototype.hasOwnProperty.call(x,k)) continue;
-                var v = x[k];
-                if(keyRe.test(String(k))){
-                  if(typeof v==="string" && /^https?:\/\//i.test(v.trim())) return v.trim();
-                }
-                if(v && typeof v==="object") q.push(v);
-              }
-            }
-            return "";
+
+          var owner = pick(j, ["cloud","github","owner"]) || pick(j, ["github","owner"]) || pick(j, ["cloud","gh","owner"]) || "";
+          var repo  = pick(j, ["cloud","github","repo"])  || pick(j, ["github","repo"])  || pick(j, ["cloud","gh","repo"])  || "";
+          var branch= pick(j, ["cloud","github","branch"])|| pick(j, ["github","branch"])|| pick(j, ["cloud","gh","branch"])|| "";
+          var path  = pick(j, ["cloud","github","path"])  || pick(j, ["github","path"])  || pick(j, ["cloud","gh","path"])  || "";
+
+          // also allow single string like "owner/repo@branch:path"
+          var one = pick(j, ["cloud","github"]) || pick(j, ["github"]) || "";
+          if((!owner || !repo) && typeof one==="string" && one.indexOf("/")>=0){
+            var cfg2 = parseGitHubCfgInput(one);
+            if(cfg2 && cfg2.owner && cfg2.repo) { owner = owner || cfg2.owner; repo = repo || cfg2.repo; }
+            if(cfg2 && cfg2.branch) branch = branch || cfg2.branch;
+            if(cfg2 && cfg2.path) path = path || cfg2.path;
           }
 
-          // ✅ 優先：明確欄位
-          var cands = [
-            pick(j, ["cloud","apiBase"]),
-            pick(j, ["cloud","d1ApiBase"]),
-            pick(j, ["cloud","API_BASE"]),
-            pick(j, ["d1","apiBase"]),
-            pick(j, ["d1","base"]),
-            (typeof j.apiBase==="string"?j.apiBase.trim():""),
-            (typeof j.d1ApiBase==="string"?j.d1ApiBase.trim():""),
-            (typeof j.D1_API_BASE==="string"?j.D1_API_BASE.trim():""),
-            pick(j, ["config","apiBase"]),
-            pick(j, ["config","d1ApiBase"])
-          ].filter(Boolean);
-
-          // ✅ 次選：遞迴搜尋 key 名稱
-          if(!cands.length){
-            cands.push(findByKey(j, /^(apiBase|api_base|d1ApiBase|d1_api_base|cloudApiBase)$/i));
-          }
-
-          for(var i=0;i<cands.length;i++){
-            var b = (cands[i]||"").trim().replace(/\/+$/,"");
-            if(b && /^https?:\/\//i.test(b)) return b;
-          }
+          var cfg = cleanGhCfg({ owner: owner, repo: repo, branch: branch || "main", path: path });
+          if(ghReady(cfg)) return cfg;
         }catch(e){}
-        return "";
+        return null;
       }
 
-      async function ensureApiBaseReady(){
-        // ✅ 1) 先用已設定/已儲存（避免每次都去抓 resources）
-        var b = "";
-        try{ b = norm(window.TASUN_D1_API_BASE); }catch(e){ b=""; }
-        if(b){ b = b.replace(/\/+$/,""); setApiBase(b); return b; }
+      async function ensureGhCfgReady(){
+        var cur = cleanGhCfg(getGhCfgRaw());
+        if(ghReady(cur)) return cur;
 
-        try{ b = norm(sessionStorage.getItem(D1_API_BASE_KEY)); }catch(e){ b=""; }
-        if(b){ b = b.replace(/\/+$/,""); setApiBase(b); return b; }
-
-        try{ b = norm(localStorage.getItem(D1_API_BASE_KEY)); }catch(e){ b=""; }
-        if(b){ b = b.replace(/\/+$/,""); setApiBase(b); return b; }
-
-        // ✅ 2) 跨設備自動發現（tasun-resources.json）
-        var d = await discoverApiBaseFromResources();
-        if(d){
-          setApiBase(d);
-          return getApiBase();
+        var d = await discoverGhFromResources();
+        if(d && ghReady(d)){
+          // only fill missing fields; do not overwrite existing token
+          if(cur.token) d.token = cur.token;
+          setGhCfg(d);
+          return cleanGhCfg(getGhCfgRaw());
         }
 
-        // ✅ 3) 最後才回退到預設（並寫入，讓後續頁也直接可用）
-        if(DEFAULT_API_BASE && /^https?:\/\//i.test(DEFAULT_API_BASE)){
-          setApiBase(DEFAULT_API_BASE);
-          return getApiBase();
-        }
-        return "";
+        return cur; // maybe incomplete
       }
 
-      function parseStoredToken(raw){
+      function parseGitHubCfgInput(raw){
         raw = norm(raw);
         if(!raw) return null;
+
+        // JSON input
         var obj = safeJSON(raw);
         if(obj && typeof obj==="object"){
-          var id = norm(obj.clientId || obj.id || obj.client_id || "");
-          var sec = norm(obj.clientSecret || obj.secret || obj.client_secret || "");
-          if(id && sec) return { clientId:id, clientSecret:sec };
+          return cleanGhCfg(obj);
         }
+
+        // RAW URL
+        // https://raw.githubusercontent.com/owner/repo/branch/path...
+        var mRaw = raw.match(/https?:\/\/raw\.githubusercontent\.com\/([^\/\s]+)\/([^\/\s]+)\/([^\/\s]+)\/([^\s#?]+)/i);
+        if(mRaw){
+          return cleanGhCfg({ owner:mRaw[1], repo:mRaw[2], branch:mRaw[3], path:mRaw[4] });
+        }
+
+        // blob URL
+        // https://github.com/owner/repo/blob/branch/path...
+        var mBlob = raw.match(/https?:\/\/github\.com\/([^\/\s]+)\/([^\/\s]+)\/blob\/([^\/\s]+)\/([^\s#?]+)/i);
+        if(mBlob){
+          return cleanGhCfg({ owner:mBlob[1], repo:mBlob[2], branch:mBlob[3], path:mBlob[4] });
+        }
+
+        // shorthand owner/repo@branch:path
+        var mShort = raw.match(/^([^\/\s]+)\/([^@\s]+)(?:@([^:\s]+))?:(.+)$/);
+        if(mShort){
+          return cleanGhCfg({ owner:mShort[1], repo:mShort[2], branch:mShort[3]||"main", path:mShort[4] });
+        }
+
+        // tokens by separators: owner/repo branch path token?
         var parts = raw.split(/[\s|,;]+/).map(norm).filter(Boolean);
-        if(parts.length>=2) return { clientId:parts[0], clientSecret:parts[1] };
-        return null;
-      }
-      function getAccessToken(){
-        try{
-          var w = window.TASUN_ACCESS_SERVICE_TOKEN;
-          if(w && typeof w==="object"){
-            var idw = norm(w.clientId||w.client_id||"");
-            var secw = norm(w.clientSecret||w.client_secret||"");
-            if(idw && secw) return { clientId:idw, clientSecret:secw };
-          }
-          if(typeof w==="string"){
-            var partsW = w.split(/[\s|,;]+/).map(norm).filter(Boolean);
-            if(partsW.length>=2) return { clientId:partsW[0], clientSecret:partsW[1] };
-          }
-        }catch(e){}
-        try{ var s1 = parseStoredToken(sessionStorage.getItem(ACCESS_ST_KEY)); if(s1) return s1; }catch(e){}
-        try{ var s2 = parseStoredToken(localStorage.getItem(ACCESS_ST_KEY)); if(s2) return s2; }catch(e){}
-        return null;
-      }
-      function hasAccessToken(){ var t = getAccessToken(); return !!(t && t.clientId && t.clientSecret); }
-      function setAccessToken(obj){
-        try{ window.TASUN_ACCESS_SERVICE_TOKEN = obj || null; }catch(e){}
-        try{ obj ? sessionStorage.setItem(ACCESS_ST_KEY, JSON.stringify(obj)) : sessionStorage.removeItem(ACCESS_ST_KEY); }catch(e){}
-        try{ obj ? localStorage.setItem(ACCESS_ST_KEY, JSON.stringify(obj)) : localStorage.removeItem(ACCESS_ST_KEY); }catch(e){}
-      }
-      function accessHeaders(){
-        var t = getAccessToken();
-        if(!t) return {};
-        return { "CF-Access-Client-Id": t.clientId, "CF-Access-Client-Secret": t.clientSecret };
-      }
-      function buildUrl(path){
-        var base = getApiBase();
-        if(/^https?:\/\//i.test(path)) return path;
-        if(!path) path = "/";
-        if(path[0] !== "/") path = "/" + path;
-        return base ? (base + path) : path;
-      }
-      function portalUrl(){ return buildUrl(D1_PING_PATH); }
+        if(!parts.length) return null;
 
-      async function httpJSON(url, opt){
+        var owner="", repo="", branch="main", path="", token="";
+        // first part might be owner/repo
+        if(parts[0].indexOf("/")>=0){
+          var sp = parts[0].split("/");
+          if(sp.length>=2){ owner = sp[0]; repo = sp[1]; }
+          parts.shift();
+        }
+        if(parts.length>=1) branch = parts[0] || branch;
+        if(parts.length>=2) path = parts[1] || path;
+        if(parts.length>=3) token = parts.slice(2).join(" ").trim() || token;
+
+        return cleanGhCfg({ owner:owner, repo:repo, branch:branch, path:path, token:token });
+      }
+
+      async function httpText(url, opt){
         opt = opt || {};
-        var baseHeaders = opt.headers || {};
-
-        function cleanHeaders(h){
-          var out = {};
-          for(var k in h){
-            if(!Object.prototype.hasOwnProperty.call(h,k)) continue;
-            var v = h[k];
-            if(v===undefined || v===null) continue;
-            v = String(v);
-            if(!v.trim()) continue;
-            out[k] = v;
-          }
-          return out;
+        var res;
+        try{
+          res = await fetch(url, opt);
+        }catch(err){
+          var e2 = new Error(err && err.message ? err.message : "Failed to fetch");
+          e2.status = 0; e2.code = "FETCH_FAIL";
+          throw e2;
         }
-
-        function buildHeaders(authMode){
-          // ✅ 盡量保持「簡單請求」：少送自訂 Header，降低 CORS/OPTIONS 失敗機率
-          var h = { "Accept":"application/json" };
-          for(var k in baseHeaders){
-            if(Object.prototype.hasOwnProperty.call(baseHeaders,k)) h[k] = baseHeaders[k];
-          }
-          // ❌ 不強制送 X- 自訂 Header（常見導致 preflight 被擋）
-          delete h["X-Tasun-AppVer"]; delete h["X-Tasun-Page"]; delete h["X-Tasun-User"]; delete h["X-Tasun-Role"];
-          delete h["x-tasun-appver"]; delete h["x-tasun-page"]; delete h["x-tasun-user"]; delete h["x-tasun-role"];
-
-          if(authMode === "token"){
-            var a = accessHeaders();
-            for(var k2 in a){
-              if(Object.prototype.hasOwnProperty.call(a,k2)) h[k2] = a[k2];
-            }
-          }
-          return cleanHeaders(h);
-        }
-
-        function looksLikeAccessHTML(txt){
-          var low = (txt||"").slice(0, 2000).toLowerCase();
-          if(!low) return false;
-          if(low.indexOf("cloudflare access") >= 0) return true;
-          if(low.indexOf("cf-access") >= 0) return true;
-          if(low.indexOf("access login") >= 0) return true;
-          if(low.indexOf("<html") >= 0 && low.indexOf("access") >= 0 && low.indexOf("login") >= 0) return true;
-          return false;
-        }
-
-        async function doFetch(authMode){
-          var fo = {};
-          for(var p in opt){
-            if(!Object.prototype.hasOwnProperty.call(opt,p)) continue;
-            if(p === "headers") continue;
-            fo[p] = opt[p];
-          }
-          fo.mode = "cors";
-          fo.cache = "no-store";
-          fo.credentials = (authMode === "token") ? "omit" : "include";
-          fo.headers = buildHeaders(authMode);
-          try{
-            return await fetch(url, fo);
-          }catch(err){
-            var e2 = new Error(err && err.message ? err.message : "Failed to fetch");
-            e2.status = 0; e2.code = "FETCH_FAIL";
-            throw e2;
-          }
-        }
-
-        // ✅ 先用 cookie（Access 互動登入）→ 不行再用 Service Token（若已設定）
-        for(var attempt=0; attempt<2; attempt++){
-          var mode = (attempt===0) ? "cookie" : "token";
-          if(mode==="token" && !hasAccessToken()) break;
-
-          var res = await doFetch(mode);
-
-          // cookie 模式遇到 401/403，若有 token 再試一次（避免一直卡在未登入狀態）
-          if((res.status===401 || res.status===403) && mode==="cookie" && hasAccessToken()){
-            continue;
-          }
-
-          var ct = (res.headers.get("content-type")||"").toLowerCase();
-          var isJson = (ct.indexOf("application/json")>=0 || ct.indexOf("+json")>=0);
-
+        apiLastStatus = res.status || 0;
+        if(!res.ok){
           var txt = "";
-          var j = null;
-
-          if(isJson){
-            try{ j = await res.json(); }
-            catch(e){ try{ txt = await res.text(); }catch(_e){ txt=""; } }
-          }else{
-            try{ txt = await res.text(); }catch(e){ txt=""; }
-          }
-
-          // Access HTML：cookie 模式先改用 token 再試一次
-          if(!isJson && looksLikeAccessHTML(txt) && mode==="cookie" && hasAccessToken()){
-            continue;
-          }
-
-          if(!res.ok){
-            if(j && typeof j==="object"){
-              var msg = j.error || j.message || ("HTTP "+res.status+" "+res.statusText);
-              var errJ = new Error(msg);
-              errJ.status = res.status;
-              try{ errJ.body = JSON.stringify(j).slice(0,4000); }catch(e){ errJ.body=""; }
-              errJ.code = (res.status===401 || res.status===403) ? "ACCESS_DENY" : "API_FAIL";
-              throw errJ;
-            }
-            var err2 = new Error("HTTP "+res.status+" "+res.statusText);
-            err2.status = res.status;
-            err2.body = (txt||"").slice(0,4000);
-            err2.code = (res.status===401 || res.status===403 || looksLikeAccessHTML(txt)) ? "ACCESS_DENY" : "HTTP_FAIL";
-            throw err2;
-          }
-
-          apiLastStatus = res.status;
-
-          if(j && typeof j==="object"){
-            if(j.ok===false){
-              var msg2 = j.error || j.message || "API_ERROR";
-              var errJ2 = new Error(msg2);
-              errJ2.status = res.status;
-              try{ errJ2.body = JSON.stringify(j).slice(0,4000); }catch(e){ errJ2.body=""; }
-              errJ2.code = "API_FAIL";
-              throw errJ2;
-            }
-            return j;
-          }
-
-          // text -> json
-          try{
-            var j2 = JSON.parse(txt || "null");
-            if(j2 && typeof j2==="object" && j2.ok===false){
-              var msg3 = j2.error || j2.message || "API_ERROR";
-              var errJ3 = new Error(msg3);
-              errJ3.status = res.status;
-              errJ3.body = (txt||"").slice(0,4000);
-              errJ3.code = "API_FAIL";
-              throw errJ3;
-            }
-            return j2;
-          }catch(e){
-            if(looksLikeAccessHTML(txt)){
-              var errH = new Error("ACCESS_HTML");
-              errH.status = res.status;
-              errH.body = (txt||"").slice(0,4000);
-              errH.code = "ACCESS_DENY";
-              throw errH;
-            }
-            var err3 = new Error("BAD_RESPONSE");
-            err3.status = res.status;
-            err3.body = (txt||"").slice(0,4000);
-            err3.code = "BAD_RESPONSE";
-            throw err3;
-          }
+          try{ txt = await res.text(); }catch(e){ txt=""; }
+          var e3 = new Error("HTTP " + res.status + " " + res.statusText);
+          e3.status = res.status;
+          e3.body = (txt||"").slice(0,4000);
+          if(res.status===401 || res.status===403) e3.code = "ACCESS_DENY";
+          else if(res.status===404) e3.code = "NOT_FOUND";
+          else e3.code = "HTTP_FAIL";
+          throw e3;
         }
-
-        var eLast = new Error("ACCESS_DENY");
-        eLast.status = 401;
-        eLast.code = "ACCESS_DENY";
-        throw eLast;
+        return await res.text();
+      }
+      async function httpJSON(url, opt){
+        var txt = await httpText(url, opt);
+        try{ return JSON.parse(txt || "null"); }catch(e){
+          var er = new Error("BAD_RESPONSE");
+          er.status = 200; er.code = "BAD_RESPONSE"; er.body = (txt||"").slice(0,4000);
+          throw er;
+        }
       }
 
-      function unwrap(resp){
-        var info = (resp && typeof resp==="object") ? (resp.info || resp.meta || {}) : {};
-        var p = resp;
-        if(p && typeof p==="object"){
-          if("payload" in p) p = p.payload;
-          else if("data" in p) p = p.data;
-          else if("result" in p) p = p.result;
+      async function ghPull(){
+        var cfg = await ensureGhCfgReady();
+        cfg = cleanGhCfg(cfg);
+        if(!ghReady(cfg)){
+          var e0 = new Error("NO_GITHUB_CFG"); e0.status = 0; e0.code = "NO_GITHUB_CFG"; throw e0;
         }
-        var out = (p && typeof p==="object") ? p : {};
-        if(!Array.isArray(out.db)) out.db = [];
-        var c = Number(out.counter||0); if(!Number.isFinite(c) || c<0) c=0;
-        out.counter = c;
-        return { payload: out, info: info };
+
+        // prefer API when token exists (private repo supported); else raw
+        if(cfg.token){
+          var url = ghContentsUrl(cfg);
+          var j = await httpJSON(url, { method:"GET", headers: ghAuthHeaders(cfg), cache:"no-store" });
+          // GitHub error payload may come as object without content
+          if(j && j.message && !j.content){
+            var e1 = new Error(j.message);
+            e1.status = apiLastStatus || 0;
+            e1.code = (e1.status===401||e1.status===403) ? "ACCESS_DENY" : "API_FAIL";
+            throw e1;
+          }
+          var content = b64ToStr(j.content || "");
+          var payload = safeJSON(content) || null;
+          return { payload: payload, sha: j.sha || "", source:"api" };
+        }else{
+          var rawUrl = ghRawUrl(cfg);
+          var url2 = rawUrl + (rawUrl.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(APP_VER||"") + "&_=" + Date.now();
+          var txt = await httpText(url2, { method:"GET", cache:"no-store" });
+          var payload2 = safeJSON(txt) || null;
+          return { payload: payload2, sha:"", source:"raw" };
+        }
       }
 
-      async function apiPull(){
-        if(!getApiBase()){
-          var e0 = new Error("NO_API_BASE"); e0.status = 0; e0.code = "NO_API_BASE"; throw e0;
+      async function ghPut(payload, sha){
+        var cfg = await ensureGhCfgReady();
+        cfg = cleanGhCfg(cfg);
+        if(!ghReady(cfg)){
+          var e0 = new Error("NO_GITHUB_CFG"); e0.status = 0; e0.code = "NO_GITHUB_CFG"; throw e0;
         }
-        var url = buildUrl(D1_PULL_PATH) + "?key=" + encodeURIComponent(CLOUD_RESOURCE_KEY) + "&_=" + Date.now();
-        return await httpJSON(url, { method:"GET" });
-      }
-      async function apiMerge(localPayload){
-        if(!getApiBase()){
-          var e0 = new Error("NO_API_BASE"); e0.status = 0; e0.code = "NO_API_BASE"; throw e0;
+        if(!cfg.token){
+          var e1 = new Error("NO_TOKEN"); e1.status = 401; e1.code = "ACCESS_DENY"; throw e1;
         }
-        var url = buildUrl(D1_MERGE_PATH);
+
+        var url = "https://api.github.com/repos/" + encodeURIComponent(cfg.owner) + "/" + encodeURIComponent(cfg.repo) + "/contents/" + cfg.path;
         var body = {
-          key: CLOUD_RESOURCE_KEY,
-          pk: CLOUD_PK,
-          idField: "id",
-          counterField: "counter",
-          local: localPayload,
-          client: { ts: Date.now(), page: PAGE_KEY, user: (Auth.current()&&Auth.current().username)||"", role: String(Auth.role()||""), ua: navigator.userAgent },
-          merge: { conflictPolicy: "stash-remote" }
+          message: "tasun-sync " + PAGE_KEY + " " + new Date().toISOString(),
+          content: strToB64(JSON.stringify(payload, null, 2)),
+          branch: cfg.branch
         };
-        return await httpJSON(url, { method:"POST", headers: { "Content-Type":"application/json" }, body: JSON.stringify(body) });
-      }
+        if(sha) body.sha = sha;
 
-      function CloudCtrl(){
-        this._timer = 0;
-        this._saving = false;
-        this._pending = false;
-        this._lastErrCode = "";
-        this._lastErrAt = 0;
-      }
-      CloudCtrl.prototype._err = function(e){
-        if(!e) return;
+        var headers = ghAuthHeaders(cfg);
+        headers["Content-Type"] = "application/json";
 
-        var code = (e.code||"");
-        if(code==="NO_API_BASE"){ cloudState="noapi"; }
-        else if(code==="FETCH_FAIL" || e.status===0){ cloudState="neterr"; }
-        else if(code==="ACCESS_DENY" || e.status===401 || e.status===403){ cloudState="deny"; }
-        else { cloudState="neterr"; }
-
-        try{ renderHint(); }catch(_e){}
-
-        // ✅ 避免輪詢時一直彈同樣的提示（12秒內同錯誤不重複 toast）
-        var now = Date.now();
-        if(code && code===this._lastErrCode && (now - this._lastErrAt) < 12000){
-          return;
-        }
-        this._lastErrCode = code;
-        this._lastErrAt = now;
-
-        if(code==="NO_API_BASE"){
-          toast("⚠️ 尚未設定 API_BASE：請按右上「雲端設定」。");
-          return;
-        }
-        if(code==="FETCH_FAIL" || e.status===0){
-          var base = "";
-          try{ base = getApiBase(); }catch(_e2){ base=""; }
-          toast("⚠️ 雲端連線失敗：可能是 CORS/網路/網址。請確認 API_BASE=" + (base||"") + "（伺服器需允許 CORS/OPTIONS）。");
-          return;
-        }
-        if(code==="ACCESS_DENY" || e.status===401 || e.status===403){
-          toast("⚠️ 雲端驗證未通過：請按「雲端檔案」完成 Access 登入，或在「雲端設定」貼 Service Token。");
-          return;
-        }
-        toast("雲端錯誤：" + (e.message ? e.message : String(e)));
-      };
-      CloudCtrl.prototype.apply = function(payload, info){
-        payload = payload || {};
-        var rdb = Array.isArray(payload.db) ? payload.db : [];
-        var rc = Number(payload.counter||0); if(!Number.isFinite(rc) || rc<0) rc=0;
-
-        var protectOnce = false;
-        try{ protectOnce = !sessionStorage.getItem(PROTECT_EMPTY_REMOTE_KEY); }catch(e){}
-        if(rdb.length===0 && db.length>0 && protectOnce){
-          var canWrite = Auth.canWrite ? Auth.canWrite() : (Auth.role && /^(admin|write)$/i.test(Auth.role()||""));
-          try{ sessionStorage.setItem(PROTECT_EMPTY_REMOTE_KEY, "1"); }catch(e){}
-          if(canWrite && !lastSyncAt){
-            toast("☁️ 雲端尚無資料：已用本機資料建立雲端（合併寫入）。");
-            cloudState = "ok";
-            lastSyncAt = Date.now();
-            renderHint();
-            var self = this;
-            setTimeout(function(){ try{ self.saveMerged(); }catch(e){} }, 0);
-            return;
-          }
-          toast("⚠️ 雲端回傳空資料：已先保護本機資料（避免誤覆蓋）。");
-          cloudState = "ok";
-          lastSyncAt = Date.now();
-          renderHint();
-          return;
-        }
-
-        db = rdb.map(normalizeRow).filter(Boolean);
-        counter = Math.max(counter, rc);
-        saveLocal();
-        lastSyncAt = Date.now();
-        cloudState = "ok";
-        renderAll();
-        if(info && info.merged) toast("雲端合併完成");
-      };
-      CloudCtrl.prototype.pullNow = function(){
-        var self = this;
-        return apiPull().then(function(resp){
-          cloudState="ok";
-          var u = unwrap(resp);
-          self.apply(u.payload, u.info||{});
-          return true;
-        }).catch(function(e){
-          if(e && (e.status===404 || e.code==="NOT_FOUND")){
-            cloudState = "ok";
-            lastSyncAt = Date.now();
-            renderHint();
-            var canWrite = Auth.canWrite ? Auth.canWrite() : (Auth.role && /^(admin|write)$/i.test(Auth.role()||""));
-            if(canWrite){
-              toast("☁️ 雲端尚未建立此資料：正在建立…");
-              return self.saveMerged().then(function(){ return true; });
-            }
-            toast("☁️ 雲端尚未建立資料（唯讀模式無法建立）。");
-            return false;
-          }
-          self._err(e); 
-          return false;
-        });
-      };
-      CloudCtrl.prototype.saveMerged = function(){
-        var self = this;
-        if(self._saving){ self._pending = true; return Promise.resolve(false); }
-        self._saving = true; self._pending = false;
-        var localPayload = { db: db, counter: counter };
-        return apiMerge(localPayload).then(function(resp){
-          var u = unwrap(resp);
-          self.apply(u.payload, Object.assign({ merged:true }, u.info||{}));
-          return true;
-        }).catch(function(e){ self._err(e); return false; })
-          .finally(function(){
-            self._saving = false;
-            if(self._pending){ self._pending=false; setTimeout(function(){ self.saveMerged(); }, 0); }
-          });
-      };
-      CloudCtrl.prototype.startWatch = function(sec){
-        var self=this;
-        sec = Number(sec||0); if(!Number.isFinite(sec) || sec<=0) sec = 10;
-        clearInterval(self._timer);
-        self._timer = setInterval(function(){ self.pullNow(); }, sec*1000);
-      };
-      CloudCtrl.prototype.destroy = function(){ clearInterval(this._timer); };
-
-          function pick(){
-      for(var i=0;i<arguments.length;i++){
-        var v = arguments[i];
-        if(v!==undefined && v!==null) return v;
-      }
-      return undefined;
-    }
-    function asStr(v){ return (v===undefined || v===null) ? "" : String(v); }
-
-    function normalizeRow(x){
-      if(!x || typeof x !== "object") return null;
-
-      var uid = norm(asStr(pick(x.uid, x._uid, x.pk, x.k, x.key, "")));
-      if(!uid) uid = uuid();
-
-      var idRaw = pick(x.id, x.no, x.idx, 0);
-      var id = Number(idRaw);
-      if(!Number.isFinite(id) || id<=0) id = null;
-
-      var text   = asStr(pick(x.text, x.content, x.note, ""));
-      var trade  = norm(asStr(pick(x.trade, x.kind, "")));
-      var system = norm(asStr(pick(x.system, x.sys, "")));
-      var source = norm(asStr(pick(x.source, x.origin, "")));
-      var attach = norm(asStr(pick(x.attach, x.attachment, x.link, "")));
-      var remark = asStr(pick(x.remark, x.note2, ""));
-      var date   = norm(asStr(pick(x.date, x.day, x.created, "")));
-
-      // normalize yyyy/mm/dd -> yyyy-mm-dd; ISO -> yyyy-mm-dd
-      if(date){
-        if(/^[0-9]{4}\/\/[0-9]{2}\/\/[0-9]{2}$/.test(date)) date = date.replace(/\//g,"-");
-        if(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T/.test(date)) date = date.slice(0,10);
-      }
-
-      return { uid:uid, k:uid, id:id, text:text, trade:trade, system:system, source:source, attach:attach, remark:remark, date:date };
-    }      function loadLocal(){
-        db = [];
-        counter = 0;
+        var res;
         try{
-          var raw = localStorage.getItem(DB_KEY);
-          var arr = safeJSON(raw);
-          if(Array.isArray(arr)) db = arr.map(normalizeRow).filter(Boolean);
-        }catch(e){}
-        try{
-          var c = Number(localStorage.getItem(COUNTER_KEY)||0);
-          if(Number.isFinite(c) && c>0) counter = c;
-        }catch(e){}
-        counter = Math.max(counter, maxId(db));
-        if(db.length>0){
-          saveLocal();
+          res = await fetch(url, { method:"PUT", headers: headers, body: JSON.stringify(body), cache:"no-store" });
+        }catch(err){
+          var e2 = new Error(err && err.message ? err.message : "Failed to fetch");
+          e2.status = 0; e2.code = "FETCH_FAIL";
+          throw e2;
         }
+
+        apiLastStatus = res.status || 0;
+        var txt = "";
+        try{ txt = await res.text(); }catch(e){ txt=""; }
+        var j = safeJSON(txt) || null;
+
+        if(!res.ok){
+          var msg = (j && (j.message || j.error)) ? (j.message || j.error) : ("HTTP " + res.status + " " + res.statusText);
+          var e3 = new Error(msg);
+          e3.status = res.status;
+          e3.body = (txt||"").slice(0,4000);
+          if(res.status===401 || res.status===403) e3.code = "ACCESS_DENY";
+          else if(res.status===409) e3.code = "CONFLICT";
+          else if(res.status===422) e3.code = "CONFLICT";
+          else e3.code = "API_FAIL";
+          throw e3;
+        }
+
+        return { ok:true, sha: (j && j.content && j.content.sha) ? j.content.sha : "", resp:j };
       }
-      function saveLocal(){
-        try{ localStorage.setItem(DB_KEY, JSON.stringify(db)); }catch(e){}
-        try{ localStorage.setItem(COUNTER_KEY, String(counter||0)); }catch(e){}
+
+      function unwrapPayload(p){
+        // accept: {items, counter} or legacy {db, counter} or legacy array
+        if(!p) return { items:[], counter:0, meta:{} };
+        if(Array.isArray(p)) return { items: p, counter: 0, meta:{} };
+        var items = [];
+        if(Array.isArray(p.items)) items = p.items;
+        else if(Array.isArray(p.db)) items = p.db;
+        var c = Number(p.counter||0); if(!Number.isFinite(c) || c<0) c = 0;
+        return { items: items, counter: c, meta: p };
       }
+
+      // ===== Data normalize (套用全站雲端同步標準 v1) =====
+      function pick(){
+        for(var i=0;i<arguments.length;i++){
+          var v = arguments[i];
+          if(v!==undefined && v!==null) return v;
+        }
+        return undefined;
+      }
+      function asStr(v){ return (v===undefined || v===null) ? "" : String(v); }
+
+      function normalizeRow(x){
+        if(!x || typeof x !== "object") return null;
+
+        var uid = norm(asStr(pick(x.uid, x.pk, x.k, x.key, x._uid, "")));
+        if(!uid) uid = uuid();
+
+        var idRaw = pick(x.id, x.no, x.idx, 0);
+        var id = Number(idRaw);
+        if(!Number.isFinite(id) || id<=0) id = null;
+
+        var text   = asStr(pick(x.text, x.content, x.note, ""));
+        var trade  = norm(asStr(pick(x.trade, x.kind, "")));
+        var system = norm(asStr(pick(x.system, x.sys, "")));
+        var source = norm(asStr(pick(x.source, x.origin, "")));
+        var attach = norm(asStr(pick(x.attach, x.attachment, x.link, "")));
+        var remark = asStr(pick(x.remark, x.note2, ""));
+        var date   = norm(asStr(pick(x.date, x.day, x.created, "")));
+
+        // normalize yyyy/mm/dd -> yyyy-mm-dd; ISO -> yyyy-mm-dd
+        if(date){
+          if(/^[0-9]{4}\/[0-9]{2}\/[0-9]{2}$/.test(date)) date = date.replace(/\//g,"-");
+          if(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T/.test(date)) date = date.slice(0,10);
+        }
+
+        // required sync fields
+        var updatedAt = Number(pick(x.updatedAt, x.updated_at, x.ts, 0));
+        if(!Number.isFinite(updatedAt) || updatedAt<=0) updatedAt = Date.now();
+        var rev = norm(asStr(pick(x.rev, x._rev, ""))) || newRev();
+        var deleted = !!pick(x.deleted, x._deleted, false);
+
+        return {
+          uid: uid, k: uid, // pk is uid
+          id: id,
+          text: text, trade: trade, system: system, source: source, attach: attach, remark: remark, date: date,
+          rev: rev, updatedAt: updatedAt, deleted: deleted
+        };
+      }
+
       function maxId(arr){
         var m=0;
         for(var i=0;i<(arr?arr.length:0);i++){
+          if(arr[i] && arr[i].deleted) continue;
           var id = Number(arr[i] && arr[i].id);
           if(Number.isFinite(id) && id>m) m=id;
         }
         return m;
+      }
+
+      function loadLocal(){
+        db = [];
+        counter = 0;
+        try{
+          var raw = localStorage.getItem(DB_KEY);
+          var j = safeJSON(raw);
+          if(Array.isArray(j)){
+            db = j.map(normalizeRow).filter(Boolean);
+          }else if(j && typeof j==="object"){
+            var u = unwrapPayload(j);
+            db = (u.items||[]).map(normalizeRow).filter(Boolean);
+            var cc = Number(u.counter||0);
+            if(Number.isFinite(cc) && cc>0) counter = cc;
+          }
+        }catch(e){}
+        try{
+          var c = Number(localStorage.getItem(COUNTER_KEY)||0);
+          if(Number.isFinite(c) && c>0) counter = Math.max(counter, c);
+        }catch(e){}
+        counter = Math.max(counter, maxId(db));
+        // ensure required fields exist
+        for(var i=0;i<db.length;i++){
+          if(!db[i].uid) db[i].uid = db[i].k = uuid();
+          if(!db[i].rev) db[i].rev = newRev();
+          if(!db[i].updatedAt) db[i].updatedAt = Date.now();
+          if(db[i].deleted===undefined) db[i].deleted = false;
+        }
+        saveLocal();
+      }
+
+      function saveLocal(){
+        // store object for future-proof
+        var payload = { pageKey: PAGE_KEY, updatedAt: Date.now(), counter: counter||0, items: db };
+        try{ localStorage.setItem(DB_KEY, JSON.stringify(payload)); }catch(e){}
+        try{ localStorage.setItem(COUNTER_KEY, String(counter||0)); }catch(e){}
       }
 
       function loadDict(key, fallback){
@@ -1455,6 +1330,7 @@
       function ensureDictFromDb(){
         var trades = [], systems = [], sources = [];
         for(var i=0;i<db.length;i++){
+          if(db[i].deleted) continue;
           if(db[i].trade) trades.push(db[i].trade);
           if(db[i].system) systems.push(db[i].system);
           if(db[i].source) sources.push(db[i].source);
@@ -1504,6 +1380,7 @@
       }
 
       function rowMatches(r){
+        if(r.deleted) return false;
         var qt = norm($("qText").value).toLowerCase();
         var ft = norm($("fTrade").value);
         var fs = norm($("fSys").value);
@@ -1529,7 +1406,7 @@
       }
 
       function renderFilters(){
-        var trades = uniqSorted(dictToList(tradeDict).concat(db.map(function(r){return r.trade;})));
+        var trades = uniqSorted(dictToList(tradeDict).concat(db.filter(function(r){return !r.deleted;}).map(function(r){return r.trade;})));
         var tradeSel = $("fTrade");
         var curT = tradeSel.value;
         tradeSel.innerHTML = '<option value="">全部</option>' + trades.map(function(t){ return '<option value="'+escHtml(t)+'">'+escHtml(t)+'</option>'; }).join("");
@@ -1540,7 +1417,7 @@
         if(curTrade && Array.isArray(tradeSysMap[curTrade]) && tradeSysMap[curTrade].length){
           sysList = tradeSysMap[curTrade].slice();
         }else{
-          sysList = uniqSorted(dictToList(sysDict).concat(db.map(function(r){return r.system;})));
+          sysList = uniqSorted(dictToList(sysDict).concat(db.filter(function(r){return !r.deleted;}).map(function(r){return r.system;})));
         }
         var sysSel = $("fSys");
         var curS = sysSel.value;
@@ -1665,7 +1542,7 @@
 
       function renderHint(){
         var rows = filteredRows();
-        var total = db.length;
+        var total = db.filter(function(r){ return !r.deleted; }).length;
         var shown = rows.length;
         var u = currentUser();
         var name = u && u.username ? u.username : "—";
@@ -1673,7 +1550,7 @@
 
         var cloudTxt = "離線";
         if(cloudState==="ok") cloudTxt = "OK";
-        if(cloudState==="deny") cloudTxt = "驗證未通過";
+        if(cloudState==="deny") cloudTxt = "無權限/未設定 Token";
         if(cloudState==="neterr") cloudTxt = "連線失敗";
         if(cloudState==="noapi") cloudTxt = "未設定";
         var syncTxt = lastSyncAt ? fmtClock(lastSyncAt) : "—";
@@ -1742,8 +1619,8 @@
 
       function renderModalSelects(curTrade, curSys, curSource){
         curTrade = norm(curTrade); curSys = norm(curSys); curSource = norm(curSource);
-        var trades = uniqSorted(dictToList(tradeDict).concat(db.map(function(r){return r.trade;})));
-        var sources = uniqSorted(dictToList(sourceDict).concat(db.map(function(r){return r.source;})));
+        var trades = uniqSorted(dictToList(tradeDict).concat(db.filter(function(r){return !r.deleted;}).map(function(r){return r.trade;})));
+        var sources = uniqSorted(dictToList(sourceDict).concat(db.filter(function(r){return !r.deleted;}).map(function(r){return r.source;})));
 
         var tSel = $("mTradeSel");
         tSel.innerHTML = trades.map(function(t){ return '<option value="'+escHtml(t)+'">'+escHtml(t)+'</option>'; }).join("");
@@ -1754,7 +1631,7 @@
         if(curTrade && Array.isArray(tradeSysMap[curTrade]) && tradeSysMap[curTrade].length){
           sysList = tradeSysMap[curTrade].slice();
         }else{
-          sysList = uniqSorted(dictToList(sysDict).concat(db.map(function(r){return r.system;})));
+          sysList = uniqSorted(dictToList(sysDict).concat(db.filter(function(r){return !r.deleted;}).map(function(r){return r.system;})));
         }
         var sSel = $("mSysSel");
         sSel.innerHTML = sysList.map(function(s){ return '<option value="'+escHtml(s)+'">'+escHtml(s)+'</option>'; }).join("");
@@ -1786,7 +1663,7 @@
           setModalEditable(true);
         }else{
           r = db.find(function(x){ return x.uid === uid; }) || null;
-          if(!r){ toast("找不到資料"); return; }
+          if(!r || r.deleted){ toast("找不到資料"); return; }
           editingUid = r.uid;
           $("mTitle").textContent = (mode==="edit") ? "編輯" : "查看";
           renderModalSelects(r.trade, r.system, r.source);
@@ -1821,20 +1698,22 @@
         saveDict(SOURCE_DICT_KEY, sourceDict);
         if(trade && system) bindSystemToTrade(trade, system);
 
+        var now = Date.now();
         if(editingUid==null){
           counter = Math.max(counter, maxId(db));
           var id = counter + 1;
           counter = id;
           var _uid = uuid();
-          var row = { uid:_uid, k:_uid, id:id, text:text, trade:trade, system:system, source:source, attach:attach, remark:remark, date:date };
+          var row = normalizeRow({ uid:_uid, id:id, text:text, trade:trade, system:system, source:source, attach:attach, remark:remark, date:date, updatedAt: now, rev: newRev(), deleted:false });
           db.push(row);
           selectedUid = row.uid;
         }else{
           var r = db.find(function(x){ return x.uid === editingUid; });
           if(!r){ toast("找不到資料"); return; }
-          r.k = r.k || r.uid || uuid();
-          r.uid = r.uid || r.k;
+          r.uid = r.uid || uuid();
+          r.k = r.uid;
           r.text = text; r.trade = trade; r.system = system; r.source = source; r.attach = attach; r.remark = remark; r.date = date;
+          r.updatedAt = now; r.rev = newRev(); r.deleted = false;
           selectedUid = r.uid;
         }
 
@@ -1855,13 +1734,17 @@
         if(editingUid==null){ toast("這筆尚未存在"); return; }
         if(!confirm("確定要刪除這筆資料嗎？")) return;
 
-        var idx = db.findIndex(function(x){ return x.uid === editingUid; });
-        if(idx<0){ toast("找不到資料"); return; }
+        var r = db.find(function(x){ return x.uid === editingUid; });
+        if(!r){ toast("找不到資料"); return; }
 
-        db.splice(idx,1);
+        // tombstone (deleted=true) to sync across devices
+        r.deleted = true;
+        r.updatedAt = Date.now();
+        r.rev = newRev();
+
         saveLocal();
         ensureDictFromDb();
-        selectedUid = db.length ? db[Math.max(0, Math.min(db.length-1, idx))].uid : null;
+        selectedUid = null;
         closeModal();
         renderAll();
         toast("已刪除");
@@ -1870,7 +1753,7 @@
       }
 
       function openPrompt(mode){
-        promptMode = mode; 
+        promptMode = mode;
         $("pMask").style.display = "flex";
         $("pInput").value = "";
         $("pInput").type = "text";
@@ -1913,7 +1796,7 @@
       }
 
       function exportBackup(){
-        var payload = { ts: Date.now(), page: PAGE_KEY, db: db, counter: counter };
+        var payload = { ts: Date.now(), page: PAGE_KEY, counter: counter, items: db };
         var blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json;charset=utf-8" });
         var a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
@@ -1924,94 +1807,330 @@
         toast("已匯出備份");
       }
 
-      function parseCloudCfgInput(raw){
-        raw = norm(raw);
-        if(!raw) return null;
-        var obj = safeJSON(raw);
-        if(obj && typeof obj==="object"){
+      function canWriteCloud(){
+        var canWrite = Auth.canWrite ? Auth.canWrite() : (Auth.role && /^(admin|write)$/i.test(Auth.role()||""));
+        return !!canWrite;
+      }
+
+      function chooseWinner(a, b){
+        // both normalized rows
+        if(!a) return b;
+        if(!b) return a;
+        var ta = Number(a.updatedAt||0), tb = Number(b.updatedAt||0);
+        if(ta !== tb) return (ta > tb) ? a : b;
+        var ra = String(a.rev||""), rb = String(b.rev||"");
+        return (ra >= rb) ? a : b;
+      }
+
+      function fixDuplicateIds(items){
+        // ensure display id uniqueness (best effort) across merged dataset
+        var used = new Set();
+        var max = 0;
+        for(var i=0;i<items.length;i++){
+          if(items[i] && !items[i].deleted){
+            var id = Number(items[i].id||0);
+            if(Number.isFinite(id) && id>max) max = id;
+          }
+        }
+        for(i=0;i<items.length;i++){
+          var r = items[i];
+          if(!r || r.deleted) continue;
+          var id2 = Number(r.id||0);
+          if(!Number.isFinite(id2) || id2<=0 || used.has(id2)){
+            max += 1;
+            r.id = max;
+            r.updatedAt = Date.now();
+            r.rev = newRev();
+          }
+          used.add(Number(r.id||0));
+        }
+        return max;
+      }
+
+      function mergeLocalRemote(localDb, localCounter, remoteDb, remoteCounter){
+        var map = Object.create(null);
+        for(var i=0;i<(remoteDb||[]).length;i++){
+          var r = normalizeRow(remoteDb[i]);
+          if(!r) continue;
+          map[r.uid] = r;
+        }
+        for(i=0;i<(localDb||[]).length;i++){
+          var l = normalizeRow(localDb[i]);
+          if(!l) continue;
+          map[l.uid] = chooseWinner(map[l.uid], l);
+        }
+        var merged = [];
+        for(var k in map){
+          if(Object.prototype.hasOwnProperty.call(map,k)) merged.push(map[k]);
+        }
+        // stable order by id then updatedAt then uid
+        merged.sort(function(a,b){
+          return (Number(a.id||0)-Number(b.id||0)) || (Number(a.updatedAt||0)-Number(b.updatedAt||0)) || String(a.uid||"").localeCompare(String(b.uid||""));
+        });
+        var c = Math.max(Number(localCounter||0), Number(remoteCounter||0), maxId(merged));
+        c = Math.max(c, fixDuplicateIds(merged));
+        c = Math.max(c, maxId(merged));
+        return { db: merged, counter: c };
+      }
+
+      function CloudCtrl(){
+        this._timer = 0;
+        this._saving = false;
+        this._pending = false;
+        this._lastErrCode = "";
+        this._lastErrAt = 0;
+        this._lastSha = "";
+      }
+      CloudCtrl.prototype._err = function(e){
+        if(!e) return;
+
+        var code = (e.code||"");
+        if(code==="NO_GITHUB_CFG"){ cloudState="noapi"; }
+        else if(code==="FETCH_FAIL" || e.status===0){ cloudState="neterr"; }
+        else if(code==="ACCESS_DENY" || e.status===401 || e.status===403){ cloudState="deny"; }
+        else { cloudState="neterr"; }
+
+        try{ renderHint(); }catch(_e){}
+
+        // prevent spam toasts (12s same error)
+        var now = Date.now();
+        if(code && code===this._lastErrCode && (now - this._lastErrAt) < 12000){
+          return;
+        }
+        this._lastErrCode = code;
+        this._lastErrAt = now;
+
+        if(code==="NO_GITHUB_CFG"){
+          toast("⚠️ 尚未設定 GitHub 檔案位置：請按右上「雲端設定」。");
+          return;
+        }
+        if(code==="FETCH_FAIL" || e.status===0){
+          toast("⚠️ 雲端連線失敗：請確認網路，或 GitHub 是否可連線。");
+          return;
+        }
+        if(code==="ACCESS_DENY" || e.status===401 || e.status===403){
+          toast("⚠️ 無法寫入：需要 GitHub token（或 repo 私有）。請到「雲端設定」貼 token。");
+          return;
+        }
+        if(code==="CONFLICT"){
+          toast("⚠️ 雲端衝突：已自動重試合併…");
+          return;
+        }
+        toast("雲端錯誤：" + (e.message ? e.message : String(e)));
+      };
+
+      CloudCtrl.prototype.apply = function(remotePayload){
+        // remotePayload can be null (empty file) -> treat as empty
+        var u = unwrapPayload(remotePayload || {});
+        var remoteDb = (u.items||[]).map(normalizeRow).filter(Boolean);
+        var remoteCounter = Number(u.counter||0); if(!Number.isFinite(remoteCounter) || remoteCounter<0) remoteCounter = 0;
+
+        // protect against empty remote overriding local (once per session)
+        var protectOnce = false;
+        try{ protectOnce = !sessionStorage.getItem(PROTECT_EMPTY_REMOTE_KEY); }catch(e){}
+        if(remoteDb.length===0 && db.filter(function(r){return !r.deleted;}).length>0 && protectOnce){
+          try{ sessionStorage.setItem(PROTECT_EMPTY_REMOTE_KEY, "1"); }catch(e){}
+          if(canWriteCloud() && this.hasToken()){
+            toast("☁️ 雲端尚無資料：已用本機資料建立雲端（合併寫入）。");
+            cloudState = "ok";
+            lastSyncAt = Date.now();
+            renderHint();
+            var self = this;
+            setTimeout(function(){ try{ self.saveMerged(); }catch(e){} }, 0);
+            return;
+          }
+          toast("⚠️ 雲端回傳空資料：已先保護本機資料（避免誤覆蓋）。");
+          cloudState = "ok";
+          lastSyncAt = Date.now();
+          renderHint();
+          return;
+        }
+
+        var merged = mergeLocalRemote(db, counter, remoteDb, remoteCounter);
+        db = merged.db;
+        counter = merged.counter;
+
+        saveLocal();
+        ensureDictFromDb();
+        lastSyncAt = Date.now();
+        cloudState = "ok";
+        renderAll();
+      };
+
+      CloudCtrl.prototype.hasToken = function(){
+        var cfg = cleanGhCfg(getGhCfgRaw());
+        return !!(cfg && cfg.token);
+      };
+
+      CloudCtrl.prototype.pullNow = function(){
+        var self = this;
+        return ghPull().then(function(r){
+          cloudState="ok";
+          self._lastSha = r.sha || self._lastSha || "";
+          self.apply(r.payload);
+          return true;
+        }).catch(function(e){
+          if(e && e.code==="NOT_FOUND"){
+            // file missing
+            cloudState = "ok";
+            lastSyncAt = Date.now();
+            renderHint();
+            if(canWriteCloud() && self.hasToken()){
+              toast("☁️ 雲端尚未建立此資料：正在建立…");
+              return self.saveMerged().then(function(){ return true; });
+            }
+            toast("☁️ 雲端尚未建立資料（或無權限）。");
+            return false;
+          }
+          self._err(e);
+          return false;
+        });
+      };
+
+      CloudCtrl.prototype.saveMerged = function(){
+        var self = this;
+        if(!canWriteCloud()){
+          cloudState = "deny";
+          renderHint();
+          return Promise.resolve(false);
+        }
+        if(!self.hasToken()){
+          cloudState = "deny";
+          renderHint();
+          toast("⚠️ 沒有 GitHub token：只能讀取，不能上傳。");
+          return Promise.resolve(false);
+        }
+
+        if(self._saving){ self._pending = true; return Promise.resolve(false); }
+        self._saving = true; self._pending = false;
+
+        var attempt = 0;
+        var maxTry = 3;
+
+        function pack(){
           return {
-            apiBase: norm(obj.apiBase || obj.base || obj.url || ""),
-            clientId: norm(obj.clientId || obj.id || obj.client_id || ""),
-            clientSecret: norm(obj.clientSecret || obj.secret || obj.client_secret || "")
+            pageKey: PAGE_KEY,
+            updatedAt: Date.now(),
+            counter: counter||0,
+            items: db
           };
         }
-        var apiBase = "";
-        var m = raw.match(/https?:\/\/[^\s|,;]+/i);
-        if(m) apiBase = norm(m[0]);
-        var parts = raw
-          .replace(/[①-⑩]/g," ")
-          .replace(/[①②③④⑤⑥⑦⑧⑨]/g," ")
-          .replace(/(API_BASE|CLIENT_ID|CLIENT_SECRET)/gi," ")
-          .replace(/(CF-Access-Client-Id|CF-Access-Client-Secret)/gi," ")
-          .replace(/[=：:]/g," ")
-          .replace(/\s+/g," ")
-          .trim()
-          .split(/[\s|,;]+/).map(norm).filter(Boolean);
-        if(!apiBase){
-          for(var i=0;i<parts.length;i++){
-            if(/^https?:\/\//i.test(parts[i])){ apiBase = parts[i]; parts.splice(i,1); break; }
-          }
-        }else{
-          for(var j=0;j<parts.length;j++){
-            if(parts[j]===apiBase){ parts.splice(j,1); break; }
-          }
+
+        function doOnce(){
+          attempt++;
+          // always pull latest before push to avoid overwriting
+          return ghPull().then(function(r){
+            self._lastSha = r.sha || self._lastSha || "";
+            var u = unwrapPayload(r.payload || {});
+            var remoteDb = (u.items||[]).map(normalizeRow).filter(Boolean);
+            var remoteCounter = Number(u.counter||0); if(!Number.isFinite(remoteCounter) || remoteCounter<0) remoteCounter = 0;
+
+            var merged = mergeLocalRemote(db, counter, remoteDb, remoteCounter);
+            db = merged.db;
+            counter = merged.counter;
+
+            var payload = pack();
+            return ghPut(payload, self._lastSha).then(function(w){
+              self._lastSha = w.sha || self._lastSha || "";
+              lastSyncAt = Date.now();
+              cloudState = "ok";
+              saveLocal();
+              ensureDictFromDb();
+              renderAll();
+              toast("☁️ 已上傳同步");
+              return true;
+            });
+          }).catch(function(e){
+            if(e && e.code==="CONFLICT" && attempt < maxTry){
+              self._err(e);
+              return doOnce();
+            }
+            self._err(e);
+            return false;
+          });
         }
-        return { apiBase: apiBase, clientId: parts[0]||"", clientSecret: parts[1]||"" };
+
+        return doOnce().finally(function(){
+          self._saving = false;
+          if(self._pending){ self._pending=false; setTimeout(function(){ self.saveMerged(); }, 0); }
+        });
+      };
+
+      CloudCtrl.prototype.startWatch = function(sec){
+        var self=this;
+        sec = Number(sec||0); if(!Number.isFinite(sec) || sec<=0) sec = 20; // GitHub friendly
+        clearInterval(self._timer);
+        self._timer = setInterval(function(){ self.pullNow(); }, sec*1000);
+      };
+      CloudCtrl.prototype.destroy = function(){ clearInterval(this._timer); };
+
+      function setModalCloudHint(){
+        var cfg = cleanGhCfg(getGhCfgRaw());
+        var base = ghReady(cfg) ? (cfg.owner+"/"+cfg.repo+" @ "+cfg.branch+" : "+cfg.path) : "未設定";
+        $("tokenHint").textContent = "目前狀態：" + base + "，Token=" + (cfg.token ? "已設定" : "未設定");
       }
 
       function openTokenMask(){
         if(!(Auth.isAdmin && Auth.isAdmin())){ toast("僅 admin 可設定雲端"); return; }
         $("tokenMask").style.display = "flex";
-        var base = getApiBase();
-        $("tokenHint").textContent = "目前狀態：API_BASE=" + (base ? base : "未設定") + "，Service Token=" + (hasAccessToken() ? "已設定" : "未設定");
         $("tokenErr").style.display = "none";
         $("tokenErr").textContent = "";
         $("tokenInput").value = "";
+        setModalCloudHint();
         setTimeout(function(){ $("tokenInput").focus(); }, 0);
       }
       function closeTokenMask(){ $("tokenMask").style.display = "none"; }
+
       function saveTokenMask(){
-        var cfg = parseCloudCfgInput($("tokenInput").value);
+        var cfg = parseGitHubCfgInput($("tokenInput").value);
         if(!cfg){ toast("請貼上內容"); return; }
-        if(cfg.apiBase && /^https?:\/\//i.test(cfg.apiBase)) setApiBase(cfg.apiBase);
-        if(cfg.clientId && cfg.clientSecret){
-          setAccessToken({ clientId: cfg.clientId, clientSecret: cfg.clientSecret });
-        }
+        // merge into existing (keep previous token if input doesn't include)
+        var cur = cleanGhCfg(getGhCfgRaw());
+        var next = cleanGhCfg({
+          owner: cfg.owner || cur.owner,
+          repo: cfg.repo || cur.repo,
+          branch: cfg.branch || cur.branch || "main",
+          path: cfg.path || cur.path,
+          token: cfg.token || cur.token
+        });
+        setGhCfg(next);
         toast("已儲存雲端設定");
         closeTokenMask();
         startCloud(true);
       }
+
       function clearTokenMask(){
-        if(!confirm("確定要清除雲端設定（API_BASE / Service Token）？")) return;
-        setApiBase("");
-        setAccessToken(null);
+        if(!confirm("確定要清除雲端設定（GitHub 檔案位置 / Token）？")) return;
+        setGhCfg(clone(DEFAULT_GH));
         toast("已清除");
         closeTokenMask();
         cloudState = "offline";
         renderHint();
       }
+
       function toggleTokenInput(){
         var el = $("tokenInput");
         el.type = (el.type==="password") ? "text" : "password";
       }
 
       async function openCloudPortal(){
-        await ensureApiBaseReady();
-        var u = portalUrl();
-        if(!u || u===D1_PING_PATH){ toast("尚未設定 API_BASE"); return; }
-        window.open(u, "_blank", "noopener");
+        var cfg = await ensureGhCfgReady();
+        cfg = cleanGhCfg(cfg);
+        if(!ghReady(cfg)){ toast("尚未設定 GitHub 檔案位置"); return; }
+        window.open(ghBlobUrl(cfg), "_blank", "noopener");
       }
 
       function startCloud(forceNow){
         if(!cloud) cloud = new CloudCtrl();
         (async function(){
-          var base = await ensureApiBaseReady();
-          if(!base){
+          var cfg = await ensureGhCfgReady();
+          cfg = cleanGhCfg(cfg);
+          if(!ghReady(cfg)){
             cloudState = "noapi";
             renderHint();
             return;
           }
-          cloud.startWatch(10);
+          cloud.startWatch(20);
           if(forceNow) cloud.pullNow();
         })();
       }
@@ -2034,25 +2153,6 @@
       function wireEvents(){
         $("navBack").addEventListener("click", function(){ location.href = withV("汐東工程管理表.html"); });
         $("mBack").addEventListener("click", function(){ location.href = withV("汐東工程管理表.html"); });
-        $("mMoreBtn").addEventListener("click", function(){
-          var m = $("mMoreMenu");
-          m.style.display = (m.style.display==="none" || !m.style.display) ? "block" : "none";
-        });
-        document.addEventListener("click", function(ev){
-          var menu = $("mMoreMenu");
-          var btn = $("mMoreBtn");
-          if(!menu || menu.style.display!=="block") return;
-          if(ev.target===btn || btn.contains(ev.target)) return;
-          if(menu.contains(ev.target)) return;
-          menu.style.display = "none";
-        });
-        var items = document.querySelectorAll(".menuItem[data-href]");
-        for(var i=0;i<items.length;i++){
-          items[i].addEventListener("click", function(){
-            var href = this.getAttribute("data-href");
-            if(href) location.href = withV(href);
-          });
-        }
 
         $("btnAdd").addEventListener("click", function(){ openModal("add"); });
         $("btnEdit").addEventListener("click", function(){
@@ -2107,7 +2207,7 @@
         $("tokenSave").addEventListener("click", saveTokenMask);
         $("tokenClear").addEventListener("click", clearTokenMask);
         $("tokenToggle").addEventListener("click", toggleTokenInput);
-        $("tokenNetDisk").addEventListener("click", function(){ window.open(CLOUD_NETDISK_URL, "_blank", "noopener"); });
+        $("tokenNetDisk").addEventListener("click", function(){ window.open(GITHUB_HELP_URL, "_blank", "noopener"); });
 
         $("mTradeSel").addEventListener("change", function(){
           var trade = norm($("mTradeSel").value);
