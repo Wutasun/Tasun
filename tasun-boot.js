@@ -1,285 +1,302 @@
-/* tasun-boot.js (Tasun Boot) - Cloud Sync STANDARD v1 */
+/* tasun-boot.js (Tasun Boot) [Cloud Auto-Mount v1] */
 (function (window, document) {
   "use strict";
 
   var Boot = window.TasunBoot || {};
   var READY = false;
   var READY_Q = [];
+
   var CLOUD_READY = false;
-  var CLOUD_Q = [];
-  var CLOUD_CTRL = null;
+  var CLOUD_READY_Q = [];
+  var _cloudCtrl = null;
+  var _autosaveTimer = null;
 
-  function str(v) { return (v === undefined || v === null) ? "" : String(v); }
+  function str(v){ return (v===undefined||v===null) ? "" : String(v); }
 
-  function onReady(cb) {
-    if (typeof cb !== "function") return;
-    if (READY) { try { cb(window.TasunCore); } catch (e) {} return; }
+  function onReady(cb){
+    if(typeof cb !== "function") return;
+    if(READY) { try{ cb(window.TasunCore); }catch(e){} return; }
     READY_Q.push(cb);
+  }
+  function flushReady(){
+    READY = true;
+    var q = READY_Q.slice();
+    READY_Q.length = 0;
+    for(var i=0;i<q.length;i++){
+      try{ q[i](window.TasunCore); }catch(e){}
+    }
   }
 
   function onCloudReady(cb){
     if(typeof cb !== "function") return;
-    if(CLOUD_READY) { try{ cb(CLOUD_CTRL); }catch(e){} return; }
-    CLOUD_Q.push(cb);
+    if(CLOUD_READY) { try{ cb(_cloudCtrl); }catch(e){} return; }
+    CLOUD_READY_Q.push(cb);
   }
-
-  function flushReady() {
-    READY = true;
-    var q = READY_Q.slice();
-    READY_Q.length = 0;
-    for (var i = 0; i < q.length; i++) {
-      try { q[i](window.TasunCore); } catch (e) {}
-    }
-  }
-
   function flushCloudReady(){
     CLOUD_READY = true;
-    var q = CLOUD_Q.slice();
-    CLOUD_Q.length = 0;
+    var q = CLOUD_READY_Q.slice();
+    CLOUD_READY_Q.length = 0;
     for(var i=0;i<q.length;i++){
-      try{ q[i](CLOUD_CTRL); }catch(e){}
+      try{ q[i](_cloudCtrl); }catch(e){}
     }
   }
 
-  function loadScript(src, cb) {
+  function loadScript(src, cb){
     var s = document.createElement("script");
     s.src = src;
     s.async = false;
-    s.onload = function () { try { cb && cb(null); } catch (e) {} };
-    s.onerror = function () { try { cb && cb(new Error("load failed: " + src)); } catch (e) {} };
+    s.onload = function(){ try{ cb && cb(); }catch(e){} };
+    s.onerror = function(){ try{ cb && cb(new Error("load failed")); }catch(e){} };
     document.head.appendChild(s);
   }
 
-  function safeJSONParse(text) {
-    if (!text) return null;
-    try { return JSON.parse(text); } catch (e) { return null; }
-  }
-
-  function fetchTextNoStore(url, cb) {
-    try {
-      var u = url + (url.indexOf("?") >= 0 ? "&" : "?") + "ts=" + Date.now();
+  function fetchJsonNoStore(url, cb){
+    try{
+      var u = url + (url.indexOf("?")>=0 ? "&" : "?") + "ts=" + Date.now();
       fetch(u, { cache: "no-store" })
-        .then(function (r) { return r.text(); })
-        .then(function (t) { cb(null, t); })
-        .catch(function (e) { cb(e, ""); });
-    } catch (e2) {
-      cb(e2, "");
+        .then(function(r){ return r.json(); })
+        .then(function(j){ cb(null, j); })
+        .catch(function(e){ cb(e, null); });
+    }catch(e){
+      cb(e, null);
     }
   }
 
-  // ===== STANDARD v1: pageKey resolve =====
-  function metaContent(name) {
-    try {
-      var el = document.querySelector('meta[name="' + name + '"]');
-      return el ? str(el.getAttribute("content") || "").trim() : "";
-    } catch (e) { return ""; }
+  // 推導 pageKey = 檔名（含 .html）
+  function inferPageKey(){
+    var k = "";
+    try{
+      if(window.TASUN_PAGE_KEY) k = str(window.TASUN_PAGE_KEY).trim();
+      if(!k){
+        var p = str(location.pathname || "");
+        if(p.indexOf("/") >= 0) p = p.split("/").pop();
+        k = p;
+      }
+      k = str(k || "").split("?")[0].split("#")[0];
+      try{ k = decodeURIComponent(k); }catch(e){}
+    }catch(e2){}
+    if(!k) k = "index.html";
+    return k;
   }
 
-  function fileName() {
-    try {
-      var p = new URL(location.href).pathname || "";
-      var seg = p.split("/");
-      var f = seg[seg.length - 1] || "index.html";
-      return f;
-    } catch (e) {
-      return "index.html";
-    }
-  }
-
-  function resolvePageKey(opts) {
-    opts = opts || {};
-    return str(
-      opts.pageKey ||
-      opts.resourceKey ||
-      window.TASUN_PAGE_KEY ||
-      metaContent("tasun:pageKey") ||
-      fileName()
-    ).trim();
-  }
-
-  // ===== STANDARD v1: version read =====
-  function readVerFromVersionJsonText(t) {
-    var j = safeJSONParse(t);
-    if (j && typeof j === "object") {
-      var v = str(j.ver || j.version || j.appVer || j.APP_VER || "").trim();
-      if (v) return v;
-    }
-    try {
-      var m = String(t || "").match(/"ver"\s*:\s*"([^"]+)"/i) || String(t || "").match(/"version"\s*:\s*"([^"]+)"/i);
-      if (m && m[1]) return str(m[1]).trim();
-    } catch (e) {}
-    return "";
-  }
-
-  // ===== STANDARD v1: global scope url lock =====
-  function forceUrlV(ver, pageKey) {
-    try {
+  // 強制 URL v=ver（比 TasunCore.init 更早）
+  function forceUrlV(ver, pageKey){
+    try{
       var v = str(ver).trim();
-      if (!v) return false;
+      if(!v) return false;
 
       var u = new URL(location.href);
-      var cur = str(u.searchParams.get("v") || "").trim();
-
-      var guard = "tasun_boot_force_v1_global_" + (pageKey || "p") + "_" + (cur || "none") + "_to_" + v;
+      var cur = str(u.searchParams.get("v")||"").trim();
+      var guard = "tasun_boot_force_" + (pageKey||"p") + "_" + (cur||"none") + "_to_" + v;
 
       var already = false;
-      try { already = (sessionStorage.getItem(guard) === "1"); } catch (e2) { already = false; }
+      try{ already = (sessionStorage.getItem(guard)==="1"); }catch(e){ already=false; }
 
-      if (cur !== v && !already) {
-        try { sessionStorage.setItem(guard, "1"); } catch (e3) {}
+      if(cur !== v && !already){
+        try{ sessionStorage.setItem(guard,"1"); }catch(e){}
         u.searchParams.set("v", v);
         location.replace(u.toString());
         return true;
       }
-    } catch (e4) {}
+    }catch(e){}
     return false;
   }
 
-  function loadCloudKit(ver, cloudPath, cb){
-    cloudPath = str(cloudPath || "tasun-cloud-kit.js").trim();
-    var src = cloudPath + (cloudPath.indexOf("?") >= 0 ? "&" : "?") + "v=" + encodeURIComponent(ver);
-    if(window.TasunCloudKit && typeof window.TasunCloudKit.mount === "function") return cb && cb(null);
-    loadScript(src, cb);
-  }
-
-  function getAuthUserRole(){
+  function canWriteByCore(){
     try{
       var C = window.TasunCore;
-      if(C && C.Auth){
-        var u = C.Auth.current && C.Auth.current();
-        var role = C.Auth.role && C.Auth.role();
-        return { user: (u && (u.username || u.user)) ? String(u.username || u.user) : "", role: String(role || "") };
+      if(C && C.Auth && typeof C.Auth.canWrite === "function") return !!C.Auth.canWrite();
+    }catch(e){}
+    return false;
+  }
+
+  function getUserByCore(){
+    try{
+      var C = window.TasunCore;
+      if(C && C.Auth && typeof C.Auth.current === "function"){
+        var u = C.Auth.current() || {};
+        return str(u.username || u.user || "");
       }
     }catch(e){}
-    return { user:"", role:"" };
+    return "";
   }
 
-  function maybeAutoMountCloud(ver, pageKey, opts){
-    opts = opts || {};
-    if(opts.cloud === false) return;
+  function getRoleByCore(){
+    try{
+      var C = window.TasunCore;
+      if(C && C.Auth && typeof C.Auth.role === "function") return str(C.Auth.role() || "");
+    }catch(e){}
+    return "";
+  }
 
-    var hooks = window.TASUN_CLOUD_HOOKS || opts.cloudHooks || null;
-    if(!hooks || typeof hooks !== "object") return;
+  function stopAutosave(){
+    if(_autosaveTimer){
+      try{ clearInterval(_autosaveTimer); }catch(e){}
+      _autosaveTimer = null;
+    }
+  }
 
-    // 必須至少提供 getLocal/apply
-    if(typeof hooks.getLocal !== "function" || typeof hooks.apply !== "function") return;
+  function startAutosave(sec){
+    stopAutosave();
+    sec = Number(sec || 0);
+    if(!isFinite(sec) || sec <= 0) return;
 
-    var cloudPath = str((opts.cloud && opts.cloud.path) || opts.cloudPath || "tasun-cloud-kit.js").trim();
-    var resourcesUrl = str((opts.cloud && opts.cloud.resourcesUrl) || opts.resourcesUrl || "tasun-resources.json").trim();
+    _autosaveTimer = setInterval(function(){
+      if(!_cloudCtrl || !_cloudCtrl.saveMerged) return;
+      if(document.hidden) return;
+      if(!canWriteByCore()) return;
+      try{ _cloudCtrl.saveMerged({ reason: "autosave" }); }catch(e){}
+    }, Math.max(3000, sec * 1000));
 
-    loadCloudKit(ver, cloudPath, function(){
-      try{
-        if(!window.TasunCloudKit || typeof window.TasunCloudKit.mount !== "function") return;
-
-        // init（可關掉 CloudKit 浮動 UI：opts.cloud.ui.enabled=false）
-        var uiCfg = (opts.cloud && opts.cloud.ui) ? opts.cloud.ui : undefined;
-        window.TasunCloudKit.init({ appVer: ver, resourcesUrl: resourcesUrl, ui: uiCfg });
-
-        // mount cfg：resourceKey 預設用 pageKey（=檔名）→ 每頁獨立資料表最穩
-        var ar = getAuthUserRole();
-        var cfg = {};
-        for(var k in hooks) if(Object.prototype.hasOwnProperty.call(hooks,k)) cfg[k] = hooks[k];
-
-        if(!cfg.resourceKey) cfg.resourceKey = pageKey;
-        if(cfg.resourcesUrl === undefined) cfg.resourcesUrl = resourcesUrl;
-
-        // 避免 read 使用者 seed 空雲端
-        if(typeof cfg.canSeed !== "function"){
-          cfg.canSeed = function(){ return !!(window.TasunCore && window.TasunCore.Auth && window.TasunCore.Auth.canWrite && window.TasunCore.Auth.canWrite()); };
+    // 退到背景也做一次（盡量不漏）
+    document.addEventListener("visibilitychange", function(){
+      if(document.hidden){
+        if(_cloudCtrl && _cloudCtrl.saveMerged && canWriteByCore()){
+          try{ _cloudCtrl.saveMerged({ reason: "visibility-hidden" }); }catch(e){}
         }
-
-        // meta user/role（一次性讀取，夠用；要更動可在你頁面 hooks 自己塞）
-        if(cfg.user === undefined) cfg.user = ar.user || "";
-        if(cfg.role === undefined) cfg.role = ar.role || "";
-
-        // watch（只 pull，不會自動寫；寫入由你頁面呼叫 ctrl.saveMerged()）
-        if(cfg.watch === undefined) cfg.watch = { intervalSec: 15 };
-
-        CLOUD_CTRL = window.TasunCloudKit.mount(cfg);
-        window.__TASUN_CLOUD_CTRL = CLOUD_CTRL; // 給頁面/console 用
-        flushCloudReady();
-      }catch(e){}
-    });
+      }
+    }, { passive:true });
   }
 
-  Boot.start = function (opts) {
+  function mountCloud(ver, pageKey, opts){
     opts = opts || {};
+    if(opts.cloud === false) { flushCloudReady(); return; }
 
-    var pageKey = resolvePageKey(opts);
-    if (pageKey) window.TASUN_PAGE_KEY = pageKey;
+    var cloudPath = str(opts.cloudPath || "tasun-cloud-kit.js").trim();
+    var resourcesUrl = str(opts.resourcesUrl || "tasun-resources.json").trim();
 
-    var verUrl = str(opts.verUrl || "tasun-version.json").trim();
-    var corePath = str(opts.corePath || "tasun-core.js").trim();
+    var cloudSrc = cloudPath + (cloudPath.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(ver);
 
-    fetchTextNoStore(verUrl, function (err, text) {
-      var ver = "";
-      if (!err) ver = readVerFromVersionJsonText(text);
-
-      if (!ver) {
-        try {
-          var u = new URL(location.href);
-          ver = str(u.searchParams.get("v") || "").trim();
-        } catch (e) {}
-      }
-      if (!ver) ver = str(window.TASUN_APP_VER || "").trim();
-      if (!ver) ver = String(Date.now());
-
-      window.TASUN_APP_VER = ver;
-      window.__CACHE_V = ver;
-
-      if (opts.forceUrlV !== false) {
-        if (forceUrlV(ver, pageKey)) return;
-      }
-
-      var coreSrc = corePath + (corePath.indexOf("?") >= 0 ? "&" : "?") + "v=" + encodeURIComponent(ver);
-
-      function afterCore(){
-        // ✅ core ready event queue
-        flushReady();
-
-        // ✅ CloudKit auto mount (if hooks provided)
-        maybeAutoMountCloud(ver, pageKey, opts);
-      }
-
-      if (window.TasunCore && typeof window.TasunCore.init === "function") {
-        try {
-          window.TasunCore.init({
-            pageKey: pageKey,
-            appVer: ver,
-            forceUrlV: true,
-            forceVersionSync: true,
-            networkToast: (opts.networkToast !== false),
-            patchResources: (opts.patchResources !== false),
-            appHeightVar: (opts.appHeightVar !== false)
-          });
-        } catch (e2) {}
-        afterCore();
+    function doMount(){
+      if(!window.TasunCloudKit || typeof window.TasunCloudKit.mount !== "function"){
+        flushCloudReady();
         return;
       }
 
-      loadScript(coreSrc, function () {
-        if (window.TasunCore && typeof window.TasunCore.init === "function") {
-          try {
+      // 每頁只需要提供 window.TASUN_CLOUD hooks（不改 UI）
+      var hooks = window.TASUN_CLOUD || (window.TASUN_PAGE && window.TASUN_PAGE.cloud) || null;
+
+      if(!hooks || typeof hooks !== "object"){
+        // 沒提供 hooks 就不 mount（避免誤寫空資料）
+        flushCloudReady();
+        return;
+      }
+
+      try{
+        window.TasunCloudKit.init({
+          appVer: ver,
+          resourcesUrl: resourcesUrl,
+          ui: (opts.cloudUi && typeof opts.cloudUi === "object") ? opts.cloudUi : undefined
+        });
+      }catch(e0){}
+
+      var rk = str(hooks.resourceKey || pageKey).trim();
+
+      _cloudCtrl = window.TasunCloudKit.mount({
+        resourcesUrl: resourcesUrl,
+        resourceKey: rk,
+
+        // 角色/使用者 meta（預設走 Core.Auth）
+        user: (typeof hooks.user === "function") ? hooks.user : function(){ return getUserByCore(); },
+        role: (typeof hooks.role === "function") ? hooks.role : function(){ return getRoleByCore(); },
+
+        // 由頁面提供（保持 UI/DOM/CSS 不變）
+        getLocal: hooks.getLocal,
+        apply: hooks.apply,
+
+        watch: (hooks.watch && typeof hooks.watch === "object") ? hooks.watch : { intervalSec: 0 },
+        protectEmptyRemote: (hooks.protectEmptyRemote !== undefined) ? !!hooks.protectEmptyRemote : true,
+        canSeed: (typeof hooks.canSeed === "function") ? hooks.canSeed : function(){ return canWriteByCore(); }
+      });
+
+      // autosave（只對 write/admin 推）
+      try{
+        var as = hooks.watch && hooks.watch.autoSaveSec ? Number(hooks.watch.autoSaveSec) : 0;
+        if(isFinite(as) && as > 0) startAutosave(as);
+      }catch(e1){}
+
+      flushCloudReady();
+    }
+
+    // 已載入就直接 mount
+    if(window.TasunCloudKit && typeof window.TasunCloudKit.mount === "function"){
+      doMount();
+      return;
+    }
+
+    loadScript(cloudSrc, function(){
+      doMount();
+    });
+  }
+
+  Boot.start = function(opts){
+    opts = opts || {};
+    var pageKey = str(opts.pageKey||"").trim() || inferPageKey();
+
+    var verUrl   = str(opts.verUrl || "tasun-version.json").trim();
+    var corePath = str(opts.corePath || "tasun-core.js").trim();
+
+    fetchJsonNoStore(verUrl, function(err, json){
+      var ver = "";
+      if(!err && json && typeof json === "object"){
+        ver = str(json.ver || json.version || "").trim();
+      }
+
+      if(!ver){
+        try{
+          var u = new URL(location.href);
+          ver = str(u.searchParams.get("v")||"").trim();
+        }catch(e){}
+      }
+      if(!ver) ver = str(window.TASUN_APP_VER||"").trim();
+      if(!ver) ver = String(Date.now());
+
+      window.TASUN_APP_VER = ver;
+
+      if(opts.forceUrlV !== false){
+        if(forceUrlV(ver, pageKey)) return;
+      }
+
+      var coreSrc = corePath + (corePath.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(ver);
+
+      function initCoreAndGo(){
+        if(window.TasunCore && typeof window.TasunCore.init === "function"){
+          try{
             window.TasunCore.init({
               pageKey: pageKey,
-              appVer: ver,
               forceUrlV: true,
               forceVersionSync: true,
               networkToast: (opts.networkToast !== false),
               patchResources: (opts.patchResources !== false),
               appHeightVar: (opts.appHeightVar !== false)
             });
-          } catch (e3) {}
+          }catch(e){}
         }
-        afterCore();
+        flushReady();
+
+        // ✅ cloud auto mount
+        mountCloud(ver, pageKey, opts);
+      }
+
+      if(window.TasunCore && typeof window.TasunCore.init === "function"){
+        initCoreAndGo();
+        return;
+      }
+
+      loadScript(coreSrc, function(){
+        initCoreAndGo();
       });
     });
   };
 
   Boot.onReady = onReady;
   Boot.onCloudReady = onCloudReady;
-  Boot.resolvePageKey = resolvePageKey;
-  Boot.cloudCtrl = function(){ return CLOUD_CTRL; };
+
+  // 讓頁面可手動呼叫
+  Boot.cloudCtrl = function(){ return _cloudCtrl; };
+  Boot.getPageKey = function(){ return inferPageKey(); };
+  Boot.stopAutosave = stopAutosave;
 
   window.TasunBoot = Boot;
+
 })(window, document);
