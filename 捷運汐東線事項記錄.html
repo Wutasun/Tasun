@@ -1,3 +1,4 @@
+<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
@@ -972,9 +973,23 @@
           var url = (typeof withV==="function") ? withV(RESOURCES_URL) : RESOURCES_URL;
           var r = await fetch(url, { cache:"no-store" });
           if(r && r.ok){
-            var j = await r.json();
-            var picked = pickFromResources(j);
-            if(picked){
+            var j = null;
+            try{
+              var txt = await r.text();
+              txt = (txt||"").replace(/^\uFEFF/, "").trim();
+              // 允許舊檔意外被包在註解裡：嘗試直接 JSON、去註解後 JSON、以及抓出第一段 { ... } JSON
+              try{ j = JSON.parse(txt); }catch(_e1){
+                var cand = txt.replace(/^\s*\/\/.*$/gm,"").replace(/\/\*[\s\S]*?\*\//g,"").trim();
+                if(cand){ try{ j = JSON.parse(cand); }catch(_e2){} }
+                if(!j){
+                  var m = txt.match(/\{[\s\S]*\}\s*$/);
+                  if(m && m[0]){ try{ j = JSON.parse(m[0]); }catch(_e3){} }
+                }
+              }
+            }catch(e){ j = null; }
+            if(j){
+              var picked = pickFromResources(j);
+              if(picked){
               cfg.endpoints = picked.endpoints || cfg.endpoints;
               if(isValidApiBase(picked.apiBase)){
                 cfg.apiBase = picked.apiBase;
@@ -1909,7 +1924,9 @@
 
         toast("已儲存雲端設定（B）");
         closeTokenMask();
-        startCloud(true);
+        wireRealtimeTriggers();
+
+      startCloud(true);
       }
       function clearTokenMask(){
         if(!confirm("確定要清除雲端設定（apiBase/endpoints 覆蓋）？")) return;
@@ -1955,11 +1972,22 @@
           };
         }
         getApiBase().then(function(base){
-          cloud.startWatch(isValidApiBase(base) ? 30 : 60);
+          cloud.startWatch(isValidApiBase(base) ? 15 : 60);
           if(forceNow) cloud.pullNow("boot");
         }).catch(function(){
           cloud.startWatch(60);
           if(forceNow) cloud.pullNow("boot");
+        });
+      }
+
+      // ===== Realtime triggers (no UI change) =====
+      var _rtWired = false;
+      function wireRealtimeTriggers(){
+        if(_rtWired) return;
+        _rtWired = true;
+        window.addEventListener("online", function(){ try{ if(cloud) cloud.pullNow("online"); }catch(e){} });
+        document.addEventListener("visibilitychange", function(){
+          try{ if(!document.hidden && cloud) cloud.pullNow("focus"); }catch(e){}
         });
       }
 
