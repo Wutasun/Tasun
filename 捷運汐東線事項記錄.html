@@ -1,4 +1,3 @@
-<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
@@ -659,7 +658,7 @@
     </div>
   </div>
 
-  <!-- ✅ 雲端設定（GitHub Repo JSON；保留原 UI） -->
+  <!-- ✅ 雲端設定（DOM 保留；本版 B：可用來覆蓋 apiBase / endpoints） -->
   <div class="loginMask" id="tokenMask" aria-hidden="true">
     <div class="loginModal" role="dialog" aria-modal="true" aria-label="雲端設定">
       <div class="loginHead">
@@ -675,9 +674,9 @@
         <div class="loginErr" id="tokenErr"></div>
         <div class="loginHint" id="tokenHint">目前狀態：—</div>
         <div class="loginHint">
-          ✅ 可貼：<b>OWNER/REPO|BRANCH|PATH|GH_TOKEN</b>（或空白/逗號分隔）。也可只貼 <b>OWNER/REPO|BRANCH|PATH</b>。<br>
-          也可直接貼 <b>GitHub 檔案網址</b>（blob 或 raw 都可）。<br>
-          <b>公開 repo</b>：GH_TOKEN 可留空（僅讀）。<b>寫入/合併</b> 必須有 GH_TOKEN（建議 Fine-grained PAT，只開此 repo 的 Contents read/write）。
+          ✅ （B 方案）你也可以直接貼 <b>Worker apiBase</b>，例如：<b>https://tasun-worker.wutasun.workers.dev</b><br>
+          ✅ 或貼 JSON：<b>{"apiBase":"...","endpoints":{"read":"/api/read","merge":"/api/merge"}}</b><br>
+          （UI 保留不動；此框僅作為臨時覆蓋，正式來源仍以 tasun-resources.json 為主。）
         </div>
       </div>
       <div class="loginFoot">
@@ -745,16 +744,6 @@
       var SOURCE_DICT_KEY = "tasunSxdhNotes_sourceDict_v1";
       var TRADE_SYS_MAP_KEY = "tasunSxdhNotes_tradeSysMap_v1";
 
-      // ===== Cloud keys (GitHub Repo JSON) =====
-      var GH_CFG_KEY   = "tasunGitHubRepoCfg_v1__" + PAGE_KEY;  // owner/repo|branch|path
-      var GH_TOKEN_KEY = "tasunGitHubToken_v1__" + PAGE_KEY;    // GH token (admin/write device)
-
-      // ✅ 預設 GitHub 檔案位置：公開 repo 讀取不需 token（跨設備免設定）
-      //    若你要改 repo/分支/路徑，可用「雲端設定」覆蓋。
-      var GH_DEFAULT_OWNER_REPO = "Wutasun/Tasun";
-      var GH_DEFAULT_BRANCH     = "main";
-      var GH_DEFAULT_PATH       = "data/sxdh-notes.json";
-
       var NET_DISK_URL = "https://www.dropbox.com/scl/fo/glb4s65934h195bxuyuqm/AH5ClZ2u4MtPMvmgtfOUAa4?rlkey=tfxkpbpw8k9bctshx5xvuge8h&st=9deaoqpw&dl=0";
       var GITHUB_TOKENS_URL = "https://github.com/settings/personal-access-tokens";
 
@@ -794,116 +783,8 @@
       // ✅ 增加 sync/save 顯示狀態
       var cloudState = "offline"; // offline | sync | save | ok | readonly | need_auth | deny | neterr | noapi | bad
 
-      // ===== Cloud helpers (GitHub Repo JSON) =====
       function safeJSON(raw){ if(!raw) return null; try{ return JSON.parse(raw); }catch(e){ return null; } }
       function nowISO(){ return new Date().toISOString(); }
-
-      function normOwnerRepo(s){
-        s = norm(s);
-        s = s.replace(/^https?:\/\/github\.com\//i, "").replace(/^https?:\/\/raw\.githubusercontent\.com\//i, "");
-        s = s.replace(/^\/+|\/+$/g, "");
-        s = s.replace(/\.git$/i, "");
-        var parts = s.split("/");
-        if(parts.length>=2) return parts[0] + "/" + parts[1];
-        return s;
-      }
-
-      function getRepoCfg(){
-        var cfg = { ownerRepo: GH_DEFAULT_OWNER_REPO, branch: GH_DEFAULT_BRANCH, path: GH_DEFAULT_PATH, token: "" };
-
-        // stored repo cfg: "owner/repo|branch|path"
-        try{
-          var raw = norm(sessionStorage.getItem(GH_CFG_KEY) || localStorage.getItem(GH_CFG_KEY) || "");
-          if(raw){
-            var parts = raw.split("|").map(norm).filter(Boolean);
-            if(parts.length>=3){
-              cfg.ownerRepo = normOwnerRepo(parts[0]);
-              cfg.branch = norm(parts[1]);
-              cfg.path = norm(parts[2]).replace(/^\/+/,"");
-            }
-          }
-        }catch(e){}
-
-        // token（保留原 UI；C 模式不依賴 token）
-        try{
-          var rawT = norm(sessionStorage.getItem(GH_TOKEN_KEY) || localStorage.getItem(GH_TOKEN_KEY) || "");
-          if(rawT) cfg.token = rawT;
-        }catch(e){}
-
-        return cfg;
-      }
-
-      function setRepoCfg(cfg){
-        cfg = cfg || {};
-        var ownerRepo = normOwnerRepo(cfg.ownerRepo || "");
-        var branch = norm(cfg.branch || "");
-        var path = norm(cfg.path || "").replace(/^\/+/,"");
-        if(ownerRepo && branch && path){
-          var s = ownerRepo + "|" + branch + "|" + path;
-          try{ sessionStorage.setItem(GH_CFG_KEY, s); }catch(e){}
-          try{ localStorage.setItem(GH_CFG_KEY, s); }catch(e){}
-        }
-        if("token" in cfg){
-          var t = norm(cfg.token || "");
-          try{ if(t) sessionStorage.setItem(GH_TOKEN_KEY, t); else sessionStorage.removeItem(GH_TOKEN_KEY); }catch(e){}
-          try{ if(t) localStorage.setItem(GH_TOKEN_KEY, t); else localStorage.removeItem(GH_TOKEN_KEY); }catch(e){}
-        }
-      }
-
-      function rawUrlFromCfg(cfg){
-        cfg = cfg || getRepoCfg();
-        var ownerRepo = normOwnerRepo(cfg.ownerRepo||"");
-        var branch = norm(cfg.branch||"");
-        var path = norm(cfg.path||"").replace(/^\/+/,"");
-        if(!ownerRepo || !branch || !path) return "";
-        return "https://raw.githubusercontent.com/" + ownerRepo + "/" + encodeURIComponent(branch) + "/" + path;
-      }
-      function blobUrlFromCfg(cfg){
-        cfg = cfg || getRepoCfg();
-        var ownerRepo = normOwnerRepo(cfg.ownerRepo||"");
-        var branch = norm(cfg.branch||"");
-        var path = norm(cfg.path||"").replace(/^\/+/,"");
-        if(!ownerRepo || !branch || !path) return "";
-        return "https://github.com/" + ownerRepo + "/blob/" + encodeURIComponent(branch) + "/" + path;
-      }
-
-      async function httpJSON(url, opt){
-        opt = opt || {};
-        opt.mode = "cors";
-        opt.cache = "no-store";
-        opt.headers = Object.assign({ "Accept":"application/json" }, opt.headers||{});
-        var res;
-        try{ res = await fetch(url, opt); }
-        catch(err){
-          var e2 = new Error(err && err.message ? err.message : "Failed to fetch");
-          e2.status = 0; e2.code = "FETCH_FAIL";
-          throw e2;
-        }
-        if(!res.ok){
-          var body = "";
-          try{ body = await res.text(); }catch(e){}
-          var err2 = new Error("HTTP "+res.status+" "+res.statusText);
-          err2.status = res.status;
-          err2.body = body;
-          if(res.status===401 || res.status===403) err2.code = "ACCESS_DENY";
-          if(res.status===404) err2.code = "NOT_FOUND";
-          throw err2;
-        }
-        var ct = (res.headers.get("content-type")||"").toLowerCase();
-        if(ct.includes("application/json")) return await res.json();
-        var txt = await res.text();
-        try{ return JSON.parse(txt); }catch(e){ return { ok:true, raw:txt }; }
-      }
-
-      // ✅ GitHub raw 只讀 pull（C 模式 fallback 用）
-      async function ghPull(){
-        var cfg = getRepoCfg();
-        var u = rawUrlFromCfg(cfg);
-        if(!u){
-          var e0 = new Error("NO_REPO_CFG"); e0.status = 0; e0.code = "NO_REPO_CFG"; throw e0;
-        }
-        return await httpJSON(u + "?_=" + Date.now(), { method:"GET" });
-      }
 
       // ===== Payload unwrap/merge (pk=uid) =====
       function unwrap(p){
@@ -954,7 +835,6 @@
         var merged = [];
         for(var k in map){ if(Object.prototype.hasOwnProperty.call(map,k)){ merged.push(map[k]); } }
 
-        // assign missing/duplicate ids for non-deleted
         var counterMerged = Math.max(Number(r.counter||0)||0, Number(l.counter||0)||0, maxId(merged));
         var used = new Set();
         merged.sort(function(a,b){
@@ -982,131 +862,156 @@
         return { db: merged, counter: counterMerged, updatedAt: nowISO() };
       }
 
-      function portalUrl(){ return blobUrlFromCfg(getRepoCfg()); }
-
       /* =========================================================
-       * Cloud API helper (Cloudflare Worker)
-       * - Read  : GET  {API_BASE}/api/tasun/pull?key=PAGE_KEY
-       * - Merge : POST {API_BASE}/api/tasun/merge  { key, pk:"uid", payload }
-       *
-       * 模式 C：
-       * ✅ 優先走 API（多人/多設備即時合併寫入）
-       * ✅ 若 API_BASE 缺失 -> fallback：GitHub raw 只讀 pull（不顯示「未設定」）
+       * B 方案：Cloudflare Worker + Access + 合併寫入 API
+       * - apiBase/endpoints 來自 tasun-resources.json（跨設備免設定）
+       * - Read  : GET  {apiBase}{endpoints.read}?key=PAGE_KEY
+       * - Merge : POST {apiBase}{endpoints.merge}  { key, pk:"uid", payload, reason, client }
        * ========================================================= */
       var RESOURCES_URL = "tasun-resources.json";
-      var API_BASE_LS_KEY = "tasunApiBase_v1";
-      var API_BASE_DEFAULT = "";
-      var API_BASE_CACHE = "";
+      var API_BASE_LS_KEY = "tasunApiBase_v1";                   // 可選：前端覆蓋 apiBase（通常不用）
+      var API_EP_LS_KEY   = "tasunApiEndpoints_v1__" + PAGE_KEY; // 可選：前端覆蓋 endpoints（通常不用）
+      var _CLOUD_CFG_CACHE = null;
 
       function sNorm(x){ return (x===undefined||x===null) ? "" : String(x).trim(); }
+
       function joinApiBase(base, path){
         base = sNorm(base).replace(/\/+$/,"");
         path = sNorm(path);
         if(!path) return base;
+        if(/^https?:\/\//i.test(path)) return path; // endpoints 可給完整 URL
         if(path.charAt(0)!="/") path = "/" + path;
         return base + path;
       }
-
-      // ✅ 強化：自動在 resources.json 多路徑找 apiBase
-      function deepFindApiBase(obj, pageKey){
+      function addParam(url, k, v){
         try{
-          if(!obj || typeof obj!=="object") return "";
-          var direct = [
-            obj.apiBase, obj.tasunApiBase, obj.cloudApiBase, obj.d1ApiBase,
-            obj.API_BASE, obj.api_base, obj.baseUrl, obj.baseURL
-          ];
-          for(var i=0;i<direct.length;i++){
-            var v = sNorm(direct[i]);
-            if(v && /^https?:\/\//i.test(v)) return v;
-          }
-          if(obj.tasunApi && typeof obj.tasunApi==="object"){
-            var v2 = sNorm(obj.tasunApi.base || obj.tasunApi.apiBase || obj.tasunApi.url);
-            if(v2 && /^https?:\/\//i.test(v2)) return v2;
-          }
-          if(obj.cloud && typeof obj.cloud==="object"){
-            var v3 = sNorm(obj.cloud.apiBase || obj.cloud.base || obj.cloud.url);
-            if(v3 && /^https?:\/\//i.test(v3)) return v3;
-          }
-          if(obj.pages && typeof obj.pages==="object" && pageKey && obj.pages[pageKey]){
-            var p = obj.pages[pageKey];
-            var v4 = sNorm(p.apiBase || p.tasunApiBase || (p.api && p.api.base));
-            if(v4 && /^https?:\/\//i.test(v4)) return v4;
-          }
-          // breadth search (depth<=4)
-          var q = [{o:obj, d:0}];
-          var seen = new Set();
-          while(q.length){
-            var it = q.shift();
-            if(!it || !it.o || typeof it.o!=="object") continue;
-            if(it.d>4) continue;
-            if(seen.has(it.o)) continue;
-            seen.add(it.o);
-            for(var k in it.o){
-              if(!Object.prototype.hasOwnProperty.call(it.o,k)) continue;
-              var val = it.o[k];
-              if(typeof val==="string"){
-                var s = sNorm(val);
-                if(s && /^https?:\/\//i.test(s) && /tasun|api|worker|cloudflare|\/api\//i.test(s)){
-                  return s;
-                }
-              }else if(val && typeof val==="object"){
-                q.push({o:val, d:it.d+1});
-              }
-            }
-          }
-        }catch(e){}
-        return "";
+          var u = new URL(url, location.href);
+          u.searchParams.set(k, v);
+          return u.toString();
+        }catch(e){
+          var sep = (url.indexOf("?")>=0) ? "&" : "?";
+          return url + sep + encodeURIComponent(k) + "=" + encodeURIComponent(v);
+        }
+      }
+      function isValidApiBase(v){
+        v = sNorm(v);
+        if(!v) return false;
+        if(!/^https?:\/\//i.test(v)) return false;
+        if(/YOUR-WORKER-DOMAIN/i.test(v)) return false;
+        return true;
+      }
+      function getFileName(){
+        try{
+          var p = location.pathname || "";
+          var fn = p.split("/").pop() || "";
+          return decodeURIComponent(fn) || fn;
+        }catch(e){
+          return (location.pathname||"").split("/").pop() || "";
+        }
+      }
+      function normalizeEndpoints(ep){
+        ep = (ep && typeof ep==="object") ? ep : {};
+        return {
+          health: sNorm(ep.health || "/health") || "/health",
+          read:   sNorm(ep.read   || "/api/read") || "/api/read",
+          merge:  sNorm(ep.merge  || "/api/merge") || "/api/merge"
+        };
+      }
+      function pickFromResources(json){
+        var root = json && json.resources;
+        if(!root || typeof root!=="object") return null;
+
+        var fn = getFileName();
+        var pageCfg = null;
+        if(fn && root[fn]) pageCfg = root[fn];
+        if(!pageCfg && PAGE_KEY && root[PAGE_KEY]) pageCfg = root[PAGE_KEY];
+
+        var def = root.__default || {};
+        var apiBase = sNorm((pageCfg && pageCfg.apiBase) || def.apiBase || "");
+        var ep = Object.assign({}, normalizeEndpoints(def.endpoints), normalizeEndpoints(pageCfg && pageCfg.endpoints));
+        return { apiBase: apiBase, endpoints: ep };
       }
 
-      async function getApiBase(){
-        if(API_BASE_CACHE) return API_BASE_CACHE;
+      async function getCloudCfg(){
+        if(_CLOUD_CFG_CACHE) return _CLOUD_CFG_CACHE;
+
+        var cfg = { apiBase:"", endpoints: normalizeEndpoints(null) };
 
         // 0) URL override：?apiBase=https://...
         try{
           var u = new URL(location.href);
           var q = sNorm(u.searchParams.get("apiBase")||"");
-          if(q && /^https?:\/\//i.test(q)){
-            API_BASE_CACHE = q;
+          if(isValidApiBase(q)){
+            cfg.apiBase = q;
+            _CLOUD_CFG_CACHE = cfg;
             try{ localStorage.setItem(API_BASE_LS_KEY, q); }catch(e){}
-            return q;
+            return cfg;
           }
         }catch(e){}
 
         // 1) window override
         var g = sNorm(window.TASUN_API_BASE);
-        if(g && /^https?:\/\//i.test(g)){ API_BASE_CACHE = g; return g; }
+        if(isValidApiBase(g)){
+          cfg.apiBase = g;
+          _CLOUD_CFG_CACHE = cfg;
+          return cfg;
+        }
 
-        // 2) localStorage
+        // 2) localStorage override（通常不用，但保留）
         try{
           var ls = sNorm(localStorage.getItem(API_BASE_LS_KEY));
-          if(ls && /^https?:\/\//i.test(ls)){ API_BASE_CACHE = ls; return ls; }
+          if(isValidApiBase(ls)){
+            cfg.apiBase = ls;
+            _CLOUD_CFG_CACHE = cfg;
+            return cfg;
+          }
         }catch(e){}
 
-        // 3) resources.json
+        // 3) resources.json（正式來源）
         try{
           var url = (typeof withV==="function") ? withV(RESOURCES_URL) : RESOURCES_URL;
           var r = await fetch(url, { cache:"no-store" });
           if(r && r.ok){
             var j = await r.json();
-            var v = deepFindApiBase(j, PAGE_KEY);
-            if(v){
-              API_BASE_CACHE = v;
-              try{ localStorage.setItem(API_BASE_LS_KEY, v); }catch(e){}
-              return v;
+            var picked = pickFromResources(j);
+            if(picked){
+              cfg.endpoints = picked.endpoints || cfg.endpoints;
+              if(isValidApiBase(picked.apiBase)){
+                cfg.apiBase = picked.apiBase;
+                try{ localStorage.setItem(API_BASE_LS_KEY, cfg.apiBase); }catch(e){}
+              }
             }
           }
         }catch(e){}
 
-        // 4) default
-        API_BASE_CACHE = sNorm(API_BASE_DEFAULT);
-        return API_BASE_CACHE;
+        // 4) endpoints override（可選）
+        try{
+          var epRaw = sNorm(localStorage.getItem(API_EP_LS_KEY));
+          if(epRaw){
+            var epObj = null;
+            try{ epObj = JSON.parse(epRaw); }catch(e){}
+            if(epObj && typeof epObj==="object"){
+              cfg.endpoints = Object.assign({}, cfg.endpoints, normalizeEndpoints(epObj));
+            }
+          }
+        }catch(e){}
+
+        _CLOUD_CFG_CACHE = cfg;
+        return cfg;
+      }
+
+      async function getApiBase(){
+        var cfg = await getCloudCfg();
+        return cfg.apiBase;
       }
 
       async function apiPull(){
-        var base = await getApiBase();
-        if(!base) throw { code:"noapi", message:"API_BASE missing" };
+        var cfg = await getCloudCfg();
+        if(!isValidApiBase(cfg.apiBase)) throw { code:"noapi", message:"API_BASE missing" };
 
-        var url = joinApiBase(base, "/api/tasun/pull?key=" + encodeURIComponent(PAGE_KEY));
+        var url = joinApiBase(cfg.apiBase, cfg.endpoints.read);
+        url = addParam(url, "key", PAGE_KEY);
+
         var r = await fetch(url, { method:"GET", credentials:"include", cache:"no-store", redirect:"manual" });
         if(r.type==="opaqueredirect" || (r.status>=300 && r.status<400)) throw { code:"need_auth", status:r.status };
         if(r.status===401 || r.status===403) throw { code:"deny", status:r.status };
@@ -1119,10 +1024,10 @@
       }
 
       async function apiMerge(localPayload, reason, clientMeta){
-        var base = await getApiBase();
-        if(!base) throw { code:"noapi", message:"API_BASE missing" };
+        var cfg = await getCloudCfg();
+        if(!isValidApiBase(cfg.apiBase)) throw { code:"noapi", message:"API_BASE missing" };
 
-        var url = joinApiBase(base, "/api/tasun/merge");
+        var url = joinApiBase(cfg.apiBase, cfg.endpoints.merge);
         var body = {
           key: PAGE_KEY,
           pk: "uid",
@@ -1167,17 +1072,21 @@
       CloudCtrl.prototype._needAuthToast = function(){
         (async function(){
           try{
-            var base = await getApiBase();
-            var u = base ? joinApiBase(base, "/api/tasun/merge") : "";
-            if(u) toast("需要 Cloudflare Access 登入才能寫入：請先在新分頁開啟 " + u + " 進行登入，再回來重試。", 7000);
-            else toast("需要 Cloudflare Access 登入才能寫入（尚未設定 API_BASE）", 7000);
+            var cfg = await getCloudCfg();
+            var base = cfg && cfg.apiBase ? cfg.apiBase : "";
+            var u = base ? joinApiBase(base, (cfg.endpoints && cfg.endpoints.merge) || "/api/merge") : "";
+            if(u){
+              toast("需要 Cloudflare Access 登入才能寫入：請先在新分頁開啟並登入，再回來重試。", 7000);
+              try{ window.open(u, "_blank", "noopener"); }catch(e){}
+            }else{
+              toast("需要 Cloudflare Access 登入（尚未設定 apiBase）", 7000);
+            }
           }catch(e){
             toast("需要 Cloudflare Access 登入才能寫入", 7000);
           }
         })();
       };
 
-      // ✅ C 模式：先 API pull；noapi 才 fallback GitHub raw 只讀 pull
       CloudCtrl.prototype.pullNow = async function(reason){
         var self=this;
         if(self.busy) return;
@@ -1196,29 +1105,9 @@
           if(self.apply) self.apply(u.payload, Object.assign({ source:"api", reason:reason||"pull" }, u.info||{}));
 
         }catch(e){
-          if(e && e.code==="need_auth"){
-            self.state = "err";
-            cloudState = "need_auth";
-            renderHint();
-            self._needAuthToast();
-          }else if(e && e.code==="noapi"){
-            try{
-              var g = await ghPull();
-              self.state = "readonly";
-              cloudState = "readonly";
-              self.lastSyncAt = Date.now();
-              lastSyncAt = self.lastSyncAt;
-
-              if(self.apply) self.apply(g, { source:"gh", reason:reason||"pull" });
-
-            }catch(e2){
-              self.state = "err";
-              cloudState = "noapi";
-            }
-          }else{
-            self.state = "err";
-            cloudState = (e && e.code) ? e.code : "neterr";
-          }
+          self.state = "err";
+          cloudState = (e && e.code) ? e.code : "neterr";
+          if(cloudState==="need_auth") self._needAuthToast();
         }finally{
           self.busy = false;
           renderAll();
@@ -1233,7 +1122,6 @@
         self._saveTimer = setTimeout(function(){ self.saveNow(); }, 1200);
       };
 
-      // 保留相容（舊呼叫）
       CloudCtrl.prototype.saveMerged = function(reason){
         this.scheduleSave(reason || "edit");
       };
@@ -1290,10 +1178,9 @@
         self._timer = setInterval(function(){
           if(!self.busy){
             self.pullNow("watch");
-            // 若本機 dirty，且 API 已可用，補推一次
             if(self.dirty){
               getApiBase().then(function(base){
-                if(base) self.saveNow();
+                if(isValidApiBase(base)) self.saveNow();
               }).catch(function(){});
             }
           }
@@ -1323,7 +1210,6 @@
         var remark = (x.remark ?? x.note2 ?? "").toString();
         var date   = norm(x.date ?? x.day ?? x.created ?? "");
 
-        // ✅ v1 必備欄位（雲端合併用）
         var rev = norm(x.rev ?? x._rev ?? "");
         var updatedAt = norm(x.updatedAt ?? x.updated_at ?? "");
         var deleted = !!(x.deleted ?? x._deleted ?? false);
@@ -1680,9 +1566,7 @@
       // ===== Cloud apply (merge into local) =====
       function countAlive(arr){
         var n=0;
-        for(var i=0;i<(arr?arr.length:0);i++){
-          if(arr[i] && !arr[i].deleted) n++;
-        }
+        for(var i=0;i<(arr?arr.length:0);i++){ if(arr[i] && !arr[i].deleted) n++; }
         return n;
       }
 
@@ -1705,10 +1589,10 @@
 
         lastSyncAt = Date.now();
 
-        // ✅ 自動補推：只有在 API 來源、且 admin/write（read 不寫）
+        // ✅ 自動補推：只有 admin/write（read 不寫）
         try{
           var canWrite = Auth.canWrite ? Auth.canWrite() : false;
-          if(canWrite && info.source==="api"){
+          if(canWrite){
             var mergedAlive = countAlive(db);
             if(remoteAlive===0 && beforeAlive>0) cloud.scheduleSave("reconcile");
             else if(mergedAlive > remoteAlive) cloud.scheduleSave("reconcile");
@@ -1866,7 +1750,6 @@
         renderAll();
         closeModal();
 
-        // ✅ 修正：原本呼叫 cloud.saveMerged() 有些版本不存在；這裡統一用 scheduleSave
         if(cloud) cloud.scheduleSave("edit");
         toast("已儲存");
       }
@@ -1894,7 +1777,6 @@
         renderAll();
         toast("已刪除");
 
-        // ✅ 立即排程合併寫入
         if(cloud) cloud.scheduleSave("delete");
       }
 
@@ -1955,80 +1837,86 @@
         toast("已匯出備份");
       }
 
-      // ===== Cloud settings modal (保留原功能) =====
+      // ===== Cloud settings modal（UI 保留；B 方案用來覆蓋 apiBase/endpoints） =====
       function parseCloudCfgInput(raw){
         raw = norm(raw);
         if(!raw) return null;
 
-        var m1 = raw.match(/raw\.githubusercontent\.com\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)/i);
-        if(m1){
-          return { ownerRepo: (m1[1]+"/"+m1[2]), branch: m1[3], path: m1[4], token: "" };
+        // 1) 直接貼 apiBase
+        if(/^https?:\/\//i.test(raw)){
+          return { apiBase: raw, endpoints: null };
         }
 
-        var m2 = raw.match(/github\.com\/([^\/]+)\/([^\/]+)\/blob\/([^\/]+)\/(.+)/i);
-        if(m2){
-          return { ownerRepo: (m2[1]+"/"+m2[2]), branch: m2[3], path: m2[4], token: "" };
+        // 2) 貼 JSON
+        if(raw.startsWith("{") || raw.startsWith("[")){
+          try{
+            var j = JSON.parse(raw);
+            var ab = sNorm(j.apiBase || j.API_BASE || j.baseUrl || j.baseURL || "");
+            var ep = (j.endpoints && typeof j.endpoints==="object") ? j.endpoints : null;
+            if(ab) return { apiBase: ab, endpoints: ep };
+            // 若只給 endpoints
+            if(ep) return { apiBase:"", endpoints: ep };
+          }catch(e){}
         }
 
-        var parts = raw
-          .replace(/[\u2460-\u2469]/g," ")
-          .replace(/[①②③④⑤⑥⑦⑧⑨]/g," ")
-          .replace(/(OWNER\/REPO|BRANCH|PATH|GH_TOKEN|TOKEN)/gi," ")
-          .replace(/[=：:]/g," ")
-          .replace(/\s+/g," ")
-          .trim()
-          .split(/[\s|,;]+/).map(norm).filter(Boolean);
-
-        if(parts.length===1 && parts[0].length>=20 && !parts[0].includes("/")){
-          return { ownerRepo:"", branch:"", path:"", token: parts[0] };
+        // 3) 也允許用空白/| 分隔：apiBase | readPath | mergePath
+        var parts = raw.split("|").map(norm).filter(Boolean);
+        if(parts.length>=1 && /^https?:\/\//i.test(parts[0])){
+          var ep2 = null;
+          if(parts.length>=3){
+            ep2 = { read: parts[1], merge: parts[2] };
+          }
+          return { apiBase: parts[0], endpoints: ep2 };
         }
-
-        return { ownerRepo: parts[0]||"", branch: parts[1]||"", path: parts[2]||"", token: parts[3]||"" };
+        return null;
       }
 
       function openTokenMask(){
         if(!(Auth.isAdmin && Auth.isAdmin())){ toast("僅 admin 可設定雲端"); return; }
         $("tokenMask").style.display = "flex";
-        var cfg = getRepoCfg();
-        $("tokenHint").textContent =
-          "目前狀態：OWNER/REPO=" + (cfg.ownerRepo||"未設定")
-          + "，BRANCH=" + (cfg.branch||"未設定")
-          + "，PATH=" + (cfg.path||"未設定")
-          + "，GH_TOKEN=" + (norm(cfg.token) ? "已設定" : "未設定（公開 repo 可僅讀）");
         $("tokenErr").style.display = "none";
         $("tokenErr").textContent = "";
         $("tokenInput").value = "";
+        (async function(){
+          try{
+            var cfg = await getCloudCfg();
+            var ab = cfg && cfg.apiBase ? cfg.apiBase : "";
+            var ep = cfg && cfg.endpoints ? cfg.endpoints : {};
+            $("tokenHint").textContent =
+              "目前狀態：apiBase=" + (ab || "未設定")
+              + "，read=" + (ep.read || "/api/read")
+              + "，merge=" + (ep.merge || "/api/merge");
+          }catch(e){
+            $("tokenHint").textContent = "目前狀態：—";
+          }
+        })();
         setTimeout(function(){ $("tokenInput").focus(); }, 0);
       }
       function closeTokenMask(){ $("tokenMask").style.display = "none"; }
       function saveTokenMask(){
-        var cfg0 = getRepoCfg();
         var cfg = parseCloudCfgInput($("tokenInput").value);
-        if(!cfg){ toast("請貼上內容"); return; }
+        if(!cfg){ toast("請貼上 apiBase 或 JSON"); return; }
 
-        var next = { ownerRepo: cfg0.ownerRepo, branch: cfg0.branch, path: cfg0.path, token: cfg0.token };
-
-        if(cfg.ownerRepo && cfg.branch && cfg.path){
-          next.ownerRepo = cfg.ownerRepo;
-          next.branch = cfg.branch;
-          next.path = cfg.path;
+        if(cfg.apiBase && isValidApiBase(cfg.apiBase)){
+          try{ localStorage.setItem(API_BASE_LS_KEY, cfg.apiBase); }catch(e){}
         }
-        if(cfg.token){
-          next.token = cfg.token;
+        if(cfg.endpoints && typeof cfg.endpoints==="object"){
+          try{ localStorage.setItem(API_EP_LS_KEY, JSON.stringify(cfg.endpoints)); }catch(e){}
         }
-        setRepoCfg(next);
 
-        toast("已儲存雲端設定");
+        // 清掉快取，讓新設定立刻生效
+        _CLOUD_CFG_CACHE = null;
+
+        toast("已儲存雲端設定（B）");
         closeTokenMask();
         startCloud(true);
       }
       function clearTokenMask(){
-        if(!confirm("確定要清除雲端設定（repo/path/GH_TOKEN）？")) return;
-        try{ sessionStorage.removeItem(GH_CFG_KEY); }catch(e){}
-        try{ localStorage.removeItem(GH_CFG_KEY); }catch(e){}
-        try{ sessionStorage.removeItem(GH_TOKEN_KEY); }catch(e){}
-        try{ localStorage.removeItem(GH_TOKEN_KEY); }catch(e){}
-        toast("已清除（回到預設 repo；GH_TOKEN 已移除）");
+        if(!confirm("確定要清除雲端設定（apiBase/endpoints 覆蓋）？")) return;
+        try{ localStorage.removeItem(API_BASE_LS_KEY); }catch(e){}
+        try{ localStorage.removeItem(API_EP_LS_KEY); }catch(e){}
+        _CLOUD_CFG_CACHE = null;
+        toast("已清除（回到 tasun-resources.json）");
         closeTokenMask();
         cloudState = "offline";
         renderHint();
@@ -2038,10 +1926,16 @@
         el.type = (el.type==="password") ? "text" : "password";
       }
 
-      function openCloudPortal(){
-        var u = portalUrl();
-        if(!u){ toast("尚未設定 GitHub 檔案位置"); return; }
-        window.open(u, "_blank", "noopener");
+      async function openCloudPortal(){
+        try{
+          var cfg = await getCloudCfg();
+          if(!(cfg && cfg.apiBase && cfg.endpoints) || !isValidApiBase(cfg.apiBase)){ toast("尚未設定 apiBase"); return; }
+          var url = joinApiBase(cfg.apiBase, cfg.endpoints.read || "/api/read");
+          url = addParam(url, "key", PAGE_KEY);
+          window.open(url, "_blank", "noopener");
+        }catch(e){
+          toast("尚未設定 apiBase");
+        }
       }
 
       function startCloud(forceNow){
@@ -2060,9 +1954,8 @@
             };
           };
         }
-        // watch: API 有 -> 30s；無 -> 60s（fallback GitHub 只讀）
         getApiBase().then(function(base){
-          cloud.startWatch(base ? 30 : 60);
+          cloud.startWatch(isValidApiBase(base) ? 30 : 60);
           if(forceNow) cloud.pullNow("boot");
         }).catch(function(){
           cloud.startWatch(60);
