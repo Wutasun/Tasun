@@ -464,6 +464,7 @@
       .hint .hb{ flex:0 0 auto; padding:5px 9px; }
     }
   </style>
+
 </head>
 
 <body>
@@ -555,6 +556,7 @@
         </div>
       </div>
     </div>
+
   </div>
 
   <!-- Edit/View Modal -->
@@ -657,7 +659,7 @@
     </div>
   </div>
 
-  <!-- ✅ 雲端設定（D1 + Access） -->
+  <!-- ✅ 雲端設定（GitHub Repo JSON；保留原 UI） -->
   <div class="loginMask" id="tokenMask" aria-hidden="true">
     <div class="loginModal" role="dialog" aria-modal="true" aria-label="雲端設定">
       <div class="loginHead">
@@ -746,7 +748,6 @@
       // ===== Cloud keys (GitHub Repo JSON) =====
       var GH_CFG_KEY   = "tasunGitHubRepoCfg_v1__" + PAGE_KEY;  // owner/repo|branch|path
       var GH_TOKEN_KEY = "tasunGitHubToken_v1__" + PAGE_KEY;    // GH token (admin/write device)
-      var PROTECT_EMPTY_REMOTE_KEY = "tasun_protect_empty_remote__" + DB_KEY;
 
       // ✅ 預設 GitHub 檔案位置：公開 repo 讀取不需 token（跨設備免設定）
       //    若你要改 repo/分支/路徑，可用「雲端設定」覆蓋。
@@ -757,18 +758,22 @@
       var NET_DISK_URL = "https://www.dropbox.com/scl/fo/glb4s65934h195bxuyuqm/AH5ClZ2u4MtPMvmgtfOUAa4?rlkey=tfxkpbpw8k9bctshx5xvuge8h&st=9deaoqpw&dl=0";
       var GITHUB_TOKENS_URL = "https://github.com/settings/personal-access-tokens";
 
-var $ = function(id){ return document.getElementById(id); };
+      var $ = function(id){ return document.getElementById(id); };
       var norm = function(s){ return (s===undefined||s===null) ? "" : String(s).trim(); };
       function pad2(n){ return String(n).padStart(2,"0"); }
       function fmtClock(ts){ if(!ts) return ""; var d = new Date(ts); return pad2(d.getHours())+":"+pad2(d.getMinutes())+":"+pad2(d.getSeconds()); }
 
-      function toast(msg){
+      // ✅ 修正：toast 支援第二參數 ms（原本你程式會 toast(msg,7000) 但 toast 沒吃第二參數）
+      function toast(msg, ms){
         var t = $("toast");
         t.textContent = msg;
         t.style.display = "block";
         clearTimeout(toast._tm);
-        toast._tm = setTimeout(function(){ t.style.display="none"; }, 2600);
+        var dur = Number(ms);
+        if(!Number.isFinite(dur) || dur<=0) dur = 2600;
+        toast._tm = setTimeout(function(){ t.style.display="none"; }, dur);
       }
+
       function escHtml(s){
         return (s ?? "").toString()
           .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
@@ -785,8 +790,9 @@ var $ = function(id){ return document.getElementById(id); };
       var promptMode = null;
       var cloud = null;
       var lastSyncAt = 0;
-      var cloudState = "offline"; // offline | ok | deny | neterr | noapi
-      var apiLastStatus = 0;
+
+      // ✅ 增加 sync/save 顯示狀態
+      var cloudState = "offline"; // offline | sync | save | ok | readonly | need_auth | deny | neterr | noapi | bad
 
       // ===== Cloud helpers (GitHub Repo JSON) =====
       function safeJSON(raw){ if(!raw) return null; try{ return JSON.parse(raw); }catch(e){ return null; } }
@@ -796,9 +802,7 @@ var $ = function(id){ return document.getElementById(id); };
         s = norm(s);
         s = s.replace(/^https?:\/\/github\.com\//i, "").replace(/^https?:\/\/raw\.githubusercontent\.com\//i, "");
         s = s.replace(/^\/+|\/+$/g, "");
-        // remove trailing .git
         s = s.replace(/\.git$/i, "");
-        // owner/repo only
         var parts = s.split("/");
         if(parts.length>=2) return parts[0] + "/" + parts[1];
         return s;
@@ -806,23 +810,6 @@ var $ = function(id){ return document.getElementById(id); };
 
       function getRepoCfg(){
         var cfg = { ownerRepo: GH_DEFAULT_OWNER_REPO, branch: GH_DEFAULT_BRANCH, path: GH_DEFAULT_PATH, token: "" };
-
-        // window override
-        try{
-          var w = window.TASUN_GH_REPO_CFG;
-          if(w && typeof w==="object"){
-            if(w.ownerRepo) cfg.ownerRepo = normOwnerRepo(w.ownerRepo);
-            if(w.branch) cfg.branch = norm(w.branch);
-            if(w.path) cfg.path = norm(w.path).replace(/^\/+/,"");
-          }else if(typeof w==="string" && w.trim()){
-            var partsW = w.split(/[\s|,;]+/).map(norm).filter(Boolean);
-            if(partsW.length>=3){
-              cfg.ownerRepo = normOwnerRepo(partsW[0]);
-              cfg.branch = norm(partsW[1]);
-              cfg.path = norm(partsW[2]).replace(/^\/+/,"");
-            }
-          }
-        }catch(e){}
 
         // stored repo cfg: "owner/repo|branch|path"
         try{
@@ -837,11 +824,7 @@ var $ = function(id){ return document.getElementById(id); };
           }
         }catch(e){}
 
-        // token
-        try{
-          var t = window.TASUN_GH_TOKEN;
-          if(typeof t==="string" && t.trim()) cfg.token = t.trim();
-        }catch(e){}
+        // token（保留原 UI；C 模式不依賴 token）
         try{
           var rawT = norm(sessionStorage.getItem(GH_TOKEN_KEY) || localStorage.getItem(GH_TOKEN_KEY) || "");
           if(rawT) cfg.token = rawT;
@@ -864,7 +847,6 @@ var $ = function(id){ return document.getElementById(id); };
           var t = norm(cfg.token || "");
           try{ if(t) sessionStorage.setItem(GH_TOKEN_KEY, t); else sessionStorage.removeItem(GH_TOKEN_KEY); }catch(e){}
           try{ if(t) localStorage.setItem(GH_TOKEN_KEY, t); else localStorage.removeItem(GH_TOKEN_KEY); }catch(e){}
-          try{ window.TASUN_GH_TOKEN = t || ""; }catch(e){}
         }
       }
 
@@ -883,34 +865,6 @@ var $ = function(id){ return document.getElementById(id); };
         var path = norm(cfg.path||"").replace(/^\/+/,"");
         if(!ownerRepo || !branch || !path) return "";
         return "https://github.com/" + ownerRepo + "/blob/" + encodeURIComponent(branch) + "/" + path;
-      }
-      function contentsApiUrlFromCfg(cfg){
-        cfg = cfg || getRepoCfg();
-        var ownerRepo = normOwnerRepo(cfg.ownerRepo||"");
-        var path = norm(cfg.path||"").replace(/^\/+/,"");
-        if(!ownerRepo || !path) return "";
-        var a = ownerRepo.split("/");
-        return "https://api.github.com/repos/" + a[0] + "/" + a[1] + "/contents/" + path;
-      }
-
-      function utf8ToB64(str){
-        try{ return btoa(unescape(encodeURIComponent(str))); }
-        catch(e){ try{ return btoa(str); }catch(e2){ return ""; } }
-      }
-      function b64ToUtf8(b64){
-        if(!b64) return "";
-        b64 = String(b64).replace(/\s+/g,"");
-        try{
-          var bin = atob(b64);
-          var esc = "";
-          for(var i=0;i<bin.length;i++){
-            var c = bin.charCodeAt(i).toString(16);
-            esc += "%" + ("00"+c).slice(-2);
-          }
-          return decodeURIComponent(esc);
-        }catch(e){
-          try{ return atob(b64); }catch(e2){ return ""; }
-        }
       }
 
       async function httpJSON(url, opt){
@@ -941,13 +895,7 @@ var $ = function(id){ return document.getElementById(id); };
         try{ return JSON.parse(txt); }catch(e){ return { ok:true, raw:txt }; }
       }
 
-      function ghAuthHeaders(token){
-        token = norm(token || "");
-        if(!token) return {};
-        // PAT: "token xxx" works; also support bearer
-        return { "Authorization": "token " + token };
-      }
-
+      // ✅ GitHub raw 只讀 pull（C 模式 fallback 用）
       async function ghPull(){
         var cfg = getRepoCfg();
         var u = rawUrlFromCfg(cfg);
@@ -957,68 +905,18 @@ var $ = function(id){ return document.getElementById(id); };
         return await httpJSON(u + "?_=" + Date.now(), { method:"GET" });
       }
 
-      async function ghGetByApi(){
-        var cfg = getRepoCfg();
-        var token = norm(cfg.token||"");
-        if(!token){
-          var e0 = new Error("NO_TOKEN"); e0.status = 0; e0.code = "NO_TOKEN"; throw e0;
-        }
-        var url = contentsApiUrlFromCfg(cfg);
-        if(!url){
-          var e1 = new Error("NO_REPO_CFG"); e1.status=0; e1.code="NO_REPO_CFG"; throw e1;
-        }
-        url += "?ref=" + encodeURIComponent(cfg.branch || "main") + "&_=" + Date.now();
-        var resp;
-        try{
-          resp = await httpJSON(url, { method:"GET", headers: Object.assign({ "Accept":"application/vnd.github+json" }, ghAuthHeaders(token)) });
-        }catch(e){
-          // If file missing, allow create later
-          if(e && e.code==="NOT_FOUND"){
-            return { payload: { db:[], counter:0 }, sha: null, missing: true, cfg: cfg };
-          }
-          throw e;
-        }
-        var content = (resp && resp.content) ? b64ToUtf8(resp.content) : "";
-        var jsonObj = safeJSON(content) || { db:[], counter:0 };
-        return { payload: jsonObj, sha: resp.sha || null, missing: false, cfg: cfg };
-      }
-
-      async function ghPutByApi(payload, sha){
-        var cfg = getRepoCfg();
-        var token = norm(cfg.token||"");
-        if(!token){
-          var e0 = new Error("NO_TOKEN"); e0.status = 0; e0.code = "NO_TOKEN"; throw e0;
-        }
-        var url = contentsApiUrlFromCfg(cfg);
-        if(!url){
-          var e1 = new Error("NO_REPO_CFG"); e1.status=0; e1.code="NO_REPO_CFG"; throw e1;
-        }
-        var body = {
-          message: "tasun: merge " + PAGE_KEY + " " + nowISO(),
-          content: utf8ToB64(JSON.stringify(payload, null, 2)),
-          branch: cfg.branch || "main"
-        };
-        if(sha) body.sha = sha;
-
-        return await httpJSON(url, {
-          method:"PUT",
-          headers: Object.assign({ "Accept":"application/vnd.github+json", "Content-Type":"application/json" }, ghAuthHeaders(token)),
-          body: JSON.stringify(body)
-        });
-      }
-
-      function unwrap(resp){
-        var p = resp;
-        if(p && typeof p==="object"){
-          if("payload" in p) p = p.payload;
-          else if("data" in p) p = p.data;
-          else if("result" in p) p = p.result;
-        }
+      // ===== Payload unwrap/merge (pk=uid) =====
+      function unwrap(p){
         var out = (p && typeof p==="object") ? p : {};
+        if(out && typeof out==="object"){
+          if("payload" in out) out = out.payload || {};
+          else if("data" in out) out = out.data || {};
+          else if("result" in out) out = out.result || {};
+        }
         if(!Array.isArray(out.db)) out.db = [];
         var c = Number(out.counter||0); if(!Number.isFinite(c) || c<0) c=0;
         out.counter = c;
-        return { payload: out, info: {} };
+        return out;
       }
 
       function tsOf(x){
@@ -1033,14 +931,13 @@ var $ = function(id){ return document.getElementById(id); };
         var ta = tsOf(a), tb = tsOf(b);
         if(tb>ta) return b;
         if(ta>tb) return a;
-        // tie-breaker by rev
         var ra = norm(a.rev||""), rb = norm(b.rev||"");
         return (rb>ra) ? b : a;
       }
 
       function mergePayload(remotePayload, localPayload){
-        var r = unwrap(remotePayload||{}).payload;
-        var l = unwrap(localPayload||{}).payload;
+        var r = unwrap(remotePayload||{});
+        var l = unwrap(localPayload||{});
 
         var map = Object.create(null);
         function putAll(arr){
@@ -1057,30 +954,9 @@ var $ = function(id){ return document.getElementById(id); };
         var merged = [];
         for(var k in map){ if(Object.prototype.hasOwnProperty.call(map,k)){ merged.push(map[k]); } }
 
-        // Ensure IDs unique for non-deleted
+        // assign missing/duplicate ids for non-deleted
+        var counterMerged = Math.max(Number(r.counter||0)||0, Number(l.counter||0)||0, maxId(merged));
         var used = new Set();
-        var max = 0;
-        for(var i2=0;i2<merged.length;i2++){
-          var rr = merged[i2];
-          if(rr && !rr.deleted){
-            var id = Number(rr.id);
-            if(Number.isFinite(id) && id>0){
-              if(!used.has(id)) used.add(id);
-              if(id>max) max=id;
-            }
-          }
-        }
-        var counterMerged = Math.max(Number(r.counter||0)||0, Number(l.counter||0)||0, max);
-        for(i2=0;i2<merged.length;i2++){
-          rr = merged[i2];
-          if(rr && !rr.deleted){
-            var id2 = Number(rr.id);
-            if(!Number.isFinite(id2) || id2<=0 || used.has(id2) && false){ /* noop */ }
-          }
-        }
-        // assign duplicates/missing
-        used = new Set();
-        // sort for stable assignment
         merged.sort(function(a,b){
           var da = a && a.deleted ? 1 : 0;
           var dbb = b && b.deleted ? 1 : 0;
@@ -1089,15 +965,15 @@ var $ = function(id){ return document.getElementById(id); };
           if(ia!==ib) return ia-ib;
           return tsOf(a)-tsOf(b);
         });
-        for(i2=0;i2<merged.length;i2++){
-          rr = merged[i2];
+        for(var i2=0;i2<merged.length;i2++){
+          var rr = merged[i2];
           if(!rr || rr.deleted) continue;
           var idv = Number(rr.id);
           if(!Number.isFinite(idv) || idv<=0 || used.has(idv)){
             counterMerged += 1;
             rr.id = counterMerged;
             rr.updatedAt = rr.updatedAt || nowISO();
-            rr.rev = rr.rev || ("r"+Math.random().toString(16).slice(2));
+            rr.rev = rr.rev || ("r"+Math.random().toString(16).slice(2)+"_"+Date.now().toString(16));
           }
           used.add(Number(rr.id));
           if(Number(rr.id)>counterMerged) counterMerged = Number(rr.id);
@@ -1107,249 +983,330 @@ var $ = function(id){ return document.getElementById(id); };
       }
 
       function portalUrl(){ return blobUrlFromCfg(getRepoCfg()); }
-/* =========================================================
- * Cloud API helper (Cloudflare Worker, GitHub backend)
- * - Read  : GET  {API_BASE}/api/tasun/pull?key=PAGE_KEY
- * - Merge : POST {API_BASE}/api/tasun/merge  { key, pk:"uid", payload }
- * 
- * ✅ 前端不需要/不應寫入 GitHub Token
- * ✅ GitHub Token 只放在 Worker 的 Secret（GH_TOKEN）
- * ========================================================= */
 
-var RESOURCES_URL = "tasun-resources.json";       // 用於自動取得 API_BASE（跨設備免重設）
-var API_BASE_LS_KEY = "tasunApiBase_v1";          // 備援：若 resources 取不到，可由 localStorage 記住
-var API_BASE_DEFAULT = "";                        // 仍可留空；建議在 tasun-resources.json 提供 apiBase
-var API_BASE_CACHE = "";
+      /* =========================================================
+       * Cloud API helper (Cloudflare Worker)
+       * - Read  : GET  {API_BASE}/api/tasun/pull?key=PAGE_KEY
+       * - Merge : POST {API_BASE}/api/tasun/merge  { key, pk:"uid", payload }
+       *
+       * 模式 C：
+       * ✅ 優先走 API（多人/多設備即時合併寫入）
+       * ✅ 若 API_BASE 缺失 -> fallback：GitHub raw 只讀 pull（不顯示「未設定」）
+       * ========================================================= */
+      var RESOURCES_URL = "tasun-resources.json";
+      var API_BASE_LS_KEY = "tasunApiBase_v1";
+      var API_BASE_DEFAULT = "";
+      var API_BASE_CACHE = "";
 
-function sNorm(x){ return (x===undefined||x===null) ? "" : String(x).trim(); }
-function joinApiBase(base, path){
-  base = sNorm(base).replace(/\/+$/,"");
-  path = sNorm(path);
-  if(!path) return base;
-  if(path.charAt(0)!="/") path = "/" + path;
-  return base + path;
-}
-
-async function getApiBase(){
-  if(API_BASE_CACHE) return API_BASE_CACHE;
-
-  // 1) 直接指定（例如在 index.html 或其他地方設定 window.TASUN_API_BASE）
-  var g = sNorm(window.TASUN_API_BASE);
-  if(g){ API_BASE_CACHE = g; return g; }
-
-  // 2) localStorage（備援）
-  try{
-    var ls = sNorm(localStorage.getItem(API_BASE_LS_KEY));
-    if(ls){ API_BASE_CACHE = ls; return ls; }
-  }catch(e){}
-
-  // 3) tasun-resources.json（最推薦：跨設備免重設）
-  try{
-    var url = (typeof withV==="function") ? withV(RESOURCES_URL) : RESOURCES_URL;
-    var r = await fetch(url, { cache:"no-store" });
-    if(r && r.ok){
-      var j = await r.json();
-      var v = sNorm(
-        (j && (j.apiBase || j.tasunApiBase || j.cloudApiBase || j.d1ApiBase)) ||
-        (j && j.tasunApi && (j.tasunApi.base || j.tasunApi.apiBase))
-      );
-      if(v){
-        API_BASE_CACHE = v;
-        try{ localStorage.setItem(API_BASE_LS_KEY, v); }catch(e){}
-        return v;
+      function sNorm(x){ return (x===undefined||x===null) ? "" : String(x).trim(); }
+      function joinApiBase(base, path){
+        base = sNorm(base).replace(/\/+$/,"");
+        path = sNorm(path);
+        if(!path) return base;
+        if(path.charAt(0)!="/") path = "/" + path;
+        return base + path;
       }
-    }
-  }catch(e){}
 
-  // 4) 最後備援：寫死（可不填）
-  API_BASE_CACHE = sNorm(API_BASE_DEFAULT);
-  return API_BASE_CACHE;
-}
+      // ✅ 強化：自動在 resources.json 多路徑找 apiBase
+      function deepFindApiBase(obj, pageKey){
+        try{
+          if(!obj || typeof obj!=="object") return "";
+          var direct = [
+            obj.apiBase, obj.tasunApiBase, obj.cloudApiBase, obj.d1ApiBase,
+            obj.API_BASE, obj.api_base, obj.baseUrl, obj.baseURL
+          ];
+          for(var i=0;i<direct.length;i++){
+            var v = sNorm(direct[i]);
+            if(v && /^https?:\/\//i.test(v)) return v;
+          }
+          if(obj.tasunApi && typeof obj.tasunApi==="object"){
+            var v2 = sNorm(obj.tasunApi.base || obj.tasunApi.apiBase || obj.tasunApi.url);
+            if(v2 && /^https?:\/\//i.test(v2)) return v2;
+          }
+          if(obj.cloud && typeof obj.cloud==="object"){
+            var v3 = sNorm(obj.cloud.apiBase || obj.cloud.base || obj.cloud.url);
+            if(v3 && /^https?:\/\//i.test(v3)) return v3;
+          }
+          if(obj.pages && typeof obj.pages==="object" && pageKey && obj.pages[pageKey]){
+            var p = obj.pages[pageKey];
+            var v4 = sNorm(p.apiBase || p.tasunApiBase || (p.api && p.api.base));
+            if(v4 && /^https?:\/\//i.test(v4)) return v4;
+          }
+          // breadth search (depth<=4)
+          var q = [{o:obj, d:0}];
+          var seen = new Set();
+          while(q.length){
+            var it = q.shift();
+            if(!it || !it.o || typeof it.o!=="object") continue;
+            if(it.d>4) continue;
+            if(seen.has(it.o)) continue;
+            seen.add(it.o);
+            for(var k in it.o){
+              if(!Object.prototype.hasOwnProperty.call(it.o,k)) continue;
+              var val = it.o[k];
+              if(typeof val==="string"){
+                var s = sNorm(val);
+                if(s && /^https?:\/\//i.test(s) && /tasun|api|worker|cloudflare|\/api\//i.test(s)){
+                  return s;
+                }
+              }else if(val && typeof val==="object"){
+                q.push({o:val, d:it.d+1});
+              }
+            }
+          }
+        }catch(e){}
+        return "";
+      }
 
-async function apiPull(){
-  var base = await getApiBase();
-  if(!base) throw { code:"noapi", message:"API_BASE missing" };
+      async function getApiBase(){
+        if(API_BASE_CACHE) return API_BASE_CACHE;
 
-  var url = joinApiBase(base, "/api/tasun/pull?key=" + encodeURIComponent(PAGE_KEY));
-  var r = await fetch(url, { method:"GET", credentials:"include", cache:"no-store", redirect:"manual" });
-  if(r.type==="opaqueredirect" || (r.status>=300 && r.status<400)) throw { code:"need_auth", status:r.status };
+        // 0) URL override：?apiBase=https://...
+        try{
+          var u = new URL(location.href);
+          var q = sNorm(u.searchParams.get("apiBase")||"");
+          if(q && /^https?:\/\//i.test(q)){
+            API_BASE_CACHE = q;
+            try{ localStorage.setItem(API_BASE_LS_KEY, q); }catch(e){}
+            return q;
+          }
+        }catch(e){}
 
-  if(r.status===401 || r.status===403) throw { code:"deny", status:r.status };
-  if(!r.ok) throw { code:"neterr", status:r.status };
+        // 1) window override
+        var g = sNorm(window.TASUN_API_BASE);
+        if(g && /^https?:\/\//i.test(g)){ API_BASE_CACHE = g; return g; }
 
-  var j = null;
-  try{ j = await r.json(); }catch(e){}
-  if(!j || !j.ok) throw { code:"bad", message:(j && j.error) || "bad" };
+        // 2) localStorage
+        try{
+          var ls = sNorm(localStorage.getItem(API_BASE_LS_KEY));
+          if(ls && /^https?:\/\//i.test(ls)){ API_BASE_CACHE = ls; return ls; }
+        }catch(e){}
 
-  return j;
-}
+        // 3) resources.json
+        try{
+          var url = (typeof withV==="function") ? withV(RESOURCES_URL) : RESOURCES_URL;
+          var r = await fetch(url, { cache:"no-store" });
+          if(r && r.ok){
+            var j = await r.json();
+            var v = deepFindApiBase(j, PAGE_KEY);
+            if(v){
+              API_BASE_CACHE = v;
+              try{ localStorage.setItem(API_BASE_LS_KEY, v); }catch(e){}
+              return v;
+            }
+          }
+        }catch(e){}
 
-async function apiMerge(localPayload, reason, clientMeta){
-  var base = await getApiBase();
-  if(!base) throw { code:"noapi", message:"API_BASE missing" };
+        // 4) default
+        API_BASE_CACHE = sNorm(API_BASE_DEFAULT);
+        return API_BASE_CACHE;
+      }
 
-  var url = joinApiBase(base, "/api/tasun/merge");
-  var body = {
-    key: PAGE_KEY,
-    pk: "uid",
-    reason: reason || "",
-    client: clientMeta || {},
-    payload: localPayload || { db:[], counter:0 }
-  };
+      async function apiPull(){
+        var base = await getApiBase();
+        if(!base) throw { code:"noapi", message:"API_BASE missing" };
 
-  var r = await fetch(url, {
-    method:"POST",
-    credentials:"include",
-    cache:"no-store",
-    redirect:"manual",
-    headers: { "content-type":"application/json" },
-    body: JSON.stringify(body)
-  });
-  if(r.type==="opaqueredirect" || (r.status>=300 && r.status<400)) throw { code:"need_auth", status:r.status };
+        var url = joinApiBase(base, "/api/tasun/pull?key=" + encodeURIComponent(PAGE_KEY));
+        var r = await fetch(url, { method:"GET", credentials:"include", cache:"no-store", redirect:"manual" });
+        if(r.type==="opaqueredirect" || (r.status>=300 && r.status<400)) throw { code:"need_auth", status:r.status };
+        if(r.status===401 || r.status===403) throw { code:"deny", status:r.status };
+        if(!r.ok) throw { code:"neterr", status:r.status };
 
-  if(r.status===401 || r.status===403) throw { code:"deny", status:r.status };
-  if(!r.ok) throw { code:"neterr", status:r.status };
+        var j = null;
+        try{ j = await r.json(); }catch(e){}
+        if(!j || !j.ok) throw { code:"bad", message:(j && j.error) || "bad" };
+        return j;
+      }
 
-  var j = null;
-  try{ j = await r.json(); }catch(e){}
-  if(!j || !j.ok) throw { code:"bad", message:(j && j.error) || "bad" };
+      async function apiMerge(localPayload, reason, clientMeta){
+        var base = await getApiBase();
+        if(!base) throw { code:"noapi", message:"API_BASE missing" };
 
-  return j;
-}
+        var url = joinApiBase(base, "/api/tasun/merge");
+        var body = {
+          key: PAGE_KEY,
+          pk: "uid",
+          reason: reason || "",
+          client: clientMeta || {},
+          payload: localPayload || { db:[], counter:0 }
+        };
 
-// -------------------------------
-// Cloud controller
-// -------------------------------
-function CloudCtrl(){
-  this.state = "idle";
-  this.busy = false;
-  this.dirty = false;
-  this.lastReason = "";
-  this.lastSyncAt = 0;
-  this._timer = null;
-  this._saveTimer = null;
-  // hook
-  this.apply = null;
-  this.clientMeta = null;
-}
+        var r = await fetch(url, {
+          method:"POST",
+          credentials:"include",
+          cache:"no-store",
+          redirect:"manual",
+          headers: { "content-type":"application/json" },
+          body: JSON.stringify(body)
+        });
+        if(r.type==="opaqueredirect" || (r.status>=300 && r.status<400)) throw { code:"need_auth", status:r.status };
+        if(r.status===401 || r.status===403) throw { code:"deny", status:r.status };
+        if(!r.ok) throw { code:"neterr", status:r.status };
 
-CloudCtrl.prototype._err = function(code, extra){
-  var e = new Error(code + (extra ? (": " + extra) : ""));
-  e.code = code;
-  return e;
-};
+        var j = null;
+        try{ j = await r.json(); }catch(e){}
+        if(!j || !j.ok) throw { code:"bad", message:(j && j.error) || "bad" };
+        return j;
+      }
 
-CloudCtrl.prototype.pullNow = async function(reason){
-  var self=this;
-  if(self.busy) return;
-  self.busy = true;
-  self.state = "sync";
-  cloudState = "sync";
-  renderHint();
+      // -------------------------------
+      // Cloud controller
+      // -------------------------------
+      function CloudCtrl(){
+        this.state = "idle";
+        this.busy = false;
+        this.dirty = false;
+        this.lastReason = "";
+        this.lastSyncAt = 0;
+        this._timer = null;
+        this._saveTimer = null;
+        this.apply = null;
+        this.clientMeta = null;
+      }
 
-  try{
-    var u = await apiPull();
-    self.state = "ok";
-    cloudState = "ok";
-    self.lastSyncAt = Date.now();
+      CloudCtrl.prototype._needAuthToast = function(){
+        (async function(){
+          try{
+            var base = await getApiBase();
+            var u = base ? joinApiBase(base, "/api/tasun/merge") : "";
+            if(u) toast("需要 Cloudflare Access 登入才能寫入：請先在新分頁開啟 " + u + " 進行登入，再回來重試。", 7000);
+            else toast("需要 Cloudflare Access 登入才能寫入（尚未設定 API_BASE）", 7000);
+          }catch(e){
+            toast("需要 Cloudflare Access 登入才能寫入", 7000);
+          }
+        })();
+      };
 
-    // apply remote -> local
-    if(self.apply) self.apply(u.payload, u.info || {});
-    renderAll();
-    renderHint();
+      // ✅ C 模式：先 API pull；noapi 才 fallback GitHub raw 只讀 pull
+      CloudCtrl.prototype.pullNow = async function(reason){
+        var self=this;
+        if(self.busy) return;
+        self.busy = true;
+        self.state = "sync";
+        cloudState = "sync";
+        renderHint();
 
-  }catch(e){
-    self.state = "err";
-    cloudState = e.code || "neterr";
-    renderHint();
-    if(cloudState==="need_auth"){
-      toast("需要 Cloudflare Access 登入才能寫入：請先在新分頁開啟 "+(API_BASE||"")+"\/api\/tasun\/merge 進行登入，再回來重試。", 7000);
-    }
-    // 靜默：避免一直跳錯；需要時再開 console
-    // console.warn("[cloud] pullNow failed:", e);
-  }finally{
-    self.busy = false;
-  }
-};
+        try{
+          var u = await apiPull();
+          self.state = "ok";
+          cloudState = "ok";
+          self.lastSyncAt = Date.now();
+          lastSyncAt = self.lastSyncAt;
 
-CloudCtrl.prototype.scheduleSave = function(reason){
-  var self=this;
-  if(self._saveTimer) clearTimeout(self._saveTimer);
-  self.dirty = true;
-  self.lastReason = reason || "edit";
-  self._saveTimer = setTimeout(function(){ self.saveNow(); }, 1200);
-};
+          if(self.apply) self.apply(u.payload, Object.assign({ source:"api", reason:reason||"pull" }, u.info||{}));
 
-CloudCtrl.prototype.saveNow = async function(){
-  var self=this;
-  if(self.busy) return;
-  if(!self.dirty) return;
+        }catch(e){
+          if(e && e.code==="need_auth"){
+            self.state = "err";
+            cloudState = "need_auth";
+            renderHint();
+            self._needAuthToast();
+          }else if(e && e.code==="noapi"){
+            try{
+              var g = await ghPull();
+              self.state = "readonly";
+              cloudState = "readonly";
+              self.lastSyncAt = Date.now();
+              lastSyncAt = self.lastSyncAt;
 
-  // 只允許 admin/write 寫入（read 只讀）
-  try{
-    if(typeof Auth!=="undefined" && Auth && typeof Auth.canWrite==="function" && !Auth.canWrite()){
-      self.dirty = false;
-      self.state = "readonly";
-      cloudState = "readonly";
-      renderHint();
-      return;
-    }
-  }catch(e){}
+              if(self.apply) self.apply(g, { source:"gh", reason:reason||"pull" });
 
-  self.busy = true;
-  self.state = "save";
-  cloudState = "save";
-  renderHint();
+            }catch(e2){
+              self.state = "err";
+              cloudState = "noapi";
+            }
+          }else{
+            self.state = "err";
+            cloudState = (e && e.code) ? e.code : "neterr";
+          }
+        }finally{
+          self.busy = false;
+          renderAll();
+        }
+      };
 
-  // local snapshot
-  var localPayload = { db: (Array.isArray(db)?db:[]), counter: (counter||0) };
-  var meta = null;
-  try{ meta = self.clientMeta ? self.clientMeta() : null; }catch(e){ meta = null; }
+      CloudCtrl.prototype.scheduleSave = function(reason){
+        var self=this;
+        if(self._saveTimer) clearTimeout(self._saveTimer);
+        self.dirty = true;
+        self.lastReason = reason || "edit";
+        self._saveTimer = setTimeout(function(){ self.saveNow(); }, 1200);
+      };
 
-  try{
-    var out = await apiMerge(localPayload, self.lastReason || "edit", meta || {});
-    self.state = "ok";
-    cloudState = "ok";
-    self.dirty = false;
-    self.lastSyncAt = Date.now();
+      // 保留相容（舊呼叫）
+      CloudCtrl.prototype.saveMerged = function(reason){
+        this.scheduleSave(reason || "edit");
+      };
 
-    // 伺服端回傳「已合併後」payload（避免覆蓋）
-    if(self.apply) self.apply(out.payload, out.info || { reason:"merged" });
-    renderAll();
-    renderHint();
+      CloudCtrl.prototype.saveNow = async function(){
+        var self=this;
+        if(self.busy) return;
+        if(!self.dirty) return;
 
-  }catch(e){
-    self.state = "err";
-    cloudState = e.code || "neterr";
-    renderHint();
-    if(cloudState==="need_auth"){
-      toast("需要 Cloudflare Access 登入才能寫入：請先在新分頁開啟 "+(API_BASE||"")+"\/api\/tasun\/merge 進行登入，再回來重試。", 7000);
-    }
-    // console.warn("[cloud] saveNow failed:", e);
-  }finally{
-    self.busy = false;
-  }
-};
+        // ✅ 只允許 admin/write 寫入；read 只讀
+        try{
+          if(typeof Auth!=="undefined" && Auth && typeof Auth.canWrite==="function" && !Auth.canWrite()){
+            self.dirty = false;
+            self.state = "readonly";
+            cloudState = "readonly";
+            renderHint();
+            return;
+          }
+        }catch(e){}
 
-CloudCtrl.prototype.startWatch = function(sec){
-  var self=this;
-  if(self._timer) clearInterval(self._timer);
-  var n = Math.max(10, parseInt(sec||30,10) || 30);
-  self._timer = setInterval(function(){
-    if(!self.busy){
-      // 週期性拉取（避免別台更新看不到）
-      self.pullNow("watch");
-    }
-  }, n*1000);
-};
+        self.busy = true;
+        self.state = "save";
+        cloudState = "save";
+        renderHint();
 
-CloudCtrl.prototype.destroy = function(){
-  var self=this;
-  if(self._timer) clearInterval(self._timer);
-  if(self._saveTimer) clearTimeout(self._saveTimer);
-  self._timer = null;
-  self._saveTimer = null;
-};
+        var localPayload = { db: (Array.isArray(db)?db:[]), counter: (counter||0) };
+        var meta = null;
+        try{ meta = self.clientMeta ? self.clientMeta() : null; }catch(e){ meta = null; }
+
+        try{
+          var out = await apiMerge(localPayload, self.lastReason || "edit", meta || {});
+          self.state = "ok";
+          cloudState = "ok";
+          self.dirty = false;
+          self.lastSyncAt = Date.now();
+          lastSyncAt = self.lastSyncAt;
+
+          if(self.apply) self.apply(out.payload, Object.assign({ source:"api", reason:"merged" }, out.info||{}));
+
+        }catch(e){
+          self.state = "err";
+          cloudState = (e && e.code) ? e.code : "neterr";
+          if(cloudState==="need_auth") self._needAuthToast();
+        }finally{
+          self.busy = false;
+          renderAll();
+        }
+      };
+
+      CloudCtrl.prototype.startWatch = function(sec){
+        var self=this;
+        if(self._timer) clearInterval(self._timer);
+        var n = Math.max(15, parseInt(sec||30,10) || 30);
+        self._timer = setInterval(function(){
+          if(!self.busy){
+            self.pullNow("watch");
+            // 若本機 dirty，且 API 已可用，補推一次
+            if(self.dirty){
+              getApiBase().then(function(base){
+                if(base) self.saveNow();
+              }).catch(function(){});
+            }
+          }
+        }, n*1000);
+      };
+
+      CloudCtrl.prototype.destroy = function(){
+        var self=this;
+        if(self._timer) clearInterval(self._timer);
+        if(self._saveTimer) clearTimeout(self._saveTimer);
+        self._timer = null;
+        self._saveTimer = null;
+      };
 
       // ===== Local load/save =====
       function normalizeRow(x){
@@ -1366,7 +1323,7 @@ CloudCtrl.prototype.destroy = function(){
         var remark = (x.remark ?? x.note2 ?? "").toString();
         var date   = norm(x.date ?? x.day ?? x.created ?? "");
 
-        // meta for merge
+        // ✅ v1 必備欄位（雲端合併用）
         var rev = norm(x.rev ?? x._rev ?? "");
         var updatedAt = norm(x.updatedAt ?? x.updated_at ?? "");
         var deleted = !!(x.deleted ?? x._deleted ?? false);
@@ -1378,7 +1335,6 @@ CloudCtrl.prototype.destroy = function(){
 
         if(!uid) uid = id ? ("legacy_"+String(id)) : uuid();
 
-        // derive updatedAt if missing
         if(!updatedAt){
           if(date && /^\d{4}-\d{2}-\d{2}$/.test(date)){
             updatedAt = date + "T00:00:00.000Z";
@@ -1394,7 +1350,8 @@ CloudCtrl.prototype.destroy = function(){
 
         return { uid:uid, id:id, text:text, trade:trade, system:system, source:source, attach:attach, remark:remark, date:date, rev:rev, updatedAt:updatedAt, deleted:deleted };
       }
-function loadLocal(){
+
+      function loadLocal(){
         db = [];
         counter = 0;
         try{
@@ -1534,14 +1491,12 @@ function loadLocal(){
       }
 
       function renderFilters(){
-        // trade options
         var trades = uniqSorted(dictToList(tradeDict).concat(db.map(function(r){return r.trade;})));
         var tradeSel = $("fTrade");
         var curT = tradeSel.value;
         tradeSel.innerHTML = '<option value="">全部</option>' + trades.map(function(t){ return '<option value="'+escHtml(t)+'">'+escHtml(t)+'</option>'; }).join("");
         tradeSel.value = trades.indexOf(curT)>=0 ? curT : "";
 
-        // sys options (global, but if trade selected -> only those bound)
         var curTrade = norm(tradeSel.value);
         var sysList = [];
         if(curTrade && Array.isArray(tradeSysMap[curTrade]) && tradeSysMap[curTrade].length){
@@ -1558,7 +1513,7 @@ function loadLocal(){
       function renderTable(rows){
         var canWrite = Auth.canWrite ? Auth.canWrite() : false;
         var tbody = $("tbody");
-        var html = "";
+        var html2 = "";
         for(var i=0;i<rows.length;i++){
           var r = rows[i];
           var sel = (r.uid === selectedUid) ? ' class="sel"' : "";
@@ -1567,7 +1522,7 @@ function loadLocal(){
           if(canWrite){
             ops += ' <button class="btn small" type="button" data-op="edit" data-uid="'+escHtml(r.uid)+'"><span class="t">編輯</span></button>';
           }
-          html += '<tr'+sel+' data-uid="'+escHtml(r.uid)+'">'
+          html2 += '<tr'+sel+' data-uid="'+escHtml(r.uid)+'">'
             + '<td style="text-align:center; font-weight:900;">'+escHtml(String(r.id||""))+'</td>'
             + '<td>'+escHtml(r.text||"")+'</td>'
             + '<td style="text-align:center;">'+escHtml(r.trade||"")+'</td>'
@@ -1579,9 +1534,8 @@ function loadLocal(){
             + '<td style="text-align:center; white-space:nowrap;">'+ops+'</td>'
             + '</tr>';
         }
-        tbody.innerHTML = html || '<tr><td colspan="9" style="text-align:center; padding:18px; color:rgba(0,0,0,.55); font-weight:900;">（目前沒有資料）</td></tr>';
+        tbody.innerHTML = html2 || '<tr><td colspan="9" style="text-align:center; padding:18px; color:rgba(0,0,0,.55); font-weight:900;">（目前沒有資料）</td></tr>';
 
-        // wire attachments
         var btns = tbody.querySelectorAll('button[data-att]');
         for(i=0;i<btns.length;i++){
           btns[i].addEventListener("click", function(ev){
@@ -1617,11 +1571,11 @@ function loadLocal(){
           wrap.innerHTML = '<div class="noteCard" style="text-align:center; cursor:default;"><div class="noteBody">（目前沒有資料）</div></div>';
           return;
         }
-        var html = "";
+        var html3 = "";
         for(var i=0;i<rows.length;i++){
           var r = rows[i];
           var sel = (r.uid === selectedUid) ? " sel" : "";
-          html += '<div class="noteCard'+sel+'" data-uid="'+escHtml(r.uid)+'">'
+          html3 += '<div class="noteCard'+sel+'" data-uid="'+escHtml(r.uid)+'">'
             + '<div class="noteHead">'
               + '<div class="noteMeta">'
                 + '<span class="noteTag">'+escHtml(r.trade||"")+'</span>'
@@ -1641,7 +1595,7 @@ function loadLocal(){
             + '</div>'
           + '</div>';
         }
-        wrap.innerHTML = html;
+        wrap.innerHTML = html3;
 
         var cards = wrap.querySelectorAll(".noteCard");
         for(i=0;i<cards.length;i++){
@@ -1680,12 +1634,14 @@ function loadLocal(){
         var role = Auth.role ? (Auth.role() || "—") : "—";
 
         var cloudTxt = "離線";
+        if(cloudState==="sync") cloudTxt = "同步中";
+        if(cloudState==="save") cloudTxt = "上傳中";
         if(cloudState==="ok") cloudTxt = "OK";
-        if(cloudState==="deny") cloudTxt = "Token/權限不足";
+        if(cloudState==="deny") cloudTxt = "權限不足";
         if(cloudState==="need_auth") cloudTxt = "需登入 Access";
         if(cloudState==="neterr") cloudTxt = "連線失敗";
         if(cloudState==="noapi") cloudTxt = "未設定";
-        if(cloudState==="notfound") cloudTxt = "找不到檔案";
+        if(cloudState==="bad") cloudTxt = "資料異常";
         if(cloudState==="readonly") cloudTxt = "僅讀";
         var syncTxt = lastSyncAt ? fmtClock(lastSyncAt) : "—";
 
@@ -1694,7 +1650,7 @@ function loadLocal(){
           +'<span class="hb"><span class="k">權限</span><span class="v">'+escHtml(role)+'</span></span>'
           +'<span class="hb"><span class="k">顯示</span><span class="v">'+escHtml(String(shown))+'</span></span>'
           +'<span class="hb"><span class="k">總筆數</span><span class="v">'+escHtml(String(total))+'</span></span>'
-          +'<span class="hb '+((cloudState==="ok")?"":"bad")+'"><span class="k">雲端</span><span class="v">'+escHtml(cloudTxt)+'</span></span>'
+          +'<span class="hb '+((cloudState==="ok" || cloudState==="readonly" || cloudState==="sync" || cloudState==="save")?"":"bad")+'"><span class="k">雲端</span><span class="v">'+escHtml(cloudTxt)+'</span></span>'
           +'<span class="hb"><span class="k">同步</span><span class="v">'+escHtml(syncTxt)+'</span></span>';
       }
 
@@ -1721,6 +1677,47 @@ function loadLocal(){
         location.href = withV(h);
       }
 
+      // ===== Cloud apply (merge into local) =====
+      function countAlive(arr){
+        var n=0;
+        for(var i=0;i<(arr?arr.length:0);i++){
+          if(arr[i] && !arr[i].deleted) n++;
+        }
+        return n;
+      }
+
+      function applyCloudPayload(remotePayload, info){
+        info = info || {};
+        var remote = unwrap(remotePayload || {});
+        var localSnap = { db: db, counter: counter };
+
+        var beforeAlive = countAlive(db);
+        var remoteAlive = countAlive(remote.db);
+
+        var merged = mergePayload(remote, localSnap);
+
+        db = (merged.db||[]).map(normalizeRow).filter(Boolean);
+        counter = Number(merged.counter||0) || 0;
+        counter = Math.max(counter, maxId(db));
+
+        saveLocal();
+        ensureDictFromDb();
+
+        lastSyncAt = Date.now();
+
+        // ✅ 自動補推：只有在 API 來源、且 admin/write（read 不寫）
+        try{
+          var canWrite = Auth.canWrite ? Auth.canWrite() : false;
+          if(canWrite && info.source==="api"){
+            var mergedAlive = countAlive(db);
+            if(remoteAlive===0 && beforeAlive>0) cloud.scheduleSave("reconcile");
+            else if(mergedAlive > remoteAlive) cloud.scheduleSave("reconcile");
+          }
+        }catch(e){}
+
+        renderAll();
+      }
+
       // ===== Modal =====
       function setModalVisible(on){ $("mask").style.display = on ? "flex" : "none"; }
       function setModalEditable(editable){
@@ -1739,7 +1736,6 @@ function loadLocal(){
         $("btnSave").style.display = editable ? "inline-block" : "none";
         $("btnCancel").style.display = editable ? "inline-block" : "none";
 
-        // ✅ delete：write/admin 都可刪（read 不可）
         var canWrite = Auth.canWrite ? Auth.canWrite() : false;
         $("btnDelete").style.display = (editable && canWrite && editingUid != null) ? "inline-block" : "none";
       }
@@ -1762,7 +1758,6 @@ function loadLocal(){
         if(!tSel.innerHTML) tSel.innerHTML = '<option value=""></option>';
         if(trades.indexOf(curTrade)>=0) tSel.value = curTrade;
 
-        // systems filtered by trade
         var sysList = [];
         if(curTrade && Array.isArray(tradeSysMap[curTrade]) && tradeSysMap[curTrade].length){
           sysList = tradeSysMap[curTrade].slice();
@@ -1871,7 +1866,8 @@ function loadLocal(){
         renderAll();
         closeModal();
 
-        if(cloud) cloud.saveMerged();
+        // ✅ 修正：原本呼叫 cloud.saveMerged() 有些版本不存在；這裡統一用 scheduleSave
+        if(cloud) cloud.scheduleSave("edit");
         toast("已儲存");
       }
 
@@ -1884,7 +1880,6 @@ function loadLocal(){
         var r = db.find(function(x){ return x.uid === editingUid; });
         if(!r){ toast("找不到資料"); return; }
 
-        // ✅ soft-delete (tombstone) for cross-device sync
         r.deleted = true;
         r.updatedAt = new Date().toISOString();
         r.rev = "r"+Math.random().toString(16).slice(2)+"_"+Date.now().toString(16);
@@ -1892,7 +1887,6 @@ function loadLocal(){
         saveLocal();
         ensureDictFromDb();
 
-        // select next non-deleted
         var rows = filteredRows();
         selectedUid = rows.length ? rows[0].uid : null;
 
@@ -1900,10 +1894,11 @@ function loadLocal(){
         renderAll();
         toast("已刪除");
 
-        if(cloud) cloud.saveMerged();
+        // ✅ 立即排程合併寫入
+        if(cloud) cloud.scheduleSave("delete");
       }
 
-// ===== Prompt add dict =====
+      // ===== Prompt add dict =====
       function openPrompt(mode){
         promptMode = mode; // trade | sys | source
         $("pMask").style.display = "flex";
@@ -1960,26 +1955,21 @@ function loadLocal(){
         toast("已匯出備份");
       }
 
-      // ===== Cloud settings modal =====
+      // ===== Cloud settings modal (保留原功能) =====
       function parseCloudCfgInput(raw){
         raw = norm(raw);
         if(!raw) return null;
 
-        // Allow paste: raw URL
-        // https://raw.githubusercontent.com/OWNER/REPO/BRANCH/PATH
         var m1 = raw.match(/raw\.githubusercontent\.com\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)/i);
         if(m1){
           return { ownerRepo: (m1[1]+"/"+m1[2]), branch: m1[3], path: m1[4], token: "" };
         }
 
-        // Allow paste: blob URL
-        // https://github.com/OWNER/REPO/blob/BRANCH/PATH
         var m2 = raw.match(/github\.com\/([^\/]+)\/([^\/]+)\/blob\/([^\/]+)\/(.+)/i);
         if(m2){
           return { ownerRepo: (m2[1]+"/"+m2[2]), branch: m2[3], path: m2[4], token: "" };
         }
 
-        // Split parts: owner/repo | branch | path | token
         var parts = raw
           .replace(/[\u2460-\u2469]/g," ")
           .replace(/[①②③④⑤⑥⑦⑧⑨]/g," ")
@@ -1989,7 +1979,6 @@ function loadLocal(){
           .trim()
           .split(/[\s|,;]+/).map(norm).filter(Boolean);
 
-        // If only token pasted
         if(parts.length===1 && parts[0].length>=20 && !parts[0].includes("/")){
           return { ownerRepo:"", branch:"", path:"", token: parts[0] };
         }
@@ -2039,7 +2028,6 @@ function loadLocal(){
         try{ localStorage.removeItem(GH_CFG_KEY); }catch(e){}
         try{ sessionStorage.removeItem(GH_TOKEN_KEY); }catch(e){}
         try{ localStorage.removeItem(GH_TOKEN_KEY); }catch(e){}
-        try{ window.TASUN_GH_TOKEN = ""; }catch(e){}
         toast("已清除（回到預設 repo；GH_TOKEN 已移除）");
         closeTokenMask();
         cloudState = "offline";
@@ -2057,18 +2045,32 @@ function loadLocal(){
       }
 
       function startCloud(forceNow){
-        if(!cloud) cloud = new CloudCtrl();
-        var cfg = getRepoCfg();
-        if(!cfg.ownerRepo || !cfg.branch || !cfg.path){
-          cloudState = "noapi";
-          renderHint();
-          return;
+        if(!cloud){
+          cloud = new CloudCtrl();
+          cloud.apply = applyCloudPayload;
+          cloud.clientMeta = function(){
+            var u = currentUser() || {};
+            return {
+              pageKey: PAGE_KEY,
+              appVer: (window.TASUN_APP_VER||""),
+              user: u.username || "",
+              role: (Auth.role ? (Auth.role()||"") : ""),
+              ts: nowISO(),
+              ua: navigator.userAgent
+            };
+          };
         }
-        cloud.startWatch(30);
-        if(forceNow) cloud.pullNow();
+        // watch: API 有 -> 30s；無 -> 60s（fallback GitHub 只讀）
+        getApiBase().then(function(base){
+          cloud.startWatch(base ? 30 : 60);
+          if(forceNow) cloud.pullNow("boot");
+        }).catch(function(){
+          cloud.startWatch(60);
+          if(forceNow) cloud.pullNow("boot");
+        });
       }
 
-// ===== Auth integration =====
+      // ===== Auth integration =====
       function wireLoginUI(){
         $("btnView").addEventListener("click", function(){ Auth.openLogin && Auth.openLogin(); });
         $("loginClose").addEventListener("click", function(){ Auth.closeLogin && Auth.closeLogin(); });
@@ -2118,7 +2120,7 @@ function loadLocal(){
 
         $("btnCloud").addEventListener("click", function(){
           openCloudPortal();
-          if(cloud) cloud.pullNow();
+          if(cloud) cloud.pullNow("manual");
         });
 
         $("btnExport").addEventListener("click", exportBackup);
@@ -2197,5 +2199,6 @@ function loadLocal(){
     }
   })();
   </script>
+
 </body>
 </html>
