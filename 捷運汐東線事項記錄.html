@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
@@ -877,22 +876,19 @@
 
       function sNorm(x){ return (x===undefined||x===null) ? "" : String(x).trim(); }
 
-      // ✅ 容錯：允許 tasun-resources.json 內含註解/尾逗號（GitHub 上常見）
-      function stripJsonComments(txt){
-        txt = String(txt||"");
-        txt = txt.replace(/\/\*[\s\S]*?\*\//g, "");
-        txt = txt.replace(/^\s*\/\/.*$/gm, "");
-        return txt;
-      }
-      function stripTrailingCommas(txt){
-        txt = String(txt||"");
-        return txt.replace(/,\s*([}\]])/g, "$1");
-      }
-      function parseJsonLenient(txt){
-        try{ return JSON.parse(txt); }catch(e1){}
-        try{ return JSON.parse(stripTrailingCommas(stripJsonComments(txt))); }catch(e2){}
-        return null;
-      }
+// ✅ 兼容：tasun-resources.json 若誤放了 /* ... */ 註解或多餘逗號，仍可解析
+function parseJsonLenient(raw){
+  raw = (raw===undefined||raw===null) ? "" : String(raw);
+  try{ return JSON.parse(raw); }catch(e){}
+  try{
+    // 移除區塊註解（JSON 本身不支援註解）
+    var cleaned = raw.replace(/\/\*[\s\S]*?\*\//g, "");
+    // 移除尾逗號：{ "a":1, } / [1,2,]
+    cleaned = cleaned.replace(/,\s*([}\]])/g, "$1");
+    return JSON.parse(cleaned);
+  }catch(e2){}
+  return null;
+}
 
       function joinApiBase(base, path){
         base = sNorm(base).replace(/\/+$/,"");
@@ -989,20 +985,23 @@
         // 3) resources.json（正式來源）
         try{
           var url = (typeof withV==="function") ? withV(RESOURCES_URL) : RESOURCES_URL;
-          var r = await fetch(url, { cache:"no-store" });
-          if(r && r.ok){
-            var txt = await r.text();
-            var j = parseJsonLenient(txt);
-            var picked = pickFromResources(j);
-            if(picked){
-              cfg.endpoints = picked.endpoints || cfg.endpoints;
-              if(isValidApiBase(picked.apiBase)){
-                cfg.apiBase = picked.apiBase;
-                try{ localStorage.setItem(API_BASE_LS_KEY, cfg.apiBase); }catch(e){}
-              }
-            }
-          }
-        }catch(e){}
+          try{
+  var url = (typeof withV==="function") ? withV(RESOURCES_URL) : RESOURCES_URL;
+  var r = await fetch(url, { cache:"no-store" });
+  if(r && r.ok){
+    var txt = await r.text();
+    var j = parseJsonLenient(txt);
+    var picked = j ? pickFromResources(j) : null;
+    if(picked){
+      cfg.endpoints = picked.endpoints || cfg.endpoints;
+      if(isValidApiBase(picked.apiBase)){
+        cfg.apiBase = picked.apiBase;
+        try{ localStorage.setItem(API_BASE_LS_KEY, cfg.apiBase); }catch(e){}
+      }
+    }
+  }
+}catch(e){}
+
 
         // 4) endpoints override（可選）
         try{
@@ -1025,56 +1024,139 @@
         return cfg.apiBase;
       }
 
+            // --- Connectivity helpers (CORS/Access-safe + endpoint auto-heal) ---
+      async function pingNoCors(url){
+        try{
+          await fetch(url, { method:"GET", mode:"no-cors", cache:"no-store" });
+          return true;
+        }catch(e){
+          return false;
+        }
+      }
+
+      function persistEndpointOverride(partial){
+        partial = (partial && typeof partial==="object") ? partial : {};
+        try{
+          var cur = null;
+          try{ cur = JSON.parse(localStorage.getItem(API_EP_LS_KEY)||""); }catch(e){}
+          if(!cur || typeof cur!=="object") cur = {};
+          var out = Object.assign({}, cur, partial);
+          localStorage.setItem(API_EP_LS_KEY, JSON.stringify(out));
+        }catch(e){}
+        _CLOUD_CFG_CACHE = null;
+      }
+
+      async function safeFetch(url, opts, healthUrl){
+        try{
+          return await fetch(url, opts);
+        }catch(err){
+          // If network reachable but fetch blocked (CORS/Access), guide user to login
+          try{
+            if(healthUrl && await pingNoCors(healthUrl)){
+              throw { code:"need_auth", message:"blocked", inner: String(err||"") };
+            }
+          }catch(e2){}
+          throw { code:"neterr", message:String(err||"") };
+        }
+      }
+
       async function apiPull(){
         var cfg = await getCloudCfg();
         if(!isValidApiBase(cfg.apiBase)) throw { code:"noapi", message:"API_BASE missing" };
 
-        var url = joinApiBase(cfg.apiBase, cfg.endpoints.read);
-        url = addParam(url, "key", PAGE_KEY);
+        var healthUrl = joinApiBase(cfg.apiBase, (cfg.endpoints && cfg.endpoints.health) || "/health");
 
-        var r = await fetch(url, { method:"GET", credentials:"include", cache:"no-store", redirect:"manual" });
-        if(r.type==="opaqueredirect" || (r.status>=300 && r.status<400)) throw { code:"need_auth", status:r.status };
-        if(r.status===401 || r.status===403) throw { code:"deny", status:r.status };
-        if(!r.ok) throw { code:"neterr", status:r.status };
+        async function pullWith(path){
+          var url = joinApiBase(cfg.apiBase, path);
+          url = addParam(url, "key", PAGE_KEY);
 
-        var j = null;
-        try{ j = await r.json(); }catch(e){}
-        if(!j || !j.ok) throw { code:"bad", message:(j && j.error) || "bad" };
-        return j;
+          var r = await safeFetch(url, { method:"GET", credentials:"include", cache:"no-store", redirect:"manual" }, healthUrl);
+
+          if(r.type==="opaqueredirect" || (r.status>=300 && r.status<400)) throw { code:"need_auth", status:r.status };
+          if(r.status===401 || r.status===403) throw { code:"deny", status:r.status };
+          if(!r.ok) throw { code:"neterr", status:r.status, path:path };
+
+          var j = null;
+          try{ j = await r.json(); }catch(e){}
+          if(!j || !j.ok) throw { code:"bad", message:(j && j.error) || "bad" };
+          return j;
+        }
+
+        try{
+          return await pullWith(cfg.endpoints.read);
+        }catch(e){
+          // Endpoint auto-heal: some workers use different paths
+          if(e && e.code==="neterr" && (e.status===404 || e.status===405)){
+            var alts = ["/api/read", "/api/tasun/pull", "/api/pull"];
+            for(var i=0;i<alts.length;i++){
+              var p = alts[i];
+              if(p===cfg.endpoints.read) continue;
+              try{
+                var j2 = await pullWith(p);
+                persistEndpointOverride({ read: p });
+                return j2;
+              }catch(e2){}
+            }
+          }
+          throw e;
+        }
       }
 
       async function apiMerge(localPayload, reason, clientMeta){
         var cfg = await getCloudCfg();
         if(!isValidApiBase(cfg.apiBase)) throw { code:"noapi", message:"API_BASE missing" };
 
-        var url = joinApiBase(cfg.apiBase, cfg.endpoints.merge);
-        var body = {
-          key: PAGE_KEY,
-          pk: "uid",
-          reason: reason || "",
-          client: clientMeta || {},
-          payload: localPayload || { db:[], counter:0 }
-        };
+        var healthUrl = joinApiBase(cfg.apiBase, (cfg.endpoints && cfg.endpoints.health) || "/health");
 
-        var r = await fetch(url, {
-          method:"POST",
-          credentials:"include",
-          cache:"no-store",
-          redirect:"manual",
-          headers: { "content-type":"application/json" },
-          body: JSON.stringify(body)
-        });
-        if(r.type==="opaqueredirect" || (r.status>=300 && r.status<400)) throw { code:"need_auth", status:r.status };
-        if(r.status===401 || r.status===403) throw { code:"deny", status:r.status };
-        if(!r.ok) throw { code:"neterr", status:r.status };
+        async function mergeWith(path){
+          var url = joinApiBase(cfg.apiBase, path);
+          var body = {
+            key: PAGE_KEY,
+            pk: "uid",
+            reason: reason || "",
+            client: clientMeta || {},
+            payload: localPayload || { db:[], counter:0 }
+          };
 
-        var j = null;
-        try{ j = await r.json(); }catch(e){}
-        if(!j || !j.ok) throw { code:"bad", message:(j && j.error) || "bad" };
-        return j;
+          var r = await safeFetch(url, {
+            method:"POST",
+            credentials:"include",
+            cache:"no-store",
+            redirect:"manual",
+            headers: { "content-type":"application/json" },
+            body: JSON.stringify(body)
+          }, healthUrl);
+
+          if(r.type==="opaqueredirect" || (r.status>=300 && r.status<400)) throw { code:"need_auth", status:r.status };
+          if(r.status===401 || r.status===403) throw { code:"deny", status:r.status };
+          if(!r.ok) throw { code:"neterr", status:r.status, path:path };
+
+          var j = null;
+          try{ j = await r.json(); }catch(e){}
+          if(!j || !j.ok) throw { code:"bad", message:(j && j.error) || "bad" };
+          return j;
+        }
+
+        try{
+          return await mergeWith(cfg.endpoints.merge);
+        }catch(e){
+          if(e && e.code==="neterr" && (e.status===404 || e.status===405)){
+            var alts = ["/api/merge", "/api/tasun/merge"];
+            for(var i=0;i<alts.length;i++){
+              var p = alts[i];
+              if(p===cfg.endpoints.merge) continue;
+              try{
+                var j2 = await mergeWith(p);
+                persistEndpointOverride({ merge: p });
+                return j2;
+              }catch(e2){}
+            }
+          }
+          throw e;
+        }
       }
 
-      // -------------------------------
+// -------------------------------
       // Cloud controller
       // -------------------------------
       function CloudCtrl(){
@@ -1762,7 +1844,7 @@
           var ta = a && a.updatedAt ? String(a.updatedAt) : "";
           var tb = b && b.updatedAt ? String(b.updatedAt) : "";
           if(ta!==tb) return ta<tb?-1:1;
-          return String(a && a.uid || "").localeCompare(String(a && a.uid || ""));
+          return String(a && a.uid || "").localeCompare(String(b && b.uid || ""));
         });
         counter = Math.max(counter, maxId(db));
         saveLocal();
