@@ -1049,7 +1049,19 @@ function parseJsonLenient(raw){
         try{ localStorage.setItem(CREDMODE_KEY, v); }catch(e){}
       }
 
-      // ✅ 用 health 探測目前狀態：
+      
+
+      // no-cors 只用來判斷「網路可達/可能被 Access 或 CORS 擋」
+      async function pingNoCors(url){
+        try{
+          await fetch(url, { method:'GET', mode:'no-cors', cache:'no-store' });
+          return true;
+        }catch(e){
+          return false;
+        }
+      }
+
+// ✅ 用 health 探測目前狀態：
       // - need_auth: 3xx/401/403/opaqueredirect（通常是 Access 轉址或拒絕）
       // - svcerr: 5xx（Worker 例外/後端掛掉）
       // - ok: 2xx/4xx（至少可連到 Worker；4xx 代表路由/參數問題但不是 Access）
@@ -1074,6 +1086,12 @@ function parseJsonLenient(raw){
             // try next cred mode
           }
         }
+
+        // CORS/Access/Worker 錯誤頁通常會讓 CORS fetch 直接 throw；
+        // 這裡用 no-cors 只判斷「能不能連到」，能連到就回傳 blocked（需登入 or 服務異常）
+        try{
+          if(await pingNoCors(healthUrl)) return { kind:'blocked', status:0 };
+        }catch(e2){}
         return { kind:'neterr', status:0 };
       }
 
@@ -1101,6 +1119,7 @@ function parseJsonLenient(raw){
         try{
           var probe = await probeHealth(healthUrl);
           if(probe.kind==='need_auth') throw { code:'need_auth', status:probe.status, message:'blocked' };
+          if(probe.kind==='blocked') throw { code:'blocked', status:probe.status, message:'blocked' };
           if(probe.kind==='svcerr') throw { code:'svcerr', status:probe.status, message:'worker_exception' };
         }catch(e2){
           if(e2 && e2.code) throw e2;
@@ -1121,6 +1140,7 @@ function parseJsonLenient(raw){
           var probe = await probeHealth(health);
           if(probe.kind==='need_auth') return 'need_auth';
           if(probe.kind==='svcerr') return 'svcerr';
+          if(probe.kind==='blocked') return 'blocked';
         }catch(_e){}
         return (e && e.code) ? e.code : 'neterr';
       }
@@ -1133,7 +1153,9 @@ function parseJsonLenient(raw){
           if(!(cfg && cfg.apiBase) || !isValidApiBase(cfg.apiBase)) return false;
 
           var ep = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-          var url = joinApiBase(cfg.apiBase, (ep.health || '/health'));
+          // ✅ 重要：用「受 Access 保護的 API」來觸發登入（/health 可能不在 Access 保護範圍內）
+          var url = joinApiBase(cfg.apiBase, (ep.read || '/api/read'));
+          url = addParam(url, 'key', PAGE_KEY);
 
           // 防止狂跳：8 秒內只嘗試一次；成功開啟則本次工作階段不再重複（除非 force）
           var now = Date.now();
@@ -1179,7 +1201,7 @@ function parseJsonLenient(raw){
         }
       }
 
-function persistEndpointOverride(partial){
+      function persistEndpointOverride(partial){
         partial = (partial && typeof partial==='object') ? partial : {};
         try{
           var cur = null;
@@ -1806,6 +1828,7 @@ function persistEndpointOverride(partial){
         if(cloudState==="save") cloudTxt = "上傳中";
         if(cloudState==="ok") cloudTxt = "OK";
         if(cloudState==="deny") cloudTxt = "權限不足";
+        if(cloudState==="blocked") cloudTxt = "需登入/服務異常";
         if(cloudState==="need_auth") cloudTxt = "需登入 Access";
         if(cloudState==="neterr") cloudTxt = "連線失敗";
         if(cloudState==="noapi") cloudTxt = "未設定";
@@ -2211,35 +2234,8 @@ function persistEndpointOverride(partial){
 
       async function openCloudPortal(){
         try{
-          var cfg = await getCloudCfg();
-          if(!(cfg && cfg.apiBase && cfg.endpoints) || !isValidApiBase(cfg.apiBase)){
-            toast("尚未設定 apiBase");
-            return;
-          }
-
-          var healthUrl = joinApiBase(cfg.apiBase, (cfg.endpoints && cfg.endpoints.health) || "/health");
-          var readUrl = joinApiBase(cfg.apiBase, (cfg.endpoints && cfg.endpoints.read) || "/api/read");
-          readUrl = addParam(readUrl, "key", PAGE_KEY);
-
-          // ✅ 優先嘗試：若已登入且 /api/read 可正常回應，就開啟「雲端資料」分頁
-          try{
-            var r = await safeFetch(readUrl, { method:"GET", cache:"no-store", redirect:"manual" }, healthUrl);
-
-            if(r && (r.type==="opaqueredirect" || (r.status>=300 && r.status<400) || r.status===401 || r.status===403)){
-              await openAccessHealthTab({ force:true, reason:"cloud_btn_redirect" });
-              return;
-            }
-
-            if(r && r.ok){
-              try{ window.open(readUrl, "_blank", "noopener"); }catch(e){}
-              return;
-            }
-          }catch(_e){
-            // fallthrough -> open Access login tab
-          }
-
-          // ✅ 無法直接讀取（需要 Access / CORS / Worker 例外）：改開啟 /health 讓你登入
-          var ok = await openAccessHealthTab({ force:true, reason:"cloud_btn" });
+          // ✅ 這顆按鈕的目的：協助完成 Access 登入（不直接打 /api/read，避免 Worker 例外頁面 1101）
+          var ok = await openAccessHealthTab({ force:true, reason:'cloud_btn' });
           if(!ok){
             toast("需要 Cloudflare Access 登入：若瀏覽器擋彈出視窗，請點一下本頁任意處，會自動開啟登入分頁。", 7000);
           }
