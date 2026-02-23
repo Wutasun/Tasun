@@ -782,7 +782,7 @@
       var lastSyncAt = 0;
 
       // ✅ 增加 sync/save 顯示狀態
-      var cloudState = "offline"; // offline | sync | save | ok | readonly | need_auth | deny | neterr | noapi | bad
+      var cloudState = "offline"; // offline | sync | save | ok | readonly | need_auth | deny | neterr | noapi | bad | svcerr
 
       function safeJSON(raw){ if(!raw) return null; try{ return JSON.parse(raw); }catch(e){ return null; } }
       function nowISO(){ return new Date().toISOString(); }
@@ -1030,6 +1030,13 @@ function parseJsonLenient(raw){
       // 1) 有 Cloudflare Access：需要 credentials=include 才會帶 cookie
       // 2) 沒有 Access 但 Worker CORS 用 '*'：credentials=include 會被瀏覽器擋（必須改 omit）
       // 因此這裡做「自動偵測 credMode」，不需要任何人手動設定。
+      
+      // --- Connectivity helpers (CORS/Access-safe + cred-mode auto-detect + endpoint auto-heal) ---
+
+      // ✅ CORS 與 Access 的兩種常見狀況：
+      // 1) 有 Cloudflare Access：需要 credentials=include 才會帶 cookie
+      // 2) 沒有 Access 但 Worker CORS 用 '*'：credentials=include 會被瀏覽器擋（必須改 omit）
+      // 因此這裡做「自動偵測 credMode」，不需要任何人手動設定。
       var CREDMODE_KEY = 'tasunApiCredMode_v1__' + PAGE_KEY; // value: 'include' | 'omit'
       function getCredMode(){
         try{
@@ -1042,14 +1049,32 @@ function parseJsonLenient(raw){
         try{ localStorage.setItem(CREDMODE_KEY, v); }catch(e){}
       }
 
-      async function pingNoCors(url){
-        try{
-          // no-cors 只用來判斷「網路可達/需要登入」，不讀回應內容
-          await fetch(url, { method:'GET', mode:'no-cors', cache:'no-store' });
-          return true;
-        }catch(e){
-          return false;
+      // ✅ 用 health 探測目前狀態：
+      // - need_auth: 3xx/401/403/opaqueredirect（通常是 Access 轉址或拒絕）
+      // - svcerr: 5xx（Worker 例外/後端掛掉）
+      // - ok: 2xx/4xx（至少可連到 Worker；4xx 代表路由/參數問題但不是 Access）
+      async function probeHealth(healthUrl){
+        if(!healthUrl) return { kind:'unknown', status:0 };
+
+        var pref = getCredMode();
+        var order = (pref==='omit') ? ['omit','include'] : ['include','omit'];
+
+        for(var i=0;i<order.length;i++){
+          var cm = order[i];
+          try{
+            var r = await fetch(healthUrl, { method:'GET', cache:'no-store', redirect:'manual', credentials: cm });
+
+            if(cm!==pref && r && r.ok){ setCredMode(cm); }
+
+            if(r.type==='opaqueredirect' || (r.status>=300 && r.status<400)) return { kind:'need_auth', status:r.status };
+            if(r.status===401 || r.status===403) return { kind:'need_auth', status:r.status };
+            if(r.status>=500) return { kind:'svcerr', status:r.status };
+            return { kind:'ok', status:r.status };
+          }catch(e){
+            // try next cred mode
+          }
         }
+        return { kind:'neterr', status:0 };
       }
 
       async function safeFetch(url, opts, healthUrl){
@@ -1063,7 +1088,7 @@ function parseJsonLenient(raw){
           try{
             var o = Object.assign({}, (opts||{}), { credentials: cm });
             var r = await fetch(url, o);
-            // 若第二種模式成功且回應 OK，記住它（避免下次再失敗）
+
             if(cm!==pref && r && r.ok){ setCredMode(cm); }
             return r;
           }catch(err){
@@ -1071,14 +1096,15 @@ function parseJsonLenient(raw){
           }
         }
 
-        // fetch 直接 throw（大多是 CORS 或 Access 擋住或 DNS/網路問題）
-        // 若 health 可達，視為「需要 Access 登入」或「被 CORS 擋」——都引導走登入/重試
+        // fetch 直接 throw（大多是 CORS/拒絕/網路錯）
+        // 用 health 再判斷是 Access 還是 Worker 服務異常
         try{
-          if(healthUrl && await pingNoCors(healthUrl)){
-            throw { code:'need_auth', message:'blocked', inner:String(lastErr||'') };
-          }
-        }catch(e2){}
-
+          var probe = await probeHealth(healthUrl);
+          if(probe.kind==='need_auth') throw { code:'need_auth', status:probe.status, message:'blocked' };
+          if(probe.kind==='svcerr') throw { code:'svcerr', status:probe.status, message:'worker_exception' };
+        }catch(e2){
+          if(e2 && e2.code) throw e2;
+        }
         throw { code:'neterr', message:String(lastErr||'') };
       }
 
@@ -1086,18 +1112,74 @@ function parseJsonLenient(raw){
         // 先尊重既有 code
         if(e && e.code && e.code !== 'neterr') return e.code;
 
-        // neterr/未知：用 no-cors 探測 health 來判斷是不是 Access/CORS
+        // neterr/未知：用 health 探測判斷是不是 Access/CORS 或 Worker 5xx
         try{
           var cfg = await getCloudCfg();
           var base = cfg && cfg.apiBase ? cfg.apiBase : '';
           var ep = (cfg && cfg.endpoints) ? cfg.endpoints : {};
           var health = base ? joinApiBase(base, (ep.health||'/health')) : '';
-          if(health && await pingNoCors(health)) return 'need_auth';
+          var probe = await probeHealth(health);
+          if(probe.kind==='need_auth') return 'need_auth';
+          if(probe.kind==='svcerr') return 'svcerr';
         }catch(_e){}
         return (e && e.code) ? e.code : 'neterr';
       }
 
-      function persistEndpointOverride(partial){
+      // ✅ Access 登入分頁（嘗試自動開啟；若被擋，改為下一次點擊時開啟）
+      async function openAccessHealthTab(opts){
+        opts = (opts && typeof opts==='object') ? opts : {};
+        try{
+          var cfg = await getCloudCfg();
+          if(!(cfg && cfg.apiBase) || !isValidApiBase(cfg.apiBase)) return false;
+
+          var ep = (cfg && cfg.endpoints) ? cfg.endpoints : {};
+          var url = joinApiBase(cfg.apiBase, (ep.health || '/health'));
+
+          // 防止狂跳：8 秒內只嘗試一次；成功開啟則本次工作階段不再重複（除非 force）
+          var now = Date.now();
+          var TRY_KEY = 'tasun_access_try__' + PAGE_KEY;
+          var OK_KEY  = 'tasun_access_ok__' + PAGE_KEY;
+
+          if(!opts.force){
+            try{
+              var okAt = Number(sessionStorage.getItem(OK_KEY)||0);
+              if(okAt && (now-okAt) < 6*60*60*1000) return true; // 6 小時內視為已開過登入分頁
+              var tryAt = Number(sessionStorage.getItem(TRY_KEY)||0);
+              if(tryAt && (now-tryAt) < 8000) return false;
+            }catch(e){}
+          }
+          try{ sessionStorage.setItem(TRY_KEY, String(now)); }catch(e){}
+
+          var w = null;
+          try{ w = window.open(url, '_blank', 'noopener'); }catch(e){ w = null; }
+
+          if(w){
+            try{ sessionStorage.setItem(OK_KEY, String(now)); }catch(e){}
+            try{ w.focus && w.focus(); }catch(e){}
+            return true;
+          }
+
+          // popup 被擋：改為「下一次使用者點擊」時再開一次（通常就不會被擋）
+          try{
+            var HK = 'tasun_access_clickhook__' + PAGE_KEY;
+            if(!sessionStorage.getItem(HK)){
+              sessionStorage.setItem(HK, '1');
+              var once = function(){
+                document.removeEventListener('click', once, true);
+                try{ sessionStorage.removeItem(HK); }catch(e){}
+                openAccessHealthTab({ force:true, reason:'click' });
+              };
+              document.addEventListener('click', once, true);
+            }
+          }catch(e){}
+          return false;
+
+        }catch(e){
+          return false;
+        }
+      }
+
+function persistEndpointOverride(partial){
         partial = (partial && typeof partial==='object') ? partial : {};
         try{
           var cur = null;
@@ -1123,11 +1205,16 @@ function parseJsonLenient(raw){
 
           if(r.type==="opaqueredirect" || (r.status>=300 && r.status<400)) throw { code:"need_auth", status:r.status };
           if(r.status===401 || r.status===403) throw { code:"deny", status:r.status };
-          if(!r.ok) throw { code:"neterr", status:r.status, path:path };
+          if(!r.ok){ if(r.status>=500) throw { code:"svcerr", status:r.status, path:path }; throw { code:"neterr", status:r.status, path:path }; }
 
           var j = null;
-          try{ j = await r.json(); }catch(e){}
-          if(!j || !j.ok) throw { code:"bad", message:(j && j.error) || "bad" };
+        var ct = "";
+        try{ ct = (r.headers && r.headers.get) ? (r.headers.get("content-type")||"") : ""; }catch(_e){}
+        try{ j = await r.json(); }catch(e){}
+        if(!j || !j.ok){
+          if((r.status>=500) || (ct && ct.indexOf("application/json")<0)) throw { code:"svcerr", status:r.status, message:(j && j.error) || "worker_exception" };
+          throw { code:"bad", message:(j && j.error) || "bad" };
+        }
           return j;
         }
 
@@ -1178,11 +1265,16 @@ function parseJsonLenient(raw){
 
           if(r.type==="opaqueredirect" || (r.status>=300 && r.status<400)) throw { code:"need_auth", status:r.status };
           if(r.status===401 || r.status===403) throw { code:"deny", status:r.status };
-          if(!r.ok) throw { code:"neterr", status:r.status, path:path };
+          if(!r.ok){ if(r.status>=500) throw { code:"svcerr", status:r.status, path:path }; throw { code:"neterr", status:r.status, path:path }; }
 
           var j = null;
-          try{ j = await r.json(); }catch(e){}
-          if(!j || !j.ok) throw { code:"bad", message:(j && j.error) || "bad" };
+        var ct = "";
+        try{ ct = (r.headers && r.headers.get) ? (r.headers.get("content-type")||"") : ""; }catch(_e){}
+        try{ j = await r.json(); }catch(e){}
+        if(!j || !j.ok){
+          if((r.status>=500) || (ct && ct.indexOf("application/json")<0)) throw { code:"svcerr", status:r.status, message:(j && j.error) || "worker_exception" };
+          throw { code:"bad", message:(j && j.error) || "bad" };
+        }
           return j;
         }
 
@@ -1228,25 +1320,14 @@ function parseJsonLenient(raw){
       CloudCtrl.prototype._needAuthToast = function(){
         (async function(){
           try{
-            var cfg = await getCloudCfg();
-            var base = cfg && cfg.apiBase ? cfg.apiBase : "";
-            var u = base ? joinApiBase(base, (cfg.endpoints && cfg.endpoints.health) || '/health') : '';
-            if(u){
-              toast("需要 Cloudflare Access 登入：請先在新分頁完成登入，再回來同步。", 7000);
-              try{
-                var k = 'tasun_access_open_once__' + PAGE_KEY;
-                if(!sessionStorage.getItem(k)){
-                  sessionStorage.setItem(k, '1');
-                  window.open(u, '_blank', 'noopener');
-                }
-              }catch(e){
-                try{ window.open(u, '_blank', 'noopener'); }catch(e2){}
-              }
+            var ok = await openAccessHealthTab({ reason:'need_auth' });
+            if(ok){
+              toast("需要 Cloudflare Access 登入：已為你開啟登入分頁，登入後回來按「同步」即可。", 7000);
             }else{
-              toast("需要 Cloudflare Access 登入（尚未設定 apiBase）", 7000);
+              toast("需要 Cloudflare Access 登入：若瀏覽器擋彈出視窗，請點一下本頁任意處，會自動開啟登入分頁。", 8000);
             }
           }catch(e){
-            toast("需要 Cloudflare Access 登入才能寫入", 7000);
+            toast("需要 Cloudflare Access 登入：請點「雲端檔案」開啟登入分頁。", 7000);
           }
         })();
       };
@@ -1729,6 +1810,7 @@ function parseJsonLenient(raw){
         if(cloudState==="neterr") cloudTxt = "連線失敗";
         if(cloudState==="noapi") cloudTxt = "未設定";
         if(cloudState==="bad") cloudTxt = "資料異常";
+        if(cloudState==="svcerr") cloudTxt = "服務異常";
         if(cloudState==="readonly") cloudTxt = "僅讀";
         var syncTxt = lastSyncAt ? fmtClock(lastSyncAt) : "—";
 
@@ -2130,10 +2212,37 @@ function parseJsonLenient(raw){
       async function openCloudPortal(){
         try{
           var cfg = await getCloudCfg();
-          if(!(cfg && cfg.apiBase && cfg.endpoints) || !isValidApiBase(cfg.apiBase)){ toast("尚未設定 apiBase"); return; }
-          var url = joinApiBase(cfg.apiBase, cfg.endpoints.read || "/api/read");
-          url = addParam(url, "key", PAGE_KEY);
-          window.open(url, "_blank", "noopener");
+          if(!(cfg && cfg.apiBase && cfg.endpoints) || !isValidApiBase(cfg.apiBase)){
+            toast("尚未設定 apiBase");
+            return;
+          }
+
+          var healthUrl = joinApiBase(cfg.apiBase, (cfg.endpoints && cfg.endpoints.health) || "/health");
+          var readUrl = joinApiBase(cfg.apiBase, (cfg.endpoints && cfg.endpoints.read) || "/api/read");
+          readUrl = addParam(readUrl, "key", PAGE_KEY);
+
+          // ✅ 優先嘗試：若已登入且 /api/read 可正常回應，就開啟「雲端資料」分頁
+          try{
+            var r = await safeFetch(readUrl, { method:"GET", cache:"no-store", redirect:"manual" }, healthUrl);
+
+            if(r && (r.type==="opaqueredirect" || (r.status>=300 && r.status<400) || r.status===401 || r.status===403)){
+              await openAccessHealthTab({ force:true, reason:"cloud_btn_redirect" });
+              return;
+            }
+
+            if(r && r.ok){
+              try{ window.open(readUrl, "_blank", "noopener"); }catch(e){}
+              return;
+            }
+          }catch(_e){
+            // fallthrough -> open Access login tab
+          }
+
+          // ✅ 無法直接讀取（需要 Access / CORS / Worker 例外）：改開啟 /health 讓你登入
+          var ok = await openAccessHealthTab({ force:true, reason:"cloud_btn" });
+          if(!ok){
+            toast("需要 Cloudflare Access 登入：若瀏覽器擋彈出視窗，請點一下本頁任意處，會自動開啟登入分頁。", 7000);
+          }
         }catch(e){
           toast("尚未設定 apiBase");
         }
