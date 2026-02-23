@@ -1024,40 +1024,89 @@ function parseJsonLenient(raw){
         return cfg.apiBase;
       }
 
-            // --- Connectivity helpers (CORS/Access-safe + endpoint auto-heal) ---
+      // --- Connectivity helpers (CORS/Access-safe + cred-mode auto-detect + endpoint auto-heal) ---
+
+      // ✅ CORS 與 Access 的兩種常見狀況：
+      // 1) 有 Cloudflare Access：需要 credentials=include 才會帶 cookie
+      // 2) 沒有 Access 但 Worker CORS 用 '*'：credentials=include 會被瀏覽器擋（必須改 omit）
+      // 因此這裡做「自動偵測 credMode」，不需要任何人手動設定。
+      var CREDMODE_KEY = 'tasunApiCredMode_v1__' + PAGE_KEY; // value: 'include' | 'omit'
+      function getCredMode(){
+        try{
+          var v = (localStorage.getItem(CREDMODE_KEY)||'').toString().trim();
+          if(v==='omit') return 'omit';
+        }catch(e){}
+        return 'include';
+      }
+      function setCredMode(v){
+        try{ localStorage.setItem(CREDMODE_KEY, v); }catch(e){}
+      }
+
       async function pingNoCors(url){
         try{
-          await fetch(url, { method:"GET", mode:"no-cors", cache:"no-store" });
+          // no-cors 只用來判斷「網路可達/需要登入」，不讀回應內容
+          await fetch(url, { method:'GET', mode:'no-cors', cache:'no-store' });
           return true;
         }catch(e){
           return false;
         }
       }
 
+      async function safeFetch(url, opts, healthUrl){
+        // 先用偏好的 credMode；若失敗再嘗試另一種（include <-> omit）
+        var pref = getCredMode();
+        var order = (pref==='omit') ? ['omit','include'] : ['include','omit'];
+        var lastErr = null;
+
+        for(var i=0;i<order.length;i++){
+          var cm = order[i];
+          try{
+            var o = Object.assign({}, (opts||{}), { credentials: cm });
+            var r = await fetch(url, o);
+            // 若第二種模式成功且回應 OK，記住它（避免下次再失敗）
+            if(cm!==pref && r && r.ok){ setCredMode(cm); }
+            return r;
+          }catch(err){
+            lastErr = err;
+          }
+        }
+
+        // fetch 直接 throw（大多是 CORS 或 Access 擋住或 DNS/網路問題）
+        // 若 health 可達，視為「需要 Access 登入」或「被 CORS 擋」——都引導走登入/重試
+        try{
+          if(healthUrl && await pingNoCors(healthUrl)){
+            throw { code:'need_auth', message:'blocked', inner:String(lastErr||'') };
+          }
+        }catch(e2){}
+
+        throw { code:'neterr', message:String(lastErr||'') };
+      }
+
+      async function classifyCloudErr(e){
+        // 先尊重既有 code
+        if(e && e.code && e.code !== 'neterr') return e.code;
+
+        // neterr/未知：用 no-cors 探測 health 來判斷是不是 Access/CORS
+        try{
+          var cfg = await getCloudCfg();
+          var base = cfg && cfg.apiBase ? cfg.apiBase : '';
+          var ep = (cfg && cfg.endpoints) ? cfg.endpoints : {};
+          var health = base ? joinApiBase(base, (ep.health||'/health')) : '';
+          if(health && await pingNoCors(health)) return 'need_auth';
+        }catch(_e){}
+        return (e && e.code) ? e.code : 'neterr';
+      }
+
       function persistEndpointOverride(partial){
-        partial = (partial && typeof partial==="object") ? partial : {};
+        partial = (partial && typeof partial==='object') ? partial : {};
         try{
           var cur = null;
-          try{ cur = JSON.parse(localStorage.getItem(API_EP_LS_KEY)||""); }catch(e){}
-          if(!cur || typeof cur!=="object") cur = {};
+          try{ cur = JSON.parse(localStorage.getItem(API_EP_LS_KEY)||''); }catch(e){}
+          if(!cur || typeof cur!=='object') cur = {};
           var out = Object.assign({}, cur, partial);
           localStorage.setItem(API_EP_LS_KEY, JSON.stringify(out));
         }catch(e){}
         _CLOUD_CFG_CACHE = null;
-      }
-
-      async function safeFetch(url, opts, healthUrl){
-        try{
-          return await fetch(url, opts);
-        }catch(err){
-          // If network reachable but fetch blocked (CORS/Access), guide user to login
-          try{
-            if(healthUrl && await pingNoCors(healthUrl)){
-              throw { code:"need_auth", message:"blocked", inner: String(err||"") };
-            }
-          }catch(e2){}
-          throw { code:"neterr", message:String(err||"") };
-        }
       }
 
       async function apiPull(){
@@ -1167,6 +1216,11 @@ function parseJsonLenient(raw){
         this.lastSyncAt = 0;
         this._timer = null;
         this._saveTimer = null;
+        // ✅ Access/網路阻擋時的自動重試（不改 UI）
+        this._retryPullN = 0;
+        this._retryPullTm = null;
+        this._retrySaveN = 0;
+        this._retrySaveTm = null;
         this.apply = null;
         this.clientMeta = null;
       }
@@ -1176,10 +1230,18 @@ function parseJsonLenient(raw){
           try{
             var cfg = await getCloudCfg();
             var base = cfg && cfg.apiBase ? cfg.apiBase : "";
-            var u = base ? joinApiBase(base, (cfg.endpoints && cfg.endpoints.merge) || "/api/merge") : "";
+            var u = base ? joinApiBase(base, (cfg.endpoints && cfg.endpoints.health) || '/health') : '';
             if(u){
-              toast("需要 Cloudflare Access 登入才能寫入：請先在新分頁開啟並登入，再回來重試。", 7000);
-              try{ window.open(u, "_blank", "noopener"); }catch(e){}
+              toast("需要 Cloudflare Access 登入：請先在新分頁完成登入，再回來同步。", 7000);
+              try{
+                var k = 'tasun_access_open_once__' + PAGE_KEY;
+                if(!sessionStorage.getItem(k)){
+                  sessionStorage.setItem(k, '1');
+                  window.open(u, '_blank', 'noopener');
+                }
+              }catch(e){
+                try{ window.open(u, '_blank', 'noopener'); }catch(e2){}
+              }
             }else{
               toast("需要 Cloudflare Access 登入（尚未設定 apiBase）", 7000);
             }
@@ -1187,6 +1249,31 @@ function parseJsonLenient(raw){
             toast("需要 Cloudflare Access 登入才能寫入", 7000);
           }
         })();
+      };
+
+
+      CloudCtrl.prototype._scheduleRetryPull = function(){
+        var self=this;
+        if(self._retryPullTm) clearTimeout(self._retryPullTm);
+        var seq = [3000, 7000, 15000];
+        var n = self._retryPullN || 0;
+        if(n>=seq.length) return;
+        self._retryPullN = n + 1;
+        self._retryPullTm = setTimeout(function(){
+          if(!self.busy) self.pullNow('retry');
+        }, seq[n]);
+      };
+
+      CloudCtrl.prototype._scheduleRetrySave = function(){
+        var self=this;
+        if(self._retrySaveTm) clearTimeout(self._retrySaveTm);
+        var seq = [4000, 9000, 18000];
+        var n = self._retrySaveN || 0;
+        if(n>=seq.length) return;
+        self._retrySaveN = n + 1;
+        self._retrySaveTm = setTimeout(function(){
+          if(!self.busy) self.saveNow();
+        }, seq[n]);
       };
 
       CloudCtrl.prototype.pullNow = async function(reason){
@@ -1201,6 +1288,7 @@ function parseJsonLenient(raw){
           var u = await apiPull();
           self.state = "ok";
           cloudState = "ok";
+          self._retryPullN = 0;
           self.lastSyncAt = Date.now();
           lastSyncAt = self.lastSyncAt;
 
@@ -1208,8 +1296,11 @@ function parseJsonLenient(raw){
 
         }catch(e){
           self.state = "err";
-          cloudState = (e && e.code) ? e.code : "neterr";
-          if(cloudState==="need_auth") self._needAuthToast();
+          cloudState = await classifyCloudErr(e);
+          if(cloudState==="need_auth"){
+            self._needAuthToast();
+            self._scheduleRetryPull();
+          }
         }finally{
           self.busy = false;
           renderAll();
@@ -1257,6 +1348,7 @@ function parseJsonLenient(raw){
           var out = await apiMerge(localPayload, self.lastReason || "edit", meta || {});
           self.state = "ok";
           cloudState = "ok";
+          self._retrySaveN = 0;
           self.dirty = false;
           self.lastSyncAt = Date.now();
           lastSyncAt = self.lastSyncAt;
@@ -1265,8 +1357,11 @@ function parseJsonLenient(raw){
 
         }catch(e){
           self.state = "err";
-          cloudState = (e && e.code) ? e.code : "neterr";
-          if(cloudState==="need_auth") self._needAuthToast();
+          cloudState = await classifyCloudErr(e);
+          if(cloudState==="need_auth"){
+            self._needAuthToast();
+            self._scheduleRetrySave();
+          }
         }finally{
           self.busy = false;
           renderAll();
@@ -1293,8 +1388,12 @@ function parseJsonLenient(raw){
         var self=this;
         if(self._timer) clearInterval(self._timer);
         if(self._saveTimer) clearTimeout(self._saveTimer);
+        if(self._retryPullTm) clearTimeout(self._retryPullTm);
+        if(self._retrySaveTm) clearTimeout(self._retrySaveTm);
         self._timer = null;
         self._saveTimer = null;
+        self._retryPullTm = null;
+        self._retrySaveTm = null;
       };
 
       // ===== Local load/save =====
