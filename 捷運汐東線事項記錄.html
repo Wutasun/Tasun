@@ -45,7 +45,7 @@
       --btnFont: clamp(14.5px, 1.12vw, 17px);
       --btnFontSmall: clamp(13.5px, 1.06vw, 16px);
 
-      --stageSide: clamp(16px, 3.2vw, 1.6cm);
+      --stageSide: 1cm;
 
       --tableWrapBg: rgba(255,252,244,.94);
       --tableBg: rgba(255,252,244,.92);
@@ -1181,6 +1181,45 @@
       return rows;
     }
 
+
+// 依工種取得「不重複」系統清單（來源：系統字典 + 本頁資料 + 工種-系統綁定表）
+function getSysListForTrade(trade){
+  trade = norm(trade);
+  var set = new Set();
+  var syss = loadDict(SYS_DICT_KEY);
+  for(var i=0;i<syss.length;i++) set.add(syss[i]);
+
+  var map = loadMap();
+  if(trade && map[trade] && Array.isArray(map[trade])){
+    map[trade].forEach(function(x){ x=norm(x); if(x) set.add(x); });
+  }
+
+  // 再從本頁資料補齊（避免 map 未建立時顯示不完整）
+  var rows = state.items.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
+  for(var j=0;j<rows.length;j++){
+    var r = rows[j];
+    if(trade){
+      if(r.trade===trade && r.sys) set.add(r.sys);
+    }else{
+      if(r.sys) set.add(r.sys);
+    }
+  }
+  var out = Array.from(set).map(function(s){ return norm(s); }).filter(Boolean);
+  out.sort();
+  return out;
+}
+
+// 依目前「顯示列」（含篩選/排序）計算項次（1..n）
+function getDisplayNo(uid){
+  uid = norm(uid);
+  if(!uid) return "";
+  var rows = getVisibleRows();
+  for(var i=0;i<rows.length;i++){
+    if(rows[i] && rows[i].uid===uid) return String(i+1);
+  }
+  return "";
+}
+
     function buildDictsFromDb(){
       var rows = state.items.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
       var trades = new Set(loadDict(TRADE_DICT_KEY));
@@ -1223,21 +1262,7 @@
       else if(includeAll) sel.value = "";
     }
 
-    function renderFilters(){
-      buildDictsFromDb();
-      var trades = loadDict(TRADE_DICT_KEY);
-      var syss = loadDict(SYS_DICT_KEY);
-
-      fillSelect($("fTrade"), trades, true);
-
-      var map = loadMap();
-      var ft = norm($("fTrade").value);
-      if(ft && map[ft] && Array.isArray(map[ft]) && map[ft].length){
-        fillSelect($("fSys"), map[ft].slice().sort(), true);
-      }else{
-        fillSelect($("fSys"), syss, true);
-      }
-    }
+    
 
     function renderTable(){
       var rows = getVisibleRows();
@@ -1249,7 +1274,7 @@
         if(state.selectedUid===r.uid) tr.classList.add("sel");
 
         var tdNo = document.createElement("td");
-        tdNo.textContent = String(r.id||"");
+        tdNo.textContent = String(i+1);
         tdNo.style.textAlign = "center";
         tr.appendChild(tdNo);
 
@@ -1316,7 +1341,7 @@
         var meta = document.createElement("div");
         meta.className = "noteMeta";
         meta.innerHTML =
-          '<span class="noteNo">#' + escHtml(String(r.id||"")) + '</span>' +
+          '<span class="noteNo">#' + escHtml(String(i+1)) + '</span>' +
           (r.trade ? '<span class="noteTag">' + escHtml(r.trade) + '</span>' : '') +
           (r.sys ? '<span class="noteTag">' + escHtml(r.sys) + '</span>' : '') +
           (r.source ? '<span class="noteTag">' + escHtml(r.source) + '</span>' : '') +
@@ -1432,7 +1457,7 @@
     }
 
     function fillModalFromRow(r){
-      $("mNo").value = r ? String(r.id||"") : "";
+      $("mNo").value = r ? (getDisplayNo(r.uid) || String(r.id||"")) : "";
       $("mText").value = r ? (r.text||"") : "";
       $("mAttach").value = r ? (r.attach||"") : "";
       $("mRemark").value = r ? (r.remark||"") : "";
@@ -1458,7 +1483,7 @@
 
       fill($("mTradeSel"), trades, r && r.trade);
       var t = norm($("mTradeSel").value);
-      var sysItems = (t && map[t] && Array.isArray(map[t]) && map[t].length) ? map[t].slice().sort() : syss.slice().sort();
+      var sysItems = getSysListForTrade(t);
       fill($("mSysSel"), sysItems, r && r.sys);
       fill($("mSourceSel"), sources, r && r.source);
     }
@@ -1514,7 +1539,7 @@
         var t = norm(this.value);
         var syss = loadDict(SYS_DICT_KEY);
         var map = loadMap();
-        var sysItems = (t && map[t] && Array.isArray(map[t]) && map[t].length) ? map[t].slice().sort() : syss.slice().sort();
+        var sysItems = getSysListForTrade(t);
         var keep = norm($("mSysSel").value);
         $("mSysSel").innerHTML = "";
         sysItems.forEach(function(it){
@@ -1528,9 +1553,9 @@
     // ---------------------------
     // Prompt modal
     // ---------------------------
-    function openPrompt(mode){
+    function openPrompt(mode, preset){
       state.promptMode = mode;
-      $("pInput").value = "";
+      $("pInput").value = (preset===undefined||preset===null) ? "" : String(preset);
       $("pMask").style.display = "flex";
       if(mode==="trade"){
         $("pTitle").textContent = "新增工種";
@@ -1870,7 +1895,7 @@
 
       $("btnAddTrade").addEventListener("click", function(){ openPrompt("trade"); });
       $("btnAddSys").addEventListener("click", function(){ openPrompt("sys"); });
-      $("btnAddSource").addEventListener("click", function(){ openPrompt("source"); });
+      $("btnAddSource").addEventListener("click", function(){ openPrompt("source", norm($("mSourceSel").value)||""); });
 
       $("pClose").addEventListener("click", closePrompt);
       $("pCancel").addEventListener("click", closePrompt);
@@ -1894,7 +1919,7 @@
       $("btnCloud").addEventListener("click", function(){ syncPull(); });
 
       $("qText").addEventListener("input", function(){ renderAll(); });
-      $("fTrade").addEventListener("change", function(){ renderFilters(); renderAll(); });
+      $("fTrade").addEventListener("change", function(){ renderAll(); });
       $("fSys").addEventListener("change", function(){ renderAll(); });
 
       ensureSelectOptions();
@@ -1934,4 +1959,3 @@
   </script>
 </body>
 </html>
-
