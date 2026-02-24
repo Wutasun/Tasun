@@ -13,34 +13,6 @@
   <!-- ✅ 全站版本：可與 tasun-version.json 一致（本頁只用於 cache busting/顯示） -->
   <script>window.TASUN_APP_VER="20260224_01";</script>
 
-  <script>
-  // Tasun Debug Helpers (preload) - available even before app boot
-  (function(){
-    function dumpStorage(){
-      try{
-        var out = [];
-        function dump(storage, name){
-          for(var i=0;i<storage.length;i++){
-            var k = storage.key(i);
-            if(!k) continue;
-            var v = storage.getItem(k) || "";
-            out.push({ storage:name, key:k, bytes:v.length });
-          }
-        }
-        dump(localStorage,"localStorage");
-        dump(sessionStorage,"sessionStorage");
-        out.sort(function(a,b){ return b.bytes-a.bytes; });
-        console.table(out);
-        return out;
-      }catch(e){ console.error(e); return []; }
-    }
-    window.tasunDumpStorage = dumpStorage;
-    window.dumpStorage = dumpStorage; // alias
-    console.log("[Tasun] debug helpers loaded: tasunDumpStorage(), dumpStorage()");
-  })();
-  </script>
-
-
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;600;700;800;900&family=Noto+Serif+TC:wght@400;600;700;900&display=swap" rel="stylesheet">
 
   <style>
@@ -1008,260 +980,41 @@
     function normalizeRow(x){
       if(!x || typeof x!=="object") return null;
       var r = Object.assign({}, x);
-      r.uid = norm(r.uid) || "";
+
+      // 兼容舊欄位命名：system/系統、trade/工種、text/記事內容... 等
+      var pick = function(obj, keys){
+        for(var i=0;i<keys.length;i++){
+          var k = keys[i];
+          if(obj && obj[k]!==undefined && obj[k]!==null && String(obj[k]).trim()!=="") return obj[k];
+        }
+        return "";
+      };
+
+      // uid / pk
+      r.uid = norm(pick(r, ["uid","pk","_pk","uuid","_uid","user"])) || "";
       if(!r.uid) return null;
-      r.id = Number(r.id||0);
-      if(!Number.isFinite(r.id)) r.id = 0;
-      r.text = norm(r.text);
-      r.trade = norm(r.trade);
-      r.sys = norm(r.sys);
-      r.source = norm(r.source);
-      r.attach = norm(r.attach);
-      r.remark = norm(r.remark);
-      r.date = norm(r.date) || "";
-      r.updatedAt = norm(r.updatedAt) || "";
-      r.rev = norm(r.rev) || "";
-      r.deleted = !!r.deleted;
+
+      // 顯示用 id（允許舊資料用「項次/序號」）
+      var rawId = pick(r, ["id","_id","no","項次","序號"]);
+      r.id = Number(rawId || 0);
+
+      r.text = norm(pick(r, ["text","content","記事內容","事項內容","內容","記事"])) || "";
+      r.trade = norm(pick(r, ["trade","工種","類別","工程","工別"])) || "";
+      r.sys = norm(pick(r, ["sys","system","系統","系統項目","系統別"])) || "";
+      r.source = norm(pick(r, ["source","src","出處","來源"])) || "";
+      r.attach = norm(pick(r, ["attach","附件","file","files","附件連結"])) || "";
+      r.remark = norm(pick(r, ["remark","備註","note","註記"])) || "";
+
+      // 日期欄位兼容（仍以字串顯示）
+      r.date = norm(pick(r, ["date","登錄日期","日期","createdAt","created_at"])) || "";
+      r.updatedAt = norm(pick(r, ["updatedAt","updated_at","updateAt","ts","time"])) || "";
+      r.rev = norm(pick(r, ["rev","_rev","version"])) || "";
+
+      r.deleted = !!(r.deleted || r._deleted);
       return r;
     }
 
-    function maxId(arr){
-      var m = 0;
-      for(var i=0;i<arr.length;i++){
-        var id = Number(arr[i] && arr[i].id || 0);
-        if(Number.isFinite(id) && id>m) m = id;
-      }
-      return m;
-    }
-
-    function tsOf(x){
-      var s = norm(x && x.updatedAt);
-      if(!s) return 0;
-      var t = Date.parse(s);
-      return isNaN(t) ? 0 : t;
-    }
-
-    function pickNewer(a,b){
-      if(!a) return b;
-      if(!b) return a;
-      var ta = tsOf(a), tb = tsOf(b);
-      if(tb>ta) return b;
-      if(ta>tb) return a;
-      var ra = norm(a.rev||""), rb = norm(b.rev||"");
-      return (rb>ra) ? b : a;
-    }
-
-    function unwrap(payload){
-      var out = (payload && typeof payload==="object") ? payload : {};
-      if(out && typeof out==="object"){
-        if("payload" in out) out = out.payload || {};
-        else if("data" in out) out = out.data || {};
-        else if("result" in out) out = out.result || {};
-      }
-      if(!Array.isArray(out.db)) out.db = [];
-      var c = Number(out.counter||0); if(!Number.isFinite(c) || c<0) c=0;
-      out.counter = c;
-      return out;
-    }
-
-    function mergePayload(remotePayload, localPayload){
-      var r = unwrap(remotePayload||{});
-      var l = unwrap(localPayload||{});
-
-      var map = Object.create(null);
-      function putAll(arr){
-        for(var i=0;i<arr.length;i++){
-          var row = normalizeRow(arr[i]);
-          if(!row) continue;
-          map[row.uid] = pickNewer(map[row.uid], row);
-        }
-      }
-      putAll(r.db||[]);
-      putAll(l.db||[]);
-
-      var merged = [];
-      for(var k in map){ if(Object.prototype.hasOwnProperty.call(map,k)) merged.push(map[k]); }
-
-      // Ensure unique visible id for non-deleted rows
-      var counterMerged = Math.max(Number(r.counter||0)||0, Number(l.counter||0)||0, maxId(merged));
-      var used = new Set();
-      merged.sort(function(a,b){
-        var da = a.deleted ? 1 : 0, db = b.deleted ? 1 : 0;
-        if(da!==db) return da-db;
-        return (Number(a.id||0) - Number(b.id||0)) || (tsOf(a)-tsOf(b));
-      });
-      for(var j=0;j<merged.length;j++){
-        var rr = merged[j];
-        if(!rr || rr.deleted) continue;
-        var idv = Number(rr.id||0);
-        if(!Number.isFinite(idv) || idv<=0 || used.has(idv)){
-          counterMerged += 1;
-          rr.id = counterMerged;
-          rr.updatedAt = rr.updatedAt || nowISO();
-          rr.rev = rr.rev || ("r"+Math.random().toString(16).slice(2)+"_"+Date.now().toString(16));
-        }
-        used.add(Number(rr.id));
-        if(Number(rr.id)>counterMerged) counterMerged = Number(rr.id);
-      }
-
-      return { db: merged, counter: counterMerged, updatedAt: nowISO(), rev: "merge_"+Date.now().toString(16) };
-    }
-
-    function loadDict(key){
-      var v = safeJSON(localStorage.getItem(key));
-      if(!Array.isArray(v)) v = [];
-      return v.map(function(s){ return norm(s); }).filter(Boolean);
-    }
-    function saveDict(key, arr){
-      arr = (arr||[]).map(function(s){ return norm(s); }).filter(Boolean);
-      // dedupe
-      var set = new Set();
-      var out = [];
-      for(var i=0;i<arr.length;i++){
-        var x = arr[i];
-        if(set.has(x)) continue;
-        set.add(x); out.push(x);
-      }
-      localStorage.setItem(key, JSON.stringify(out));
-      return out;
-    }
-    function loadMap(){
-      var m = safeJSON(localStorage.getItem(TRADE_SYS_MAP_KEY));
-      if(!m || typeof m!=="object") m = {};
-      return m;
-    }
-    function saveMap(m){
-      localStorage.setItem(TRADE_SYS_MAP_KEY, JSON.stringify(m||{}));
-    }
-
-    // ---------------------------
-    // UI state
-    // ---------------------------
-    var state = {
-      user: null,
-      db: [],
-      counter: 0,
-      selectedUid: null,
-      editingUid: null,
-      promptMode: null,
-      readMode: false,
-      lastSyncAt: 0,
-      cloudState: "offline", // offline|sync|save|ok|readonly|need_auth|deny|neterr|noapi|bad|svcerr
-    };
-
-    // ---------------------------
-    // Cloud I/O
-    // ---------------------------
-    async function cloudHealth(){
-      var cfg = await loadCloudCfg();
-      var url = joinApiBase(cfg.apiBase, cfg.endpoints.health);
-      try{
-        var res = await fetch(addV(url), { cache:"no-store", credentials:"include" });
-        return !!(res && res.ok);
-      }catch(e){ return false; }
-    }
-
-    async function cloudRead(){
-      var cfg = await loadCloudCfg();
-      var url = joinApiBase(cfg.apiBase, cfg.endpoints.read);
-      url = url + (url.indexOf("?")>=0 ? "&" : "?") + "key=" + encodeURIComponent(PAGE_KEY);
-      url = addV(url);
-      var res = await fetch(url, { cache:"no-store", credentials:"include" });
-      if(res.status===401 || res.status===403) throw { code:"deny", status: res.status };
-      if(!res.ok) throw { code:"neterr", status: res.status };
-      return await res.json();
-    }
-
-    async function cloudMerge(payload, reason){
-      var cfg = await loadCloudCfg();
-      var url = addV(joinApiBase(cfg.apiBase, cfg.endpoints.merge));
-      var body = {
-        key: PAGE_KEY,
-        pk: "uid",
-        payload: payload,
-        reason: reason || "client_merge",
-        client: { appVer: APP_VER, pageKey: PAGE_KEY, ua: navigator.userAgent }
-      };
-      var res = await fetch(url, {
-        method:"POST",
-        headers:{ "content-type":"application/json" },
-        body: JSON.stringify(body),
-        cache:"no-store",
-        credentials:"include"
-      });
-      if(res.status===401 || res.status===403) throw { code:"deny", status: res.status };
-      if(!res.ok) throw { code:"neterr", status: res.status };
-      return await res.json();
-    }
-
-    async function syncPull(){
-      state.cloudState = "sync";
-      renderHint();
-      try{
-        var remote = await cloudRead();
-        var merged = mergePayload(remote && (remote.payload||remote), { db: state.db, counter: state.counter });
-        state.db = merged.db; state.counter = merged.counter;
-        saveLocal({ db: state.db, counter: state.counter });
-
-        // If user can write, push merged back to consolidate (optional)
-        if(state.user && roleRank(state.user.role) >= 2){
-          state.cloudState = "save"; renderHint();
-          try{ await cloudMerge({ db: state.db, counter: state.counter }, "pull_then_consolidate"); }catch(e2){ /* ignore */ }
-        }
-        state.lastSyncAt = Date.now();
-        state.cloudState = "ok";
-      }catch(e){
-        if(e && e.code==="deny") state.cloudState = "deny";
-        else state.cloudState = "neterr";
-      }
-      renderAll();
-
-      // 提示列保底（避免偶發情況下提示列被清空或 renderHint 中斷）
-      function hintWatchdog(){
-        try{
-          var h = $("hint");
-          if(!h) return;
-          if(!h.children || h.children.length===0){
-            renderHint();
-          }
-        }catch(e){}
-      }
-      hintWatchdog();
-      clearInterval(state._hintTimer);
-      state._hintTimer = setInterval(hintWatchdog, 1200);
-    }
-
-    async function saveToCloud(reason){
-      if(!(state.user && roleRank(state.user.role) >= 2)) return;
-      state.cloudState = "save";
-      renderHint();
-      try{
-        var remote = null;
-        try{ remote = await cloudRead(); }catch(e0){ remote = null; }
-        var merged = mergePayload(remote && (remote.payload||remote), { db: state.db, counter: state.counter });
-        // update local to merged, then push
-        state.db = merged.db; state.counter = merged.counter;
-        saveLocal({ db: state.db, counter: state.counter });
-
-        await cloudMerge({ db: state.db, counter: state.counter }, reason||"save");
-        state.lastSyncAt = Date.now();
-        state.cloudState = "ok";
-      }catch(e){
-        if(e && e.code==="deny") state.cloudState = "deny";
-        else state.cloudState = "neterr";
-      }
-      renderAll();
-      // 復原舊資料後：首次同步完成再補一次上傳整併（可寫權限）
-      if(state._recovered && state.user && roleRank(state.user.role)>=2){
-        state._recovered = false;
-        try{ saveToCloud("recover_legacy"); }catch(e3){}
-      }
-    }
-
-    // ---------------------------
-    // Render helpers
-    // ---------------------------
-    function getVisibleRows(){
+function getVisibleRows(){
       var q = norm($("qText").value).toLowerCase();
       var ft = norm($("fTrade").value);
       var fs = norm($("fSys").value);
@@ -1323,828 +1076,1038 @@
     function collectSysForTrade(trade, dbArr){
       trade = norm(trade);
       var set = new Set();
-      // include sys dictionary as base (so newly added sys can appear once bound)
-      loadDict(SYS_DICT_KEY).forEach(function(s){ s=norm(s); if(s) set.add(s); });
-      var map = loadMap();
-if(trade && map && Array.isArray(map[trade])){
-        map[trade].forEach(function(s){ s = norm(s); if(s) set.add(s); });
-      }
-      // from db
+
+      // 來源1：工種-系統綁定表（指定工種）
+      var bound = (TRADE_SYS_MAP && trade && TRADE_SYS_MAP[trade]) ? TRADE_SYS_MAP[trade] : [];
+      for(var i=0;i<bound.length;i++){ if(bound[i]) set.add(String(bound[i])); }
+
+      // 來源2：本頁資料庫中該工種實際出現過的系統（補強：避免綁定表漏掉）
       var rows = (dbArr||[]).map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
-      for(var i=0;i<rows.length;i++){
-        var r = rows[i];
-        if(trade && r.trade===trade && r.sys) set.add(r.sys);
+      for(var j=0;j<rows.length;j++){
+        if(rows[j].trade===trade && rows[j].sys) set.add(rows[j].sys);
       }
-      // also allow from global sys dict if trade not set
-      var out = Array.from(set);
-      out.sort();
-      return out;
-    }
-    function collectSysAll(dbArr){
-      var set = new Set(loadDict(SYS_DICT_KEY));
-      var rows = (dbArr||[]).map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
-      for(var i=0;i<rows.length;i++){
-        if(rows[i].sys) set.add(rows[i].sys);
-      }
-      var out = Array.from(set);
-      out.sort();
-      return out;
+
+      return Array.from(set).sort();
     }
 
 
-    function fillSelect(sel, items, includeAll){
-      var v = sel.value;
+
+
+
+
+
+    // ---------------------------
+    // Dict / Map helpers
+    // ---------------------------
+    function loadDict(key){
+      var a = safeJSON(localStorage.getItem(key));
+      return Array.isArray(a) ? a.filter(Boolean).map(function(x){return norm(x);}).filter(Boolean) : [];
+    }
+    function saveDict(key, arr){
+      arr = Array.isArray(arr) ? arr.filter(Boolean).map(function(x){return norm(x);}).filter(Boolean) : [];
+      // unique + sort
+      var set = new Set(arr);
+      localStorage.setItem(key, JSON.stringify(Array.from(set).sort()));
+    }
+    function loadMap(){
+      var m = safeJSON(localStorage.getItem(TRADE_SYS_MAP_KEY));
+      return (m && typeof m==="object") ? m : {};
+    }
+    function saveMap(m){
+      if(!m || typeof m!=="object") m = {};
+      // normalize arrays
+      Object.keys(m).forEach(function(k){
+        var a = m[k];
+        if(!Array.isArray(a)) a = [];
+        var set = new Set(a.map(function(x){return norm(x);}).filter(Boolean));
+        m[k] = Array.from(set).sort();
+      });
+      localStorage.setItem(TRADE_SYS_MAP_KEY, JSON.stringify(m));
+    }
+
+    function unwrap(obj){
+      if(!obj || typeof obj!=="object") return obj;
+      return obj.payload ?? obj.data ?? obj.result ?? obj;
+    }
+
+    function tsOf(r){
+      var t = norm(r && (r.updatedAt||r.ts||r.time||""));
+      if(!t) return 0;
+      var n = Date.parse(t);
+      return Number.isFinite(n) ? n : 0;
+    }
+
+    // ---------------------------
+    // State
+    // ---------------------------
+    var state = {
+      db: [],
+      counter: 0,
+      user: null,
+      role: "read",
+      selectedUid: "",
+      mode: "view",
+      readMode: false,
+      cloud: { ok:false, apiBase:"", endpoints:null, lastSyncAt:"", lastOkAt:"" },
+      _legacyScan: null
+    };
+
+    // load map once (kept in memory + persisted on change)
+    var TRADE_SYS_MAP = loadMap();
+
+    // ---------------------------
+    // Merge logic (cloud/local)
+    // ---------------------------
+    function ensureRowV1(r){
+      r = normalizeRow(r);
+      if(!r) return null;
+
+      // mandatory fields per v1
+      r.uid = norm(r.uid);
+      if(!r.uid) return null;
+      r.pk = r.uid; // internal convenience
+      if(!r.updatedAt) r.updatedAt = nowISO();
+      if(!r.rev) r.rev = "r" + Date.now().toString(16) + Math.random().toString(16).slice(2,6);
+      r.deleted = !!r.deleted;
+
+      // id is display only; keep numeric but not required
+      if(!Number.isFinite(Number(r.id))) r.id = 0;
+
+      // normalize date value (YYYY-MM-DD preferred)
+      if(r.date && /^\d{4}-\d{2}-\d{2}/.test(r.date)===false){
+        // accept ISO -> slice
+        if(/^\d{4}-\d{2}-\d{2}T/.test(r.date)) r.date = r.date.slice(0,10);
+      }
+      return r;
+    }
+
+    function mergeTwo(a, b){
+      // choose newer by updatedAt; tie -> keep non-empty fields of either
+      var ta = tsOf(a), tb = tsOf(b);
+      var newer = (tb>ta) ? b : a;
+      var older = (newer===a) ? b : a;
+      var out = Object.assign({}, older, newer);
+      // ✅ 修訂：避免 newer 的空字串覆蓋舊資料（例如 sys 變空造成表格只剩 1 列有值）
+      ["text","trade","sys","source","attach","remark","date"].forEach(function(k){
+        if(!norm(newer && newer[k]) && norm(older && older[k])) out[k] = older[k];
+      });
+
+      // if either says deleted true and it's newer, keep deleted true
+      out.deleted = !!newer.deleted;
+
+      // keep essential fields
+      out.uid = norm(out.uid || newer.uid || older.uid);
+      out.updatedAt = norm(out.updatedAt) || nowISO();
+      out.rev = norm(out.rev || newer.rev || older.rev) || ("r"+Date.now().toString(16));
+      out.pk = out.uid;
+      return out;
+    }
+
+    function mergePayload(remote, local){
+      // payload: {db:[rows], counter}
+      var ldb = (local && Array.isArray(local.db)) ? local.db : [];
+      var rdb = (remote && Array.isArray(remote.db)) ? remote.db : [];
+
+      var map = new Map();
+      function put(x){
+        var r = ensureRowV1(x);
+        if(!r) return;
+        var key = r.uid;
+        if(!map.has(key)) map.set(key, r);
+        else map.set(key, mergeTwo(map.get(key), r));
+      }
+      ldb.forEach(put);
+      rdb.forEach(put);
+
+      var outDb = Array.from(map.values());
+      // keep stable order: by date desc then updatedAt desc, else uid
+      outDb.sort(function(a,b){
+        var da = norm(a.date), db = norm(b.date);
+        if(da && db && da!==db) return db.localeCompare(da);
+        var ta = tsOf(a), tb = tsOf(b);
+        if(tb!==ta) return tb-ta;
+        return norm(a.uid).localeCompare(norm(b.uid));
+      });
+
+      var lc = Number(local && local.counter || 0) || 0;
+      var rc = Number(remote && remote.counter || 0) || 0;
+      return { db: outDb, counter: Math.max(lc, rc) };
+    }
+
+    // ---------------------------
+    // UI: filters and selects
+    // ---------------------------
+    function setOptions(sel, arr, keepValue){
+      var cur = keepValue ? norm(sel.value) : "";
       sel.innerHTML = "";
-      if(includeAll){
+      // always include "全部" for filter selects
+      if(sel=== $("fTrade") || sel=== $("fSys")){
         var op0 = document.createElement("option");
-        op0.value = "";
-        op0.textContent = "全部";
+        op0.value = ""; op0.textContent = "全部";
         sel.appendChild(op0);
       }
-      items.forEach(function(it){
+      (arr||[]).forEach(function(v){
+        v = norm(v);
+        if(!v) return;
         var op = document.createElement("option");
-        op.value = it;
-        op.textContent = it;
+        op.value = v; op.textContent = v;
         sel.appendChild(op);
       });
-      // restore if possible
-      if(v && items.includes(v)) sel.value = v;
-      else if(includeAll) sel.value = "";
+      if(keepValue && cur && Array.from(sel.options).some(function(o){return o.value===cur;})){
+        sel.value = cur;
+      }
     }
 
-    function renderFilters(){
+    function uniqueOf(arr){
+      var set = new Set();
+      (arr||[]).forEach(function(x){ x = norm(x); if(x) set.add(x); });
+      return Array.from(set).sort();
+    }
+
+    function rebuildFilterOptions(){
+      // build dicts first
       buildDictsFromDb();
-      var trades = loadDict(TRADE_DICT_KEY);
-      fillSelect($("fTrade"), trades, true);
 
-      // 修訂2：系統下拉依工種所屬（不重複）
+      var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
+      var trades = uniqueOf(rows.map(function(r){return r.trade;})).concat(loadDict(TRADE_DICT_KEY));
+      trades = uniqueOf(trades);
+      setOptions($("fTrade"), trades, true);
+
+      // system options depends on current selected trade filter
       var ft = norm($("fTrade").value);
-      var sysItems = ft ? collectSysForTrade(ft, state.db) : collectSysAll(state.db);
-      fillSelect($("fSys"), sysItems, true);
+      var sysList;
+      if(ft){
+        sysList = collectSysForTrade(ft, state.db);
+      }else{
+        // all systems from db + dict
+        sysList = uniqueOf(rows.map(function(r){return r.sys;})).concat(loadDict(SYS_DICT_KEY));
+        sysList = uniqueOf(sysList);
+      }
+      setOptions($("fSys"), sysList, true);
 
-      // 若工種改變導致系統不在清單內，強制回到「全部」
-      var curSys = norm($("fSys").value);
-      if(curSys && !sysItems.includes(curSys)) $("fSys").value = "";
+      // modal selects (trade/sys/source)
+      setOptions($("mTradeSel"), trades, true);
+
+      var mTrade = norm($("mTradeSel").value);
+      var mSysList = mTrade ? collectSysForTrade(mTrade, state.db) : sysList;
+      setOptions($("mSysSel"), mSysList, true);
+
+      var sources = uniqueOf(rows.map(function(r){return r.source;})).concat(loadDict(SOURCE_DICT_KEY));
+      sources = uniqueOf(sources);
+      // for modal source we don't need "全部"
+      $("mSourceSel").innerHTML = "";
+      sources.forEach(function(v){
+        var op = document.createElement("option");
+        op.value=v; op.textContent=v;
+        $("mSourceSel").appendChild(op);
+      });
     }
 
-    function renderTable(){
-      var rows = getVisibleRows();
+    // when trade filter changes, system filter must be recomputed (修訂2)
+    function onTradeFilterChanged(){
+      var ft = norm($("fTrade").value);
+      var fsOld = norm($("fSys").value);
+
+      var sysList;
+      if(ft){
+        sysList = collectSysForTrade(ft, state.db);
+      }else{
+        var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
+        sysList = uniqueOf(rows.map(function(r){return r.sys;})).concat(loadDict(SYS_DICT_KEY));
+        sysList = uniqueOf(sysList);
+      }
+      setOptions($("fSys"), sysList, false);
+      if(fsOld && sysList.includes(fsOld)) $("fSys").value = fsOld;
+      refresh();
+    }
+
+    // modal trade changed => update modal system options (修訂2)
+    function onModalTradeChanged(){
+      var t = norm($("mTradeSel").value);
+      var curSys = norm($("mSysSel").value);
+      var list = t ? collectSysForTrade(t, state.db) : uniqueOf(loadDict(SYS_DICT_KEY));
+      setOptions($("mSysSel"), list, false);
+      if(curSys && list.includes(curSys)) $("mSysSel").value = curSys;
+    }
+
+    // ---------------------------
+    // Render: table + cards
+    // ---------------------------
+    function attachCell(attach){
+      attach = norm(attach);
+      if(!attach) return document.createTextNode("—");
+      var a = document.createElement("a");
+      a.href = addV(attach);
+      a.target="_blank";
+      a.rel="noopener";
+      a.textContent = "開啟";
+      a.style.fontWeight="900";
+      a.style.color="rgba(120,64,6,.96)";
+      return a;
+    }
+
+    function mkBtn(text, onClick){
+      var b = document.createElement("button");
+      b.className="attBtn";
+      b.type="button";
+      var span = document.createElement("span");
+      span.className="t";
+      span.textContent = text;
+      b.appendChild(span);
+      b.addEventListener("click", onClick);
+      return b;
+    }
+
+    function renderTable(rows){
       var tb = $("tbody");
       tb.innerHTML = "";
       for(var i=0;i<rows.length;i++){
         var r = rows[i];
         var tr = document.createElement("tr");
-        if(state.selectedUid===r.uid) tr.classList.add("sel");
+        if(r.uid===state.selectedUid) tr.classList.add("sel");
 
         var tdNo = document.createElement("td");
-        // 修訂3：項次依「顯示列」排序（不改動資料本身的 id；僅顯示用重新編號）
-        tdNo.textContent = String(i+1);
-        tdNo.style.textAlign = "center";
+        tdNo.style.textAlign="center";
+        tdNo.textContent = String(i+1); // 修訂3：依顯示列排序顯示項次
         tr.appendChild(tdNo);
 
-        function tdText(v){
-          var td = document.createElement("td");
-          td.innerHTML = escHtml(v||"");
-          return td;
-        }
-        tr.appendChild(tdText(r.text));
-        tr.appendChild(tdText(r.trade));
-        tr.appendChild(tdText(r.sys));
-        tr.appendChild(tdText(r.source));
+        var tdText = document.createElement("td");
+        tdText.textContent = r.text || "";
+        tr.appendChild(tdText);
 
-        // attach
-        var tdA = document.createElement("td");
-        tdA.style.textAlign="center";
-        if(r.attach){
-          var a = document.createElement("a");
-          a.className = "attBtn";
-          a.href = addV(r.attach);
-          a.target = "_blank";
-          a.rel = "noopener noreferrer";
-          a.innerHTML = '<span class="t">開啟附件</span>';
-          tdA.appendChild(a);
-        }else{
-          tdA.innerHTML = '<span class="muted">—</span>';
-        }
-        tr.appendChild(tdA);
+        var tdTrade = document.createElement("td");
+        tdTrade.style.textAlign="center";
+        tdTrade.textContent = r.trade || "";
+        tr.appendChild(tdTrade);
 
-        tr.appendChild(tdText(r.remark));
-        var tdD = document.createElement("td");
-        tdD.style.textAlign="center";
-        tdD.textContent = r.date || "";
-        tr.appendChild(tdD);
+        var tdSys = document.createElement("td");
+        tdSys.style.textAlign="center";
+        tdSys.textContent = r.sys || "";
+        tr.appendChild(tdSys);
 
-        var tdOp = document.createElement("td");
-        tdOp.style.textAlign="center";
-        var bSel = document.createElement("button");
-        bSel.className = "btn ghost small";
-        bSel.type = "button";
-        bSel.innerHTML = '<span class="t">選取</span>';
-        bSel.addEventListener("click", (function(uid){ return function(e){ e.stopPropagation(); selectRow(uid); }; })(r.uid));
-        tdOp.appendChild(bSel);
-        tr.appendChild(tdOp);
+        var tdSrc = document.createElement("td");
+        tdSrc.style.textAlign="center";
+        tdSrc.textContent = r.source || "";
+        tr.appendChild(tdSrc);
 
-        tr.addEventListener("click", (function(uid){ return function(){ selectRow(uid); }; })(r.uid));
+        var tdAtt = document.createElement("td");
+        tdAtt.style.textAlign="center";
+        tdAtt.appendChild(attachCell(r.attach));
+        tr.appendChild(tdAtt);
+
+        var tdRem = document.createElement("td");
+        tdRem.textContent = r.remark || "";
+        tr.appendChild(tdRem);
+
+        var tdDate = document.createElement("td");
+        tdDate.style.textAlign="center";
+        tdDate.textContent = r.date || "";
+        tr.appendChild(tdDate);
+
+        var tdAct = document.createElement("td");
+        tdAct.style.textAlign="center";
+        tdAct.appendChild(mkBtn("選取", (function(uid){ return function(e){
+          e.stopPropagation();
+          selectRow(uid);
+        };})(r.uid)));
+        tr.appendChild(tdAct);
+
+        tr.addEventListener("click", (function(uid){ return function(){
+          selectRow(uid);
+        };})(r.uid));
+
         tb.appendChild(tr);
       }
     }
 
-    function renderCards(){
-      var rows = getVisibleRows();
-      var wrap = $("cards");
-      wrap.innerHTML = "";
+    function renderCards(rows){
+      var box = $("cards");
+      box.innerHTML = "";
       for(var i=0;i<rows.length;i++){
         var r = rows[i];
         var card = document.createElement("div");
-        card.className = "noteCard" + (state.selectedUid===r.uid ? " sel" : "");
+        card.className = "noteCard" + (r.uid===state.selectedUid ? " sel": "");
         card.dataset.uid = r.uid;
 
         var head = document.createElement("div");
         head.className = "noteHead";
-
         var meta = document.createElement("div");
         meta.className = "noteMeta";
-        meta.innerHTML =
-          '<span class="noteNo">#' + escHtml(String(i+1)) + '</span>' +
-          (r.trade ? '<span class="noteTag">' + escHtml(r.trade) + '</span>' : '') +
-          (r.sys ? '<span class="noteTag">' + escHtml(r.sys) + '</span>' : '') +
-          (r.source ? '<span class="noteTag">' + escHtml(r.source) + '</span>' : '') +
-          (r.date ? '<span class="noteTag">' + escHtml(r.date) + '</span>' : '');
+
+        function tag(txt){
+          var s=document.createElement("span");
+          s.className="noteTag";
+          s.textContent=txt;
+          return s;
+        }
+        meta.appendChild(tag("項次 " + (i+1)));
+        if(r.trade) meta.appendChild(tag(r.trade));
+        if(r.sys) meta.appendChild(tag(r.sys));
+        if(r.source) meta.appendChild(tag(r.source));
+        if(r.date) meta.appendChild(tag(r.date));
+
         head.appendChild(meta);
 
-        var more = document.createElement("div");
-        more.className = "noteMore";
-        more.innerHTML = (r.attach ? ('<a class="attBtn" href="'+escHtml(addV(r.attach))+'" target="_blank" rel="noopener noreferrer"><span class="t">附件</span></a>') : '') +
-                         (r.remark ? ('<div class="miniHint" style="margin-top:8px; text-align:left;">備註：'+escHtml(r.remark)+'</div>') : '');
-        head.appendChild(more);
+        var btn = mkBtn("選取", (function(uid){ return function(e){ e.stopPropagation(); selectRow(uid); };})(r.uid));
+        head.appendChild(btn);
 
         var body = document.createElement("div");
-        body.className = "noteBody";
+        body.className="noteBody";
         body.textContent = r.text || "";
+
+        var more = document.createElement("div");
+        more.className="noteMore miniHint";
+        more.textContent = "點一下展開/收合內容";
 
         card.appendChild(head);
         card.appendChild(body);
+        card.appendChild(more);
 
-        card.addEventListener("click", function(e){
+        card.addEventListener("click", function(){
           var uid = this.dataset.uid;
-          if(state.selectedUid!==uid) selectRow(uid);
-          // toggle open
+          selectRow(uid);
           this.classList.toggle("open");
         });
 
-        wrap.appendChild(card);
+        box.appendChild(card);
       }
     }
 
-    function renderHint(){
+    function refresh(){
+      rebuildFilterOptions();
       var rows = getVisibleRows();
-      var total = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
 
-      var user = state.user || { user:"—", role:"—" };
-      $("uName").textContent = user.user || "—";
-      $("uRole").textContent = user.role || "—";
+      renderTable(rows);
+      renderCards(rows);
 
-      var canWrite = (user && roleRank(user.role)>=2);
+      // hint
+      var cloudTxt = state.cloud.ok ? "已同步" : "未設定";
+      var lastTxt = state.cloud.lastOkAt ? fmtClock(state.cloud.lastOkAt) : "—";
+      var roleTxt = state.role==="admin" ? "admin" : (state.role==="write"?"可編輯":"唯讀");
 
-      $("btnAdd").style.display = canWrite ? "" : "none";
-      $("btnEdit").style.display = canWrite ? "" : "none";
-      $("btnToken").style.display = (user && user.role==="admin") ? "" : "none";
-
-      var stateLabel = {
-        offline: ["雲端", "離線/未啟用"],
-        sync: ["雲端", "同步中…"],
-        save: ["雲端", "上傳中…"],
-        ok: ["雲端", "已同步"],
-        deny: ["雲端", "被拒絕（Access/權限）"],
-        neterr: ["雲端", "網路/服務異常"],
-      }[state.cloudState] || ["雲端","—"];
-
-      var last = state.lastSyncAt ? fmtClock(state.lastSyncAt) : "—";
-      var sel = state.selectedUid ? ("已選取") : ("未選取");
-
-      $("hint").innerHTML =
-        '<span class="hb"><span class="k">版本</span><span class="v">'+escHtml(APP_VER)+'</span></span>' +
-        '<span class="hb"><span class="k">筆數</span><span class="v">'+escHtml(String(rows.length))+'</span><span class="k">/</span><span class="v">'+escHtml(String(total))+'</span></span>' +
-        '<span class="hb"><span class="k">選取</span><span class="v">'+escHtml(sel)+'</span></span>' +
-        '<span class="hb '+(state.cloudState==="deny"||state.cloudState==="neterr"?"bad":"")+'"><span class="k">'+escHtml(stateLabel[0])+'</span><span class="v">'+escHtml(stateLabel[1])+'</span></span>' +
-        '<span class="hb"><span class="k">最後</span><span class="v">'+escHtml(last)+'</span></span>' +
-        '<span class="hb"><span class="k">權限</span><span class="v">'+escHtml(canWrite?"可編輯":"唯讀")+'</span></span>';
+      $("hint").innerHTML = "";
+      function hb(k,v,bad){
+        var s=document.createElement("span");
+        s.className="hb"+(bad?" bad":"");
+        s.innerHTML = '<span class="k">'+escHtml(k)+'</span><span class="v">'+escHtml(v)+'</span>';
+        return s;
+      }
+      $("hint").appendChild(hb("版本", APP_VER));
+      $("hint").appendChild(hb("筆數", String(rows.length) + " / " + String(state.db.map(normalizeRow).filter(Boolean).filter(function(r){return !r.deleted;}).length)));
+      $("hint").appendChild(hb("選取", state.selectedUid ? "已選取" : "未選取", !state.selectedUid));
+      $("hint").appendChild(hb("雲端", cloudTxt, !state.cloud.ok));
+      $("hint").appendChild(hb("最後", lastTxt));
+      $("hint").appendChild(hb("權限", roleTxt));
     }
 
-    function renderAll(opts){
-      opts = opts || {};
-      if(opts.filters!==false) renderFilters();
-      renderHint();
-      renderTable();
-      renderCards();
+    function selectRow(uid){
+      uid = norm(uid);
+      state.selectedUid = uid;
+      refresh();
     }
 
     // ---------------------------
-    // Selection + modal
+    // Modal logic
     // ---------------------------
-    function findRow(uid){
+    function openMask(mode){
+      state.mode = mode;
+      $("mask").style.display = "flex";
+      $("mTitle").textContent = (mode==="add") ? "新增" : (mode==="edit" ? "編輯" : "查看");
+      var canEdit = (state.role==="admin" || state.role==="write") && (mode!=="view");
+      $("btnSave").style.display = canEdit ? "" : "none";
+      $("btnDelete").style.display = (canEdit && mode!=="add") ? "" : "none";
+      // lock inputs in view mode
+      var ro = (mode==="view");
+      ["mText","mAttach","mRemark","mDate"].forEach(function(id){ $(id).disabled = ro; });
+      ["mTradeSel","mSysSel","mSourceSel"].forEach(function(id){ $(id).disabled = ro; });
+      ["btnAddTrade","btnAddSys","btnAddSource","btnNetDisk"].forEach(function(id){ $(id).disabled = ro; });
+    }
+
+    function closeMask(){
+      $("mask").style.display = "none";
+    }
+
+    function fillModal(row){
+      row = row || {};
+      $("mText").value = norm(row.text);
+      $("mTradeSel").value = norm(row.trade);
+      onModalTradeChanged();
+      $("mSysSel").value = norm(row.sys);
+      $("mSourceSel").value = norm(row.source);
+      $("mAttach").value = norm(row.attach);
+      $("mRemark").value = norm(row.remark);
+      $("mDate").value = norm(row.date) || todayISO();
+      $("mNo").value = row.uid ? String(displayNoOf(row.uid) || "") : "";
+    }
+
+    function currentRowByUid(uid){
       uid = norm(uid);
       if(!uid) return null;
       for(var i=0;i<state.db.length;i++){
-        var r = normalizeRow(state.db[i]);
+        var r = ensureRowV1(state.db[i]);
         if(r && r.uid===uid) return r;
       }
       return null;
     }
 
-    function selectRow(uid){
-      state.selectedUid = norm(uid) || null;
-      renderAll();
-      // 復原舊資料後：首次同步完成再補一次上傳整併（可寫權限）
-      if(state._recovered && state.user && roleRank(state.user.role)>=2){
-        state._recovered = false;
-        try{ saveToCloud("recover_legacy"); }catch(e3){}
-      }
-    }
-
-    function openMask(title){
-      $("mTitle").textContent = title;
-      $("mask").style.display = "flex";
-      $("mask").setAttribute("aria-hidden","false");
-    }
-    function closeMask(){
-      $("mask").style.display = "none";
-      $("mask").setAttribute("aria-hidden","true");
-      state.editingUid = null;
-    }
-
-    function setModalReadonly(ro){
-      ["mText","mTradeSel","mSysSel","mSourceSel","mAttach","mRemark","mDate"].forEach(function(id){
-        var el = $(id);
-        if(!el) return;
-        el.disabled = !!ro;
-      });
-      $("btnAddTrade").disabled = !!ro;
-      $("btnAddSys").disabled = !!ro;
-      $("btnAddSource").disabled = !!ro;
-      $("btnNetDisk").disabled = false;
-    }
-
-    function fillModalFromRow(r){
-      $("mNo").value = r ? String(displayNoOf(r.uid) || (r.id||"")) : "";
-      $("mText").value = r ? (r.text||"") : "";
-      $("mAttach").value = r ? (r.attach||"") : "";
-      $("mRemark").value = r ? (r.remark||"") : "";
-      $("mDate").value = r ? (r.date||todayISO()) : todayISO();
-
-      // dict selects
-      buildDictsFromDb();
-      var trades = loadDict(TRADE_DICT_KEY);
-      var syss = loadDict(SYS_DICT_KEY);
-      var sources = loadDict(SOURCE_DICT_KEY);
-      var map = loadMap();
-
-      function fill(sel, items, keep){
-        sel.innerHTML = "";
-        items.forEach(function(it){
-          var op = document.createElement("option");
-          op.value = it; op.textContent = it;
-          sel.appendChild(op);
-        });
-        if(keep && items.includes(keep)) sel.value = keep;
-        else if(items.length) sel.value = items[0];
-        else sel.value = "";
-      }
-
-      fill($("mTradeSel"), trades, r && r.trade);      var t = norm($("mTradeSel").value);
-      var sysItems = t ? collectSysForTrade(t, state.db) : collectSysAll(state.db);
-      // 相容舊資料：若該筆 sys 不在清單，仍加入讓使用者可見可選
-      var keepSys = r && r.sys ? norm(r.sys) : "";
-      if(keepSys && !sysItems.includes(keepSys)) sysItems = sysItems.concat([keepSys]).filter(Boolean).sort();
-      fill($("mSysSel"), sysItems, r && r.sys);
-      fill($("mSourceSel"), sources, r && r.source);
-    }
-
     function openView(){
-      if(!state.selectedUid){ toast("請先選取一筆", 2200); return; }
-      var r = findRow(state.selectedUid);
-      if(!r){ toast("找不到資料（可能已被刪除）", 2400); return; }
-      fillModalFromRow(r);
-      setModalReadonly(true);
-      $("btnSave").style.display = "none";
-      $("btnDelete").style.display = "none";
-      openMask("查看");
-    }
-
-    function openAdd(){
-      if(!(state.user && roleRank(state.user.role)>=2)){ toast("目前為唯讀權限", 2400); return; }
-      state.editingUid = null;
-      fillModalFromRow(null);
-      setModalReadonly(false);
-      $("btnSave").style.display = "";
-      $("btnDelete").style.display = "none";
-      openMask("新增");
+      if(!state.selectedUid){ toast("請先選取一筆"); return; }
+      var r = currentRowByUid(state.selectedUid);
+      if(!r){ toast("找不到資料"); return; }
+      fillModal(r);
+      openMask("view");
     }
 
     function openEdit(){
-      if(!(state.user && roleRank(state.user.role)>=2)){ toast("目前為唯讀權限", 2400); return; }
-      if(!state.selectedUid){ toast("請先選取一筆", 2200); return; }
-      var r = findRow(state.selectedUid);
-      if(!r){ toast("找不到資料（可能已被刪除）", 2400); return; }
-      state.editingUid = r.uid;
-      fillModalFromRow(r);
-      setModalReadonly(false);
-      $("btnSave").style.display = "";
-      $("btnDelete").style.display = "";
-      openMask("編輯");
+      if(!state.selectedUid){ toast("請先選取一筆"); return; }
+      if(!(state.role==="admin" || state.role==="write")){ toast("目前權限不可編輯"); return; }
+      var r = currentRowByUid(state.selectedUid);
+      if(!r){ toast("找不到資料"); return; }
+      fillModal(r);
+      openMask("edit");
     }
 
-    function readModal(){
-      return {
+    function openAdd(){
+      if(!(state.role==="admin" || state.role==="write")){ toast("目前權限不可新增"); return; }
+      state.selectedUid = "";
+      fillModal({ date: todayISO() });
+      openMask("add");
+    }
+
+    function modalToRow(existingUid){
+      var uid = existingUid ? norm(existingUid) : uuid();
+      var r = {
+        uid: uid,
+        id: 0, // display only
         text: norm($("mText").value),
         trade: norm($("mTradeSel").value),
         sys: norm($("mSysSel").value),
         source: norm($("mSourceSel").value),
         attach: norm($("mAttach").value),
         remark: norm($("mRemark").value),
-        date: norm($("mDate").value) || todayISO()
+        date: norm($("mDate").value) || todayISO(),
+        updatedAt: nowISO(),
+        rev: "r" + Date.now().toString(16) + Math.random().toString(16).slice(2,6),
+        deleted: false
       };
+      return ensureRowV1(r);
     }
 
-    function ensureSelectOptions(){
-      // when trade changes, sys options should filter
-      $("mTradeSel").addEventListener("change", function(){
-        var t = norm(this.value);
-        var sysItems = t ? collectSysForTrade(t, state.db) : collectSysAll(state.db);
-        var keep = norm($("mSysSel").value);
-        if(keep && !sysItems.includes(keep)) sysItems = sysItems.concat([keep]).filter(Boolean).sort();
-        $("mSysSel").innerHTML = "";
-        sysItems.forEach(function(it){
-          var op=document.createElement("option"); op.value=it; op.textContent=it; $("mSysSel").appendChild(op);
-        });
-        if(keep && sysItems.includes(keep)) $("mSysSel").value = keep;
-        else if(sysItems.length) $("mSysSel").value = sysItems[0];
-      });
-    }
-
-    // ---------------------------
-    // Prompt modal (add dict items)
-    // ---------------------------
-    function openPrompt(mode){
-      state.promptMode = mode; // "trade"|"sys"|"source"
-      $("pInput").value = "";
-      $("pMask").style.display = "flex";
-      if(mode==="trade"){
-        $("pTitle").textContent = "新增工種";
-        $("pLabel").textContent = "請輸入工種";
-        $("pHint").textContent = "新增後會加入工種字典。";
-      }else if(mode==="sys"){
-        $("pTitle").textContent = "新增系統";
-        $("pLabel").textContent = "請輸入系統名稱";
-        $("pHint").textContent = "新增後會加入系統字典，並綁定到目前工種。";
-      }else{
-        $("pTitle").textContent = "新增出處";
-        $("pLabel").textContent = "請輸入出處";
-        $("pHint").textContent = "新增後會加入出處字典。";
-      }
-      setTimeout(function(){ $("pInput").focus(); }, 0);
-    }
-    function closePrompt(){
-      $("pMask").style.display = "none";
-      state.promptMode = null;
-    }
-    function confirmPrompt(){
-      var v = norm($("pInput").value);
-      if(!v){ toast("請輸入內容", 2200); return; }
-      if(state.promptMode==="trade"){
-        var trades = saveDict(TRADE_DICT_KEY, loadDict(TRADE_DICT_KEY).concat([v]));
-        // refresh select
-        $("mTradeSel").innerHTML = "";
-        trades.forEach(function(it){ var op=document.createElement("option"); op.value=it; op.textContent=it; $("mTradeSel").appendChild(op); });
-        $("mTradeSel").value = v;
-        $("mTradeSel").dispatchEvent(new Event("change"));
-        closePrompt();
-        toast("已新增工種", 2000);
-      }else if(state.promptMode==="sys"){
-        var syss = saveDict(SYS_DICT_KEY, loadDict(SYS_DICT_KEY).concat([v]));
-        var t = norm($("mTradeSel").value);
-        var map = loadMap();
-        if(t){
-          map[t] = map[t] || [];
-          if(!map[t].includes(v)) map[t].push(v);
-          saveMap(map);
-        }
-        // refresh sys select according to trade
-        $("mTradeSel").dispatchEvent(new Event("change"));
-        $("mSysSel").value = v;
-        closePrompt();
-        toast("已新增系統", 2000);
-      }else if(state.promptMode==="source"){
-        var srcs = saveDict(SOURCE_DICT_KEY, loadDict(SOURCE_DICT_KEY).concat([v]));
-        $("mSourceSel").innerHTML = "";
-        srcs.forEach(function(it){ var op=document.createElement("option"); op.value=it; op.textContent=it; $("mSourceSel").appendChild(op); });
-        $("mSourceSel").value = v;
-        closePrompt();
-        toast("已新增出處", 2000);
-      }
-      renderFilters();
-    }
-
-    // ---------------------------
-    // CRUD
-    // ---------------------------
-    function upsertRow(uid, data){
+    function upsertRow(row){
       var found = false;
       for(var i=0;i<state.db.length;i++){
-        var r = normalizeRow(state.db[i]);
-        if(r && r.uid===uid){
+        var r = ensureRowV1(state.db[i]);
+        if(r && r.uid===row.uid){
+          state.db[i] = mergeTwo(r, row);
           found = true;
-          state.db[i] = Object.assign({}, r, data);
           break;
         }
       }
-      if(!found){
-        state.db.push(Object.assign({ uid: uid }, data));
-      }
-    }
-
-    async function onSave(){
-      if(!(state.user && roleRank(state.user.role)>=2)){ toast("目前為唯讀權限", 2400); return; }
-
-      var d = readModal();
-      if(!d.text){ toast("記事內容不可空白", 2400); return; }
-
-      // Normalize dict binding
-      if(d.trade && d.sys){
-        var map = loadMap();
-        map[d.trade] = map[d.trade] || [];
-        if(!map[d.trade].includes(d.sys)) map[d.trade].push(d.sys);
-        saveMap(map);
-      }
-
-      var isEdit = !!state.editingUid;
-      var uid = isEdit ? state.editingUid : uuid();
-
-      // assign id
-      var idv = 0;
-      if(isEdit){
-        var old = findRow(uid);
-        idv = old ? Number(old.id||0) : 0;
-      }
-      if(!idv || !Number.isFinite(idv) || idv<=0){
-        state.counter = Math.max(state.counter, maxId(state.db.map(normalizeRow).filter(Boolean)));
-        state.counter += 1;
-        idv = state.counter;
-      }
-
-      var row = {
-        uid: uid,
-        id: idv,
-        text: d.text,
-        trade: d.trade,
-        sys: d.sys,
-        source: d.source,
-        attach: d.attach,
-        remark: d.remark,
-        date: d.date,
-        updatedAt: nowISO(),
-        rev: "r"+Math.random().toString(16).slice(2)+"_"+Date.now().toString(16),
-        deleted: false
-      };
-
-      upsertRow(uid, row);
+      if(!found) state.db.push(row);
       saveLocal({ db: state.db, counter: state.counter });
       buildDictsFromDb();
-      closeMask();
-      selectRow(uid);
-      toast(isEdit ? "已儲存修改" : "已新增", 2000);
-
-      // Cloud save (best effort)
-      await saveToCloud(isEdit ? "edit" : "add");
+      refresh();
     }
 
-    async function onDelete(){
-      if(!(state.user && roleRank(state.user.role)>=2)){ toast("目前為唯讀權限", 2400); return; }
-      if(!state.editingUid){ toast("未選取要刪除的資料", 2200); return; }
-      if(!confirm("確定刪除這筆？（可由雲端同步回復需管理者介入）")) return;
-
-      var uid = state.editingUid;
-      var old = findRow(uid);
-      if(!old){ toast("找不到資料", 2200); return; }
-
-      upsertRow(uid, {
-        uid: uid,
-        id: old.id,
-        deleted: true,
-        updatedAt: nowISO(),
-        rev: "r"+Math.random().toString(16).slice(2)+"_"+Date.now().toString(16)
-      });
+    function deleteRow(uid){
+      uid = norm(uid);
+      if(!uid) return;
+      for(var i=0;i<state.db.length;i++){
+        var r = ensureRowV1(state.db[i]);
+        if(r && r.uid===uid){
+          r.deleted = true;
+          r.updatedAt = nowISO();
+          r.rev = "r" + Date.now().toString(16) + Math.random().toString(16).slice(2,6);
+          state.db[i] = r;
+          break;
+        }
+      }
       saveLocal({ db: state.db, counter: state.counter });
-      closeMask();
-      state.selectedUid = null;
-      renderAll();
-      toast("已刪除", 2000);
-
-      await saveToCloud("delete");
+      refresh();
     }
 
     // ---------------------------
-    // Export / Read mode / Clear
+    // Prompt modal (add trade/sys/source)
     // ---------------------------
-    function exportBackup(){
-      var payload = {
+    var promptMode = ""; // "trade" | "sys" | "source"
+    function openPrompt(mode){
+      promptMode = mode;
+      $("pMask").style.display="flex";
+      $("pInput").value="";
+      if(mode==="trade"){
+        $("pTitle").textContent="新增工種";
+        $("pLabel").textContent="請輸入工種";
+        $("pHint").textContent="新增後會加入「工種字典」。";
+      }else if(mode==="sys"){
+        $("pTitle").textContent="新增系統";
+        $("pLabel").textContent="請輸入系統";
+        $("pHint").textContent="新增後會加入「系統字典」，並綁定到目前工種。";
+      }else{
+        $("pTitle").textContent="新增出處";
+        $("pLabel").textContent="請輸入出處";
+        $("pHint").textContent="新增後會加入「出處字典」。";
+      }
+      setTimeout(function(){ $("pInput").focus(); }, 50);
+    }
+    function closePrompt(){ $("pMask").style.display="none"; promptMode=""; }
+
+    function commitPrompt(){
+      var val = norm($("pInput").value);
+      if(!val){ toast("請輸入內容"); return; }
+
+      if(promptMode==="trade"){
+        var trades = uniqueOf(loadDict(TRADE_DICT_KEY).concat([val]));
+        saveDict(TRADE_DICT_KEY, trades);
+        rebuildFilterOptions();
+        $("mTradeSel").value = val;
+        onModalTradeChanged();
+        toast("已新增工種");
+      }else if(promptMode==="sys"){
+        var syss = uniqueOf(loadDict(SYS_DICT_KEY).concat([val]));
+        saveDict(SYS_DICT_KEY, syss);
+
+        var t = norm($("mTradeSel").value);
+        if(t){
+          TRADE_SYS_MAP[t] = TRADE_SYS_MAP[t] || [];
+          if(!TRADE_SYS_MAP[t].includes(val)) TRADE_SYS_MAP[t].push(val);
+          saveMap(TRADE_SYS_MAP);
+        }
+        rebuildFilterOptions();
+        $("mSysSel").value = val;
+        toast("已新增系統並綁定");
+      }else if(promptMode==="source"){
+        var srcs = uniqueOf(loadDict(SOURCE_DICT_KEY).concat([val]));
+        saveDict(SOURCE_DICT_KEY, srcs);
+        rebuildFilterOptions();
+        $("mSourceSel").value = val;
+        toast("已新增出處");
+      }
+      closePrompt();
+    }
+
+    // ---------------------------
+    // Cloud API
+    // ---------------------------
+    async function cloudHealth(){
+      var cfg = await loadCloudCfg();
+      state.cloud.apiBase = cfg.apiBase;
+      state.cloud.endpoints = cfg.endpoints;
+
+      try{
+        var url = joinApiBase(cfg.apiBase, cfg.endpoints.health);
+        var res = await fetch(addV(url), { cache:"no-store" });
+        state.cloud.ok = !!(res && res.ok);
+        if(state.cloud.ok) state.cloud.lastOkAt = Date.now();
+      }catch(e){
+        state.cloud.ok = false;
+      }
+      refresh();
+      return state.cloud.ok;
+    }
+
+    function buildCloudEnvelope(payload){
+      // Worker side commonly accepts JSON body; keep flexible
+      return {
         pageKey: PAGE_KEY,
-        appVer: APP_VER,
-        exportedAt: nowISO(),
-        payload: { db: state.db, counter: state.counter }
+        resourceKey: "tasun-index-db",
+        pk: "uid",
+        client: { appVer: APP_VER, ua: navigator.userAgent, at: nowISO() },
+        payload: payload
       };
-      var blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" });
+    }
+
+    async function cloudRead(){
+      var cfg = await loadCloudCfg();
+      var url = joinApiBase(cfg.apiBase, cfg.endpoints.read);
+      var body = buildCloudEnvelope({ op:"read" });
+      var res = await fetch(addV(url), {
+        method:"POST",
+        headers: { "content-type":"application/json" },
+        body: JSON.stringify(body)
+      });
+      if(!res.ok) throw new Error("read failed");
+      var json = await res.json();
+      var un = unwrap(json);
+      // accept shapes: {db:[...], counter}, {data:{db:[]}}, {payload:{db:[]}}
+      var db = un && (un.db || (un.data && un.data.db) || (un.payload && un.payload.db) || un.rows) || [];
+      var counter = un && (un.counter || (un.data && un.data.counter) || 0) || 0;
+      if(!Array.isArray(db)) db = [];
+      return { db: db, counter: Number(counter||0)||0 };
+    }
+
+    async function cloudMerge(localPayload){
+      var cfg = await loadCloudCfg();
+      var url = joinApiBase(cfg.apiBase, cfg.endpoints.merge);
+      var body = buildCloudEnvelope({ op:"merge", db: localPayload.db, counter: localPayload.counter });
+      var res = await fetch(addV(url), {
+        method:"POST",
+        headers: { "content-type":"application/json" },
+        body: JSON.stringify(body)
+      });
+      if(!res.ok) throw new Error("merge failed");
+      var json = await res.json();
+      var un = unwrap(json);
+      var db = un && (un.db || (un.data && un.data.db) || (un.payload && un.payload.db) || un.rows) || [];
+      var counter = un && (un.counter || (un.data && un.data.counter) || 0) || 0;
+      if(!Array.isArray(db)) db = [];
+      return { db: db, counter: Number(counter||0)||0 };
+    }
+
+    async function syncFromCloud(){
+      try{
+        var ok = await cloudHealth();
+        if(!ok){ toast("雲端未設定或不可用"); return; }
+
+        var remote = await cloudRead();
+        var merged = mergePayload(remote, { db: state.db, counter: state.counter });
+        state.db = merged.db;
+        state.counter = merged.counter;
+        saveLocal({ db: state.db, counter: state.counter });
+        state.cloud.lastSyncAt = Date.now();
+        refresh();
+        toast("已從雲端同步");
+      }catch(e){
+        console.error(e);
+        toast("雲端同步失敗");
+      }
+    }
+
+    async function syncToCloud(){
+      try{
+        var ok = await cloudHealth();
+        if(!ok){ toast("雲端未設定或不可用"); return; }
+
+        // ensure v1 shape before upload
+        var clean = state.db.map(ensureRowV1).filter(Boolean);
+        var payload = { db: clean, counter: state.counter };
+
+        var remoteMerged = await cloudMerge(payload);
+        var merged = mergePayload(remoteMerged, payload); // trust server, but keep merge safety
+        state.db = merged.db;
+        state.counter = merged.counter;
+        saveLocal({ db: state.db, counter: state.counter });
+        state.cloud.lastSyncAt = Date.now();
+        refresh();
+        toast("已上傳並同步");
+      }catch(e){
+        console.error(e);
+        toast("雲端上傳失敗");
+      }
+    }
+
+    // ---------------------------
+    // Export / Import helpers (backup)
+    // ---------------------------
+    function downloadText(filename, text){
+      var blob = new Blob([text], {type:"application/json;charset=utf-8"});
       var a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = "sxdh-notes_backup_" + todayISO().replaceAll("-","") + ".json";
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       setTimeout(function(){
         URL.revokeObjectURL(a.href);
         a.remove();
-      }, 2000);
-      toast("已匯出備份", 2000);
+      }, 0);
     }
 
-    function setReadMode(on){
+    function exportBackup(){
+      var pack = {
+        meta: { app:"Tasun sxdh-notes", ver: APP_VER, exportedAt: nowISO(), pageKey: PAGE_KEY },
+        db: state.db.map(ensureRowV1).filter(Boolean),
+        counter: state.counter,
+        dicts: {
+          trades: loadDict(TRADE_DICT_KEY),
+          syss: loadDict(SYS_DICT_KEY),
+          sources: loadDict(SOURCE_DICT_KEY),
+          tradeSysMap: loadMap()
+        }
+      };
+      downloadText("捷運汐東線事項記錄_backup_"+APP_VER+".json", JSON.stringify(pack, null, 2));
+      toast("已匯出備份");
+    }
+
+    // ---------------------------
+    // Read mode
+    // ---------------------------
+    function applyReadMode(on){
       state.readMode = !!on;
       document.body.classList.toggle("readMode", state.readMode);
-      localStorage.setItem(READ_MODE_KEY, state.readMode ? "1" : "0");
       $("btnRead").querySelector(".t").textContent = "閱讀模式：" + (state.readMode ? "開" : "關");
-      renderAll();
-      // 復原舊資料後：首次同步完成再補一次上傳整併（可寫權限）
-      if(state._recovered && state.user && roleRank(state.user.role)>=2){
-        state._recovered = false;
-        try{ saveToCloud("recover_legacy"); }catch(e3){}
-      }
-    }
-
-    function clearFilters(){
-      $("qText").value = "";
-      $("fTrade").value = "";
-      $("fSys").value = "";
-      renderAll();
-      // 復原舊資料後：首次同步完成再補一次上傳整併（可寫權限）
-      if(state._recovered && state.user && roleRank(state.user.role)>=2){
-        state._recovered = false;
-        try{ saveToCloud("recover_legacy"); }catch(e3){}
-      }
+      localStorage.setItem(READ_MODE_KEY, state.readMode ? "1" : "0");
+      refresh();
     }
 
     // ---------------------------
-    // Cloud settings modal
+    // Nav / menus
     // ---------------------------
-    function openToken(){
-      $("tokenErr").style.display = "none";
-      $("tokenErr").textContent = "";
-      $("tokenMask").style.display = "flex";
-      $("tokenMask").setAttribute("aria-hidden","false");
-      $("tokenInput").value = "";
-      refreshTokenHint();
-      setTimeout(function(){ $("tokenInput").focus(); }, 0);
-    }
-    function closeToken(){
-      $("tokenMask").style.display = "none";
-      $("tokenMask").setAttribute("aria-hidden","true");
-    }
-    async function refreshTokenHint(){
-      var cfg = await loadCloudCfg();
-      $("tokenHint").textContent = "目前狀態：" + (cfg && cfg.apiBase ? cfg.apiBase : "—");
+    function navTo(href){
+      href = norm(href);
+      if(!href) return;
+      location.href = addV(href);
     }
 
-    function tokenToggle(){
-      var el = $("tokenInput");
-      el.type = (el.type==="password") ? "text" : "password";
-    }
-
-    async function tokenSave(){
-      var raw = norm($("tokenInput").value);
-      $("tokenErr").style.display = "none";
-      $("tokenErr").textContent = "";
-      if(!raw){ toast("未輸入", 2000); return; }
-
-      var j = safeJSON(raw);
-      if(j && typeof j==="object"){
-        if(j.apiBase && isValidApiBase(j.apiBase)) localStorage.setItem(API_BASE_LS_KEY, j.apiBase);
-        if(j.endpoints && typeof j.endpoints==="object"){
-          localStorage.setItem(API_EP_LS_KEY, JSON.stringify(normalizeEndpoints(j.endpoints)));
-        }
-      }else{
-        if(!isValidApiBase(raw)){
-          $("tokenErr").style.display = "block";
-          $("tokenErr").textContent = "輸入格式不正確：請貼 apiBase（https://...）或 JSON。";
-          return;
-        }
-        localStorage.setItem(API_BASE_LS_KEY, raw);
-      }
-      _cloudCfgCache = null;
-      toast("已儲存雲端設定（覆蓋）", 2400);
-      closeToken();
-      await syncPull();
-    }
-
-    function tokenClear(){
-      localStorage.removeItem(API_BASE_LS_KEY);
-      localStorage.removeItem(API_EP_LS_KEY);
-      _cloudCfgCache = null;
-      toast("已清除雲端覆蓋設定", 2400);
-      refreshTokenHint();
-    }
-
-    // ---------------------------
-    // Login modal
-    // ---------------------------
-    function openLogin(){
-      var tab = ensureAuthTable();
-      var sel = $("loginUser");
-      sel.innerHTML = '<option value="">請選擇帳號</option>';
-      tab.users.forEach(function(u){
-        var op=document.createElement("option");
-        op.value=u.user; op.textContent = u.user + " (" + (u.role||"read") + ")";
-        sel.appendChild(op);
-      });
-      $("loginPass").value = "";
-      $("loginErr").style.display = "none";
-      $("loginErr").textContent = "";
-      $("loginMask").style.display = "flex";
-      $("loginMask").setAttribute("aria-hidden","false");
-    }
-    function closeLogin(){
-      $("loginMask").style.display = "none";
-      $("loginMask").setAttribute("aria-hidden","true");
-    }
-    function doLogin(){
-      var user = norm($("loginUser").value);
-      var pass = norm($("loginPass").value);
-      var tab = ensureAuthTable();
-      var found = tab.users.find(function(u){ return u.user===user; });
-      if(!found || found.pass!==pass){
-        $("loginErr").style.display="block";
-        $("loginErr").textContent = "帳號或密碼錯誤";
-        return;
-      }
-      state.user = { user: found.user, role: found.role||"read", name: found.name||found.user, loginAt: nowISO() };
-      setCurrentUser(state.user);
-      closeLogin();
-      renderHint();
-      toast("登入成功", 1800);
-      // After login, try sync
-      syncPull();
-    }
-
-    // ---------------------------
-    // Nav + mobile menu
-    // ---------------------------
-    function initNav(){
-      function go(href){ location.href = addV(href); }
-
-      $("navBack").addEventListener("click", function(){ go("汐東工程管理表.html"); });
-      $("mBack").addEventListener("click", function(){ history.length>1 ? history.back() : go("汐東工程管理表.html"); });
-
+    function setupMobileMenu(){
       var btn = $("mMoreBtn");
       var menu = $("mMoreMenu");
+      if(!btn || !menu) return;
+
       btn.addEventListener("click", function(e){
         e.stopPropagation();
         menu.style.display = (menu.style.display==="none" || !menu.style.display) ? "block" : "none";
       });
-      document.addEventListener("click", function(){ menu.style.display = "none"; });
-      Array.from(document.querySelectorAll(".menuItem")).forEach(function(el){
-        el.addEventListener("click", function(e){
-          e.stopPropagation();
-          var href = this.getAttribute("data-href");
-          menu.style.display = "none";
-          if(href) go(href);
+      document.addEventListener("click", function(){ menu.style.display="none"; });
+      menu.querySelectorAll(".menuItem").forEach(function(it){
+        it.addEventListener("click", function(){
+          navTo(this.dataset.href);
         });
       });
     }
 
     // ---------------------------
-    // Wire UI events
+    // Login
+    // ---------------------------
+    function openLogin(){
+      $("loginMask").style.display="flex";
+      $("loginErr").style.display="none";
+      $("loginPass").value="";
+      var auth = ensureAuthTable();
+      var sel = $("loginUser");
+      sel.innerHTML = '<option value="">請選擇帳號</option>';
+      auth.users.forEach(function(u){
+        var op = document.createElement("option");
+        op.value = u.user;
+        op.textContent = (u.name||u.user) + " ("+(u.role||"read")+")";
+        sel.appendChild(op);
+      });
+    }
+    function closeLogin(){ $("loginMask").style.display="none"; }
+
+    function applyUser(u){
+      state.user = u;
+      state.role = u && u.role ? u.role : "read";
+      $("uName").textContent = u && (u.name||u.user) ? (u.name||u.user) : "—";
+      $("uRole").textContent = state.role || "—";
+
+      var canWrite = (state.role==="admin" || state.role==="write");
+      $("btnAdd").style.display = canWrite ? "" : "none";
+      $("btnEdit").style.display = canWrite ? "" : "none";
+      $("btnToken").style.display = (state.role==="admin") ? "" : "none";
+      refresh();
+    }
+
+    function doLogin(){
+      var user = norm($("loginUser").value);
+      var pass = norm($("loginPass").value);
+      if(!user || !pass){
+        $("loginErr").style.display="block";
+        $("loginErr").textContent="請選擇帳號並輸入密碼";
+        return;
+      }
+      var auth = ensureAuthTable();
+      var hit = auth.users.find(function(u){ return u.user===user && u.pass===pass; });
+      if(!hit){
+        $("loginErr").style.display="block";
+        $("loginErr").textContent="帳號或密碼錯誤";
+        return;
+      }
+      var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
+      setCurrentUser(cur);
+      applyUser(cur);
+      closeLogin();
+      toast("登入成功");
+    }
+
+    // ---------------------------
+    // Cloud setting modal
+    // ---------------------------
+    function openToken(){
+      $("tokenMask").style.display="flex";
+      $("tokenErr").style.display="none";
+      $("tokenInput").value = "";
+      updateTokenHint();
+    }
+    function closeToken(){ $("tokenMask").style.display="none"; }
+
+    async function updateTokenHint(){
+      var cfg = await loadCloudCfg();
+      var txt = (cfg && cfg.apiBase) ? cfg.apiBase : "—";
+      $("tokenHint").textContent = "目前狀態：" + txt;
+    }
+
+    function saveToken(){
+      var raw = norm($("tokenInput").value);
+      if(!raw){
+        $("tokenErr").style.display="block";
+        $("tokenErr").textContent="請貼上 apiBase 或 JSON";
+        return;
+      }
+      var js = parseJsonLenient(raw);
+      if(js && typeof js==="object" && (js.apiBase || js.endpoints)){
+        if(js.apiBase){
+          if(!isValidApiBase(js.apiBase)){
+            $("tokenErr").style.display="block";
+            $("tokenErr").textContent="apiBase 格式不正確";
+            return;
+          }
+          localStorage.setItem(API_BASE_LS_KEY, norm(js.apiBase));
+        }
+        if(js.endpoints){
+          localStorage.setItem(API_EP_LS_KEY, JSON.stringify(normalizeEndpoints(js.endpoints)));
+        }
+      }else{
+        if(!isValidApiBase(raw)){
+          $("tokenErr").style.display="block";
+          $("tokenErr").textContent="apiBase 格式不正確";
+          return;
+        }
+        localStorage.setItem(API_BASE_LS_KEY, raw);
+      }
+      _cloudCfgCache = null;
+      toast("已儲存雲端設定");
+      updateTokenHint();
+      cloudHealth();
+    }
+
+    function clearToken(){
+      localStorage.removeItem(API_BASE_LS_KEY);
+      localStorage.removeItem(API_EP_LS_KEY);
+      _cloudCfgCache = null;
+      toast("已清除雲端設定");
+      updateTokenHint();
+      cloudHealth();
+    }
+
+    function toggleTokenVis(){
+      var inp = $("tokenInput");
+      inp.type = (inp.type==="password") ? "text" : "password";
+    }
+
+    // ---------------------------
+    // Wire events
     // ---------------------------
     function wire(){
-      initNav();
+      $("navBack").addEventListener("click", function(){ navTo("汐東工程管理表.html"); });
+      $("mBack").addEventListener("click", function(){ navTo("汐東工程管理表.html"); });
+      setupMobileMenu();
 
       $("btnView").addEventListener("click", openView);
-      $("btnAdd").addEventListener("click", openAdd);
       $("btnEdit").addEventListener("click", openEdit);
-      $("btnToken").addEventListener("click", openToken);
+      $("btnAdd").addEventListener("click", openAdd);
 
+      $("btnCloud").addEventListener("click", syncFromCloud);
+      $("btnExport").addEventListener("click", exportBackup);
+      $("btnClear").addEventListener("click", function(){
+        $("qText").value="";
+        $("fTrade").value="";
+        $("fSys").value="";
+        refresh();
+      });
+
+      $("qText").addEventListener("input", function(){ refresh(); });
+      $("fTrade").addEventListener("change", onTradeFilterChanged);
+      $("fSys").addEventListener("change", function(){ refresh(); });
+
+      $("btnRead").addEventListener("click", function(){ applyReadMode(!state.readMode); });
+
+      // modal buttons
       $("btnClose").addEventListener("click", closeMask);
       $("btnCancel").addEventListener("click", closeMask);
-      $("btnSave").addEventListener("click", onSave);
-      $("btnDelete").addEventListener("click", onDelete);
-      $("btnNetDisk").addEventListener("click", function(){
-        var url = "https://www.dropbox.com/scl/fo/glb4s65934h195bxuyuqm/AH5ClZ2u4MtPMvmgtfOUAa4?rlkey=tfxkpbpw8k9bctshx5xvuge8h&st=9deaoqpw&dl=0";
-        window.open(url, "_blank", "noopener,noreferrer");
-      });
+
+      $("mTradeSel").addEventListener("change", onModalTradeChanged);
 
       $("btnAddTrade").addEventListener("click", function(){ openPrompt("trade"); });
       $("btnAddSys").addEventListener("click", function(){ openPrompt("sys"); });
       $("btnAddSource").addEventListener("click", function(){ openPrompt("source"); });
 
+      $("btnNetDisk").addEventListener("click", function(){
+        if($("mAttach").value){ window.open(addV($("mAttach").value), "_blank", "noopener"); }
+        else toast("請先貼上連結");
+      });
+
+      $("btnSave").addEventListener("click", async function(){
+        if(state.mode==="view"){ closeMask(); return; }
+        var existing = (state.mode==="edit") ? state.selectedUid : "";
+        var row = modalToRow(existing);
+        if(!row.text){ toast("請輸入記事內容"); return; }
+        if(!row.trade){ toast("請選擇工種"); return; }
+        // record trade-sys binding if both set
+        if(row.trade && row.sys){
+          TRADE_SYS_MAP[row.trade] = TRADE_SYS_MAP[row.trade] || [];
+          if(!TRADE_SYS_MAP[row.trade].includes(row.sys)) TRADE_SYS_MAP[row.trade].push(row.sys);
+          saveMap(TRADE_SYS_MAP);
+        }
+        upsertRow(row);
+        state.selectedUid = row.uid;
+        closeMask();
+        // upload if cloud ok
+        await syncToCloud();
+      });
+
+      $("btnDelete").addEventListener("click", async function(){
+        if(!(state.role==="admin" || state.role==="write")){ toast("目前權限不可刪除"); return; }
+        if(!state.selectedUid){ toast("請先選取一筆"); return; }
+        if(!confirm("確定刪除？（可在雲端同步後仍保留刪除狀態）")) return;
+        deleteRow(state.selectedUid);
+        closeMask();
+        await syncToCloud();
+      });
+
+      // prompt
       $("pClose").addEventListener("click", closePrompt);
       $("pCancel").addEventListener("click", closePrompt);
-      $("pOk").addEventListener("click", confirmPrompt);
-      $("pInput").addEventListener("keydown", function(e){ if(e.key==="Enter"){ e.preventDefault(); confirmPrompt(); } });
+      $("pOk").addEventListener("click", commitPrompt);
+      $("pInput").addEventListener("keydown", function(e){
+        if(e.key==="Enter"){ e.preventDefault(); commitPrompt(); }
+      });
 
+      // token modal
+      $("btnToken").addEventListener("click", openToken);
       $("tokenClose").addEventListener("click", closeToken);
-      $("tokenToggle").addEventListener("click", tokenToggle);
-      $("tokenSave").addEventListener("click", tokenSave);
-      $("tokenClear").addEventListener("click", tokenClear);
+      $("tokenSave").addEventListener("click", saveToken);
+      $("tokenClear").addEventListener("click", clearToken);
+      $("tokenToggle").addEventListener("click", toggleTokenVis);
 
+      // login modal
       $("loginClose").addEventListener("click", closeLogin);
       $("loginBtn").addEventListener("click", doLogin);
-      $("loginPass").addEventListener("keydown", function(e){ if(e.key==="Enter"){ e.preventDefault(); doLogin(); } });
-      $("loginToAuth").addEventListener("click", function(){ location.href = addV("權限表.html"); });
-
-      $("btnExport").addEventListener("click", exportBackup);
-      $("btnClear").addEventListener("click", clearFilters);
-      $("btnRead").addEventListener("click", function(){ setReadMode(!state.readMode); });
-
-      $("btnCloud").addEventListener("click", function(){ syncPull(); });
-
-      $("qText").addEventListener("input", function(){ renderAll(); });
-      $("fTrade").addEventListener("change", function(){ renderFilters(); renderAll({filters:false}); });
-      $("fSys").addEventListener("change", function(){ renderAll(); });
-
-      ensureSelectOptions();
+      $("loginPass").addEventListener("keydown", function(e){ if(e.key==="Enter") doLogin(); });
+      $("loginToAuth").addEventListener("click", function(){ navTo("權限表.html"); });
     }
 
     // ---------------------------
     // Boot
     // ---------------------------
-    async function boot(){
-      wire();
+    function boot(){
+      // load local
+      var p = loadDb();
+      state.db = p.db;
+      state.counter = p.counter;
 
-      // load local state
-      var local = loadDb();
-      state.db = local.db || [];
-      state.counter = local.counter || 0;
+      // recover old storages once
+      recoverLegacyLocal();
 
-
-      // 復原舊資料（若有）
-      try{ if(recoverLegacyLocal()){ state._recovered = true; toast("已嘗試復原舊資料並合併", 2600);} }catch(e){}
       // read mode
-      state.readMode = (localStorage.getItem(READ_MODE_KEY)==="1");
-      document.body.classList.toggle("readMode", state.readMode);
-      $("btnRead").querySelector(".t").textContent = "閱讀模式：" + (state.readMode ? "開" : "關");
+      state.readMode = localStorage.getItem(READ_MODE_KEY)==="1";
+      applyReadMode(state.readMode);
 
-      // user
-      state.user = getCurrentUser();
-      renderAll();
-      // 若已復原舊資料且目前已登入可寫，會在首次同步後自動上傳合併結果
+      // auth
+      ensureAuthTable();
+      var cur = getCurrentUser();
+      if(cur) applyUser(cur);
+      else applyUser({ user:"—", role:"read", name:"—" });
 
-      // if no user => login
-      if(!state.user) openLogin();
+      wire();
+      refresh();
 
-      // attempt cloud health & pull (non-blocking)
-      var ok = await cloudHealth();
-      state.cloudState = ok ? "offline" : "neterr"; // show net err if unreachable
-      renderHint();
-      if(ok) syncPull();
+      // best-effort cloud status (does not block)
+      cloudHealth();
+
+      // if not logged in, show login modal
+      if(!cur) openLogin();
     }
 
-    // Debug helpers（不改 UI）：可在 Console 使用
-    window.tasunDumpStorage = function(){
-      try{
-        var out = [];
-        function dump(storage, name){
-          for(var i=0;i<storage.length;i++){
-            var k = storage.key(i);
-            if(!k) continue;
-            var v = storage.getItem(k) || "";
-            out.push({ storage:name, key:k, bytes:v.length });
-          }
-        }
-        dump(localStorage,"localStorage");
-        dump(sessionStorage,"sessionStorage");
-        out.sort(function(a,b){ return b.bytes-a.bytes; });
-        console.table(out);
-        return out;
-      }catch(e){ console.error(e); return []; }
-    };
-    window.tasunLegacyScan = function(){
-      try{ return state._legacyScan || null; }catch(e){ return null; }
-    };
-    window.tasunImportBackupJson = function(obj){
-      try{
-        var pay = unwrap(obj||{});
-        if(!Array.isArray(pay.db)) pay.db = [];
-        var merged = mergePayload({ db: pay.db, counter: pay.counter||0 }, { db: state.db, counter: state.counter });
-        state.db = merged.db; state.counter = merged.counter;
-        saveLocal({ db: state.db, counter: state.counter });
-        buildDictsFromDb();
-        renderAll();
-        if(state.user && roleRank(state.user.role)>=2) saveToCloud("import_backup");
-        return true;
-      }catch(e){ console.error(e); return false; }
-    };
-
-    boot().catch(function(e){
-      console.error(e);
-      toast("啟動失敗（請開 Console 檢查錯誤）", 7000);
-    });
-
+    boot();
   })();
   </script>
 </body>
