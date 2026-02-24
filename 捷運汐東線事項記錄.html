@@ -858,51 +858,117 @@
 
     // 嘗試復原舊版本本機資料（不同 key / 舊備份格式），並合併回目前 db
     function recoverLegacyLocal(){
-      var candidates = [];
-      try{
-        for(var i=0;i<localStorage.length;i++){
-          var k = localStorage.key(i);
-          if(!k) continue;
-          // 可能的舊 key：同專案不同版本、備份、舊頁 key
-          if(/SxdhNotes/i.test(k) || /sxdh[-_]?notes/i.test(k) || /事項記錄/i.test(k) || /notes/i.test(k) && /tasun/i.test(k)){
-            if(k!==DB_KEY && k!==COUNTER_KEY) candidates.push(k);
-          }
-        }
-      }catch(e){}
-      var mergedAny = false;
-      var localNow = { db: state.db, counter: state.counter };
-      for(var j=0;j<candidates.length;j++){
-        var key = candidates[j];
-        var raw = null;
-        try{ raw = localStorage.getItem(key); }catch(e){ raw=null; }
-        if(!raw) continue;
-        var parsed = safeJSON(raw);
-        // 可能直接是 db array
+      // 以「內容特徵」找舊資料：任何 storage key 只要能解析出 {db:[{uid/text/trade/sys/...}], counter} 或直接是陣列，都納入合併
+      function tryParsePayload(parsed){
         if(Array.isArray(parsed)){
-          var pay = { db: parsed, counter: 0 };
-          var merged = mergePayload(pay, localNow);
+          // 直接是資料列陣列
+          return { db: parsed, counter: 0 };
+        }
+        if(parsed && typeof parsed==="object"){
+          // 可能包在 payload/data/result
+          var un = unwrap(parsed);
+          if(Array.isArray(un.db) && un.db.length) return { db: un.db, counter: un.counter||0 };
+          // 也可能就是 {records:[...]} 或 {rows:[...]} 等
+          if(Array.isArray(parsed.records) && parsed.records.length) return { db: parsed.records, counter: Number(parsed.counter||0)||0 };
+          if(Array.isArray(parsed.rows) && parsed.rows.length) return { db: parsed.rows, counter: Number(parsed.counter||0)||0 };
+          if(Array.isArray(parsed.items) && parsed.items.length) return { db: parsed.items, counter: Number(parsed.counter||0)||0 };
+        }
+        return null;
+      }
+
+      function looksLikeRow(x){
+        if(!x || typeof x!=="object") return false;
+        // 允許舊欄名：content/note/body 也視作 text
+        var hasUid = !!norm(x.uid || x.pk || x.key || x.uuid || "");
+        var hasText = !!norm(x.text || x.content || x.note || x.body || x.msg || "");
+        var hasMeta = !!norm(x.trade || x.kind || x.work || "") || !!norm(x.sys || x.system || "") || !!norm(x.date || x.createdAt || "");
+        return (hasUid && hasText) || (hasText && hasMeta);
+      }
+
+      function normalizeLegacyRows(arr){
+        var out = [];
+        for(var i=0;i<(arr||[]).length;i++){
+          var x = arr[i];
+          if(!x || typeof x!=="object") continue;
+          // map legacy fields
+          var uid = norm(x.uid || x.pk || x.key || x.uuid || "");
+          if(!uid) uid = uuid(); // fallback
+          out.push({
+            uid: uid,
+            id: Number(x.id||x.no||0)||0,
+            text: norm(x.text || x.content || x.note || x.body || x.msg || ""),
+            trade: norm(x.trade || x.kind || x.work || ""),
+            sys: norm(x.sys || x.system || ""),
+            source: norm(x.source || x.from || x.origin || ""),
+            attach: norm(x.attach || x.link || x.url || ""),
+            remark: norm(x.remark || x.memo || ""),
+            date: norm(x.date || (x.createdAt? String(x.createdAt).slice(0,10):"") || ""),
+            updatedAt: norm(x.updatedAt || x.updated || x.modifiedAt || x.ts || ""),
+            rev: norm(x.rev || x.version || ""),
+            deleted: !!(x.deleted || x.isDeleted)
+          });
+        }
+        return out;
+      }
+
+      function scanStorage(storage, storageName){
+        var keys = [];
+        try{
+          for(var i=0;i<storage.length;i++){
+            var k = storage.key(i);
+            if(k) keys.push(k);
+          }
+        }catch(e){}
+        var mergedAny = false;
+        var localNow = { db: state.db, counter: state.counter };
+        var matched = [];
+        for(var j=0;j<keys.length;j++){
+          var key = keys[j];
+          if(key===DB_KEY || key===COUNTER_KEY || key===READ_MODE_KEY) continue;
+          var raw = null;
+          try{ raw = storage.getItem(key); }catch(e){ raw=null; }
+          if(!raw || raw.length<2) continue;
+
+          var parsed = safeJSON(raw);
+          if(!parsed) continue;
+
+          var pay = tryParsePayload(parsed);
+          if(!pay || !Array.isArray(pay.db) || !pay.db.length) continue;
+
+          // 檢查是否像是我們的資料列（至少 1 筆符合）
+          var arr = pay.db;
+          var ok = false;
+          for(var k=0;k<Math.min(arr.length, 10);k++){
+            if(looksLikeRow(arr[k])) { ok = true; break; }
+          }
+          if(!ok) continue;
+
+          // normalize legacy
+          var normed = normalizeLegacyRows(arr);
+          if(!normed.length) continue;
+
+          var merged = mergePayload({ db: normed, counter: pay.counter||0 }, localNow);
           localNow = { db: merged.db, counter: merged.counter };
           mergedAny = true;
-          continue;
+          matched.push({ storage: storageName, key: key, rows: normed.length, bytes: raw.length });
         }
-        // 可能是 {payload:{db,counter}} 或 {db,counter}
-        if(parsed && typeof parsed==="object"){
-          var un = unwrap(parsed);
-          if(Array.isArray(un.db) && un.db.length){
-            var merged2 = mergePayload({ db: un.db, counter: un.counter||0 }, localNow);
-            localNow = { db: merged2.db, counter: merged2.counter };
-            mergedAny = true;
-            continue;
-          }
+
+        if(mergedAny){
+          state.db = localNow.db;
+          state.counter = localNow.counter;
+          saveLocal({ db: state.db, counter: state.counter });
+          buildDictsFromDb();
         }
+        return { mergedAny: mergedAny, matched: matched };
       }
-      if(mergedAny){
-        state.db = localNow.db;
-        state.counter = localNow.counter;
-        saveLocal({ db: state.db, counter: state.counter });
-        buildDictsFromDb();
-      }
-      return mergedAny;
+
+      var res1 = scanStorage(localStorage, "localStorage");
+      var res2 = scanStorage(sessionStorage, "sessionStorage");
+
+      // expose last scan result for debugging
+      state._legacyScan = { local: res1, session: res2, at: nowISO() };
+
+      return !!(res1.mergedAny || res2.mergedAny);
     }
 
 
@@ -2009,6 +2075,42 @@ if(trade && map && Array.isArray(map[trade])){
       renderHint();
       if(ok) syncPull();
     }
+
+    // Debug helpers（不改 UI）：可在 Console 使用
+    window.tasunDumpStorage = function(){
+      try{
+        var out = [];
+        function dump(storage, name){
+          for(var i=0;i<storage.length;i++){
+            var k = storage.key(i);
+            if(!k) continue;
+            var v = storage.getItem(k) || "";
+            out.push({ storage:name, key:k, bytes:v.length });
+          }
+        }
+        dump(localStorage,"localStorage");
+        dump(sessionStorage,"sessionStorage");
+        out.sort(function(a,b){ return b.bytes-a.bytes; });
+        console.table(out);
+        return out;
+      }catch(e){ console.error(e); return []; }
+    };
+    window.tasunLegacyScan = function(){
+      try{ return state._legacyScan || null; }catch(e){ return null; }
+    };
+    window.tasunImportBackupJson = function(obj){
+      try{
+        var pay = unwrap(obj||{});
+        if(!Array.isArray(pay.db)) pay.db = [];
+        var merged = mergePayload({ db: pay.db, counter: pay.counter||0 }, { db: state.db, counter: state.counter });
+        state.db = merged.db; state.counter = merged.counter;
+        saveLocal({ db: state.db, counter: state.counter });
+        buildDictsFromDb();
+        renderAll();
+        if(state.user && roleRank(state.user.role)>=2) saveToCloud("import_backup");
+        return true;
+      }catch(e){ console.error(e); return false; }
+    };
 
     boot().catch(function(e){
       console.error(e);
