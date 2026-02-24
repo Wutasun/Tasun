@@ -533,7 +533,8 @@
           <div class="field span2">
             <div class="label">出處（下拉；可新增）</div>
             <div class="inline2">
-              <select id="mSourceSel"></select>
+              <input id="mSourceSel" list="mSourceList" placeholder="可選擇或直接輸入出處..." />
+              <datalist id="mSourceList"></datalist>
               <button class="btn ghost small" id="btnAddSource" type="button"><span class="t">新增出處</span></button>
             </div>
             <div class="miniHint">選單來源：本頁資料「出處」不重複 + 出處字典。</div>
@@ -1237,25 +1238,48 @@ function getVisibleRows(){
     // ---------------------------
     // UI: filters and selects
     // ---------------------------
-    function setOptions(sel, arr, keepValue){
-      var cur = keepValue ? norm(sel.value) : "";
-      sel.innerHTML = "";
-      // always include "全部" for filter selects
-      if(sel=== $("fTrade") || sel=== $("fSys")){
-        var op0 = document.createElement("option");
-        op0.value = ""; op0.textContent = "全部";
-        sel.appendChild(op0);
+    function setOptions(el, arr, keepValue, opt){
+      opt = opt || {};
+      if(!el) return;
+      var cur = keepValue ? norm(el.value) : "";
+      var tag = (el.tagName||"").toUpperCase();
+
+      // SELECT: rebuild <option>
+      if(tag==="SELECT"){
+        el.innerHTML = "";
+        if(opt.includeAll){
+          var op0 = document.createElement("option");
+          op0.value = ""; op0.textContent = "全部";
+          el.appendChild(op0);
+        }
+        (arr||[]).forEach(function(v){
+          v = norm(v);
+          if(!v) return;
+          var op = document.createElement("option");
+          op.value = v; op.textContent = v;
+          el.appendChild(op);
+        });
+        if(opt.forceValue!==undefined) el.value = String(opt.forceValue);
+        if(keepValue && cur && Array.from(el.options).some(function(o){return o.value===cur;})){
+          el.value = cur;
+        }
+        return;
       }
-      (arr||[]).forEach(function(v){
-        v = norm(v);
-        if(!v) return;
-        var op = document.createElement("option");
-        op.value = v; op.textContent = v;
-        sel.appendChild(op);
-      });
-      if(keepValue && cur && Array.from(sel.options).some(function(o){return o.value===cur;})){
-        sel.value = cur;
+
+      // INPUT + datalist: rebuild datalist options (keep input value as-is)
+      var listId = el.getAttribute("list");
+      var dl = listId ? $(listId) : null;
+      if(dl){
+        dl.innerHTML = "";
+        (arr||[]).forEach(function(v){
+          v = norm(v);
+          if(!v) return;
+          var op = document.createElement("option");
+          op.value = v;
+          dl.appendChild(op);
+        });
       }
+      if(keepValue && cur) el.value = cur;
     }
 
     function uniqueOf(arr){
@@ -1271,7 +1295,7 @@ function getVisibleRows(){
       var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
       var trades = uniqueOf(rows.map(function(r){return r.trade;}));
       // ✅ 修訂：工種篩選下拉只顯示「目前資料表」工種欄位不重複項目（不混入字典）
-      setOptions($("fTrade"), trades, true);
+      setOptions($("fTrade"), trades, true, { includeAll:true });
 
       // system options depends on current selected trade filter
       var ft = norm($("fTrade").value);
@@ -1283,7 +1307,7 @@ function getVisibleRows(){
         sysList = uniqueOf(rows.map(function(r){return r.sys;})).concat(loadDict(SYS_DICT_KEY));
         sysList = uniqueOf(sysList);
       }
-      setOptions($("fSys"), sysList, true);
+      setOptions($("fSys"), sysList, true, { includeAll:true });
 
       // modal selects (trade/sys/source)
       setOptions($("mTradeSel"), trades, true);
@@ -1295,13 +1319,8 @@ function getVisibleRows(){
       var sources = uniqueOf(rows.map(function(r){return r.source;})).concat(loadDict(SOURCE_DICT_KEY));
       sources = uniqueOf(sources);
       // for modal source we don't need "全部"
-      $("mSourceSel").innerHTML = "";
-      sources.forEach(function(v){
-        var op = document.createElement("option");
-        op.value=v; op.textContent=v;
-        $("mSourceSel").appendChild(op);
-      });
-    }
+      setOptions($("mSourceSel"), sources, true, { includeAll:false });
+}
 
     // when trade filter changes, system filter must be recomputed (修訂2)
     function onTradeFilterChanged(){
@@ -1316,7 +1335,7 @@ function getVisibleRows(){
         sysList = uniqueOf(rows.map(function(r){return r.sys;})).concat(loadDict(SYS_DICT_KEY));
         sysList = uniqueOf(sysList);
       }
-      setOptions($("fSys"), sysList, false);
+      setOptions($("fSys"), sysList, false, { includeAll:true, forceValue:"" });
       if(fsOld && sysList.includes(fsOld)) $("fSys").value = fsOld;
       refresh();
     }
