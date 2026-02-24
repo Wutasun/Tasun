@@ -210,6 +210,7 @@
       display:flex; flex-wrap:wrap; gap:8px;
       align-items:center; justify-content:center;
       padding:9px 10px;
+      min-height: 44px;
       border-radius:14px; border:1px solid var(--border);
       background: rgba(255,255,255,.92);
       box-shadow: 0 12px 26px rgba(0,0,0,.08);
@@ -1070,6 +1071,20 @@
         else state.cloudState = "neterr";
       }
       renderAll();
+
+      // 提示列保底（避免偶發情況下提示列被清空或 renderHint 中斷）
+      function hintWatchdog(){
+        try{
+          var h = $("hint");
+          if(!h) return;
+          if(!h.children || h.children.length===0){
+            renderHint();
+          }
+        }catch(e){}
+      }
+      hintWatchdog();
+      clearInterval(state._hintTimer);
+      state._hintTimer = setInterval(hintWatchdog, 1200);
     }
 
     async function saveToCloud(reason){
@@ -1121,6 +1136,17 @@
       return rows;
     }
 
+    function displayNoOf(uid){
+      uid = norm(uid);
+      if(!uid) return 0;
+      var rows = getVisibleRows();
+      for(var i=0;i<rows.length;i++){
+        if(rows[i] && rows[i].uid===uid) return i+1;
+      }
+      return 0;
+    }
+
+
     function buildDictsFromDb(){
       var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
       var trades = new Set(loadDict(TRADE_DICT_KEY));
@@ -1143,6 +1169,37 @@
       saveDict(SOURCE_DICT_KEY, Array.from(sources).sort());
       saveMap(map);
     }
+
+    // 修訂2：依工種取得系統清單（來源：工種-系統綁定表 + 本頁資料），並去重排序
+    function collectSysForTrade(trade, dbArr){
+      trade = norm(trade);
+      var set = new Set();
+      var map = loadMap();
+      if(trade && map && Array.isArray(map[trade])){
+        map[trade].forEach(function(s){ s = norm(s); if(s) set.add(s); });
+      }
+      // from db
+      var rows = (dbArr||[]).map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
+      for(var i=0;i<rows.length;i++){
+        var r = rows[i];
+        if(trade && r.trade===trade && r.sys) set.add(r.sys);
+      }
+      // also allow from global sys dict if trade not set
+      var out = Array.from(set);
+      out.sort();
+      return out;
+    }
+    function collectSysAll(dbArr){
+      var set = new Set(loadDict(SYS_DICT_KEY));
+      var rows = (dbArr||[]).map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
+      for(var i=0;i<rows.length;i++){
+        if(rows[i].sys) set.add(rows[i].sys);
+      }
+      var out = Array.from(set);
+      out.sort();
+      return out;
+    }
+
 
     function fillSelect(sel, items, includeAll){
       var v = sel.value;
@@ -1167,18 +1224,16 @@
     function renderFilters(){
       buildDictsFromDb();
       var trades = loadDict(TRADE_DICT_KEY);
-      var syss = loadDict(SYS_DICT_KEY);
-
       fillSelect($("fTrade"), trades, true);
 
-      // sys filter: if trade selected, limit to map
-      var map = loadMap();
+      // 修訂2：系統下拉依工種所屬（不重複）
       var ft = norm($("fTrade").value);
-      if(ft && map[ft] && Array.isArray(map[ft]) && map[ft].length){
-        fillSelect($("fSys"), map[ft].slice().sort(), true);
-      }else{
-        fillSelect($("fSys"), syss, true);
-      }
+      var sysItems = ft ? collectSysForTrade(ft, state.db) : collectSysAll(state.db);
+      fillSelect($("fSys"), sysItems, true);
+
+      // 若工種改變導致系統不在清單內，強制回到「全部」
+      var curSys = norm($("fSys").value);
+      if(curSys && !sysItems.includes(curSys)) $("fSys").value = "";
     }
 
     function renderTable(){
@@ -1191,7 +1246,8 @@
         if(state.selectedUid===r.uid) tr.classList.add("sel");
 
         var tdNo = document.createElement("td");
-        tdNo.textContent = String(r.id||"");
+        // 修訂3：項次依「顯示列」排序（不改動資料本身的 id；僅顯示用重新編號）
+        tdNo.textContent = String(i+1);
         tdNo.style.textAlign = "center";
         tr.appendChild(tdNo);
 
@@ -1258,7 +1314,7 @@
         var meta = document.createElement("div");
         meta.className = "noteMeta";
         meta.innerHTML =
-          '<span class="noteNo">#' + escHtml(String(r.id||"")) + '</span>' +
+          '<span class="noteNo">#' + escHtml(String(i+1)) + '</span>' +
           (r.trade ? '<span class="noteTag">' + escHtml(r.trade) + '</span>' : '') +
           (r.sys ? '<span class="noteTag">' + escHtml(r.sys) + '</span>' : '') +
           (r.source ? '<span class="noteTag">' + escHtml(r.source) + '</span>' : '') +
@@ -1373,7 +1429,7 @@
     }
 
     function fillModalFromRow(r){
-      $("mNo").value = r ? String(r.id||"") : "";
+      $("mNo").value = r ? String(displayNoOf(r.uid) || (r.id||"")) : "";
       $("mText").value = r ? (r.text||"") : "";
       $("mAttach").value = r ? (r.attach||"") : "";
       $("mRemark").value = r ? (r.remark||"") : "";
@@ -1400,7 +1456,10 @@
 
       fill($("mTradeSel"), trades, r && r.trade);
       var t = norm($("mTradeSel").value);
-      var sysItems = (t && map[t] && Array.isArray(map[t]) && map[t].length) ? map[t].slice().sort() : syss.slice().sort();
+      var sysItems = t ? collectSysForTrade(t, state.db) : collectSysAll(state.db);
+      // 相容舊資料：若該筆 sys 不在清單，仍加入讓使用者可見可選
+      var keepSys = r && r.sys ? norm(r.sys) : "";
+      if(keepSys && !sysItems.includes(keepSys)) sysItems = sysItems.concat([keepSys]).filter(Boolean).sort();
       fill($("mSysSel"), sysItems, r && r.sys);
       fill($("mSourceSel"), sources, r && r.source);
     }
@@ -1455,10 +1514,9 @@
       // when trade changes, sys options should filter
       $("mTradeSel").addEventListener("change", function(){
         var t = norm(this.value);
-        var syss = loadDict(SYS_DICT_KEY);
-        var map = loadMap();
-        var sysItems = (t && map[t] && Array.isArray(map[t]) && map[t].length) ? map[t].slice().sort() : syss.slice().sort();
+        var sysItems = t ? collectSysForTrade(t, state.db) : collectSysAll(state.db);
         var keep = norm($("mSysSel").value);
+        if(keep && !sysItems.includes(keep)) sysItems = sysItems.concat([keep]).filter(Boolean).sort();
         $("mSysSel").innerHTML = "";
         sysItems.forEach(function(it){
           var op=document.createElement("option"); op.value=it; op.textContent=it; $("mSysSel").appendChild(op);
