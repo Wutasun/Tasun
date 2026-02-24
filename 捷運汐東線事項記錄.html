@@ -45,7 +45,7 @@
       --btnFont: clamp(14.5px, 1.12vw, 17px);
       --btnFontSmall: clamp(13.5px, 1.06vw, 16px);
 
-      --stageSide: 1cm;
+      --stageSide: clamp(16px, 3.2vw, 1.6cm);
 
       --tableWrapBg: rgba(255,252,244,.94);
       --tableBg: rgba(255,252,244,.92);
@@ -101,7 +101,7 @@
     }
 
     .wrap{
-      width:min(1720px, calc(100vw - (2*var(--stageSide))));
+      width:calc(100vw - (2*var(--stageSide)));
       margin:0 auto;
       padding: 18px 16px 18px;
       height:100vh;
@@ -649,52 +649,29 @@
   (function(){
     "use strict";
 
-    /* =========================================================
-     * 套用全站雲端同步標準 v1（本頁已套用）
-     * ---------------------------------------------------------
-     * 口令：『套用全站雲端同步標準 v1』
-     *
-     * 規格（所有頁面一律一致）：
-     * 1) pageKey：每頁唯一（例：sxdh-notes）
-     * 2) pk：一律 uid（uuid），雲端合併以 uid 為主鍵
-     * 3) 每筆資料必備欄位：uid / rev / updatedAt / deleted
-     * 4) id：只作顯示用（可重排/補號），不可當主鍵
-     * 5) 本機存檔格式（localStorage）：{ items:[], counter:n, rev, updatedAt }
-     * 6) 雲端 payload 格式相容：支援 items/db 任一字段（本頁送出 items）
-     * 7) 合併策略：以 uid 去重；同 uid 取 updatedAt 較新者；同時刻以 rev 字典序決勝
-     * ========================================================= */
-
     // ---------------------------
-    // Constants / Keys (v1)
+    // Constants / Keys
     // ---------------------------
-    var PAGE_KEY = "sxdh-notes";                        // ✅ 每頁唯一
-    var PK = "uid";                                    // ✅ 全站固定 uid
+    var PAGE_KEY = "sxdh-notes";
     var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || "dev";
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
     var DEFAULT_ENDPOINTS = { health:"/health", read:"/api/read", merge:"/api/merge" };
 
-    // Auth table (shared)
     var AUTH_KEY = "tasunAuthTable_v1";
     var CURRENT_KEY = "tasunCurrentUser_v1";
 
-    // ---- Local storage (v1 unified) ----
-    var DB_KEY_V1      = "tasun_db_v1__" + PAGE_KEY;        // {items,counter,rev,updatedAt}
-    var READ_MODE_KEY  = "tasun_readMode_v1__" + PAGE_KEY;  // "1"|"0"
+    var DB_KEY = "tasunSxdhNotes_v1";
+    var COUNTER_KEY = "tasunSxdhNotes_counter_v1";
+    var READ_MODE_KEY  = "tasunSxdhNotes_readMode_v1";
 
-    // ---- Legacy keys (migration only) ----
-    var DB_KEY_LEGACY      = "tasunSxdhNotes_v1";
-    var COUNTER_KEY_LEGACY = "tasunSxdhNotes_counter_v1";
-    var READ_MODE_LEGACY   = "tasunSxdhNotes_readMode_v1";
-
-    // Dicts (keep existing keys to avoid breaking other pages / user habits)
     var TRADE_DICT_KEY = "tasunSxdhNotes_tradeDict_v1";
     var SYS_DICT_KEY   = "tasunSxdhNotes_sysDict_v1";
     var SOURCE_DICT_KEY = "tasunSxdhNotes_sourceDict_v1";
     var TRADE_SYS_MAP_KEY = "tasunSxdhNotes_tradeSysMap_v1";
 
-    // Optional cloud overrides
+    // Optional overrides
     var API_BASE_LS_KEY = "tasunApiBase_v1";
     var API_EP_LS_KEY   = "tasunApiEndpoints_v1__" + PAGE_KEY;
 
@@ -708,16 +685,7 @@
     function todayISO(){ return new Date().toISOString().slice(0,10); }
     function pad2(n){ return String(n).padStart(2,"0"); }
     function fmtClock(ts){ if(!ts) return ""; var d = new Date(ts); return pad2(d.getHours())+":"+pad2(d.getMinutes())+":"+pad2(d.getSeconds()); }
-
-    // UUID (browser-safe)
-    function uuidv4(){
-      if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
-      var s = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function(c){
-        var r = Math.random()*16|0, v = (c==="x") ? r : (r&0x3|0x8);
-        return v.toString(16);
-      });
-      return s;
-    }
+    function uuid(){ return "u" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2); }
 
     function toast(msg, ms){
       var t = $("toast");
@@ -833,8 +801,10 @@
     async function loadCloudCfg(){
       if(_cloudCfgCache) return _cloudCfgCache;
 
+      // Start with defaults
       var cfg = { apiBase: DEFAULT_API_BASE, endpoints: Object.assign({}, DEFAULT_ENDPOINTS) };
 
+      // 1) resources.json (best)
       try{
         var res = await fetch(addV(RESOURCES_URL), { cache:"no-store" });
         if(res && res.ok){
@@ -853,8 +823,9 @@
             }
           }
         }
-      }catch(e){}
+      }catch(e){ /* ignore */ }
 
+      // 2) local overrides (optional)
       var ob = norm(localStorage.getItem(API_BASE_LS_KEY));
       if(isValidApiBase(ob)) cfg.apiBase = ob;
 
@@ -866,18 +837,28 @@
     }
 
     // ---------------------------
-    // v1 Local data (with migration)
+    // Local data + dicts
     // ---------------------------
+    function loadDb(){
+      var arr = safeJSON(localStorage.getItem(DB_KEY));
+      if(!Array.isArray(arr)) arr = [];
+      var c = Number(localStorage.getItem(COUNTER_KEY)||"0");
+      if(!Number.isFinite(c) || c<0) c = 0;
+      return { db: arr, counter: c };
+    }
+
+    function saveLocal(payload){
+      localStorage.setItem(DB_KEY, JSON.stringify(payload.db||[]));
+      localStorage.setItem(COUNTER_KEY, String(Number(payload.counter||0)||0));
+    }
+
     function normalizeRow(x){
       if(!x || typeof x!=="object") return null;
       var r = Object.assign({}, x);
-
-      r.uid = norm(r.uid || r[PK] || "");
+      r.uid = norm(r.uid) || "";
       if(!r.uid) return null;
-
       r.id = Number(r.id||0);
       if(!Number.isFinite(r.id)) r.id = 0;
-
       r.text = norm(r.text);
       r.trade = norm(r.trade);
       r.sys = norm(r.sys);
@@ -885,11 +866,9 @@
       r.attach = norm(r.attach);
       r.remark = norm(r.remark);
       r.date = norm(r.date) || "";
-
-      r.updatedAt = norm(r.updatedAt) || nowISO();
-      r.rev = norm(r.rev) || ("r"+Math.random().toString(16).slice(2)+"_"+Date.now().toString(16));
+      r.updatedAt = norm(r.updatedAt) || "";
+      r.rev = norm(r.rev) || "";
       r.deleted = !!r.deleted;
-
       return r;
     }
 
@@ -919,72 +898,22 @@
       return (rb>ra) ? b : a;
     }
 
-    function unwrapPayload(payload){
+    function unwrap(payload){
       var out = (payload && typeof payload==="object") ? payload : {};
       if(out && typeof out==="object"){
         if("payload" in out) out = out.payload || {};
         else if("data" in out) out = out.data || {};
         else if("result" in out) out = out.result || {};
       }
-      if(Array.isArray(out)) out = { items: out };
-
-      var items = out.items;
-      if(!Array.isArray(items)) items = out.db;
-      if(!Array.isArray(items)) items = [];
-      var counter = Number(out.counter||0);
-      if(!Number.isFinite(counter) || counter<0) counter = 0;
-
-      return { items: items, counter: counter, rev: norm(out.rev)||"", updatedAt: norm(out.updatedAt)||"" };
+      if(!Array.isArray(out.db)) out.db = [];
+      var c = Number(out.counter||0); if(!Number.isFinite(c) || c<0) c=0;
+      out.counter = c;
+      return out;
     }
 
-    function loadDbV1(){
-      var raw = safeJSON(localStorage.getItem(DB_KEY_V1));
-      if(raw){
-        var u = unwrapPayload(raw);
-        return { items: u.items, counter: u.counter, rev: u.rev, updatedAt: u.updatedAt };
-      }
-
-      var legacyArr = safeJSON(localStorage.getItem(DB_KEY_LEGACY));
-      var legacyCounter = Number(localStorage.getItem(COUNTER_KEY_LEGACY)||"0");
-      if(!Number.isFinite(legacyCounter) || legacyCounter<0) legacyCounter = 0;
-
-      if(Array.isArray(legacyArr) && legacyArr.length){
-        var fixed = [];
-        for(var i=0;i<legacyArr.length;i++){
-          var r = legacyArr[i] || {};
-          if(!r.uid){
-            r.uid = uuidv4();
-            r.updatedAt = r.updatedAt || nowISO();
-            r.rev = r.rev || ("migr_"+Date.now().toString(16)+"_"+Math.random().toString(16).slice(2));
-          }
-          fixed.push(normalizeRow(r));
-        }
-        fixed = fixed.filter(Boolean);
-        var counter = Math.max(legacyCounter, maxId(fixed));
-        var out = { items: fixed, counter: counter, rev: "migr_"+Date.now().toString(16), updatedAt: nowISO() };
-        localStorage.setItem(DB_KEY_V1, JSON.stringify(out));
-        return out;
-      }
-
-      return { items: [], counter: 0, rev: "", updatedAt: "" };
-    }
-
-    function saveLocalV1(pack){
-      var out = {
-        items: Array.isArray(pack.items) ? pack.items : [],
-        counter: Number(pack.counter||0) || 0,
-        rev: norm(pack.rev) || ("local_"+Date.now().toString(16)),
-        updatedAt: norm(pack.updatedAt) || nowISO()
-      };
-      localStorage.setItem(DB_KEY_V1, JSON.stringify(out));
-    }
-
-    // ---------------------------
-    // Merge (v1)
-    // ---------------------------
-    function mergePack(remotePack, localPack){
-      var r = unwrapPayload(remotePack||{});
-      var l = unwrapPayload(localPack||{});
+    function mergePayload(remotePayload, localPayload){
+      var r = unwrap(remotePayload||{});
+      var l = unwrap(localPayload||{});
 
       var map = Object.create(null);
       function putAll(arr){
@@ -994,12 +923,13 @@
           map[row.uid] = pickNewer(map[row.uid], row);
         }
       }
-      putAll(r.items||[]);
-      putAll(l.items||[]);
+      putAll(r.db||[]);
+      putAll(l.db||[]);
 
       var merged = [];
       for(var k in map){ if(Object.prototype.hasOwnProperty.call(map,k)) merged.push(map[k]); }
 
+      // Ensure unique visible id for non-deleted rows
       var counterMerged = Math.max(Number(r.counter||0)||0, Number(l.counter||0)||0, maxId(merged));
       var used = new Set();
       merged.sort(function(a,b){
@@ -1021,12 +951,9 @@
         if(Number(rr.id)>counterMerged) counterMerged = Number(rr.id);
       }
 
-      return { items: merged, counter: counterMerged, updatedAt: nowISO(), rev: "merge_"+Date.now().toString(16) };
+      return { db: merged, counter: counterMerged, updatedAt: nowISO(), rev: "merge_"+Date.now().toString(16) };
     }
 
-    // ---------------------------
-    // Dicts
-    // ---------------------------
     function loadDict(key){
       var v = safeJSON(localStorage.getItem(key));
       if(!Array.isArray(v)) v = [];
@@ -1034,6 +961,7 @@
     }
     function saveDict(key, arr){
       arr = (arr||[]).map(function(s){ return norm(s); }).filter(Boolean);
+      // dedupe
       var set = new Set();
       var out = [];
       for(var i=0;i<arr.length;i++){
@@ -1058,14 +986,14 @@
     // ---------------------------
     var state = {
       user: null,
-      items: [],
+      db: [],
       counter: 0,
       selectedUid: null,
       editingUid: null,
       promptMode: null,
       readMode: false,
       lastSyncAt: 0,
-      cloudState: "offline"
+      cloudState: "offline", // offline|sync|save|ok|readonly|need_auth|deny|neterr|noapi|bad|svcerr
     };
 
     // ---------------------------
@@ -1091,15 +1019,15 @@
       return await res.json();
     }
 
-    async function cloudMerge(pack, reason){
+    async function cloudMerge(payload, reason){
       var cfg = await loadCloudCfg();
       var url = addV(joinApiBase(cfg.apiBase, cfg.endpoints.merge));
       var body = {
         key: PAGE_KEY,
-        pk: PK,
-        payload: pack,
+        pk: "uid",
+        payload: payload,
         reason: reason || "client_merge",
-        client: { appVer: APP_VER, pageKey: PAGE_KEY, pk: PK, ua: navigator.userAgent }
+        client: { appVer: APP_VER, pageKey: PAGE_KEY, ua: navigator.userAgent }
       };
       var res = await fetch(url, {
         method:"POST",
@@ -1118,15 +1046,14 @@
       renderHint();
       try{
         var remote = await cloudRead();
-        var merged = mergePack(remote && (remote.payload||remote), { items: state.items, counter: state.counter });
-        state.items = merged.items;
-        state.counter = merged.counter;
+        var merged = mergePayload(remote && (remote.payload||remote), { db: state.db, counter: state.counter });
+        state.db = merged.db; state.counter = merged.counter;
+        saveLocal({ db: state.db, counter: state.counter });
 
-        saveLocalV1({ items: state.items, counter: state.counter, rev: merged.rev, updatedAt: merged.updatedAt });
-
+        // If user can write, push merged back to consolidate (optional)
         if(state.user && roleRank(state.user.role) >= 2){
           state.cloudState = "save"; renderHint();
-          try{ await cloudMerge({ items: state.items, counter: state.counter, rev: merged.rev, updatedAt: merged.updatedAt }, "pull_then_consolidate"); }catch(e2){}
+          try{ await cloudMerge({ db: state.db, counter: state.counter }, "pull_then_consolidate"); }catch(e2){ /* ignore */ }
         }
         state.lastSyncAt = Date.now();
         state.cloudState = "ok";
@@ -1144,13 +1071,12 @@
       try{
         var remote = null;
         try{ remote = await cloudRead(); }catch(e0){ remote = null; }
-        var merged = mergePack(remote && (remote.payload||remote), { items: state.items, counter: state.counter });
+        var merged = mergePayload(remote && (remote.payload||remote), { db: state.db, counter: state.counter });
+        // update local to merged, then push
+        state.db = merged.db; state.counter = merged.counter;
+        saveLocal({ db: state.db, counter: state.counter });
 
-        state.items = merged.items;
-        state.counter = merged.counter;
-        saveLocalV1({ items: state.items, counter: state.counter, rev: merged.rev, updatedAt: merged.updatedAt });
-
-        await cloudMerge({ items: state.items, counter: state.counter, rev: merged.rev, updatedAt: merged.updatedAt }, reason||"save");
+        await cloudMerge({ db: state.db, counter: state.counter }, reason||"save");
         state.lastSyncAt = Date.now();
         state.cloudState = "ok";
       }catch(e){
@@ -1160,73 +1086,82 @@
       renderAll();
     }
 
-    // ---------------------------
-    // Render
+    
+
+    // 依工種取得「不重複」系統清單（來源：系統字典 + 本頁資料 + 工種-系統綁定表）
+    function getSysListForTrade(trade){
+      trade = norm(trade);
+      var set = new Set();
+
+      // 1) 系統字典
+      loadDict(SYS_DICT_KEY).forEach(function(x){ x=norm(x); if(x) set.add(x); });
+
+      // 2) 工種-系統綁定
+      var map = loadMap();
+      if(trade && map[trade] && Array.isArray(map[trade])){
+        map[trade].forEach(function(x){ x=norm(x); if(x) set.add(x); });
+      }
+
+      // 3) 從本頁資料補齊（避免 map/字典未完整）
+      var rows = state.items.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
+      for(var i=0;i<rows.length;i++){
+        var r = rows[i];
+        if(trade){
+          if(r.trade===trade && r.sys) set.add(r.sys);
+        }else{
+          if(r.sys) set.add(r.sys);
+        }
+      }
+
+      var out = Array.from(set).map(function(s){ return norm(s); }).filter(Boolean);
+      out.sort();
+      return out;
+    }
+
+    // 依目前「顯示列」（含篩選/排序）計算項次（1..n）
+    function getDisplayNo(uid){
+      uid = norm(uid);
+      if(!uid) return "";
+      var rows = getVisibleRows();
+      for(var i=0;i<rows.length;i++){
+        if(rows[i] && rows[i].uid===uid) return String(i+1);
+      }
+      return "";
+    }
+// ---------------------------
+    // Render helpers
     // ---------------------------
     function getVisibleRows(){
       var q = norm($("qText").value).toLowerCase();
       var ft = norm($("fTrade").value);
       var fs = norm($("fSys").value);
-
-      var rows = state.items
+      var rows = state.db
         .map(normalizeRow)
         .filter(Boolean)
         .filter(function(r){ return !r.deleted; });
 
+      // sort by id asc
       rows.sort(function(a,b){ return (Number(a.id||0)-Number(b.id||0)) || (tsOf(a)-tsOf(b)); });
 
-      if(q) rows = rows.filter(function(r){ return (r.text||"").toLowerCase().includes(q); });
-      if(ft) rows = rows.filter(function(r){ return r.trade===ft; });
-      if(fs) rows = rows.filter(function(r){ return r.sys===fs; });
+      if(q){
+        rows = rows.filter(function(r){ return (r.text||"").toLowerCase().includes(q); });
+      }
+      if(ft){
+        rows = rows.filter(function(r){ return r.trade===ft; });
+      }
+      if(fs){
+        rows = rows.filter(function(r){ return r.sys===fs; });
+      }
       return rows;
     }
 
-
-// 依工種取得「不重複」系統清單（來源：系統字典 + 本頁資料 + 工種-系統綁定表）
-function getSysListForTrade(trade){
-  trade = norm(trade);
-  var set = new Set();
-  var syss = loadDict(SYS_DICT_KEY);
-  for(var i=0;i<syss.length;i++) set.add(syss[i]);
-
-  var map = loadMap();
-  if(trade && map[trade] && Array.isArray(map[trade])){
-    map[trade].forEach(function(x){ x=norm(x); if(x) set.add(x); });
-  }
-
-  // 再從本頁資料補齊（避免 map 未建立時顯示不完整）
-  var rows = state.items.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
-  for(var j=0;j<rows.length;j++){
-    var r = rows[j];
-    if(trade){
-      if(r.trade===trade && r.sys) set.add(r.sys);
-    }else{
-      if(r.sys) set.add(r.sys);
-    }
-  }
-  var out = Array.from(set).map(function(s){ return norm(s); }).filter(Boolean);
-  out.sort();
-  return out;
-}
-
-// 依目前「顯示列」（含篩選/排序）計算項次（1..n）
-function getDisplayNo(uid){
-  uid = norm(uid);
-  if(!uid) return "";
-  var rows = getVisibleRows();
-  for(var i=0;i<rows.length;i++){
-    if(rows[i] && rows[i].uid===uid) return String(i+1);
-  }
-  return "";
-}
-
     function buildDictsFromDb(){
-      var rows = state.items.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
+      var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
       var trades = new Set(loadDict(TRADE_DICT_KEY));
       var syss = new Set(loadDict(SYS_DICT_KEY));
       var sources = new Set(loadDict(SOURCE_DICT_KEY));
 
-      var map = loadMap();
+      var map = loadMap(); // trade -> [sys]
       for(var i=0;i<rows.length;i++){
         var r = rows[i];
         if(r.trade) trades.add(r.trade);
@@ -1258,11 +1193,25 @@ function getDisplayNo(uid){
         op.textContent = it;
         sel.appendChild(op);
       });
+      // restore if possible
       if(v && items.includes(v)) sel.value = v;
       else if(includeAll) sel.value = "";
     }
 
-    
+    function renderFilters(){
+      buildDictsFromDb();
+      var trades = loadDict(TRADE_DICT_KEY);
+      var syss = loadDict(SYS_DICT_KEY);
+
+      fillSelect($("fTrade"), trades, true);
+
+      // ✅ 系統選單依「工種」顯示不重複系統（含字典+資料+綁定）
+      var ft = norm($("fTrade").value);
+      var fs = norm($("fSys").value);
+      var sysItems = getSysListForTrade(ft);
+      fillSelect($("fSys"), sysItems, true);
+      if(fs && sysItems.includes(fs)) $("fSys").value = fs; else $("fSys").value = "";
+    }
 
     function renderTable(){
       var rows = getVisibleRows();
@@ -1274,7 +1223,7 @@ function getDisplayNo(uid){
         if(state.selectedUid===r.uid) tr.classList.add("sel");
 
         var tdNo = document.createElement("td");
-        tdNo.textContent = String(i+1);
+        tdNo.textContent = String(r.id||"");
         tdNo.style.textAlign = "center";
         tr.appendChild(tdNo);
 
@@ -1288,6 +1237,7 @@ function getDisplayNo(uid){
         tr.appendChild(tdText(r.sys));
         tr.appendChild(tdText(r.source));
 
+        // attach
         var tdA = document.createElement("td");
         tdA.style.textAlign="center";
         if(r.attach){
@@ -1304,7 +1254,6 @@ function getDisplayNo(uid){
         tr.appendChild(tdA);
 
         tr.appendChild(tdText(r.remark));
-
         var tdD = document.createElement("td");
         tdD.style.textAlign="center";
         tdD.textContent = r.date || "";
@@ -1341,7 +1290,7 @@ function getDisplayNo(uid){
         var meta = document.createElement("div");
         meta.className = "noteMeta";
         meta.innerHTML =
-          '<span class="noteNo">#' + escHtml(String(i+1)) + '</span>' +
+          '<span class="noteNo">#' + escHtml(String(r.id||"")) + '</span>' +
           (r.trade ? '<span class="noteTag">' + escHtml(r.trade) + '</span>' : '') +
           (r.sys ? '<span class="noteTag">' + escHtml(r.sys) + '</span>' : '') +
           (r.source ? '<span class="noteTag">' + escHtml(r.source) + '</span>' : '') +
@@ -1361,9 +1310,10 @@ function getDisplayNo(uid){
         card.appendChild(head);
         card.appendChild(body);
 
-        card.addEventListener("click", function(){
+        card.addEventListener("click", function(e){
           var uid = this.dataset.uid;
           if(state.selectedUid!==uid) selectRow(uid);
+          // toggle open
           this.classList.toggle("open");
         });
 
@@ -1373,7 +1323,7 @@ function getDisplayNo(uid){
 
     function renderHint(){
       var rows = getVisibleRows();
-      var total = state.items.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
+      var total = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
 
       var user = state.user || { user:"—", role:"—" };
       $("uName").textContent = user.user || "—";
@@ -1399,8 +1349,6 @@ function getDisplayNo(uid){
 
       $("hint").innerHTML =
         '<span class="hb"><span class="k">版本</span><span class="v">'+escHtml(APP_VER)+'</span></span>' +
-        '<span class="hb"><span class="k">pageKey</span><span class="v">'+escHtml(PAGE_KEY)+'</span></span>' +
-        '<span class="hb"><span class="k">pk</span><span class="v">'+escHtml(PK)+'</span></span>' +
         '<span class="hb"><span class="k">筆數</span><span class="v">'+escHtml(String(rows.length))+'</span><span class="k">/</span><span class="v">'+escHtml(String(total))+'</span></span>' +
         '<span class="hb"><span class="k">選取</span><span class="v">'+escHtml(sel)+'</span></span>' +
         '<span class="hb '+(state.cloudState==="deny"||state.cloudState==="neterr"?"bad":"")+'"><span class="k">'+escHtml(stateLabel[0])+'</span><span class="v">'+escHtml(stateLabel[1])+'</span></span>' +
@@ -1421,8 +1369,8 @@ function getDisplayNo(uid){
     function findRow(uid){
       uid = norm(uid);
       if(!uid) return null;
-      for(var i=0;i<state.items.length;i++){
-        var r = normalizeRow(state.items[i]);
+      for(var i=0;i<state.db.length;i++){
+        var r = normalizeRow(state.db[i]);
         if(r && r.uid===uid) return r;
       }
       return null;
@@ -1457,12 +1405,13 @@ function getDisplayNo(uid){
     }
 
     function fillModalFromRow(r){
-      $("mNo").value = r ? (getDisplayNo(r.uid) || String(r.id||"")) : "";
+      $("mNo").value = r ? String(r.id||"") : "";
       $("mText").value = r ? (r.text||"") : "";
       $("mAttach").value = r ? (r.attach||"") : "";
       $("mRemark").value = r ? (r.remark||"") : "";
       $("mDate").value = r ? (r.date||todayISO()) : todayISO();
 
+      // dict selects
       buildDictsFromDb();
       var trades = loadDict(TRADE_DICT_KEY);
       var syss = loadDict(SYS_DICT_KEY);
@@ -1535,6 +1484,7 @@ function getDisplayNo(uid){
     }
 
     function ensureSelectOptions(){
+      // when trade changes, sys options should filter
       $("mTradeSel").addEventListener("change", function(){
         var t = norm(this.value);
         var syss = loadDict(SYS_DICT_KEY);
@@ -1551,11 +1501,11 @@ function getDisplayNo(uid){
     }
 
     // ---------------------------
-    // Prompt modal
+    // Prompt modal (add dict items)
     // ---------------------------
     function openPrompt(mode, preset){
-      state.promptMode = mode;
-      $("pInput").value = (preset===undefined||preset===null) ? "" : String(preset);
+      state.promptMode = mode; // "trade"|"sys"|"source"
+      $("pInput").value = "";
       $("pMask").style.display = "flex";
       if(mode==="trade"){
         $("pTitle").textContent = "新增工種";
@@ -1581,6 +1531,7 @@ function getDisplayNo(uid){
       if(!v){ toast("請輸入內容", 2200); return; }
       if(state.promptMode==="trade"){
         var trades = saveDict(TRADE_DICT_KEY, loadDict(TRADE_DICT_KEY).concat([v]));
+        // refresh select
         $("mTradeSel").innerHTML = "";
         trades.forEach(function(it){ var op=document.createElement("option"); op.value=it; op.textContent=it; $("mTradeSel").appendChild(op); });
         $("mTradeSel").value = v;
@@ -1588,7 +1539,7 @@ function getDisplayNo(uid){
         closePrompt();
         toast("已新增工種", 2000);
       }else if(state.promptMode==="sys"){
-        saveDict(SYS_DICT_KEY, loadDict(SYS_DICT_KEY).concat([v]));
+        var syss = saveDict(SYS_DICT_KEY, loadDict(SYS_DICT_KEY).concat([v]));
         var t = norm($("mTradeSel").value);
         var map = loadMap();
         if(t){
@@ -1596,6 +1547,7 @@ function getDisplayNo(uid){
           if(!map[t].includes(v)) map[t].push(v);
           saveMap(map);
         }
+        // refresh sys select according to trade
         $("mTradeSel").dispatchEvent(new Event("change"));
         $("mSysSel").value = v;
         closePrompt();
@@ -1616,24 +1568,26 @@ function getDisplayNo(uid){
     // ---------------------------
     function upsertRow(uid, data){
       var found = false;
-      for(var i=0;i<state.items.length;i++){
-        var r = normalizeRow(state.items[i]);
+      for(var i=0;i<state.db.length;i++){
+        var r = normalizeRow(state.db[i]);
         if(r && r.uid===uid){
           found = true;
-          state.items[i] = Object.assign({}, r, data);
+          state.db[i] = Object.assign({}, r, data);
           break;
         }
       }
       if(!found){
-        state.items.push(Object.assign({ uid: uid }, data));
+        state.db.push(Object.assign({ uid: uid }, data));
       }
     }
 
     async function onSave(){
       if(!(state.user && roleRank(state.user.role)>=2)){ toast("目前為唯讀權限", 2400); return; }
+
       var d = readModal();
       if(!d.text){ toast("記事內容不可空白", 2400); return; }
 
+      // Normalize dict binding
       if(d.trade && d.sys){
         var map = loadMap();
         map[d.trade] = map[d.trade] || [];
@@ -1642,20 +1596,21 @@ function getDisplayNo(uid){
       }
 
       var isEdit = !!state.editingUid;
-      var uid = isEdit ? state.editingUid : uuidv4();
+      var uid = isEdit ? state.editingUid : uuid();
 
+      // assign id
       var idv = 0;
       if(isEdit){
         var old = findRow(uid);
         idv = old ? Number(old.id||0) : 0;
       }
       if(!idv || !Number.isFinite(idv) || idv<=0){
-        state.counter = Math.max(state.counter, maxId(state.items.map(normalizeRow).filter(Boolean)));
+        state.counter = Math.max(state.counter, maxId(state.db.map(normalizeRow).filter(Boolean)));
         state.counter += 1;
         idv = state.counter;
       }
 
-      var row = normalizeRow({
+      var row = {
         uid: uid,
         id: idv,
         text: d.text,
@@ -1668,36 +1623,36 @@ function getDisplayNo(uid){
         updatedAt: nowISO(),
         rev: "r"+Math.random().toString(16).slice(2)+"_"+Date.now().toString(16),
         deleted: false
-      });
+      };
 
       upsertRow(uid, row);
-      saveLocalV1({ items: state.items, counter: state.counter, rev: row.rev, updatedAt: row.updatedAt });
+      saveLocal({ db: state.db, counter: state.counter });
       buildDictsFromDb();
       closeMask();
       selectRow(uid);
       toast(isEdit ? "已儲存修改" : "已新增", 2000);
 
+      // Cloud save (best effort)
       await saveToCloud(isEdit ? "edit" : "add");
     }
 
     async function onDelete(){
       if(!(state.user && roleRank(state.user.role)>=2)){ toast("目前為唯讀權限", 2400); return; }
       if(!state.editingUid){ toast("未選取要刪除的資料", 2200); return; }
-      if(!confirm("確定刪除這筆？（合併同步後會同步到其他裝置）")) return;
+      if(!confirm("確定刪除這筆？（可由雲端同步回復需管理者介入）")) return;
 
       var uid = state.editingUid;
       var old = findRow(uid);
       if(!old){ toast("找不到資料", 2200); return; }
 
-      upsertRow(uid, normalizeRow({
+      upsertRow(uid, {
         uid: uid,
         id: old.id,
         deleted: true,
         updatedAt: nowISO(),
         rev: "r"+Math.random().toString(16).slice(2)+"_"+Date.now().toString(16)
-      }));
-
-      saveLocalV1({ items: state.items, counter: state.counter, rev: "del_"+Date.now().toString(16), updatedAt: nowISO() });
+      });
+      saveLocal({ db: state.db, counter: state.counter });
       closeMask();
       state.selectedUid = null;
       renderAll();
@@ -1711,17 +1666,15 @@ function getDisplayNo(uid){
     // ---------------------------
     function exportBackup(){
       var payload = {
-        schema: "tasun-sync-v1",
         pageKey: PAGE_KEY,
-        pk: PK,
         appVer: APP_VER,
         exportedAt: nowISO(),
-        payload: { items: state.items, counter: state.counter, rev: "export_"+Date.now().toString(16), updatedAt: nowISO() }
+        payload: { db: state.db, counter: state.counter }
       };
       var blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" });
       var a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = "sxdh-notes_backup_v1_" + todayISO().replaceAll("-","") + ".json";
+      a.download = "sxdh-notes_backup_" + todayISO().replaceAll("-","") + ".json";
       document.body.appendChild(a);
       a.click();
       setTimeout(function(){
@@ -1735,7 +1688,6 @@ function getDisplayNo(uid){
       state.readMode = !!on;
       document.body.classList.toggle("readMode", state.readMode);
       localStorage.setItem(READ_MODE_KEY, state.readMode ? "1" : "0");
-      localStorage.setItem(READ_MODE_LEGACY, state.readMode ? "1" : "0");
       $("btnRead").querySelector(".t").textContent = "閱讀模式：" + (state.readMode ? "開" : "關");
       renderAll();
     }
@@ -1844,6 +1796,7 @@ function getDisplayNo(uid){
       closeLogin();
       renderHint();
       toast("登入成功", 1800);
+      // After login, try sync
       syncPull();
     }
 
@@ -1919,7 +1872,7 @@ function getDisplayNo(uid){
       $("btnCloud").addEventListener("click", function(){ syncPull(); });
 
       $("qText").addEventListener("input", function(){ renderAll(); });
-      $("fTrade").addEventListener("change", function(){ renderAll(); });
+      $("fTrade").addEventListener("change", function(){ renderFilters(); renderAll(); });
       $("fSys").addEventListener("change", function(){ renderAll(); });
 
       ensureSelectOptions();
@@ -1931,21 +1884,26 @@ function getDisplayNo(uid){
     async function boot(){
       wire();
 
-      var local = loadDbV1();
-      state.items = local.items || [];
+      // load local state
+      var local = loadDb();
+      state.db = local.db || [];
       state.counter = local.counter || 0;
 
-      state.readMode = (localStorage.getItem(READ_MODE_KEY)==="1") || (localStorage.getItem(READ_MODE_LEGACY)==="1");
+      // read mode
+      state.readMode = (localStorage.getItem(READ_MODE_KEY)==="1");
       document.body.classList.toggle("readMode", state.readMode);
       $("btnRead").querySelector(".t").textContent = "閱讀模式：" + (state.readMode ? "開" : "關");
 
+      // user
       state.user = getCurrentUser();
       renderAll();
 
+      // if no user => login
       if(!state.user) openLogin();
 
+      // attempt cloud health & pull (non-blocking)
       var ok = await cloudHealth();
-      state.cloudState = ok ? "offline" : "neterr";
+      state.cloudState = ok ? "offline" : "neterr"; // show net err if unreachable
       renderHint();
       if(ok) syncPull();
     }
