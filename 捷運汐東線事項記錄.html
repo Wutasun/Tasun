@@ -856,6 +856,56 @@
       return { db: arr, counter: c };
     }
 
+    // 嘗試復原舊版本本機資料（不同 key / 舊備份格式），並合併回目前 db
+    function recoverLegacyLocal(){
+      var candidates = [];
+      try{
+        for(var i=0;i<localStorage.length;i++){
+          var k = localStorage.key(i);
+          if(!k) continue;
+          // 可能的舊 key：同專案不同版本、備份、舊頁 key
+          if(/SxdhNotes/i.test(k) || /sxdh[-_]?notes/i.test(k) || /事項記錄/i.test(k) || /notes/i.test(k) && /tasun/i.test(k)){
+            if(k!==DB_KEY && k!==COUNTER_KEY) candidates.push(k);
+          }
+        }
+      }catch(e){}
+      var mergedAny = false;
+      var localNow = { db: state.db, counter: state.counter };
+      for(var j=0;j<candidates.length;j++){
+        var key = candidates[j];
+        var raw = null;
+        try{ raw = localStorage.getItem(key); }catch(e){ raw=null; }
+        if(!raw) continue;
+        var parsed = safeJSON(raw);
+        // 可能直接是 db array
+        if(Array.isArray(parsed)){
+          var pay = { db: parsed, counter: 0 };
+          var merged = mergePayload(pay, localNow);
+          localNow = { db: merged.db, counter: merged.counter };
+          mergedAny = true;
+          continue;
+        }
+        // 可能是 {payload:{db,counter}} 或 {db,counter}
+        if(parsed && typeof parsed==="object"){
+          var un = unwrap(parsed);
+          if(Array.isArray(un.db) && un.db.length){
+            var merged2 = mergePayload({ db: un.db, counter: un.counter||0 }, localNow);
+            localNow = { db: merged2.db, counter: merged2.counter };
+            mergedAny = true;
+            continue;
+          }
+        }
+      }
+      if(mergedAny){
+        state.db = localNow.db;
+        state.counter = localNow.counter;
+        saveLocal({ db: state.db, counter: state.counter });
+        buildDictsFromDb();
+      }
+      return mergedAny;
+    }
+
+
     function saveLocal(payload){
       localStorage.setItem(DB_KEY, JSON.stringify(payload.db||[]));
       localStorage.setItem(COUNTER_KEY, String(Number(payload.counter||0)||0));
@@ -1107,6 +1157,11 @@
         else state.cloudState = "neterr";
       }
       renderAll();
+      // 復原舊資料後：首次同步完成再補一次上傳整併（可寫權限）
+      if(state._recovered && state.user && roleRank(state.user.role)>=2){
+        state._recovered = false;
+        try{ saveToCloud("recover_legacy"); }catch(e3){}
+      }
     }
 
     // ---------------------------
@@ -1174,8 +1229,10 @@
     function collectSysForTrade(trade, dbArr){
       trade = norm(trade);
       var set = new Set();
+      // include sys dictionary as base (so newly added sys can appear once bound)
+      loadDict(SYS_DICT_KEY).forEach(function(s){ s=norm(s); if(s) set.add(s); });
       var map = loadMap();
-      if(trade && map && Array.isArray(map[trade])){
+if(trade && map && Array.isArray(map[trade])){
         map[trade].forEach(function(s){ s = norm(s); if(s) set.add(s); });
       }
       // from db
@@ -1380,8 +1437,9 @@
         '<span class="hb"><span class="k">權限</span><span class="v">'+escHtml(canWrite?"可編輯":"唯讀")+'</span></span>';
     }
 
-    function renderAll(){
-      renderFilters();
+    function renderAll(opts){
+      opts = opts || {};
+      if(opts.filters!==false) renderFilters();
       renderHint();
       renderTable();
       renderCards();
@@ -1403,6 +1461,11 @@
     function selectRow(uid){
       state.selectedUid = norm(uid) || null;
       renderAll();
+      // 復原舊資料後：首次同步完成再補一次上傳整併（可寫權限）
+      if(state._recovered && state.user && roleRank(state.user.role)>=2){
+        state._recovered = false;
+        try{ saveToCloud("recover_legacy"); }catch(e3){}
+      }
     }
 
     function openMask(title){
@@ -1715,6 +1778,11 @@
       localStorage.setItem(READ_MODE_KEY, state.readMode ? "1" : "0");
       $("btnRead").querySelector(".t").textContent = "閱讀模式：" + (state.readMode ? "開" : "關");
       renderAll();
+      // 復原舊資料後：首次同步完成再補一次上傳整併（可寫權限）
+      if(state._recovered && state.user && roleRank(state.user.role)>=2){
+        state._recovered = false;
+        try{ saveToCloud("recover_legacy"); }catch(e3){}
+      }
     }
 
     function clearFilters(){
@@ -1722,6 +1790,11 @@
       $("fTrade").value = "";
       $("fSys").value = "";
       renderAll();
+      // 復原舊資料後：首次同步完成再補一次上傳整併（可寫權限）
+      if(state._recovered && state.user && roleRank(state.user.role)>=2){
+        state._recovered = false;
+        try{ saveToCloud("recover_legacy"); }catch(e3){}
+      }
     }
 
     // ---------------------------
@@ -1897,7 +1970,7 @@
       $("btnCloud").addEventListener("click", function(){ syncPull(); });
 
       $("qText").addEventListener("input", function(){ renderAll(); });
-      $("fTrade").addEventListener("change", function(){ renderFilters(); renderAll(); });
+      $("fTrade").addEventListener("change", function(){ renderFilters(); renderAll({filters:false}); });
       $("fSys").addEventListener("change", function(){ renderAll(); });
 
       ensureSelectOptions();
@@ -1914,6 +1987,9 @@
       state.db = local.db || [];
       state.counter = local.counter || 0;
 
+
+      // 復原舊資料（若有）
+      try{ if(recoverLegacyLocal()){ state._recovered = true; toast("已嘗試復原舊資料並合併", 2600);} }catch(e){}
       // read mode
       state.readMode = (localStorage.getItem(READ_MODE_KEY)==="1");
       document.body.classList.toggle("readMode", state.readMode);
@@ -1922,6 +1998,7 @@
       // user
       state.user = getCurrentUser();
       renderAll();
+      // 若已復原舊資料且目前已登入可寫，會在首次同步後自動上傳合併結果
 
       // if no user => login
       if(!state.user) openLogin();
