@@ -711,7 +711,8 @@
       <div class="pBody">
         <div class="field">
           <div class="label" id="pLabel">請輸入</div>
-          <input id="pInput" placeholder="例如：機電 / 土建 / ..."/>
+          <input id="pInput" placeholder="例如：機電 / 土建 / ..." list="pList"/>
+          <datalist id="pList"></datalist>
           <div class="miniHint" id="pHint">新增後會加入「選單字典」，且系統會綁到目前工種。</div>
         </div>
       </div>
@@ -1165,7 +1166,7 @@
       if(_cloudCfgCache) return _cloudCfgCache;
 
       // Start with defaults
-      var cfg = { apiBase: DEFAULT_API_BASE, endpoints: Object.assign({}, DEFAULT_ENDPOINTS) };
+      var cfg = { apiBase: DEFAULT_API_BASE, endpoints: Object.assign({}, DEFAULT_ENDPOINTS), netDiskUrl: "https://www.dropbox.com/home" };
 
       // 1) resources.json (best)
       try{
@@ -1180,9 +1181,15 @@
             if(pick){
               if(isValidApiBase(pick.apiBase)) cfg.apiBase = pick.apiBase;
               if(pick.endpoints) cfg.endpoints = normalizeEndpoints(pick.endpoints);
+              if(pick.netDiskUrl) cfg.netDiskUrl = String(pick.netDiskUrl);
+              else if(pick.links && pick.links.netDiskUrl) cfg.netDiskUrl = String(pick.links.netDiskUrl);
+
             }else{
               if(isValidApiBase(json.apiBase)) cfg.apiBase = json.apiBase;
               if(json.endpoints) cfg.endpoints = normalizeEndpoints(json.endpoints);
+              if(json.netDiskUrl) cfg.netDiskUrl = String(json.netDiskUrl);
+              else if(json.links && json.links.netDiskUrl) cfg.netDiskUrl = String(json.links.netDiskUrl);
+
             }
           }
         }
@@ -1657,14 +1664,15 @@ function getVisibleRows(){
       var newer = (tb>ta) ? b : a;
       var older = (newer===a) ? b : a;
       var out = Object.assign({}, older, newer);
-      // ✅ 修訂：避免 newer 的空字串覆蓋舊資料（例如 sys 變空造成表格只剩 1 列有值）
-      ["text","trade","sys","source","attach","remark","date"].forEach(function(k){
-        var touched = !!(newer && newer._touch && newer._touch[k]);
-        // ✅ 修訂：避免「非刻意」的空字串覆蓋舊資料；但若為使用者在表單中「刻意清空」，則允許覆蓋為空
-        if(!touched && !norm(newer && newer[k]) && norm(older && older[k])) out[k] = older[k];
-      });
+      // ✅ 修訂：避免「系統 sys」在雲端合併時被空字串覆蓋（曾造成表格顯示異常）
+// 但其他欄位（例如附件 attach）必須允許使用者清空，所以只保護 sys。
+(["sys"]).forEach(function(k){
+  var touched = !!(newer && newer._touch && newer._touch[k]);
+  // 若非刻意清空，且新值為空、舊值不空，則保留舊值
+  if(!touched && !norm(newer && newer[k]) && norm(older && older[k])) out[k] = older[k];
+});
 
-      // if either says deleted true and it's newer, keep deleted true
+// if either says deleted true and it's newer, keep deleted true
       out.deleted = !!newer.deleted;
 
       // keep essential fields
@@ -2133,7 +2141,38 @@ function getVisibleRows(){
     // ---------------------------
     // Prompt modal (add trade/sys/source)
     // ---------------------------
-    var promptMode = ""; // "trade" | "sys" | "source"
+    var promptMode = "";
+
+function setPromptListOptions(arr){
+  var dl = $("pList");
+  if(!dl) return;
+  dl.innerHTML = "";
+  (arr||[]).forEach(function(v){
+    v = norm(v);
+    if(!v) return;
+    var op = document.createElement("option");
+    op.value = v;
+    dl.appendChild(op);
+  });
+}
+
+function getPromptOptions(mode){
+  var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
+  if(mode==="trade"){
+    return uniqueOf(rows.map(function(r){return r.trade;})).concat(loadDict(TRADE_DICT_KEY)).filter(Boolean);
+  }
+  if(mode==="sys"){
+    var t = norm($("mTradeSel").value);
+    if(t) return collectSysForTrade(t, state.db);
+    return uniqueOf(rows.map(function(r){return r.sys;})).concat(loadDict(SYS_DICT_KEY)).filter(Boolean);
+  }
+  if(mode==="source"){
+    return uniqueOf(rows.map(function(r){return r.source;})).concat(loadDict(SOURCE_DICT_KEY)).filter(Boolean);
+  }
+  return [];
+}
+
+ // "trade" | "sys" | "source"
     function openPrompt(mode){
       promptMode = mode;
       $("pMask").style.display="flex";
@@ -2151,6 +2190,8 @@ function getVisibleRows(){
         $("pLabel").textContent="請輸入出處";
         $("pHint").textContent="新增後會加入「出處字典」。";
       }
+      // ✅ 讓「新增」視窗也能用下拉建議（不改 UI；用 datalist）
+      setPromptListOptions(uniqueOf(getPromptOptions(mode)));
       setTimeout(function(){ $("pInput").focus(); }, 50);
     }
     function closePrompt(){ $("pMask").style.display="none"; promptMode=""; }
@@ -2560,12 +2601,23 @@ function getVisibleRows(){
       $("btnAddSys").addEventListener("click", function(){ openPrompt("sys"); });
       $("btnAddSource").addEventListener("click", function(){ openPrompt("source"); });
 
-      $("btnNetDisk").addEventListener("click", function(){
-        if($("mAttach").value){ window.open(addV($("mAttach").value), "_blank", "noopener"); }
-        else toast("請先貼上連結");
-      });
+      $("btnNetDisk").addEventListener("click", async function(){
+  // ✅ 行為修正：附件欄位為空時，「網路硬碟」仍可打開預設網路硬碟（不影響 UI）
+  var v = norm($("mAttach").value);
+  if(v){
+    window.open(addV(v), "_blank", "noopener");
+    return;
+  }
+  try{
+    var cfg = await loadCloudCfg();
+    var url = (cfg && cfg.netDiskUrl) ? String(cfg.netDiskUrl) : "https://www.dropbox.com/home";
+    window.open(addV(url), "_blank", "noopener");
+  }catch(e){
+    window.open("https://www.dropbox.com/home", "_blank", "noopener");
+  }
+});
 
-      $("btnSave").addEventListener("click", async function(){
+$("btnSave").addEventListener("click", async function(){
         if(state.mode==="view"){ closeMask(); return; }
         var existing = (state.mode==="edit") ? state.selectedUid : "";
         var row = modalToRow(existing);
