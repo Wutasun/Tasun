@@ -686,6 +686,17 @@
     var API_EP_LS_KEY   = "tasunApiEndpoints_v1__" + PAGE_KEY;
 
     // ---------------------------
+    // IndexedDB (真正資料庫) v1
+    // ---------------------------
+    var IDB_NAME = "tasun_notes_idb_v1";
+    var IDB_VER  = 1;
+    var IDB_META_STORE = "meta";
+    var IDB_ROWS_STORE = "rows";
+    var IDB_OPS_STORE  = "ops";
+
+    var CLIENT_ID_KEY = "tasunClientId_v1";
+
+    // ---------------------------
     // DOM helpers
     // ---------------------------
     function $(id){ return document.getElementById(id); }
@@ -696,6 +707,184 @@
     function pad2(n){ return String(n).padStart(2,"0"); }
     function fmtClock(ts){ if(!ts) return ""; var d = new Date(ts); return pad2(d.getHours())+":"+pad2(d.getMinutes())+":"+pad2(d.getSeconds()); }
     function uuid(){ return "u" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2); }
+
+    // ---------------------------
+    // IndexedDB helpers
+    // ---------------------------
+    var _idb = null;
+
+    function getClientId(){
+      var cid = norm(localStorage.getItem(CLIENT_ID_KEY));
+      if(!cid){
+        cid = "c" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2);
+        localStorage.setItem(CLIENT_ID_KEY, cid);
+      }
+      return cid;
+    }
+
+    function idbReqToPromise(req){
+      return new Promise(function(resolve,reject){
+        req.onsuccess = function(){ resolve(req.result); };
+        req.onerror = function(){ reject(req.error || new Error("IndexedDB error")); };
+      });
+    }
+
+    function idbTxDone(tx){
+      return new Promise(function(resolve,reject){
+        tx.oncomplete = function(){ resolve(true); };
+        tx.onerror = function(){ reject(tx.error || new Error("IndexedDB tx error")); };
+        tx.onabort = function(){ reject(tx.error || new Error("IndexedDB tx abort")); };
+      });
+    }
+
+    async function openIDB(){
+      if(_idb) return _idb;
+      _idb = await new Promise(function(resolve,reject){
+        var req = indexedDB.open(IDB_NAME, IDB_VER);
+        req.onupgradeneeded = function(){
+          var db = req.result;
+          if(!db.objectStoreNames.contains(IDB_META_STORE)){
+            db.createObjectStore(IDB_META_STORE, { keyPath: "pageKey" });
+          }
+          if(!db.objectStoreNames.contains(IDB_ROWS_STORE)){
+            var rows = db.createObjectStore(IDB_ROWS_STORE, { keyPath: ["pageKey","uid"] });
+            rows.createIndex("by_page", "pageKey", { unique:false });
+            rows.createIndex("by_page_updatedAt", ["pageKey","updatedAt"], { unique:false });
+          }
+          if(!db.objectStoreNames.contains(IDB_OPS_STORE)){
+            var ops = db.createObjectStore(IDB_OPS_STORE, { keyPath: "opId", autoIncrement: true });
+            ops.createIndex("by_page", "pageKey", { unique:false });
+            ops.createIndex("by_page_ts", ["pageKey","ts"], { unique:false });
+          }
+        };
+        req.onsuccess = function(){ resolve(req.result); };
+        req.onerror = function(){ reject(req.error || new Error("IndexedDB open error")); };
+      });
+      return _idb;
+    }
+
+    async function idbGetMeta(pageKey){
+      var db = await openIDB();
+      var tx = db.transaction([IDB_META_STORE], "readonly");
+      var store = tx.objectStore(IDB_META_STORE);
+      var res = await idbReqToPromise(store.get(pageKey));
+      await idbTxDone(tx);
+      return res || null;
+    }
+
+    async function idbPutMeta(meta){
+      var db = await openIDB();
+      var tx = db.transaction([IDB_META_STORE], "readwrite");
+      tx.objectStore(IDB_META_STORE).put(meta);
+      await idbTxDone(tx);
+      return true;
+    }
+
+    async function idbGetAllRows(pageKey){
+      var db = await openIDB();
+      var tx = db.transaction([IDB_ROWS_STORE], "readonly");
+      var idx = tx.objectStore(IDB_ROWS_STORE).index("by_page");
+      var rows = await idbReqToPromise(idx.getAll(pageKey));
+      await idbTxDone(tx);
+      return (rows||[]).map(function(r){
+        if(!r) return null;
+        var out = Object.assign({}, r);
+        delete out.pageKey;
+        return out;
+      }).filter(Boolean);
+    }
+
+    async function idbPutRows(pageKey, rows){
+      var db = await openIDB();
+      var tx = db.transaction([IDB_ROWS_STORE], "readwrite");
+      var store = tx.objectStore(IDB_ROWS_STORE);
+      (rows||[]).forEach(function(r){
+        if(!r || !r.uid) return;
+        store.put(Object.assign({ pageKey: pageKey, uid: r.uid }, r));
+      });
+      await idbTxDone(tx);
+      return true;
+    }
+
+    async function idbAddOp(pageKey, uid){
+      uid = norm(uid);
+      if(!uid) return;
+      var db = await openIDB();
+      var tx = db.transaction([IDB_OPS_STORE], "readwrite");
+      tx.objectStore(IDB_OPS_STORE).add({ pageKey: pageKey, uid: uid, ts: Date.now() });
+      await idbTxDone(tx);
+    }
+
+    async function idbGetDirtyUids(pageKey, sinceTs){
+      var db = await openIDB();
+      var tx = db.transaction([IDB_OPS_STORE], "readonly");
+      var idx = tx.objectStore(IDB_OPS_STORE).index("by_page_ts");
+      var range = IDBKeyRange.bound([pageKey, Number(sinceTs||0)], [pageKey, Number.MAX_SAFE_INTEGER]);
+      var ops = await idbReqToPromise(idx.getAll(range));
+      await idbTxDone(tx);
+      var set = new Set();
+      (ops||[]).forEach(function(op){ if(op && op.uid) set.add(op.uid); });
+      return Array.from(set);
+    }
+
+    async function idbClearOps(pageKey){
+      var db = await openIDB();
+      var tx = db.transaction([IDB_OPS_STORE], "readwrite");
+      var store = tx.objectStore(IDB_OPS_STORE);
+      var idx = store.index("by_page");
+      var keys = await idbReqToPromise(idx.getAllKeys(pageKey));
+      keys.forEach(function(k){ store.delete(k); });
+      await idbTxDone(tx);
+      return true;
+    }
+
+    function markDirty(uid){
+      try{ idbAddOp(PAGE_KEY, uid); }catch(e){}
+      // ✅ 企業級最佳做法：任何變更都排程自動同步（去抖 + 互斥 + 離線重試）
+      try{ scheduleSync("dirty"); }catch(e){}
+    }
+
+    // ---------------------------
+    // Auto Sync (enterprise best practice)
+    // ---------------------------
+    var AUTO_SYNC = true;
+    var SYNC_DEBOUNCE_MS = 900;      // 變更後去抖
+    var SYNC_MIN_GAP_MS = 1500;      // 連續同步最小間隔
+    var SYNC_PERIODIC_MS = 2*60*1000;// 週期保底同步
+    var _sync = { timer:null, inFlight:false, pending:false, lastRun:0, lastReason:"" };
+
+    function scheduleSync(reason, immediate){
+      if(!AUTO_SYNC) return;
+      _sync.pending = true;
+      _sync.lastReason = reason || _sync.lastReason || "auto";
+      if(_sync.timer) clearTimeout(_sync.timer);
+      var now = Date.now();
+      var gap = Math.max(0, (SYNC_MIN_GAP_MS - (now - (_sync.lastRun||0))));
+      var wait = immediate ? Math.min(50, gap) : Math.max(SYNC_DEBOUNCE_MS, gap);
+      _sync.timer = setTimeout(function(){ _sync.timer=null; runAutoSync(); }, wait);
+    }
+
+    async function runAutoSync(){
+      if(!_sync.pending) return;
+      if(_sync.inFlight) { _sync.pending = true; return; }
+      _sync.inFlight = true;
+      _sync.pending = false;
+      try{
+        if(navigator && navigator.onLine===false){
+          // 離線：等恢復網路再同步
+          _sync.pending = true;
+          return;
+        }
+        await syncToCloud({ silent:true, reason:_sync.lastReason||"auto" });
+      }catch(e){
+        // 失敗：保留 pending，下次事件/週期再試
+        _sync.pending = true;
+      }finally{
+        _sync.lastRun = Date.now();
+        _sync.inFlight = false;
+        if(_sync.pending) scheduleSync("retry");
+      }
+    }
 
     function toast(msg, ms){
       var t = $("toast");
@@ -849,11 +1038,36 @@
     // ---------------------------
     // Local data + dicts
     // ---------------------------
-    function loadDb(){
+        async function loadDb(){
+      // 1) try IDB
+      var meta = null, rows = [];
+      try{
+        meta = await idbGetMeta(PAGE_KEY);
+        rows = await idbGetAllRows(PAGE_KEY);
+      }catch(e){ meta=null; rows=[]; }
+
+      if(meta || (rows && rows.length)){
+        var counter = Number(meta && meta.counter || 0) || 0;
+        state.lastSyncAt = Number(meta && meta.lastSyncAt || 0) || 0;
+        state.clientId = norm(meta && meta.clientId) || getClientId();
+        return { db: rows||[], counter: counter };
+      }
+
+      // 2) migrate from localStorage (legacy)
       var arr = safeJSON(localStorage.getItem(DB_KEY));
       if(!Array.isArray(arr)) arr = [];
       var c = Number(localStorage.getItem(COUNTER_KEY)||"0");
       if(!Number.isFinite(c) || c<0) c = 0;
+
+      state.lastSyncAt = 0;
+      state.clientId = getClientId();
+
+      // write into IDB for the first time
+      try{
+        await idbPutRows(PAGE_KEY, arr);
+        await idbPutMeta({ pageKey: PAGE_KEY, counter: c, lastSyncAt: 0, clientId: state.clientId, updatedAt: nowISO() });
+      }catch(e){}
+
       return { db: arr, counter: c };
     }
 
@@ -973,9 +1187,27 @@
     }
 
 
-    function saveLocal(payload){
-      localStorage.setItem(DB_KEY, JSON.stringify(payload.db||[]));
-      localStorage.setItem(COUNTER_KEY, String(Number(payload.counter||0)||0));
+        async function saveLocal(payload){
+      var dbArr = payload.db||[];
+      var counter = Number(payload.counter||0)||0;
+
+      // IDB primary
+      try{
+        await idbPutRows(PAGE_KEY, dbArr);
+        await idbPutMeta({
+          pageKey: PAGE_KEY,
+          counter: counter,
+          lastSyncAt: Number(state.lastSyncAt||0)||0,
+          clientId: state.clientId || getClientId(),
+          updatedAt: nowISO()
+        });
+      }catch(e){}
+
+      // localStorage fallback
+      try{
+        localStorage.setItem(DB_KEY, JSON.stringify(dbArr));
+        localStorage.setItem(COUNTER_KEY, String(counter));
+      }catch(e){}
     }
 
     function normalizeRow(x){
@@ -1213,6 +1445,8 @@ function getVisibleRows(){
     // State
     // ---------------------------
     var state = {
+      lastSyncAt:0,
+      clientId:'',
       db: [],
       counter: 0,
       user: null,
@@ -1698,6 +1932,7 @@ function getVisibleRows(){
         }
       }
       if(!found) state.db.push(row);
+      markDirty(r.uid);
       saveLocal({ db: state.db, counter: state.counter });
       buildDictsFromDb();
       refresh();
@@ -1716,6 +1951,7 @@ function getVisibleRows(){
           break;
         }
       }
+      markDirty(uid);
       saveLocal({ db: state.db, counter: state.counter });
       refresh();
     }
@@ -1847,45 +2083,80 @@ function getVisibleRows(){
       return { db: db, counter: Number(counter||0)||0 };
     }
 
-    async function syncFromCloud(){
+        async function syncFromCloud(){
+      var cfg = await loadCloudCfg();
+      if(!cfg || !isValidApiBase(cfg.apiBase)){
+        if(!silent) toast("雲端未設定/無效"); return;
+      }
       try{
-        var ok = await cloudHealth();
-        if(!ok){ toast("雲端未設定或不可用"); return; }
+        var remote = await cloudRead({ pageKey: PAGE_KEY }, cfg);
+        var out = mergePayload(remote, { db: state.db, counter: state.counter });
+        state.db = out.db;
+        state.counter = out.counter;
 
-        var remote = await cloudRead();
-        var merged = mergePayload(remote, { db: state.db, counter: state.counter });
-        state.db = merged.db;
-        state.counter = merged.counter;
-        saveLocal({ db: state.db, counter: state.counter });
-        state.cloud.lastSyncAt = Date.now();
+        state.lastSyncAt = Date.now();
+        await idbClearOps(PAGE_KEY);
+        await saveLocal({ db: state.db, counter: state.counter });
+
+        buildDictsFromDb();
         refresh();
-        toast("已從雲端同步");
+        toast("已從雲端更新");
       }catch(e){
-        console.error(e);
-        toast("雲端同步失敗");
+        toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
       }
     }
 
-    async function syncToCloud(){
+        async function syncToCloud(opts){
+      opts = (opts && typeof opts==="object") ? opts : {};
+      var silent = !!opts.silent;
+      var reason = opts.reason || "";
+
+      var cfg = await loadCloudCfg();
+      if(!cfg || !isValidApiBase(cfg.apiBase)){
+        if(!silent) toast("雲端未設定/無效"); return;
+      }
+
+      var meta = null;
+      try{ meta = await idbGetMeta(PAGE_KEY); }catch(e){ meta=null; }
+      var lastSyncAt = Number(state.lastSyncAt || (meta && meta.lastSyncAt) || 0) || 0;
+
+      var dirtyUids = [];
+      try{ dirtyUids = await idbGetDirtyUids(PAGE_KEY, lastSyncAt); }catch(e){ dirtyUids = []; }
+
+      if(!dirtyUids.length){
+        if(!silent) toast("沒有需要上傳的本機變更");
+        return;
+      }
+
+      var dirtySet = new Set(dirtyUids.map(norm));
+      var sendRows = state.db
+        .map(ensureRowV1)
+        .filter(Boolean)
+        .filter(function(r){ return dirtySet.has(norm(r.uid)); });
+
+      var payload = {
+        pageKey: PAGE_KEY,
+        clientId: state.clientId || getClientId(),
+        since: lastSyncAt || 0,
+        partial: true,
+        payload: { db: sendRows, counter: state.counter }
+      };
+
       try{
-        var ok = await cloudHealth();
-        if(!ok){ toast("雲端未設定或不可用"); return; }
+        var merged = await cloudMerge(payload, cfg);
+        var out = mergePayload(merged, { db: state.db, counter: state.counter });
+        state.db = out.db;
+        state.counter = out.counter;
 
-        // ensure v1 shape before upload
-        var clean = state.db.map(ensureRowV1).filter(Boolean);
-        var payload = { db: clean, counter: state.counter };
+        state.lastSyncAt = Date.now();
+        await idbClearOps(PAGE_KEY);
+        await saveLocal({ db: state.db, counter: state.counter });
 
-        var remoteMerged = await cloudMerge(payload);
-        var merged = mergePayload(remoteMerged, payload); // trust server, but keep merge safety
-        state.db = merged.db;
-        state.counter = merged.counter;
-        saveLocal({ db: state.db, counter: state.counter });
-        state.cloud.lastSyncAt = Date.now();
+        buildDictsFromDb();
         refresh();
-        toast("已上傳並同步");
+        if(!silent) toast("雲端同步完成（增量）");
       }catch(e){
-        console.error(e);
-        toast("雲端上傳失敗");
+        toast("雲端同步失敗：" + (e && e.message ? e.message : String(e)));
       }
     }
 
@@ -2134,8 +2405,8 @@ function getVisibleRows(){
         upsertRow(row);
         state.selectedUid = row.uid;
         closeMask();
-        // upload if cloud ok
-        await syncToCloud();
+        // ✅ 自動同步：不阻塞 UI（離線會自動重試）
+        scheduleSync("save", true);
       });
 
       $("btnDelete").addEventListener("click", async function(){
@@ -2144,7 +2415,8 @@ function getVisibleRows(){
         if(!confirm("確定刪除？（可在雲端同步後仍保留刪除狀態）")) return;
         deleteRow(state.selectedUid);
         closeMask();
-        await syncToCloud();
+        // ✅ 自動同步：不阻塞 UI（離線會自動重試）
+        scheduleSync("delete", true);
       });
 
       // prompt
@@ -2167,29 +2439,37 @@ function getVisibleRows(){
       $("loginBtn").addEventListener("click", doLogin);
       $("loginPass").addEventListener("keydown", function(e){ if(e.key==="Enter") doLogin(); });
       $("loginToAuth").addEventListener("click", function(){ navTo("權限表.html"); });
+      // ---------------------------
+      // ✅ Auto sync triggers
+      // ---------------------------
+      window.addEventListener("online", function(){ scheduleSync("online", true); });
+      window.addEventListener("focus", function(){ scheduleSync("focus"); });
+      document.addEventListener("visibilitychange", function(){
+        if(!document.hidden) scheduleSync("visible");
+      });
+      // 週期保底同步（避免長時間開著頁面但沒互動）
+      setInterval(function(){ scheduleSync("periodic"); }, SYNC_PERIODIC_MS);
+
     }
 
     // ---------------------------
     // Boot
     // ---------------------------
-    function boot(){
-      // load local
-      var p = loadDb();
+        async function boot(){
+      try{ await openIDB(); }catch(e){}
+
+      var p = await loadDb();
       state.db = p.db;
       state.counter = p.counter;
 
-      // recover old storages once
-      recoverLegacyLocal();
+      state.clientId = state.clientId || getClientId();
 
-      // ensure legacy rows have deterministic uid for stable multi-device merge
+      recoverLegacyLocal();
       migrateEnsureUidInPlace();
 
-
-      // read mode
       state.readMode = localStorage.getItem(READ_MODE_KEY)==="1";
       applyReadMode(state.readMode);
 
-      // auth
       ensureAuthTable();
       var cur = getCurrentUser();
       if(cur) applyUser(cur);
@@ -2197,15 +2477,21 @@ function getVisibleRows(){
 
       wire();
       refresh();
-
-      // best-effort cloud status (does not block)
       cloudHealth();
-
-      // if not logged in, show login modal
       if(!cur) openLogin();
+
+      try{
+        await idbPutMeta({
+          pageKey: PAGE_KEY,
+          counter: state.counter,
+          lastSyncAt: Number(state.lastSyncAt||0)||0,
+          clientId: state.clientId,
+          updatedAt: nowISO()
+        });
+      }catch(e){}
     }
 
-    boot();
+    boot().catch(function(e){ console.error(e); });
   })();
   </script>
 </body>
