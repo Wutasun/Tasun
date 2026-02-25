@@ -1659,7 +1659,9 @@ function getVisibleRows(){
       var out = Object.assign({}, older, newer);
       // ✅ 修訂：避免 newer 的空字串覆蓋舊資料（例如 sys 變空造成表格只剩 1 列有值）
       ["text","trade","sys","source","attach","remark","date"].forEach(function(k){
-        if(!norm(newer && newer[k]) && norm(older && older[k])) out[k] = older[k];
+        var touched = !!(newer && newer._touch && newer._touch[k]);
+        // ✅ 修訂：避免「非刻意」的空字串覆蓋舊資料；但若為使用者在表單中「刻意清空」，則允許覆蓋為空
+        if(!touched && !norm(newer && newer[k]) && norm(older && older[k])) out[k] = older[k];
       });
 
       // if either says deleted true and it's newer, keep deleted true
@@ -2073,6 +2075,8 @@ function getVisibleRows(){
 
     function modalToRow(existingUid){
       var uid = existingUid ? norm(existingUid) : uuid();
+      // ✅ _touch：標記本次「表單有改動/有填寫」的欄位，讓 mergeTwo 判斷「刻意清空」也要生效
+      var touch = { text:1, trade:1, sys:1, source:1, attach:1, remark:1, date:1 };
       var r = {
         uid: uid,
         id: 0, // display only
@@ -2085,7 +2089,8 @@ function getVisibleRows(){
         date: norm($("mDate").value) || todayISO(),
         updatedAt: nowISO(),
         rev: "r" + Date.now().toString(16) + Math.random().toString(16).slice(2,6),
-        deleted: false
+        deleted: false,
+        _touch: touch
       };
       return ensureRowV1(r);
     }
@@ -2101,7 +2106,7 @@ function getVisibleRows(){
         }
       }
       if(!found) state.db.push(row);
-      markDirty(r.uid);
+      markDirty(row.uid);
       saveLocal({ db: state.db, counter: state.counter });
       buildDictsFromDb();
       refresh();
@@ -2253,6 +2258,7 @@ function getVisibleRows(){
     }
 
         async function syncFromCloud(){
+      var silent = false;
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)){
         if(!silent) toast("雲端未設定/無效"); return;
