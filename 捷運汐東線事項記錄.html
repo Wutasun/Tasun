@@ -1774,6 +1774,25 @@ function getVisibleRows(){
       return Array.from(set).sort();
     }
 
+    // ✅ 系統篩選清單：需與「目前搜尋/工種」顯示結果一致（不含系統本身的篩選）
+    function getBaseRowsForSysFilter(){
+      var q = norm($("qText").value).toLowerCase();
+      var ft = norm($("fTrade").value);
+      var rows = state.db
+        .map(normalizeRow)
+        .filter(Boolean)
+        .filter(function(r){ return !r.deleted; });
+
+      if(ft){
+        rows = rows.filter(function(r){ return r.trade===ft; });
+      }
+      if(q){
+        rows = rows.filter(function(r){ return (r.text||"").toLowerCase().includes(q); });
+      }
+      return rows;
+    }
+
+
     function rebuildFilterOptions(){
       // build dicts first
       buildDictsFromDb();
@@ -1784,15 +1803,28 @@ function getVisibleRows(){
       var tradesTable = uniqueOf(rows.map(function(r){return r.trade;}));
       setOptions($("fTrade"), tradesTable, true, { includeAll:true });
 
-      // ✅ 主頁「系統」篩選：依目前選取工種顯示不重複系統（工種-系統綁定表 + 本頁資料）
-      var ft = norm($("fTrade").value);
+      // ✅ 主頁「系統」篩選：需與「目前搜尋/工種」顯示結果一致（避免下拉選單與列表不一致）
       var sysList;
+      var ft = norm($("fTrade").value);
       if(ft){
-        sysList = collectSysForTrade(ft, state.db);
+        var baseRows = getBaseRowsForSysFilter(); // 已套用 工種 + 搜尋（不含系統篩選）
+        sysList = uniqueOf(baseRows.map(function(r){ return r.sys; }));
+        // 若目前搜尋結果剛好 0 筆，仍保留「工種所屬系統」作為備援（避免空選單）
+        if(!sysList.length){
+          sysList = collectSysForTrade(ft, state.db);
+        }
       }else{
-        // 無工種時：所有系統（字典 + 本頁資料）去重
-        sysList = uniqueOf(rows.map(function(r){return r.sys;})).concat(loadDict(SYS_DICT_KEY));
-        sysList = uniqueOf(sysList);
+        var q = norm($("qText").value).toLowerCase();
+        var baseRows2 = rows.slice();
+        if(q){
+          baseRows2 = baseRows2.filter(function(r){ return (r.text||"").toLowerCase().includes(q); });
+        }
+        sysList = uniqueOf(baseRows2.map(function(r){ return r.sys; }));
+        if(!sysList.length){
+          // 備援：字典 + 本頁資料
+          sysList = uniqueOf(rows.map(function(r){return r.sys;})).concat(loadDict(SYS_DICT_KEY));
+          sysList = uniqueOf(sysList);
+        }
       }
       setOptions($("fSys"), sysList, true, { includeAll:true });
 
@@ -1817,14 +1849,27 @@ function getVisibleRows(){
       var ft = norm($("fTrade").value);
       var fsOld = norm($("fSys").value);
 
+      // ✅ 系統下拉需跟著「工種 + 目前搜尋」同步（不含系統本身）
       var sysList;
       if(ft){
-        sysList = collectSysForTrade(ft, state.db);
+        var baseRows = getBaseRowsForSysFilter();
+        sysList = uniqueOf(baseRows.map(function(r){ return r.sys; }));
+        if(!sysList.length){
+          sysList = collectSysForTrade(ft, state.db);
+        }
       }else{
+        var q = norm($("qText").value).toLowerCase();
         var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
-        sysList = uniqueOf(rows.map(function(r){return r.sys;})).concat(loadDict(SYS_DICT_KEY));
-        sysList = uniqueOf(sysList);
+        if(q){
+          rows = rows.filter(function(r){ return (r.text||"").toLowerCase().includes(q); });
+        }
+        sysList = uniqueOf(rows.map(function(r){return r.sys;}));
+        if(!sysList.length){
+          sysList = uniqueOf(state.db.map(normalizeRow).filter(Boolean).filter(function(r){return !r.deleted;}).map(function(r){return r.sys;})).concat(loadDict(SYS_DICT_KEY));
+          sysList = uniqueOf(sysList);
+        }
       }
+
       setOptions($("fSys"), sysList, false, { includeAll:true, forceValue:"" });
       if(fsOld && sysList.includes(fsOld)) $("fSys").value = fsOld;
       refresh();
