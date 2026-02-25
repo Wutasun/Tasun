@@ -1015,6 +1015,77 @@
       return r;
     }
 
+    // ---------------------------
+    // Legacy UID migration (deterministic)
+    // ---------------------------
+    // Some older localStorage rows may not contain uid/pk.
+    // To keep multi-device merge stable, we derive a deterministic uid from row content,
+    // then persist it back into DB_KEY once per device.
+    function fnv1a32(str){
+      str = (str===undefined||str===null) ? "" : String(str);
+      var h = 0x811c9dc5;
+      for(var i=0;i<str.length;i++){
+        h ^= str.charCodeAt(i);
+        // h *= 16777619 (with 32-bit overflow)
+        h = (h + ((h<<1) + (h<<4) + (h<<7) + (h<<8) + (h<<24))) >>> 0;
+      }
+      return ("00000000" + h.toString(16)).slice(-8);
+    }
+
+    function deriveLegacyUid(rawRow){
+      if(!rawRow || typeof rawRow!=="object") return "";
+      // Use the same pick logic as normalizeRow, but allow missing uid
+      var pick = function(obj, keys){
+        for(var i=0;i<keys.length;i++){
+          var k = keys[i];
+          if(obj && obj[k]!==undefined && obj[k]!==null && String(obj[k]).trim()!=="") return obj[k];
+        }
+        return "";
+      };
+      var id = String(pick(rawRow, ["id","_id","no","項次","序號"]) || "");
+      var text = norm(pick(rawRow, ["text","content","記事內容","事項內容","內容","記事"]) || "");
+      var trade = norm(pick(rawRow, ["trade","工種","類別","工程","工別"]) || "");
+      var sys = norm(pick(rawRow, ["sys","system","系統","系統項目","系統別"]) || "");
+      var source = norm(pick(rawRow, ["source","src","出處","來源"]) || "");
+      var attach = norm(pick(rawRow, ["attach","附件","file","files","附件連結"]) || "");
+      var remark = norm(pick(rawRow, ["remark","備註","note","註記"]) || "");
+      var date = norm(pick(rawRow, ["date","登錄日期","日期","createdAt","created_at"]) || "");
+      // If we still have nothing meaningful, skip
+      if(!text && !trade && !sys && !source && !attach && !remark && !id && !date) return "";
+      var key = [PAGE_KEY, id, date, trade, sys, source, attach, remark, text].join("|");
+      return "l" + fnv1a32(key);
+    }
+
+    function migrateEnsureUidInPlace(){
+      var changed = false;
+      for(var i=0;i<(state.db||[]).length;i++){
+        var x = state.db[i];
+        if(!x || typeof x!=="object") continue;
+        var uid = norm(x.uid || x.pk || x._pk || x.uuid || x._uid || "");
+        if(!uid){
+          uid = deriveLegacyUid(x);
+          if(uid){
+            x.uid = uid;
+            x.pk = uid;
+            changed = true;
+          }
+        }else{
+          // normalize pk convenience
+          if(!x.pk) { x.pk = uid; changed = true; }
+          if(!x.uid) { x.uid = uid; changed = true; }
+        }
+        // normalize minimal fields so normalizeRow can work
+        if(x.deleted===undefined && x._deleted!==undefined){ x.deleted = !!x._deleted; changed = true; }
+        if(x.deleted===undefined) x.deleted = !!x.deleted;
+        if(!x.rev){ x.rev = "r" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2,6); changed = true; }
+        if(!x.updatedAt){ x.updatedAt = nowISO(); changed = true; }
+      }
+      if(changed){
+        saveLocal({ db: state.db, counter: state.counter });
+      }
+      return changed;
+    }
+
 function getVisibleRows(){
       var q = norm($("qText").value).toLowerCase();
       var ft = norm($("fTrade").value);
@@ -2109,6 +2180,10 @@ function getVisibleRows(){
 
       // recover old storages once
       recoverLegacyLocal();
+
+      // ensure legacy rows have deterministic uid for stable multi-device merge
+      migrateEnsureUidInPlace();
+
 
       // read mode
       state.readMode = localStorage.getItem(READ_MODE_KEY)==="1";
