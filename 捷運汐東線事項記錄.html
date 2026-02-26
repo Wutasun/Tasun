@@ -579,9 +579,9 @@
         <div class="pill">權限：<b id="uRole">—</b></div>
 
         <button class="btn small" id="btnView"><span class="t">檢視</span></button>
-        <button class="btn small" id="btnAdd" style="display:none;"><span class="t">新增</span></button>
-        <button class="btn small" id="btnEdit" style="display:none;"><span class="t">編輯</span></button>
-        <button class="btn small" id="btnToken" style="display:none;"><span class="t">雲端設定</span></button>
+        <button class="btn small" id="btnAdd"><span class="t">新增</span></button>
+        <button class="btn small" id="btnEdit"><span class="t">編輯</span></button>
+        <button class="btn small" id="btnToken"><span class="t">雲端設定</span></button>
       </div>
     </div>
 
@@ -2157,46 +2157,48 @@ function getVisibleRows(){
     }
 
     function refresh(){
-      rebuildFilterOptions();
-      var rows = getVisibleRows();
-
-      renderTable(rows);
-      renderCards(rows);
+      // ✅ 防呆：任何資料/篩選異常都不能影響狀態列與按鈕可用性（不改 UI）
+      var rows = [];
+      try{
+        rebuildFilterOptions();
+        rows = getVisibleRows();
+        renderTable(rows);
+        renderCards(rows);
+      }catch(e){
+        try{ rows = getVisibleRows(); }catch(_e){ rows = []; }
+        try{ renderTable(rows); }catch(_e){}
+        try{ renderCards(rows); }catch(_e){}
+      }
 
       // hint（狀態列）
-      // ✅ 防呆：任何欄位/資料異常都不要讓整條狀態列變成空白（不改 UI）
       try{
         var cloudTxt = state.cloud && state.cloud.ok ? "已同步" : (state.cloud && state.cloud.cfgOk ? "待同步" : "未設定");
         var lastTxt = (state.cloud && state.cloud.lastOkAt) ? fmtClock(state.cloud.lastOkAt) : "—";
 
         var hintEl = $("hint");
-        hintEl.innerHTML = "";
-        function hb(k,v,bad){
-          var s=document.createElement("span");
-          s.className="hb"+(bad?" bad":"");
-          s.innerHTML = '<span class="k">'+escHtml(String(k))+'</span><span class="v">'+escHtml(String(v))+'</span>';
-          return s;
+        if(hintEl){
+          hintEl.innerHTML = "";
+          function hb(k,v,bad){
+            var s=document.createElement("span");
+            s.className="hb"+(bad?" bad":"");
+            s.innerHTML = '<span class="k">'+escHtml(String(k))+'</span><span class="v">'+escHtml(String(v))+'</span>';
+            return s;
+          }
+          var total = 0;
+          try{
+            total = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
+          }catch(e){ total = Array.isArray(state.db) ? state.db.length : 0; }
+
+          hintEl.appendChild(hb("版本", APP_VER || "dev"));
+          hintEl.appendChild(hb("筆數", String(rows.length) + " / " + String(total)));
+          hintEl.appendChild(hb("選取", state.selectedUid ? "已選取" : "未選取", !state.selectedUid));
+          hintEl.appendChild(hb("雲端", cloudTxt, !(state.cloud && state.cloud.ok)));
+          hintEl.appendChild(hb("最後", lastTxt));
         }
-        var total = 0;
-        try{
-          total = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
-        }catch(e){ total = Array.isArray(state.db) ? state.db.length : 0; }
+      }catch(_e){}
+    }
 
-        hintEl.appendChild(hb("版本", APP_VER || "dev"));
-        hintEl.appendChild(hb("筆數", String(rows.length) + " / " + String(total)));
-        hintEl.appendChild(hb("選取", state.selectedUid ? "已選取" : "未選取", !state.selectedUid));
-        hintEl.appendChild(hb("雲端", cloudTxt, !(state.cloud && state.cloud.ok)));
-        hintEl.appendChild(hb("最後", lastTxt));
-      }catch(_e){
-        try{
-          var hintEl2 = $("hint");
-          hintEl2.innerHTML = "";
-          hintEl2.textContent = "";
-        }catch(__e){}
-      }
-      }
-
-    function selectRow(uid){
+function selectRow(uid){
       uid = norm(uid);
       state.selectedUid = uid;
       refresh();
@@ -2212,7 +2214,7 @@ function getVisibleRows(){
       document.body.style.overflow = "hidden";
       $("mask").style.display = "flex";
       $("mTitle").textContent = (mode==="add") ? "新增" : (mode==="edit" ? "編輯" : "查看");
-      var canEdit = (state.role==="admin" || state.role==="write") && (mode!=="view");
+      var canEdit = (mode!=="view");
       $("btnSave").style.display = canEdit ? "" : "none";
       $("btnDelete").style.display = (canEdit && mode!=="add") ? "" : "none";
       // lock inputs in view mode
@@ -2261,7 +2263,6 @@ function getVisibleRows(){
 
     function openEdit(){
       if(!state.selectedUid){ toast("請先選取一筆"); return; }
-      if(!(state.role==="admin" || state.role==="write")){ toast("目前權限不可編輯"); return; }
       var r = currentRowByUid(state.selectedUid);
       if(!r){ toast("找不到資料"); return; }
       fillModal(r);
@@ -2269,7 +2270,6 @@ function getVisibleRows(){
     }
 
     function openAdd(){
-      if(!(state.role==="admin" || state.role==="write")){ toast("目前權限不可新增"); return; }
       state.selectedUid = "";
       fillModal({ date: todayISO() });
       openMask("add");
@@ -2689,12 +2689,9 @@ function getPromptOptions(mode){
 
       function _refreshMobileActions(){
         try{
-          var role = (state && state.role) ? String(state.role) : ((window.__TASUN_AUTH__&&window.__TASUN_AUTH__.role)?String(window.__TASUN_AUTH__.role):"");
-          var canWrite = (role === "admin" || role === "write");
-          var isAdmin = (role === "admin");
-          _setDisp($("mActAdd"), canWrite);
-          _setDisp($("mActEdit"), canWrite);
-          _setDisp($("mActCloud"), isAdmin);
+          _setDisp($("mActAdd"), true);
+          _setDisp($("mActEdit"), true);
+          _setDisp($("mActCloud"), true);
         }catch(e){}
       }
       window.__TASUN_REFRESH_MOBILE_MENU__ = _refreshMobileActions;
@@ -2727,10 +2724,14 @@ function getPromptOptions(mode){
       $("uName").textContent = u && (u.name||u.user) ? (u.name||u.user) : "—";
       $("uRole").textContent = state.role || "—";
 
-      var canWrite = (state.role==="admin" || state.role==="write");
-      $("btnAdd").style.display = canWrite ? "" : "none";
-      $("btnEdit").style.display = canWrite ? "" : "none";
-      $("btnToken").style.display = (state.role==="admin") ? "" : "none";
+      // ✅ 不做任何權限限制：按鈕一律顯示（維持既有 UI，不新增元素）
+      try{ $("btnAdd").style.display = ""; }catch(e){}
+      try{ $("btnEdit").style.display = ""; }catch(e){}
+      try{ $("btnToken").style.display = ""; }catch(e){}
+
+      // mobile '更多' menu actions also always visible
+      try{ if(window.__TASUN_REFRESH_MOBILE_MENU__) window.__TASUN_REFRESH_MOBILE_MENU__(); }catch(e){}
+
       refresh();
     }
 
@@ -2895,7 +2896,6 @@ $("btnSave").addEventListener("click", async function(){
       });
 
       $("btnDelete").addEventListener("click", async function(){
-        if(!(state.role==="admin" || state.role==="write")){ toast("目前權限不可刪除"); return; }
         if(!state.selectedUid){ toast("請先選取一筆"); return; }
         if(!confirm("確定刪除？（可在雲端同步後仍保留刪除狀態）")) return;
         deleteRow(state.selectedUid);
