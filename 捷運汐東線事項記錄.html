@@ -599,7 +599,7 @@
           </div>
         </div>
 
-        <div class="hint" id="hint"></div>
+        <div class="hint" id="hint"><span class="hb"><span class="k">版本</span><span class="v">dev</span></span><span class="hb"><span class="k">筆數</span><span class="v">0 / 0</span></span><span class="hb"><span class="k">選取</span><span class="v">未選取</span></span><span class="hb"><span class="k">雲端</span><span class="v">未設定</span></span><span class="hb"><span class="k">最後</span><span class="v">-</span></span><span class="hb"><span class="k">權限</span><span class="v">-</span></span></div>
       </div>
 
       <div class="panelBody">
@@ -836,20 +836,31 @@
     // ---------------------------
     var PAGE_KEY = "捷運汐東線事項記錄.html";
     var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || "dev";
+  try { var __urlv = new URL(location.href).searchParams.get("v"); if (__urlv) { APP_VER = __urlv; window.TASUN_APP_VER = __urlv; } } catch(_e) {}
+
+    function __getAppVer(){ return (window.TASUN_APP_VER||"").toString().trim() || APP_VER || "dev"; }
     // 若 tasun-version-loader.js 尚未完成，等版本就緒後再更新 APP_VER（避免手機端一直顯示 dev）
     (function(){
+      var apply = function(){
+        try {
+          var v = (window.TASUN_APP_VER||"").toString().trim();
+          if(v) APP_VER = v;
+        } catch(_){}
+      };
       try {
-        window.__TASUN_READY_Q = window.__TASUN_READY_Q || [];
-        var apply = function(){
-          try {
-            var v = (window.TASUN_APP_VER||"").toString().trim();
-            if(v) APP_VER = v;
-            if(typeof updateStatusLine==="function") updateStatusLine();
-          } catch(_){}
-        };
-        if(window.__TASUN_VERSION_READY__) apply();
-        else window.__TASUN_READY_Q.push(apply);
+        // tasun-version-loader.js 會 push callback 到 __TASUN_WAIT__（全站標準 v1）
+        if (window.__TASUN_WAIT__ && typeof window.__TASUN_WAIT__.push === "function") {
+          window.__TASUN_WAIT__.push(apply);
+        } else if (window.__TASUN_READY_Q && typeof window.__TASUN_READY_Q.push === "function") {
+          // 相容舊版佇列名稱
+          window.__TASUN_READY_Q.push(apply);
+        } else {
+          // 最差情況：DOMContentLoaded 再讀一次
+          document.addEventListener("DOMContentLoaded", apply, { once:true });
+        }
       } catch(_){}
+      // 也先嘗試讀一次（桌機通常已經就緒）
+      apply();
     })();
     var RESOURCES_URL = "tasun-resources.json";
 
@@ -2361,27 +2372,32 @@ function getPromptOptions(mode){
     if(__AUTO_SYNC_INFLIGHT) return;
     __AUTO_SYNC_INFLIGHT = true;
     try{
+      // 只要能上網就盡量先拉雲端，避免手機端先顯示本機舊資料
       if(!navigator.onLine) return;
 
-      const cfg = await loadCloudCfg();
-      if(!cfg || !cfg.apiBase) return;
+      var cfg = await loadCloudCfg();
+      if(!cfg || !isValidApiBase(cfg.apiBase)) return;
 
-      const h = await cloudHealth();
-      if(!h || !h.ok) return;
+      // 先做 health（內部會更新 state.cloud.ok）
+      try { await cloudHealth(); } catch(_){}
+      if(!state.cloud || !state.cloud.ok) return;
 
-      const payload = { db: Array.isArray(state.db)? state.db : [], counter: Number(state.counter||0) };
-      const r = await cloudMerge(payload);
-      if(!r || !r.ok || !r.data || !Array.isArray(r.data.db)) return;
+      // 以 merge API 取得雲端最新（merge 會回傳 merged 的 db/counter）
+      var localPayload = { db: state.db, counter: state.counter };
+      var remoteMerged = await cloudMerge(localPayload); // {db,counter}
 
-      state.db = r.data.db;
-      state.counter = Number(r.data.counter||0);
+      // 兩邊再做一次 deterministic merge，確保一致
+      var out = mergePayload(remoteMerged, localPayload);
+      state.db = out.db;
+      state.counter = out.counter;
 
-      // 重新建立字典/索引（避免選單/篩選不一致）
-      if(typeof buildDictsFromDb === "function"){
-        try{ buildDictsFromDb(); }catch(_){}
-      }
+      // 清掉待送佇列（我們已與雲端對齊）
+      try { await idbClearOps(PAGE_KEY); } catch(_){}
 
-      await saveLocal();
+      state.lastSyncAt = Date.now();
+      await saveLocal({ db: state.db, counter: state.counter });
+
+      buildDictsFromDb();
       refresh();
       try{ updateStatusLine(); }catch(_){}
     }catch(_){
@@ -2389,6 +2405,8 @@ function getPromptOptions(mode){
     }finally{
       __AUTO_SYNC_INFLIGHT = false;
     }
+  }
+
   }
 
   // iOS/Safari 常見：切回分頁才會恢復網路/JS，恢復可視時再補一次（仍採用靜默）
@@ -2884,7 +2902,8 @@ $("btnSave").addEventListener("click", async function(){
 
         try{ wire(); }catch(e){}
         try{ refresh(); }catch(e){}
-        try{ cloudHealth(); }catch(e){}
+        try{ await cloudHealth(); }catch(e){}
+        try{ await autoCloudSyncOnStart(); }catch(e){}
         try{ if(!cur) openLogin(); }catch(e){}
 
         try{
