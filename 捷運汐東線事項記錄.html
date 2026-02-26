@@ -838,6 +838,66 @@
     // ---------------------------
     var PAGE_KEY = "sxdh-notes";
     var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || (function(){try{var u=new URL(location.href);return (u.searchParams.get("v")||"").trim();}catch(e){return ""}})() || "dev";
+    // ---------------------------
+    // Hidden repair switch (no UI)
+    //  - enable by: #repair  or  #repair=1  or  ?repair=1
+    // ---------------------------
+    var REPAIR_MODE = (function(){
+      try{
+        var u = new URL(location.href);
+        var q = (u.searchParams.get("repair")||"").trim().toLowerCase();
+        var h = (u.hash||"").trim().toLowerCase();
+        if(h.indexOf("repair") >= 0) return true;
+        if(q && q!=="0" && q!=="false" && q!=="no") return true;
+        return false;
+      }catch(e){
+        return ((location.hash||"").toLowerCase().indexOf("repair") >= 0);
+      }
+    })();
+    window.__TASUN_REPAIR_MODE__ = REPAIR_MODE;
+    function clearRepairFlag(){
+      try{
+        var u = new URL(location.href);
+        var changed = false;
+        // clear hash if it's only repair-ish
+        if((u.hash||"").toLowerCase().indexOf("repair")>=0){
+          // if hash contains only repair or starts with #repair, remove it entirely
+          if(/^#repair(=1)?$/i.test(u.hash) || u.hash.toLowerCase().startsWith("#repair")){
+            u.hash = "";
+            changed = true;
+          }
+        }
+        // also drop ?repair=... if present
+        if(u.searchParams.has("repair")){
+          u.searchParams.delete("repair");
+          changed = true;
+        }
+        if(changed){
+          history.replaceState(null, document.title, u.toString());
+        }
+      }catch(e){
+        try{
+          if((location.hash||"").toLowerCase().indexOf("repair")>=0){
+            history.replaceState(null, document.title, location.pathname + location.search);
+          }
+        }catch(_e){}
+      }
+    }
+
+    // visible rows count (exclude deleted)
+    function visibleCount(db){
+      if(!Array.isArray(db)) return 0;
+      var n = 0;
+      for(var i=0;i<db.length;i++){
+        var r = db[i];
+        if(r && r.deleted === true) continue;
+        n++;
+      }
+      return n;
+    }
+
+
+
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
@@ -1088,7 +1148,11 @@
     // Auth
     // ---------------------------
     function ensureAuthTable(){
-      var t = safeJSON(localStorage.getItem(AUTH_KEY));
+      // ✅ 防呆：localStorage 不可用或資料損毀時，仍提供預設權限表（不改 UI）
+      // 目標：避免因 CURRENT_KEY/AUTH_KEY 異常而卡住「使用者：- / 權限：- / 按鈕不顯示」
+      if(window.__AUTH_CACHE__ && window.__AUTH_CACHE__.users) return window.__AUTH_CACHE__;
+      var t = null;
+      try{ t = safeJSON(localStorage.getItem(AUTH_KEY)); }catch(e){ t = null; }
       if(!t || typeof t !== "object"){
         t = {
           users: [
@@ -1099,21 +1163,55 @@
           updatedAt: nowISO(),
           rev: "seed"
         };
-        localStorage.setItem(AUTH_KEY, JSON.stringify(t));
+        try{ localStorage.setItem(AUTH_KEY, JSON.stringify(t)); }catch(e){}
       }
       if(!Array.isArray(t.users)) t.users = [];
+      window.__AUTH_CACHE__ = t;
       return t;
     }
 
+    function isValidRole(role){
+      role = norm(role);
+      return role==="admin" || role==="write" || role==="read";
+    }
+
     function getCurrentUser(){
-      var cur = safeJSON(localStorage.getItem(CURRENT_KEY));
-      if(cur && cur.user && cur.role) return cur;
-      return null;
+      var cur = null;
+      try{ cur = safeJSON(localStorage.getItem(CURRENT_KEY)); }catch(e){ cur = null; }
+      if(!cur || !cur.user || !cur.role) return null;
+
+      var u = norm(cur.user);
+      var r = norm(cur.role);
+      if(!u || !isValidRole(r)){
+        try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
+        return null;
+      }
+
+      // ✅ 嚴格驗證：CURRENT_KEY 必須存在於權限表 users，否則視為未登入並清除（避免卡住）
+      try{
+        var auth = ensureAuthTable();
+        var hit = auth && Array.isArray(auth.users) ? auth.users.find(function(x){ return norm(x.user)===u; }) : null;
+        if(!hit){
+          try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
+          return null;
+        }
+        return {
+          user: u,
+          role: isValidRole(hit.role) ? hit.role : r,
+          name: norm(hit.name) || u,
+          at: cur.at || nowISO()
+        };
+      }catch(e){
+        // 若權限表不可讀（極端情況），仍回傳基本 cur
+        return { user:u, role:r, name: norm(cur.name)||u, at: cur.at || nowISO() };
+      }
     }
 
     function setCurrentUser(u){
-      if(!u) localStorage.removeItem(CURRENT_KEY);
-      else localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
+      try{
+        if(!u) localStorage.removeItem(CURRENT_KEY);
+        else localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
+      }catch(e){}
     }
 
     function roleRank(role){
@@ -1253,6 +1351,15 @@
 
     // 嘗試復原舊版本本機資料（不同 key / 舊備份格式），並合併回目前 db
     function recoverLegacyLocal(){
+      // ✅ repair 模式：不併入舊本機資料，並清掉可能造成跨設備不一致的舊快取（不影響 UI）
+      if(window.__TASUN_REPAIR_MODE__){
+        try{ localStorage.removeItem(DB_KEY); }catch(e){}
+        try{ localStorage.removeItem(COUNTER_KEY); }catch(e){}
+        try{ sessionStorage.removeItem(DB_KEY); }catch(e){}
+        try{ sessionStorage.removeItem(COUNTER_KEY); }catch(e){}
+        return false;
+      }
+
       // 以「內容特徵」找舊資料：任何 storage key 只要能解析出 {db:[{uid/text/trade/sys/...}], counter} 或直接是陣列，都納入合併
       function tryParsePayload(parsed){
         if(Array.isArray(parsed)){
@@ -1367,11 +1474,15 @@
     }
 
 
-        async function saveLocal(payload){
+        async function saveLocal\(payload\)\{
+      // Cloud-only: when cloud is configured, do NOT persist db/counter locally (avoid cross-device divergence)
+      try{ if(state && state.cloud && state.cloud.cfgOk) { return true; } }catch(_e){}
+
       var dbArr = payload.db||[];
       var counter = Number(payload.counter||0)||0;
 
-      // IDB primary
+      // IDB primary（本機快取）
+      var idbOk = false;
       try{
         await idbPutRows(PAGE_KEY, dbArr);
         await idbPutMeta({
@@ -1381,14 +1492,20 @@
           clientId: state.clientId || getClientId(),
           updatedAt: nowISO()
         });
-      }catch(e){}
+        idbOk = true;
+      }catch(e){
+        idbOk = false;
+      }
 
-      // localStorage fallback
-      try{
-        localStorage.setItem(DB_KEY, JSON.stringify(dbArr));
-        localStorage.setItem(COUNTER_KEY, String(counter));
-      }catch(e){}
+      // localStorage 僅作「最後備援」：只有在 IDB 失敗時才寫入（避免各設備因本機儲存差異造成筆數不一致）
+      if(!idbOk){
+        try{
+          localStorage.setItem(DB_KEY, JSON.stringify(dbArr));
+          localStorage.setItem(COUNTER_KEY, String(counter));
+        }catch(e){}
+      }
     }
+
 
     function normalizeRow(x){
       if(!x || typeof x!=="object") return null;
@@ -2036,23 +2153,37 @@ function getVisibleRows(){
       renderTable(rows);
       renderCards(rows);
 
-      // hint
-      var cloudTxt = state.cloud.ok ? "已同步" : (state.cloud.cfgOk ? "待同步" : "未設定");
-      var lastTxt = state.cloud.lastOkAt ? fmtClock(state.cloud.lastOkAt) : "—";
-      var roleTxt = state.role==="admin" ? "admin" : (state.role==="write"?"可編輯":"唯讀");
+      // hint（狀態列）
+      // ✅ 防呆：任何欄位/資料異常都不要讓整條狀態列變成空白（不改 UI）
+      try{
+        var cloudTxt = state.cloud && state.cloud.ok ? "已同步" : (state.cloud && state.cloud.cfgOk ? "待同步" : "未設定");
+        var lastTxt = (state.cloud && state.cloud.lastOkAt) ? fmtClock(state.cloud.lastOkAt) : "—";
 
-      $("hint").innerHTML = "";
-      function hb(k,v,bad){
-        var s=document.createElement("span");
-        s.className="hb"+(bad?" bad":"");
-        s.innerHTML = '<span class="k">'+escHtml(k)+'</span><span class="v">'+escHtml(v)+'</span>';
-        return s;
+        var hintEl = $("hint");
+        hintEl.innerHTML = "";
+        function hb(k,v,bad){
+          var s=document.createElement("span");
+          s.className="hb"+(bad?" bad":"");
+          s.innerHTML = '<span class="k">'+escHtml(String(k))+'</span><span class="v">'+escHtml(String(v))+'</span>';
+          return s;
+        }
+        var total = 0;
+        try{
+          total = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
+        }catch(e){ total = Array.isArray(state.db) ? state.db.length : 0; }
+
+        hintEl.appendChild(hb("版本", APP_VER || "dev"));
+        hintEl.appendChild(hb("筆數", String(rows.length) + " / " + String(total)));
+        hintEl.appendChild(hb("選取", state.selectedUid ? "已選取" : "未選取", !state.selectedUid));
+        hintEl.appendChild(hb("雲端", cloudTxt, !(state.cloud && state.cloud.ok)));
+        hintEl.appendChild(hb("最後", lastTxt));
+      }catch(_e){
+        try{
+          var hintEl2 = $("hint");
+          hintEl2.innerHTML = "";
+          hintEl2.textContent = "";
+        }catch(__e){}
       }
-      $("hint").appendChild(hb("版本", APP_VER));
-      $("hint").appendChild(hb("筆數", String(rows.length) + " / " + String(state.db.map(normalizeRow).filter(Boolean).filter(function(r){return !r.deleted;}).length)));
-      $("hint").appendChild(hb("選取", state.selectedUid ? "已選取" : "未選取", !state.selectedUid));
-      $("hint").appendChild(hb("雲端", cloudTxt, !state.cloud.ok));
-      $("hint").appendChild(hb("最後", lastTxt));
       }
 
     function selectRow(uid){
@@ -2360,54 +2491,73 @@ function getPromptOptions(mode){
       return { db: db, counter: Number(counter||0)||0 };
     }
 
-        async function syncFromCloud(){
-      var silent = false;
+        async function syncFromCloud(opts){
+      opts = (opts && typeof opts==="object") ? opts : {};
+      var silent = !!opts.silent;
+
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)){
-        if(!silent) toast("雲端未設定/無效"); return;
+        if(!silent) toast("雲端未設定/無效");
+        return false;
       }
+
       try{
         var remote = await cloudRead();
+
+        // 以「雲端資料」為主，與本機快取做 merge（保留較新的 updatedAt）
         var out = mergePayload(remote, { db: state.db, counter: state.counter });
         state.db = out.db;
         state.counter = out.counter;
 
+        // 讀取成功視為已同步到此刻（之後若需上傳，會用 ops/forceAll 觸發）
         state.lastSyncAt = Date.now();
         await idbClearOps(PAGE_KEY);
         await saveLocal({ db: state.db, counter: state.counter });
 
         buildDictsFromDb();
         refresh();
-        toast("已從雲端更新");
+        if(!silent) toast("已從雲端更新");
+        return true;
       }catch(e){
-        toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
+        if(!silent) toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
+        return false;
       }
     }
 
-        async function syncToCloud(opts){
+    async function syncToCloud(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
       var silent = !!opts.silent;
       var reason = opts.reason || "";
+      var forceAll = !!opts.forceAll;
 
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)){
-        if(!silent) toast("雲端未設定/無效"); return;
+        if(!silent) toast("雲端未設定/無效");
+        return false;
       }
 
       var meta = null;
       try{ meta = await idbGetMeta(PAGE_KEY); }catch(e){ meta=null; }
       var lastSyncAt = Number(state.lastSyncAt || (meta && meta.lastSyncAt) || 0) || 0;
 
+      // forceAll：上傳全部（用於第一次上雲/舊資料匯入/跨設備筆數不一致的修復）
       var dirtyUids = [];
-      try{ dirtyUids = await idbGetDirtyUids(PAGE_KEY, lastSyncAt); }catch(e){ dirtyUids = []; }
+      if(forceAll || !lastSyncAt){
+        dirtyUids = (state.db||[]).map(function(r){ return norm(r && r.uid); }).filter(Boolean);
+      }else{
+        try{ dirtyUids = await idbGetDirtyUids(PAGE_KEY, lastSyncAt); }catch(e){ dirtyUids = []; }
+      }
+
+      // 去重
+      dirtyUids = Array.from(new Set(dirtyUids.map(norm).filter(Boolean)));
 
       if(!dirtyUids.length){
         if(!silent) toast("沒有需要上傳的本機變更");
-        return;
+        return true;
       }
 
-      var dirtySet = new Set(dirtyUids.map(norm));
-      var sendRows = state.db
+      var dirtySet = new Set(dirtyUids);
+      var sendRows = (state.db||[])
         .map(ensureRowV1)
         .filter(Boolean)
         .filter(function(r){ return dirtySet.has(norm(r.uid)); });
@@ -2416,7 +2566,8 @@ function getPromptOptions(mode){
         pageKey: PAGE_KEY,
         clientId: state.clientId || getClientId(),
         since: lastSyncAt || 0,
-        partial: true,
+        partial: !(forceAll || !lastSyncAt),
+        reason: reason || "",
         payload: { db: sendRows, counter: state.counter }
       };
 
@@ -2432,14 +2583,16 @@ function getPromptOptions(mode){
 
         buildDictsFromDb();
         refresh();
-        if(!silent) toast("雲端同步完成（增量）");
+        if(!silent) toast(forceAll ? "雲端同步完成（全量修復）" : "雲端同步完成（增量）");
+        return true;
       }catch(e){
-        toast("雲端同步失敗：" + (e && e.message ? e.message : String(e)));
+        if(!silent) toast("雲端同步失敗：" + (e && e.message ? e.message : String(e)));
+        return false;
       }
     }
 
     // ---------------------------
-    // Export / Import helpers (backup)
+    // Export / Import helpers (backup) (backup)
     // ---------------------------
     function downloadText(filename, text){
       var blob = new Blob([text], {type:"application/json;charset=utf-8"});
@@ -2779,7 +2932,86 @@ $("btnSave").addEventListener("click", async function(){
 
         try{ wire(); }catch(e){}
         try{ refresh(); }catch(e){}
-        try{ cloudHealth(); }catch(e){}
+
+        // ✅ 跨設備一致性：雲端可用時，以雲端為主（啟動即讀取），必要時做一次「全量修復上傳」
+        var needFullRepair = false;
+        try{
+          var meta0 = null;
+          try{ meta0 = await idbGetMeta(PAGE_KEY); }catch(_e){ meta0 = null; }
+          var last0 = Number(state.lastSyncAt || (meta0 && meta0.lastSyncAt) || 0) || 0;
+          if(!last0) needFullRepair = true;
+
+          // 若偵測到舊 localStorage/sessionStorage 被併入，也視為需要全量修復，避免各設備筆數不同
+          var lsMerged = false;
+          try{
+            var sc = state._legacyScan || null;
+            var l1 = sc && sc.local; var l2 = sc && sc.session;
+            lsMerged = !!((l1 && l1.mergedAny) || (l2 && l2.mergedAny));
+          }catch(_e){}
+                    if(lsMerged) needFullRepair = true;
+          if(window.__TASUN_REPAIR_MODE__) needFullRepair = true;
+
+        }catch(e){}
+
+        try{
+          var ok = await cloudHealth();
+          if(state.cloud && state.cloud.cfgOk && ok){
+            // 先從雲端覆蓋/合併到本機快取（確保顯示一致）
+            await syncFromCloud({ silent:true });
+
+            // 若第一次上雲 / 舊資料併入：做一次全量上傳修復，讓雲端成為唯一真相
+            if(needFullRepair){
+              await syncToCloud({ silent:true, forceAll:true, reason:"repair" });
+              if(window.__TASUN_REPAIR_MODE__){
+                try{
+                  // ✅ 只有當雲端 read 回來的筆數與本機顯示筆數一致，且每筆 uid 的 rev/updatedAt（含 deleted）完全一致，才清除 #repair
+                  // 先再同步一次（確保 state.db 反映雲端最新）
+                  await syncFromCloud({ silent:true });
+
+                  var localDb = Array.isArray(state.db) ? state.db : [];
+                  var localCount = visibleCount(localDb);
+
+                  var remote = await cloudRead();
+                  var remoteDb = (remote && Array.isArray(remote.db)) ? remote.db : [];
+                  var remoteCount = visibleCount(remoteDb);
+
+                  function toMap(db){
+                    var mp = new Map();
+                    for(var i=0;i<db.length;i++){
+                      var it = db[i];
+                      if(!it || !it.uid) continue;
+                      var uid = String(it.uid);
+                      mp.set(uid, {
+                        rev: (it.rev===undefined||it.rev===null) ? "" : String(it.rev),
+                        updatedAt: (it.updatedAt===undefined||it.updatedAt===null) ? "" : String(it.updatedAt),
+                        deleted: !!it.deleted
+                      });
+                    }
+                    return mp;
+                  }
+
+                  var lm = toMap(localDb);
+                  var rm = toMap(remoteDb);
+
+                  var sameMeta = (lm.size === rm.size);
+                  if(sameMeta){
+                    rm.forEach(function(rv, uid){
+                      if(!sameMeta) return;
+                      var lv = lm.get(uid);
+                      if(!lv || lv.rev !== rv.rev || lv.updatedAt !== rv.updatedAt || lv.deleted !== rv.deleted){
+                        sameMeta = false;
+                      }
+                    });
+                  }
+
+                  if(remoteCount === localCount && sameMeta){
+                    clearRepairFlag();
+                  }
+                }catch(_e){}
+              }
+            }
+          }
+        }catch(e){}
         try{ if(!cur) openLogin(); }catch(e){}
 
         try{
