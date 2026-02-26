@@ -2,270 +2,538 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>捷運汐止東湖線統包工程-資料明細表查詢 · Tasun</title>
 
-  <!-- ✅✅✅ APP_VER 強制同步（全站共用） -->
+  <link rel="icon" href="data:,">
+  
+  <!-- ✅ 版本鎖定：由 tasun-version.json 驅動（A 模式同名覆蓋 + v=appVer） -->
+  <script src="tasun-version-loader.js"></script>
+<meta http-equiv="Cache-Control" content="no-cache">
+    <!-- ✅ 全站版本：由 tasun-version.json 統一提供（刪除硬寫 window.TASUN_APP_VER=...） -->
   <script>
   (function(){
-    const KEY = "tasun_app_ver_v1";
-    const BUILTIN_VER = "2026.01.26.1";
-    const norm = (s)=>(s??"").toString().trim();
-    function withV(url, v){
-      if(!url) return url;
-      try{
-        const uu = new URL(url, document.baseURI);
-        if(uu.origin !== location.origin) return url;
-        if(v) uu.searchParams.set("v", v);
-        return uu.pathname + (uu.search || "") + (uu.hash || "");
-      }catch(e){ return url; }
+    // 建立 __TASUN_READY__/__TASUN_WAIT__（後續 run() 會 push 進來）
+    var WAIT = window.__TASUN_READY__;
+    if(!WAIT || typeof WAIT !== "object"){
+      var _q = [], _ready = false, _resolve = null;
+      var _p = new Promise(function(res){ _resolve = res; });
+      WAIT = {
+        get ready(){ return _ready; },
+        push: function(fn){ if(typeof fn!=="function") return; _ready ? fn() : _q.push(fn); },
+        then: function(a,b){ return _p.then(a,b); },
+        flush: function(){
+          if(_ready) return;
+          _ready = true;
+          try{ _resolve(true); }catch(e){}
+          var list = _q.splice(0);
+          for(var i=0;i<list.length;i++){ try{ list[i](); }catch(e){} }
+        }
+      };
+      window.__TASUN_READY__ = WAIT;
     }
-    let stored = "";
-    try{ stored = norm(localStorage.getItem(KEY)); }catch(e){}
-    const ver = stored || BUILTIN_VER;
-    try{ localStorage.setItem(KEY, ver); }catch(e){}
-    window.APP_VER = ver;
-    window.__withAPPVER = function(url){ return withV(url, window.APP_VER); };
-    try{
-      const onceKey = "tasun_app_ver_sync_once:" + location.pathname;
-      const u = new URL(location.href);
-      const cur = norm(u.searchParams.get("v"));
-      if(!sessionStorage.getItem(onceKey) && ver && cur !== ver){
-        sessionStorage.setItem(onceKey, "1");
-        u.searchParams.set("v", ver);
-        location.replace(u.toString());
+    window.__TASUN_WAIT__ = WAIT;
+
+    function norm(s){ return (s===undefined||s===null) ? "" : String(s).trim(); }
+    function pickVer(j){
+      if(!j || typeof j!=="object") return "";
+      // 兼容多種欄位命名
+      return norm(j.appVer || j.APP_VER || j.TASUN_APP_VER || j.ver || j.version || j.app_version || "");
+    }
+
+    async function loadJsonNoStore(url){
+      try{
+        var res = await fetch(url, { cache:"no-store", credentials:"omit" });
+        if(!res.ok) throw new Error("HTTP " + res.status);
+        return await res.json();
+      }catch(e){
+        return null;
       }
-    }catch(e){}
+    }
+
+    function addV(src, APP){
+      return src + (src.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(APP);
+    }
+    function hasScript(id){ return !!document.querySelector('script[data-tasun-id="'+id+'"]'); }
+    function loadOnce(id, src){
+      return new Promise(function(resolve){
+        if(hasScript(id)) return resolve(true);
+        var s = document.createElement("script");
+        s.src = src; s.async = false; s.setAttribute("data-tasun-id", id);
+        s.onload = function(){ resolve(true); };
+        s.onerror = function(){ resolve(false); };
+        document.head.appendChild(s);
+      });
+    }
+
+    (async function(){
+      // 1) 讀取版本（版本檔走 no-store，避免卡舊）
+      var vUrl;
+      try{
+        vUrl = new URL("tasun-version.json", location.href);
+        vUrl.searchParams.set("_", String(Date.now()));
+      }catch(e){
+        vUrl = "tasun-version.json?_=" + Date.now();
+      }
+      var j = await loadJsonNoStore(String(vUrl));
+      var APP = pickVer(j);
+
+      // 若讀不到版本，就沿用 URL 的 v（若有）
+      try{
+        var u0 = new URL(location.href);
+        var cur0 = norm(u0.searchParams.get("v"));
+        if(!APP) APP = cur0;
+      }catch(e){}
+
+      if(APP) window.TASUN_APP_VER = APP;
+
+      // 2) 進站必鎖定最新版 ?v=APP_VER（避免不同裝置卡舊版）
+      try{
+        if(APP){
+          var u = new URL(location.href);
+          var cur = norm(u.searchParams.get("v"));
+          var KEY = "tasun_force_v_once__sxdh_notes__" + (cur||"none") + "_to_" + APP;
+          if(cur !== APP && !sessionStorage.getItem(KEY)){
+            sessionStorage.setItem(KEY, "1");
+            u.searchParams.set("v", APP);
+            location.replace(u.toString());
+            return;
+          }
+        }
+      }catch(e){}
+
+      // 3) 載入 tasun-core / tasun-boot（都帶 ?v=APP_VER）
+      try{
+        if(APP){
+          if(!window.TasunCore) await loadOnce("tasun-core", addV("tasun-core.js", APP));
+          await loadOnce("tasun-boot", addV("tasun-boot.js", APP));
+        }else{
+          // fallback：沒有版本時仍可載入（不帶 v）
+          if(!window.TasunCore) await loadOnce("tasun-core", "tasun-core.js");
+          await loadOnce("tasun-boot", "tasun-boot.js");
+        }
+      }catch(e){}
+
+      try{ if(!WAIT.ready) WAIT.flush(); }catch(e){}
+    })();
   })();
   </script>
 
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>捷運汐止東湖線統包工程-資料明細表查詢 · Tasun</title>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet">
+  <!-- ✅ 額外提醒：若 head 裡使用 no-store/no-cache meta，會讓手機每次都重抓資源、變慢
+       已改成最精簡 no-cache；真正的版本一致性請用 ?v=APP_VER -->
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;600;700;800;900&family=Noto+Serif+TC:wght@400;600;700;900&display=swap" rel="stylesheet">
 
   <style>
     :root{
-      --bg0:#070809; --bg1:#0b0d10; --gold:#f6d37a;
-      --border:rgba(246,211,122,.28); --border2:rgba(246,211,122,.40);
-      --text:#ececec; --muted:rgba(236,236,236,.70);
-      --shadow:0 18px 50px rgba(0,0,0,.55); --r:18px;
+      --appH: 100vh;
+      --vv-top: 0px;
+      --vv-bottom: 0px;
+      --bg0:#dbe3e1; --bg1:#c7d4d1;
+      --ink:#111;
+      --paper: rgba(255,255,255,.96);
+      --paper2: rgba(255,255,255,.92);
+      --border: rgba(0,0,0,.18);
+      --border2: rgba(0,0,0,.28);
+      --r:18px;
+      --shadow: 0 16px 44px rgba(0,0,0,.10);
+      --shadow2: 0 10px 26px rgba(0,0,0,.08);
+
+      --goldHi: rgba(255,254,246,.98);
+      --goldText: rgba(246,214,150,.98);
+      --goldDeep: rgba(170,110,18,.98);
+
+      --strokeBlack: rgba(0,0,0,.58);
+      --olPx: .78px;
+
+      --titleSize: clamp(28px, 2.6vw, 42px);
+      --subSize:   clamp(12.5px, 1.05vw, 15.5px);
+      --labelSize: clamp(13.5px, 1.00vw, 15.5px);
+      --ctrlSize:  clamp(13.5px, 1.05vw, 16px);
+      --thSize:    clamp(15px, 1.10vw, 17px);
+      --tdSize:    clamp(14.5px, 1.06vw, 16.5px);
+      --readBody:  clamp(14.5px, 1.10vw, 17.5px);
+
+      --btnFont: clamp(14.5px, 1.12vw, 17px);
+      --btnFontSmall: clamp(13.5px, 1.06vw, 16px);
+
+      /* ✅ 修訂：舞台兩側距離網頁邊框固定 1cm（桌機）
+         注意：wrap 內有左右 padding 16px，因此外側留白需扣除 16px 才能讓舞台外框到視窗邊緣為 1cm */
+      --stageSide: calc(1cm - 16px);
+
+      --tableWrapBg: rgba(255,252,244,.94);
+      --tableBg: rgba(255,252,244,.92);
+      --tableHeadBg: rgba(252,240,218,.96);
+      --tableStripe: rgba(40,120,90,.035);
+      --tableHover: rgba(170,110,18,.060);
+      --tableSel: rgba(170,110,18,.120);
+      --tableLine: rgba(90,60,20,.180);
+      --tableText: rgba(22,18,14,.92);
+      --tableMuted: rgba(90,60,20,.55);
+
+      --btnBg1: rgba(255,255,255,.70);
+      --btnBg2: rgba(255,255,255,.54);
+      --btnBgGhost1: rgba(255,255,255,.62);
+      --btnBgGhost2: rgba(255,255,255,.46);
     }
+
     *{box-sizing:border-box}
-    body{
-      margin:0; color:var(--text); font-family:"Noto Serif TC", serif;
+    html,body{height:100%}
+    html{
       background:
-        radial-gradient(900px 520px at 20% 15%, rgba(246,211,122,.10), transparent 60%),
-        radial-gradient(900px 520px at 85% 25%, rgba(246,211,122,.08), transparent 62%),
+        radial-gradient(1000px 560px at 50% 120px, rgba(255,255,255,.55), transparent 64%),
+        radial-gradient(1200px 900px at 32% 36%, rgba(255,255,255,.40), transparent 68%),
         linear-gradient(180deg, var(--bg0), var(--bg1));
-      overflow-x:hidden;
     }
-    .wrap{max-width:1400px;margin:0 auto;padding:20px 16px 34px}
+    body{
+      margin:0; color:var(--ink);
+      font-family:"Noto Sans TC", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+      background: inherit;
+      overflow:hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: optimizeLegibility;
+    }
+    :where(.sub,.label,.pill,.hint,.miniHint,.loginErr,.loginHint,.toast, thead th, tbody td, .noteTag,.noteNo,.noteBody){
+      text-shadow:none !important; filter:none !important;
+    }
+
+    .goldCrystal{
+      display:inline-block;
+      --_ol: var(--strokeBlack); --_olpx: var(--olPx);
+      background: linear-gradient(180deg, var(--goldHi) 0%, rgba(255,246,224,.98) 18%, var(--goldText) 46%, rgba(226,156,54,.98) 78%, var(--goldHi) 100%);
+      -webkit-background-clip:text; background-clip:text;
+      color: var(--goldDeep);
+      text-shadow:
+        var(--_olpx) 0 0 var(--_ol), calc(var(--_olpx)*-1) 0 0 var(--_ol),
+        0 var(--_olpx) 0 var(--_ol), 0 calc(var(--_olpx)*-1) 0 var(--_ol),
+        var(--_olpx) var(--_olpx) 0 var(--_ol), var(--_olpx) calc(var(--_olpx)*-1) 0 var(--_ol),
+        calc(var(--_olpx)*-1) var(--_olpx) 0 var(--_ol), calc(var(--_olpx)*-1) calc(var(--_olpx)*-1) 0 var(--_ol);
+    }
+    @supports (-webkit-background-clip:text) or (background-clip:text){
+      .goldCrystal{ color: transparent; -webkit-text-fill-color: transparent; }
+    }
+
+    .wrap{
+      width:min(1720px, calc(100vw - (2*var(--stageSide))));
+      margin:0 auto;
+      padding: 18px 16px 18px;
+      height:var(--appH,100vh);
+      min-height:var(--appH,100vh);
+      display:flex; flex-direction:column; gap:16px;
+    }
 
     .topbar{
-      position:relative; z-index:20;
-      display:grid; grid-template-columns: 1fr auto 1fr;
+      display:grid;
+      grid-template-columns: 1fr auto 1fr;
       gap:12px; align-items:center;
-      padding:14px; border:1px solid var(--border); border-radius:var(--r);
-      background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
-      box-shadow:var(--shadow); backdrop-filter:blur(10px);
+      padding:14px 14px;
+      border:1px solid var(--border2);
+      border-radius:var(--r);
+      background: linear-gradient(180deg, var(--paper), var(--paper2));
+      box-shadow: var(--shadow);
+      overflow:hidden;
     }
     @media (max-width:920px){
-      .topbar{ grid-template-columns: 1fr; }
-      .nav-left{ order:0; }
-      .brand{ order:1; }
-      .right{ order:2; justify-content:flex-start; }
+      .topbar{grid-template-columns:1fr}
+      .nav-left{order:0} .brand{order:1} .right{order:2; justify-content:flex-start}
     }
-    .nav-left{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:flex-start; min-width:220px; }
-    .nav-desktop{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-    .nav-mobile{ display:none; gap:10px; align-items:center; width:100%; }
-    @media (max-width:650px){ .nav-desktop{display:none} .nav-mobile{display:flex} }
 
-    .brand{display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:0 6px;}
-    .title{font-weight:900; letter-spacing:.06em; font-size: clamp(16px, 1.5vw, 20px); color:var(--gold);
-      text-shadow:0 0 18px rgba(246,211,122,.22); line-height:1.25;}
-    .sub{font-size:12px; color:var(--muted); letter-spacing:.08em; margin-top:4px}
+    .nav-left{display:flex; gap:10px; flex-wrap:wrap; align-items:center; min-width:220px;}
+    .nav-desktop{display:flex; gap:10px; flex-wrap:wrap; align-items:center;}
+    .nav-mobile{display:none; gap:10px; align-items:center; width:100%;}
+    @media (max-width:600px){ .nav-desktop{display:none;} .nav-mobile{display:flex;} }
+
+    .brand{display:flex; flex-direction:column; gap:6px; align-items:center; justify-content:center; text-align:center;}
+    .title{font-family:"Noto Serif TC","Noto Sans TC",serif; font-weight:820; letter-spacing:.10em; font-size:var(--titleSize); line-height:1.12;}
+    .sub{font-size:var(--subSize); color:rgba(0,0,0,.55); letter-spacing:.10em; font-weight:700;}
 
     .right{display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end; min-width:220px;}
-    @media (max-width:920px){ .right{justify-content:flex-start;} }
-
     .pill{
-      padding:8px 12px; border-radius:999px;
-      border:1px solid rgba(255,255,255,.16); background:rgba(255,255,255,.05);
-      font-size:13px; color:rgba(236,236,236,.85);
+      padding:9px 12px; border-radius:999px; border:1px solid var(--border);
+      background: rgba(255,255,255,.90); font-size:14px; color: rgba(0,0,0,.78);
       display:flex; gap:8px; align-items:center; white-space:nowrap;
+      box-shadow: var(--shadow2); font-weight:800; letter-spacing:.03em;
     }
-    .pill b{color:var(--gold)}
+    .pill b{font-weight:900; color: rgba(0,0,0,.86);}
 
     .btn{
-      appearance:none; border:1px solid var(--border2);
-      background:linear-gradient(180deg, rgba(246,211,122,.18), rgba(246,211,122,.07));
-      color:var(--gold); padding:9px 12px; border-radius:999px; cursor:pointer;
-      font-family:inherit; font-weight:900; letter-spacing:.05em;
-      box-shadow:0 10px 22px rgba(0,0,0,.35);
-      transition:transform .12s ease, filter .12s ease;
+      position:relative; appearance:none;
+      border:1px solid var(--border2);
+      background: linear-gradient(180deg, var(--btnBg1), var(--btnBg2));
+      padding:11px 16px; border-radius:999px;
+      cursor:pointer; font-family:inherit;
+      font-weight:720; letter-spacing:.05em;
+      font-size: var(--btnFont);
+      box-shadow: 0 12px 22px rgba(0,0,0,.10);
+      transition:transform .12s ease, border-color .12s ease, box-shadow .12s ease;
       user-select:none; white-space:nowrap;
+      color: rgba(0,0,0,.82); overflow:hidden;
     }
-    .btn:hover{transform:translateY(-1px); filter:brightness(1.06)}
-    .btn:active{transform:translateY(0); filter:brightness(.98)}
-    .btn.ghost{
-      background:rgba(255,255,255,.05);
-      border:1px solid rgba(255,255,255,.18);
-      color:rgba(236,236,236,.85);
-      font-weight:600;
+    .btn::before{
+      content:""; position:absolute; inset:0; pointer-events:none;
+      background: radial-gradient(240px 110px at 26% 20%, rgba(255,255,255,.12), transparent 66%);
+      opacity:.28; z-index:0;
     }
-    .small{padding:8px 10px; font-size:12px; border-radius:999px; letter-spacing:.04em}
-
-    .moreWrap{ position:relative; display:inline-flex; }
-    .moreMenu{
-      position:absolute; top:calc(100% + 8px); right:0;
-      min-width: 250px;
-      border-radius:16px;
-      border:1px solid rgba(246,211,122,.30);
-      background:linear-gradient(180deg, rgba(0,0,0,.72), rgba(0,0,0,.45));
-      box-shadow:0 18px 50px rgba(0,0,0,.65);
-      backdrop-filter:blur(10px);
-      padding:8px;
-      display:none;
-      z-index:60;
+    .btn:hover{transform:translateY(-1px); border-color: rgba(0,0,0,.40); box-shadow: 0 14px 26px rgba(0,0,0,.12);}
+    .btn:active{transform:none}
+    .btn.ghost{ background: linear-gradient(180deg, var(--btnBgGhost1), var(--btnBgGhost2)); border:1px solid var(--border); }
+    .btn.danger{ border-color: rgba(0,0,0,.42); }
+    .small{ padding:10px 14px; font-size: var(--btnFontSmall); }
+    .btn[disabled]{opacity:.45; cursor:not-allowed; transform:none !important;}
+    .btn .t{
+      position:relative; z-index:1; display:inline-block;
+      color: rgba(120,64,6,.98);
+      font-weight:700; letter-spacing:.04em; line-height:1.12;
+      text-shadow:none !important;
     }
-    .moreMenu.open{ display:block; }
-    .menuItem{
-      width:100%;
-      text-align:left;
-      border:none;
-      background:rgba(255,255,255,.04);
-      color:rgba(236,236,236,.92);
-      padding:10px 12px;
-      border-radius:12px;
-      cursor:pointer;
-      font-family:inherit;
-      letter-spacing:.04em;
-    }
-    .menuItem:hover{ background:rgba(246,211,122,.12); color:var(--gold); }
-    .menuSep{ height:1px; margin:8px 6px; background:rgba(255,255,255,.10); }
 
     .panel{
-      margin-top:16px;
-      border:1px solid var(--border);
-      background:rgba(255,255,255,.05);
+      border:1px solid var(--border2);
       border-radius:var(--r);
-      box-shadow:var(--shadow);
+      background: linear-gradient(180deg, var(--paper), var(--paper2));
+      box-shadow: var(--shadow);
       padding:14px;
+      flex:1; min-height:0;
+      display:flex; flex-direction:column;
+      overflow:hidden;
     }
 
-    .controls{
-      display:grid;
-      grid-template-columns: 1.3fr 1fr 1fr 1fr 1fr auto;
-      gap:10px;
-      align-items:end;
-    }
-    @media (max-width:1100px){ .controls{grid-template-columns:1fr 1fr 1fr} }
-    @media (max-width:720px){ .controls{grid-template-columns:1fr} }
+    .panelHead{display:flex; flex-direction:column; gap:10px; flex:0 0 auto;}
+    .controls{display:grid; grid-template-columns: 1.3fr .9fr .9fr auto; gap:10px; align-items:end;}
+    @media (max-width:920px){ .controls{grid-template-columns:1fr 1fr} }
+    @media (max-width:520px){ .controls{grid-template-columns:1fr} }
 
-    .field{display:flex; flex-direction:column; gap:6px}
-    .label{font-size:12px; letter-spacing:.08em; color:var(--muted)}
-    input,select{
+    .field{display:flex; flex-direction:column; gap:6px;}
+    .label{font-size:var(--labelSize); letter-spacing:.08em; font-weight:700; color: rgba(0,0,0,.70); text-align:center;}
+    input,select,textarea{
       width:100%;
-      border-radius:14px;
-      border:1px solid rgba(255,255,255,.18);
-      background:rgba(0,0,0,.25);
-      color:var(--text);
-      padding:10px 12px;
-      font-family:inherit;
-      outline:none;
-      transition:border-color .12s ease, filter .12s ease;
+      border-radius:14px; border:1px solid var(--border2);
+      background: rgba(255,255,255,.96); color: rgba(0,0,0,.86);
+      padding:11px 12px; font-family:inherit;
+      font-size:var(--ctrlSize); font-weight:700;
+      outline:none; transition:border-color .12s ease, box-shadow .12s ease;
+      box-shadow: 0 10px 22px rgba(0,0,0,.08);
     }
-    input:focus,select:focus{border-color:rgba(246,211,122,.55); filter:brightness(1.05)}
+    input:focus,select:focus,textarea:focus{ border-color: rgba(0,0,0,.46); box-shadow: 0 0 0 3px rgba(0,0,0,.08), 0 12px 26px rgba(0,0,0,.10); }
+    textarea{min-height:92px; resize:vertical;}
+    select{ text-align:center; text-align-last:center; font-weight:800; }
+    select option{ background:#fff; color: rgba(0,0,0,.88); }
 
-    .tableWrap{margin-top:14px; overflow:auto; border-radius:16px; border:1px solid rgba(255,255,255,.12)}
-    table{width:100%; border-collapse:collapse; min-width:1200px; background:rgba(0,0,0,.18)}
+    .hint{
+      display:flex; flex-wrap:wrap; gap:8px;
+      align-items:center; justify-content:center;
+      padding:9px 10px;
+      min-height: 44px;
+      border-radius:14px; border:1px solid var(--border);
+      background: rgba(255,255,255,.92);
+      box-shadow: 0 12px 26px rgba(0,0,0,.08);
+      color: rgba(0,0,0,.78);
+      font-size:14px; line-height:1.55;
+      font-weight:900; letter-spacing:.04em;
+    }
+    .hint .hb{ display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:999px; border:1px solid rgba(0,0,0,.14); background: rgba(255,255,255,.86); white-space:nowrap; }
+    .hint .hb .k{ color: rgba(0,0,0,.62); font-weight:900; }
+    .hint .hb .v{ color: rgba(0,0,0,.84); font-weight:900; }
+    .hint .hb.bad .v{ color: rgba(170,60,60,.92); }
+
+    .panelBody{flex:1; min-height:0; display:flex; flex-direction:column;}
+    .tableWrap{
+      margin-top:4px;
+      overflow:auto;
+      border-radius:16px;
+      border:1px solid var(--border2);
+      background: var(--tableWrapBg);
+      box-shadow: var(--shadow2);
+      flex:1; min-height:0;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    table{width:100%; border-collapse:collapse; min-width:1460px; background: var(--tableBg);}
     thead th{
-      position:sticky; top:0; z-index:2;
-      background:linear-gradient(180deg, rgba(0,0,0,.55), rgba(0,0,0,.35));
-      color:rgba(246,211,122,.95);
-      font-size:13px; letter-spacing:.06em;
-      text-align:left;
-      padding:12px 12px;
-      border-bottom:1px solid rgba(246,211,122,.25);
-      white-space:nowrap;
+      position:sticky; top:0; z-index:3;
+      padding:13px 10px;
+      border-bottom:1px solid var(--tableLine);
+      white-space:nowrap; text-align:center;
+      letter-spacing:.06em;
+      font-size: var(--thSize);
+      font-weight:900;
+      color: rgba(30,22,16,.92);
+      background: var(--tableHeadBg);
     }
     tbody td{
-      padding:12px 12px;
-      border-bottom:1px solid rgba(255,255,255,.08);
+      padding:13px 10px;
+      border-bottom:1px solid var(--tableLine);
       vertical-align:top;
-      font-size:14px;
-      color:rgba(236,236,236,.92);
+      font-size: var(--tdSize);
+      color: var(--tableText);
+      line-height:1.75;
+      font-weight:700;
+      background: transparent;
     }
-    tbody tr:hover td{background:rgba(255,255,255,.04)}
-    .muted{color:rgba(236,236,236,.55)}
-    .hint{margin-top:10px; color:var(--muted); font-size:13px; line-height:1.6}
-    a.link{ color:rgba(246,211,122,.95); text-decoration:none; }
-    a.link:hover{ text-decoration:underline; }
+    tbody tr:nth-child(even) td{ background: var(--tableStripe); }
+    tbody tr:hover td{ background: var(--tableHover); }
+    tbody tr.sel td{ background: var(--tableSel); }
+    .muted{ color: var(--tableMuted); }
 
+    .attBtn{
+      display:inline-flex; align-items:center; justify-content:center; gap:6px;
+      padding:9px 12px; border-radius:999px;
+      border:1px solid var(--border2); background: rgba(255,255,255,.88);
+      cursor:pointer; white-space:nowrap;
+      box-shadow: 0 10px 20px rgba(0,0,0,.08);
+      font-weight:900;
+    }
+    .attBtn .t{ color: rgba(0,0,0,.82); letter-spacing:.04em; font-weight:900; }
+
+    .mask,.pMask,.loginMask{
+      position:fixed; inset:0;
+      display:none; align-items:center; justify-content:center;
+      padding:20px; z-index:100;
+      background: rgba(0,0,0,.45);
+    }
+    .modal,.pModal,.loginModal{
+      width:min(980px, 96vw);
+      border-radius:22px; border:1px solid var(--border2);
+      background: rgba(255,255,255,.98);
+      box-shadow:0 32px 110px rgba(0,0,0,.35);
+      overflow:hidden;
+    }
+    .pModal,.loginModal{ width:min(560px, 96vw); }
+    .mHead,.pHead,.loginHead{
+      padding:14px 16px;
+      display:grid; grid-template-columns: 1fr auto 1fr;
+      align-items:center; gap:10px;
+      border-bottom:1px solid rgba(0,0,0,.10);
+      background: rgba(255,255,255,.98);
+      min-height:56px;
+    }
+    .mTitle,.pTitle,.loginTitle{
+      grid-column:2; justify-self:center;
+      letter-spacing:.14em;
+      font-family:"Noto Serif TC","Noto Sans TC",serif;
+      font-size: clamp(16px, 1.6vw, 22px);
+      font-weight:900; white-space:nowrap;
+    }
+    .mHead .btn,.pHead .btn,.loginHead .btn{ grid-column:3; justify-self:end; }
+    .mBody,.pBody,.loginBody{ padding:14px 16px 10px; color: rgba(0,0,0,.86); }
+    .mFoot,.pFoot,.loginFoot{
+      padding:12px 16px;
+      display:flex; gap:10px;
+      justify-content:flex-end; flex-wrap:wrap;
+      border-top:1px solid rgba(0,0,0,.10);
+      background: rgba(255,255,255,.98);
+    }
+
+    .grid{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+    .span2{grid-column:span 2}
+    @media (max-width:720px){
+      .grid{grid-template-columns:1fr}
+      .span2{grid-column:span 1}
+      table{min-width:1240px}
+    }
+    .inline2{display:grid; grid-template-columns: 1fr auto; gap:10px; align-items:end}
+    @media (max-width:520px){
+      .inline2{ grid-template-columns: 1fr; }
+      .mHead,.pHead,.loginHead{ grid-template-columns: 1fr auto; }
+      .mTitle,.pTitle,.loginTitle{ grid-column:1; justify-self:start; }
+      .mHead .btn,.pHead .btn,.loginHead .btn{ grid-column:2; }
+    }
+
+    .miniHint{font-size:12px; line-height:1.6; font-weight:700; color: rgba(0,0,0,.55); text-align:center;}
     .toast{
       position:fixed; left:50%; transform:translateX(-50%);
-      bottom:18px;
-      padding:10px 14px;
-      border-radius:999px;
-      border:1px solid rgba(255,255,255,.16);
-      background:rgba(0,0,0,.55);
-      color:rgba(236,236,236,.92);
-      font-size:13px;
-      box-shadow:var(--shadow);
-      display:none;
-      z-index:200;
-      backdrop-filter:blur(10px);
-    }
-
-    /* ===== Login Modal（共用）===== */
-    .loginMask{
-      position:fixed; inset:0;
-      background:rgba(0,0,0,.68);
-      display:none;
-      align-items:center;
-      justify-content:center;
-      padding:20px;
-      z-index:999;
-    }
-    .loginMask.show{display:flex;}
-    .loginModal{
-      width:min(520px, 96vw);
-      border-radius:22px;
-      border:1px solid var(--border2);
-      background:linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.04));
-      box-shadow:0 30px 90px rgba(0,0,0,.78);
-      overflow:hidden;
-      backdrop-filter:blur(12px);
-    }
-    .loginHead{
-      padding:14px 16px;
-      display:flex; align-items:center; justify-content:space-between; gap:10px;
-      border-bottom:1px solid rgba(255,255,255,.10);
-    }
-    .loginTitle{
-      font-weight:900; letter-spacing:.08em;
-      color:var(--gold);
-      text-shadow:0 0 18px rgba(246,211,122,.22);
-    }
-    .loginBody{padding:14px 16px 10px;}
-    .loginFoot{
-      padding:12px 16px;
-      display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;
-      border-top:1px solid rgba(255,255,255,.10);
+      bottom:18px; padding:10px 14px;
+      border-radius:999px; border:1px solid var(--border2);
+      background: rgba(255,255,255,.96); color: rgba(0,0,0,.84);
+      font-size:14px; box-shadow: 0 18px 50px rgba(0,0,0,.20);
+      display:none; z-index:200; font-weight:800; letter-spacing:.06em;
     }
     .loginErr{
-      margin-top:10px;
-      color:rgba(255,190,190,.95);
-      font-size:13px;
-      line-height:1.5;
-      display:none;
-      white-space:pre-wrap;
+      margin-top:10px; color:rgba(170,60,60,.95);
+      font-size:14px; line-height:1.6; display:none; white-space:pre-wrap;
+      font-weight:900; text-align:center;
     }
-    .loginHint{
-      margin-top:10px;
-      color:rgba(236,236,236,.65);
-      font-size:12px;
-      line-height:1.6;
+    .loginHint{ margin-top:10px; color: rgba(0,0,0,.60); font-size:12.5px; line-height:1.7; font-weight:700; text-align:center; }
+
+    body.readMode #tbl{ display:none; }
+    body.readMode #cards{ display:block !important; padding:10px 6px; }
+    body:not(.readMode) #tbl{ display:table; }
+    body:not(.readMode) #cards{ display:none !important; }
+
+    #cards{display:none; overflow:auto; max-height:100%; -webkit-overflow-scrolling: touch;}
+    .noteCard{
+      border-radius:16px; border:1px solid var(--border2);
+      background: rgba(255,255,255,.96);
+      box-shadow: 0 14px 26px rgba(0,0,0,.10);
+      padding:12px; margin:10px 4px;
+      color: rgba(0,0,0,.86); cursor:pointer;
     }
-  </style>
+    .noteCard.sel{ outline: 2px solid rgba(0,0,0,.18); box-shadow: 0 18px 34px rgba(0,0,0,.12); }
+    .noteHead{ display:flex; gap:10px; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; }
+    .noteMeta{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; font-weight:900; letter-spacing:.04em; }
+    .noteTag{
+      padding:6px 10px; border-radius:999px;
+      border:1px solid rgba(0,0,0,.14);
+      background: rgba(0,0,0,.03);
+      color: rgba(0,0,0,.78);
+      font-size:13px; white-space:nowrap;
+    }
+    .noteNo{ font-family:"Noto Serif TC","Noto Sans TC",serif; font-weight:900; letter-spacing:.06em; color: rgba(0,0,0,.88); white-space:nowrap; }
+    .noteBody{
+      margin-top:10px; line-height:1.85;
+      font-size: var(--readBody);
+      white-space:pre-wrap; word-break:break-word;
+      color: rgba(0,0,0,.86);
+    }
+    .noteCard:not(.open) .noteBody{
+      display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;
+    }
+    .noteMore{ margin-top:10px; display:none; opacity:.92; }
+    .noteCard.open .noteMore{ display:block; }
+
+    @media (max-width:720px){
+      :root{
+        /* 手機維持原本緊湊邊距 */
+        --stageSide: 10px;
+        --titleSize: clamp(20px, 5.0vw, 28px);
+        --subSize: clamp(11px, 3.2vw, 13px);
+        --btnFont: 14px;
+        --btnFontSmall: 13px;
+      }
+      .wrap{ height:var(--appH,100dvh); padding:10px 10px 12px; gap:10px; }
+      .topbar{ padding:10px; gap:10px; }
+      .brand{ gap:4px; }
+      .pill{ padding:6px 9px; font-size:12.5px; box-shadow: 0 10px 18px rgba(0,0,0,.08); }
+      .right{ gap:8px; }
+      .btn{ padding:9px 12px; box-shadow: 0 10px 16px rgba(0,0,0,.10); }
+      .small{ padding:8px 10px; }
+      .panel{ padding:10px; }
+      .panelHead{ gap:8px; position:sticky; top:var(--vv-top,0px); z-index:6; background: transparent; }
+      .controls{ gap:8px; }
+      input,select,textarea{ padding:10px 11px; border-radius:12px; }
+      .hint{ justify-content:flex-start; flex-wrap:nowrap; overflow:auto; -webkit-overflow-scrolling: touch; padding:7px 8px; gap:7px; }
+      .hint .hb{ flex:0 0 auto; padding:5px 9px; }
+    }
+  
+
+/* --- Mobile scroll fix (v12) ---
+   On iOS Safari, body{overflow:hidden} + 100vh layouts can prevent any scrolling.
+   Keep desktop layout unchanged; enable normal page scrolling on narrow screens. */
+@media (max-width: 980px){
+  body{ overflow:auto; -webkit-overflow-scrolling: touch; }
+  .wrap{ height:auto !important; min-height:100vh; }
+  .panel{ height:auto !important; overflow:visible !important; }
+  .panelBody{ overflow:visible !important; }
+  .tableWrap{ max-height:none !important; overflow:visible !important; }
+}
+</style>
+
+<script>
+(function(){
+  window.DEFAULT_NETDISK_URL = "https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88";
+})();
+</script>
+
 </head>
 
 <body>
@@ -273,592 +541,2246 @@
     <div class="topbar">
       <div class="nav-left">
         <div class="nav-desktop">
-          <button class="btn ghost small" id="navToEntry">前往登錄表</button>
-          <button class="btn ghost small" id="navBackDB">返回資料庫</button>
-          <button class="btn ghost small" id="navBackXidong">返回汐東工程管理表</button>
+          <button class="btn ghost small" id="navBack"><span class="t">返回汐東工程管理表</span></button>
         </div>
 
         <div class="nav-mobile">
-          <button class="btn ghost small" id="mBack">返回</button>
-          <div class="moreWrap">
-            <button class="btn ghost small" id="mMoreBtn" type="button">更多 ▾</button>
-            <div class="moreMenu" id="mMoreMenu" role="menu" aria-label="更多選單">
-              <button class="menuItem" data-href="捷運汐止東湖線統包工程-資料明細表登錄.html" type="button">前往登錄表</button>
-              <button class="menuItem" data-href="捷運汐止東湖線統包工程-資料庫.html" type="button">返回資料庫</button>
-              <button class="menuItem" data-href="汐東工程管理表.html" type="button">返回汐東工程管理表</button>
-              <div class="menuSep"></div>
-              <button class="menuItem" data-href="index.html" type="button">返回首頁</button>
+          <button class="btn ghost small" id="mBack"><span class="t">返回</span></button>
+          <div style="position:relative; display:inline-flex;">
+            <button class="btn ghost small" id="mMoreBtn" type="button"><span class="t">更多 ▾</span></button>
+            <div id="mMoreMenu" style="display:none; position:absolute; top:calc(100% + 8px); right:0; min-width:220px; border-radius:16px; border:1px solid rgba(0,0,0,.20); background:rgba(255,255,255,.98); box-shadow:0 18px 50px rgba(0,0,0,.20); padding:8px; z-index:60;">
+              <button class="menuItem" data-href="汐東工程管理表.html" type="button" style="width:100%; text-align:left; border:none; background:rgba(0,0,0,.03); color:rgba(0,0,0,.86); padding:10px 12px; border-radius:12px; cursor:pointer; font-family:inherit; letter-spacing:.04em; font-weight:800;">汐東工程管理表</button>
+              <div style="height:1px; margin:8px 6px; background:rgba(0,0,0,.10);"></div>
+              <button class="menuItem" data-href="index.html" type="button" style="width:100%; text-align:left; border:none; background:rgba(0,0,0,.03); color:rgba(0,0,0,.86); padding:10px 12px; border-radius:12px; cursor:pointer; font-family:inherit; letter-spacing:.04em; font-weight:800;">返回首頁</button>
             </div>
           </div>
         </div>
       </div>
 
       <div class="brand">
-        <div class="title">捷運汐止東湖線統包工程-資料明細表查詢</div>
-        <div class="sub">Standard v1 · resourceKey：tasun-sxdh-detail · pk=uid(uuid)</div>
+        <div class="title goldCrystal">捷運汐東線事項記錄</div>
+        <div class="sub">記事內容 · 工種 · 系統 · 出處 · 附件 · 登錄日期</div>
       </div>
 
       <div class="right">
         <div class="pill">使用者：<b id="uName">—</b></div>
         <div class="pill">權限：<b id="uRole">—</b></div>
-        <button class="btn ghost" id="btnHome">返回首頁</button>
-        <button class="btn" id="btnReLogin">切換帳號</button>
+
+        <button class="btn small" id="btnView"><span class="t">檢視</span></button>
+        <button class="btn small" id="btnAdd" style="display:none;"><span class="t">新增</span></button>
+        <button class="btn small" id="btnEdit" style="display:none;"><span class="t">編輯</span></button>
+        <button class="btn small" id="btnToken" style="display:none;"><span class="t">雲端設定</span></button>
       </div>
     </div>
 
     <div class="panel">
-      <div class="controls">
-        <div class="field">
-          <div class="label">搜尋（文件名稱/工種/系統/備註/網址...）</div>
-          <input id="q" placeholder="例如：電氣、排水、Dropbox..." />
+      <div class="panelHead">
+        <div class="controls">
+          <div class="field">
+            <div class="label">搜尋（記事內容）</div>
+            <input id="qText" placeholder="可輸入關鍵字，例如：送審、會議、現勘..." />
+          </div>
+
+          <div class="field">
+            <div class="label">工種</div>
+            <select id="fTrade"><option value="">全部</option></select>
+          </div>
+
+          <div class="field">
+            <div class="label">系統</div>
+            <select id="fSys"><option value="">全部</option></select>
+          </div>
+
+          <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
+            <button class="btn ghost" id="btnCloud" type="button"><span class="t">雲端檔案</span></button>
+            <button class="btn ghost" id="btnExport" type="button"><span class="t">匯出備份</span></button>
+            <button class="btn ghost" id="btnRead" type="button"><span class="t">閱讀模式：關</span></button>
+            <button class="btn ghost" id="btnClear" type="button"><span class="t">清除條件</span></button>
+          </div>
         </div>
-        <div class="field">
-          <div class="label">工種</div>
-          <select id="trade"><option value="">全部</option></select>
+
+        <div class="hint" id="hint"></div>
+      </div>
+
+      <div class="panelBody">
+        <div class="tableWrap">
+          <div id="cards" style="display:none; position:relative; z-index:2;"></div>
+
+          <table id="tbl">
+            <thead>
+              <tr>
+                <th style="width:90px;">項次</th>
+                <th>記事內容</th>
+                <th style="width:150px;">工種</th>
+                <th style="width:150px;">系統</th>
+                <th style="width:150px;">出處</th>
+                <th style="width:160px;">附件</th>
+                <th style="width:220px;">備註</th>
+                <th style="width:140px;">登錄日期</th>
+                <th style="width:160px;">操作</th>
+              </tr>
+            </thead>
+            <tbody id="tbody"></tbody>
+          </table>
         </div>
-        <div class="field">
-          <div class="label">系統</div>
-          <select id="system"><option value="">全部</option></select>
-        </div>
-        <div class="field">
-          <div class="label">登錄日期（起）</div>
-          <input id="from" type="date" />
-        </div>
-        <div class="field">
-          <div class="label">登錄日期（迄）</div>
-          <input id="to" type="date" />
-        </div>
-        <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
-          <button class="btn ghost" id="btnSync">同步</button>
-          <button class="btn ghost" id="btnClear">清除條件</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Edit/View Modal -->
+  <div class="mask" id="mask">
+    <div class="modal">
+      <div class="mHead">
+        <div></div>
+        <div class="mTitle goldCrystal" id="mTitle">查看</div>
+        <button class="btn ghost small" id="btnClose" type="button"><span class="t">關閉</span></button>
+      </div>
+
+      <div class="mBody">
+        <div class="grid">
+          <div class="field span2">
+            <div class="label">記事內容</div>
+            <textarea id="mText" placeholder="請輸入記事內容（可多行）..."></textarea>
+          </div>
+
+          <div class="field">
+            <div class="label">工種（下拉；可新增選項）</div>
+            <div class="inline2">
+              <select id="mTradeSel"></select>
+              <button class="btn ghost small" id="btnAddTrade" type="button"><span class="t">新增工種</span></button>
+            </div>
+            <div class="miniHint">選單來源：本頁資料不重複 + 工種字典。</div>
+          </div>
+
+          <div class="field">
+            <div class="label">系統（下拉；可新增選項）</div>
+            <div class="inline2">
+              <select id="mSysSel"></select>
+              <button class="btn ghost small" id="btnAddSys" type="button"><span class="t">新增系統</span></button>
+            </div>
+            <div class="miniHint">✅ 系統會依「工種」篩選；可輸入既有系統名稱來「綁定」到目前工種。</div>
+          </div>
+
+          <div class="field span2">
+            <div class="label">出處（下拉；可新增）</div>
+            <div class="inline2">
+              <input id="mSourceSel" list="mSourceList" placeholder="可選擇或直接輸入出處..." />
+              <datalist id="mSourceList"></datalist>
+              <button class="btn ghost small" id="btnAddSource" type="button"><span class="t">新增出處</span></button>
+            </div>
+            <div class="miniHint">選單來源：本頁資料「出處」不重複 + 出處字典。</div>
+          </div>
+
+          <div class="field span2">
+            <div class="label">附件（超連結）</div>
+            <div class="inline2">
+              <input id="mAttach" placeholder="貼上連結，例如：https://... / Dropbox 連結 / file:///..." />
+              <button class="btn ghost small" id="btnNetDisk" type="button"><span class="t">網路硬碟</span></button>
+            </div>
+            <div class="miniHint">可留空；相對網址會自動帶 v。</div>
+          </div>
+
+          <div class="field span2">
+            <div class="label">備註</div>
+            <textarea id="mRemark" placeholder="可輸入備註（可多行）..."></textarea>
+          </div>
+
+          <div class="field">
+            <div class="label">登錄日期（可改）</div>
+            <input id="mDate" type="date" />
+            <div class="miniHint">預設為今日；可用日曆修改。</div>
+          </div>
+
+          <div class="field">
+            <div class="label">項次</div>
+            <input id="mNo" disabled />
+          </div>
         </div>
       </div>
 
-      <div class="tableWrap">
-        <table>
-          <thead>
-            <tr>
-              <th style="width:80px;">項次</th>
-              <th style="width:140px;">登錄日期</th>
-              <th style="width:360px;">文件名稱</th>
-              <th style="width:160px;">工種</th>
-              <th style="width:160px;">系統</th>
-              <th style="width:220px;">電子檔</th>
-              <th style="width:420px;">備註</th>
-              <th style="width:180px;">更新時間</th>
-            </tr>
-          </thead>
-          <tbody id="tbody"></tbody>
-        </table>
+      <div class="mFoot">
+        <button class="btn danger" id="btnDelete" style="display:none;" type="button"><span class="t">刪除</span></button>
+        <button class="btn ghost" id="btnCancel" type="button"><span class="t">取消</span></button>
+        <button class="btn" id="btnSave" type="button"><span class="t">儲存</span></button>
       </div>
-
-      <div class="hint" id="hint"></div>
     </div>
   </div>
 
-  <!-- Login Modal（共用） -->
+  <!-- Prompt：新增 工種/系統/出處 -->
+  <div class="pMask" id="pMask">
+    <div class="pModal">
+      <div class="pHead">
+        <div></div>
+        <div class="pTitle goldCrystal" id="pTitle">新增</div>
+        <button class="btn ghost small" id="pClose" type="button"><span class="t">關閉</span></button>
+      </div>
+      <div class="pBody">
+        <div class="field">
+          <div class="label" id="pLabel">請輸入</div>
+          <input id="pInput" placeholder="例如：機電 / 土建 / ..." list="pList"/>
+          <datalist id="pList"></datalist>
+          <div class="miniHint" id="pHint">新增後會加入「選單字典」，且系統會綁到目前工種。</div>
+        </div>
+      </div>
+      <div class="pFoot">
+        <button class="btn ghost" id="pCancel" type="button"><span class="t">取消</span></button>
+        <button class="btn" id="pOk" type="button"><span class="t">確定新增</span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 雲端設定（可用來覆蓋 apiBase / endpoints） -->
+  <div class="loginMask" id="tokenMask" aria-hidden="true">
+    <div class="loginModal" role="dialog" aria-modal="true" aria-label="雲端設定">
+      <div class="loginHead">
+        <div></div>
+        <div class="loginTitle goldCrystal" id="cloudCfgTitle">雲端設定（Worker API）</div>
+        <button class="btn ghost small" id="tokenClose" type="button"><span class="t">關閉</span></button>
+      </div>
+      <div class="loginBody">
+        <div class="field">
+          <div class="label" id="cloudCfgLabel">貼上（可擇一）</div>
+          <input id="tokenInput" type="password" placeholder="① Worker apiBase ② 或 JSON：{&quot;apiBase&quot;:&quot;...&quot;,&quot;endpoints&quot;:{...}}" autocomplete="off" />
+        </div>
+        <div class="loginErr" id="tokenErr"></div>
+        <div class="loginHint" id="tokenHint">目前狀態：—</div>
+        <div class="loginHint">
+          ✅ 你也可以直接貼 <b>Worker apiBase</b>，例如：<b>https://tasun-worker.wutasun.workers.dev</b><br>
+          ✅ 或貼 JSON：<b>{"apiBase":"...","endpoints":{"read":"/api/read","merge":"/api/merge"}}</b><br>
+          （正式來源仍以 tasun-resources.json 為主；此框僅作為臨時覆蓋。）
+        </div>
+      </div>
+      <div class="loginFoot">
+        <button class="btn danger" id="tokenClear" type="button"><span class="t">清除</span></button>
+        <button class="btn ghost" id="tokenToggle" type="button"><span class="t">顯示/隱藏</span></button>
+        <button class="btn" id="tokenSave" type="button"><span class="t">儲存</span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Login Modal -->
   <div class="loginMask" id="loginMask" aria-hidden="true">
     <div class="loginModal" role="dialog" aria-modal="true" aria-label="登入">
       <div class="loginHead">
-        <div class="loginTitle">登入</div>
-        <button class="btn ghost small" id="loginClose" type="button">關閉</button>
+        <div></div>
+        <div class="loginTitle goldCrystal">登入</div>
+        <button class="btn ghost small" id="loginClose" type="button"><span class="t">關閉</span></button>
       </div>
       <div class="loginBody">
         <div class="field">
           <div class="label">帳號</div>
-          <select id="loginUser" autocomplete="username">
-            <option value="">請選擇帳號</option>
-          </select>
+          <select id="loginUser" autocomplete="username"><option value="">請選擇帳號</option></select>
         </div>
         <div class="field" style="margin-top:10px;">
           <div class="label">密碼</div>
           <input id="loginPass" type="password" autocomplete="current-password" placeholder="請輸入密碼" />
         </div>
         <div class="loginErr" id="loginErr"></div>
-        <div class="loginHint">
-          登入帳密完全以「權限表.html」的權限表（localStorage: <b>tasunAuthTable_v1</b>）為準。
-        </div>
+        <div class="loginHint">登入帳密以「權限表.html」(localStorage: <b>tasunAuthTable_v1</b>) 為準。</div>
       </div>
       <div class="loginFoot">
-        <button class="btn ghost" id="loginToAuth" type="button">前往權限表</button>
-        <button class="btn" id="loginBtn" type="button">登入</button>
+        <button class="btn ghost" id="loginToAuth" type="button"><span class="t">前往權限表</span></button>
+        <button class="btn" id="loginBtn" type="button"><span class="t">登入</span></button>
       </div>
     </div>
   </div>
 
-  <div class="toast" id="toast"></div>
+  <div class="toast" id="toast"></div><script>
+// iOS visualViewport / 100vh second-layer stabilization (no UI change)
+(function(){
+  var ua = navigator.userAgent || "";
+  var isIOS = /iP(ad|hone|od)/.test(ua) || (ua.indexOf("Mac")>-1 && ("ontouchend" in document));
+  if(!isIOS || !window.visualViewport) return;
+
+  var raf = 0;
+  function update(){
+    raf = 0;
+    var vv = window.visualViewport;
+    var ih = window.innerHeight || 0;
+
+    // Stable viewport height + offsets (address bar / keyboard)
+    var h = Math.round(vv.height || ih);
+    var top = Math.round(vv.offsetTop || 0);
+    var bottom = Math.round(ih - (vv.height + vv.offsetTop));
+    if(bottom < 0) bottom = 0;
+
+    var root = document.documentElement;
+    root.style.setProperty('--appH', h + 'px');
+    root.style.setProperty('--vv-top', top + 'px');
+    root.style.setProperty('--vv-bottom', bottom + 'px');
+  }
+  function schedule(){
+    if(raf) return;
+    raf = requestAnimationFrame(update);
+  }
+
+  window.visualViewport.addEventListener('resize', schedule, {passive:true});
+  window.visualViewport.addEventListener('scroll', schedule, {passive:true});
+  window.addEventListener('orientationchange', schedule, {passive:true});
+  window.addEventListener('pageshow', schedule, {passive:true});
+  document.addEventListener('focusin', schedule, {passive:true});
+  document.addEventListener('focusout', schedule, {passive:true});
+  schedule();
+})();
+</script>
+
+
 
   <script>
-/* ===========================
-   TasunAuth 共用登入模組 v1
-   =========================== */
-window.TasunAuth = (function(){
-  const CURRENT_KEY = "tasunCurrentUser_v1";
-  const AUTH_KEY    = "tasunAuthTable_v1";
-  const SESSION_WATCH_MS = 3000;
+  (function(){
+    "use strict";
 
-  let currentUser = null;
-  let _watchStarted = false;
+    // ---------------------------
+    // Constants / Keys
+    // ---------------------------
+    var PAGE_KEY = "sxdh-detail-query";
+    var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || "dev";
+    var RESOURCES_URL = "tasun-resources.json";
 
-  const $ = (id)=>document.getElementById(id);
-  const norm = (s)=>(s??"").toString().trim();
+    var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
+    var DEFAULT_ENDPOINTS = { health:"/health", read:"/api/read", merge:"/api/merge" };
 
-  function mapRole(v){
-    const s=(v??"").toString().trim().toLowerCase();
-    if(!s) return "read";
-    if(s==="admin") return "admin";
-    if(s==="write"||s==="edit") return "write";
-    if(s==="read"||s==="view") return "read";
-    if(s==="0") return "admin";
-    if(s==="1") return "write";
-    if(s==="2") return "read";
-    return s;
-  }
-  function loadAuthTable(){
-    try{
-      const raw=localStorage.getItem(AUTH_KEY);
-      if(!raw) return [];
-      const parsed=JSON.parse(raw);
-      if(Array.isArray(parsed)) return parsed;
-      if(parsed && Array.isArray(parsed.users)) return parsed.users;
-      return [];
-    }catch(e){ return []; }
-  }
-  function pickUsername(row){ return norm(row?.username ?? row?.user ?? row?.account ?? row?.name); }
-  function pickPassword(row){ return (row?.password ?? row?.pass ?? row?.pwd ?? "").toString(); }
-  function pickRole(row){ return mapRole(row?.role ?? row?.level ?? row?.perm ?? row?.permission); }
+    var AUTH_KEY = "tasunAuthTable_v1";
+    var CURRENT_KEY = "tasunCurrentUser_v1";
 
-  function findAuthUser(username){
-    const u=norm(username).toLowerCase();
-    if(!u) return null;
-    const rows=loadAuthTable();
-    for(const r of rows){
-      const ru=pickUsername(r).toLowerCase();
-      if(ru && ru===u){
-        return { user: pickUsername(r), pass: pickPassword(r), role: pickRole(r) || "read" };
+    var DB_KEY = "tasun_db_v1__" + PAGE_KEY; // ✅ v1 單一封包
+    var READ_MODE_KEY  = "tasun_readMode_v1__" + PAGE_KEY;
+
+    // per-page dictionaries (still local only)
+    var TRADE_DICT_KEY = "tasun_tradeDict_v1__" + PAGE_KEY;
+    var SYS_DICT_KEY   = "tasun_sysDict_v1__" + PAGE_KEY;
+    var SOURCE_DICT_KEY = "tasun_sourceDict_v1__" + PAGE_KEY;
+    var TRADE_SYS_MAP_KEY = "tasun_tradeSysMap_v1__" + PAGE_KEY;
+
+    // Optional overrides
+    var API_BASE_LS_KEY = "tasunApiBase_v1";
+    var API_EP_LS_KEY   = "tasunApiEndpoints_v1__" + PAGE_KEY;
+
+    // ---------------------------
+    // IndexedDB (真正資料庫) v1
+    // ---------------------------
+    var IDB_NAME = "tasun_notes_idb_v1";
+    var IDB_VER  = 1;
+    var IDB_META_STORE = "meta";
+    var IDB_ROWS_STORE = "rows";
+    var IDB_OPS_STORE  = "ops";
+
+    var CLIENT_ID_KEY = "tasunClientId_v1";
+
+    // ---------------------------
+    // DOM helpers
+    // ---------------------------
+    function $(id){ return document.getElementById(id); }
+    function norm(s){ return (s===undefined||s===null) ? "" : String(s).trim(); }
+    function safeJSON(raw){ try{ return JSON.parse(raw); }catch(e){ return null; } }
+    function nowISO(){ return new Date().toISOString(); }
+    function todayISO(){ return new Date().toISOString().slice(0,10); }
+    function pad2(n){ return String(n).padStart(2,"0"); }
+    function fmtClock(ts){ if(!ts) return ""; var d = new Date(ts); return pad2(d.getHours())+":"+pad2(d.getMinutes())+":"+pad2(d.getSeconds()); }
+    function uuid(){ return "u" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2); }
+
+    // ---------------------------
+    // IndexedDB helpers
+    // ---------------------------
+    var _idb = null;
+
+    function getClientId(){
+      var cid = norm(localStorage.getItem(CLIENT_ID_KEY));
+      if(!cid){
+        cid = "c" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2);
+        localStorage.setItem(CLIENT_ID_KEY, cid);
+      }
+      return cid;
+    }
+
+    function idbReqToPromise(req){
+      return new Promise(function(resolve,reject){
+        req.onsuccess = function(){ resolve(req.result); };
+        req.onerror = function(){ reject(req.error || new Error("IndexedDB error")); };
+      });
+    }
+
+    function idbTxDone(tx){
+      return new Promise(function(resolve,reject){
+        tx.oncomplete = function(){ resolve(true); };
+        tx.onerror = function(){ reject(tx.error || new Error("IndexedDB tx error")); };
+        tx.onabort = function(){ reject(tx.error || new Error("IndexedDB tx abort")); };
+      });
+    }
+
+    async function openIDB(){
+      if(_idb) return _idb;
+      _idb = await new Promise(function(resolve,reject){
+        var req = indexedDB.open(IDB_NAME, IDB_VER);
+        req.onupgradeneeded = function(){
+          var db = req.result;
+          if(!db.objectStoreNames.contains(IDB_META_STORE)){
+            db.createObjectStore(IDB_META_STORE, { keyPath: "pageKey" });
+          }
+          if(!db.objectStoreNames.contains(IDB_ROWS_STORE)){
+            var rows = db.createObjectStore(IDB_ROWS_STORE, { keyPath: ["pageKey","uid"] });
+            rows.createIndex("by_page", "pageKey", { unique:false });
+            rows.createIndex("by_page_updatedAt", ["pageKey","updatedAt"], { unique:false });
+          }
+          if(!db.objectStoreNames.contains(IDB_OPS_STORE)){
+            var ops = db.createObjectStore(IDB_OPS_STORE, { keyPath: "opId", autoIncrement: true });
+            ops.createIndex("by_page", "pageKey", { unique:false });
+            ops.createIndex("by_page_ts", ["pageKey","ts"], { unique:false });
+          }
+        };
+        req.onsuccess = function(){ resolve(req.result); };
+        req.onerror = function(){ reject(req.error || new Error("IndexedDB open error")); };
+      });
+      return _idb;
+    }
+
+    async function idbGetMeta(pageKey){
+      var db = await openIDB();
+      var tx = db.transaction([IDB_META_STORE], "readonly");
+      var store = tx.objectStore(IDB_META_STORE);
+      var res = await idbReqToPromise(store.get(pageKey));
+      await idbTxDone(tx);
+      return res || null;
+    }
+
+    async function idbPutMeta(meta){
+      var db = await openIDB();
+      var tx = db.transaction([IDB_META_STORE], "readwrite");
+      tx.objectStore(IDB_META_STORE).put(meta);
+      await idbTxDone(tx);
+      return true;
+    }
+
+    async function idbGetAllRows(pageKey){
+      var db = await openIDB();
+      var tx = db.transaction([IDB_ROWS_STORE], "readonly");
+      var idx = tx.objectStore(IDB_ROWS_STORE).index("by_page");
+      var rows = await idbReqToPromise(idx.getAll(pageKey));
+      await idbTxDone(tx);
+      return (rows||[]).map(function(r){
+        if(!r) return null;
+        var out = Object.assign({}, r);
+        delete out.pageKey;
+        return out;
+      }).filter(Boolean);
+    }
+
+    async function idbPutRows(pageKey, rows){
+      var db = await openIDB();
+      var tx = db.transaction([IDB_ROWS_STORE], "readwrite");
+      var store = tx.objectStore(IDB_ROWS_STORE);
+      (rows||[]).forEach(function(r){
+        if(!r || !r.uid) return;
+        store.put(Object.assign({ pageKey: pageKey, uid: r.uid }, r));
+      });
+      await idbTxDone(tx);
+      return true;
+    }
+
+    async function idbAddOp(pageKey, uid){
+      uid = norm(uid);
+      if(!uid) return;
+      var db = await openIDB();
+      var tx = db.transaction([IDB_OPS_STORE], "readwrite");
+      tx.objectStore(IDB_OPS_STORE).add({ pageKey: pageKey, uid: uid, ts: Date.now() });
+      await idbTxDone(tx);
+    }
+
+    async function idbGetDirtyUids(pageKey, sinceTs){
+      var db = await openIDB();
+      var tx = db.transaction([IDB_OPS_STORE], "readonly");
+      var idx = tx.objectStore(IDB_OPS_STORE).index("by_page_ts");
+      var range = IDBKeyRange.bound([pageKey, Number(sinceTs||0)], [pageKey, Number.MAX_SAFE_INTEGER]);
+      var ops = await idbReqToPromise(idx.getAll(range));
+      await idbTxDone(tx);
+      var set = new Set();
+      (ops||[]).forEach(function(op){ if(op && op.uid) set.add(op.uid); });
+      return Array.from(set);
+    }
+
+    async function idbClearOps(pageKey){
+      var db = await openIDB();
+      var tx = db.transaction([IDB_OPS_STORE], "readwrite");
+      var store = tx.objectStore(IDB_OPS_STORE);
+      var idx = store.index("by_page");
+      var keys = await idbReqToPromise(idx.getAllKeys(pageKey));
+      keys.forEach(function(k){ store.delete(k); });
+      await idbTxDone(tx);
+      return true;
+    }
+
+    function markDirty(uid){
+      try{ idbAddOp(PAGE_KEY, uid); }catch(e){}
+      // ✅ 企業級最佳做法：任何變更都排程自動同步（去抖 + 互斥 + 離線重試）
+      try{ scheduleSync("dirty"); }catch(e){}
+    }
+
+    // ---------------------------
+    // Auto Sync (enterprise best practice)
+    // ---------------------------
+    var AUTO_SYNC = true;
+    var SYNC_DEBOUNCE_MS = 900;      // 變更後去抖
+    var SYNC_MIN_GAP_MS = 1500;      // 連續同步最小間隔
+    var SYNC_PERIODIC_MS = 2*60*1000;// 週期保底同步
+    var _sync = { timer:null, inFlight:false, pending:false, lastRun:0, lastReason:"" };
+
+    function scheduleSync(reason, immediate){
+      if(!AUTO_SYNC) return;
+      _sync.pending = true;
+      _sync.lastReason = reason || _sync.lastReason || "auto";
+      if(_sync.timer) clearTimeout(_sync.timer);
+      var now = Date.now();
+      var gap = Math.max(0, (SYNC_MIN_GAP_MS - (now - (_sync.lastRun||0))));
+      var wait = immediate ? Math.min(50, gap) : Math.max(SYNC_DEBOUNCE_MS, gap);
+      _sync.timer = setTimeout(function(){ _sync.timer=null; runAutoSync(); }, wait);
+    }
+
+    async function runAutoSync(){
+      if(!_sync.pending) return;
+      if(_sync.inFlight) { _sync.pending = true; return; }
+      _sync.inFlight = true;
+      _sync.pending = false;
+      try{
+        if(navigator && navigator.onLine===false){
+          // 離線：等恢復網路再同步
+          _sync.pending = true;
+          return;
+        }
+        await syncToCloud({ silent:true, reason:_sync.lastReason||"auto" });
+      }catch(e){
+        // 失敗：保留 pending，下次事件/週期再試
+        _sync.pending = true;
+      }finally{
+        _sync.lastRun = Date.now();
+        _sync.inFlight = false;
+        if(_sync.pending) scheduleSync("retry");
       }
     }
-    return null;
-  }
 
-  function loadCurrentUser(){
-    try{ currentUser = JSON.parse(localStorage.getItem(CURRENT_KEY) || "null"); }
-    catch(e){ currentUser=null; }
-    if(currentUser && typeof currentUser==="object"){
-      const uname = norm(currentUser.user ?? currentUser.username ?? currentUser.name ?? currentUser.account);
-      if(uname){ currentUser.user = uname; currentUser.username = uname; }
-      currentUser.role = mapRole(currentUser.role ?? currentUser.level ?? "read");
-      currentUser.level = currentUser.role;
-      currentUser.authStamp = (currentUser.authStamp ?? "").toString();
-    }
-  }
-
-  function setCurrentUser(user, role, authStamp){
-    const u = { user, username:user, role: mapRole(role), level: mapRole(role), authStamp: (authStamp||"").toString() };
-    localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
-    currentUser=u;
-  }
-
-  function role(){ return mapRole(currentUser?.role ?? currentUser?.level ?? "read"); }
-
-  function fnv1a(str){
-    let h = 0x811c9dc5;
-    for(let i=0;i<str.length;i++){ h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
-    return (h >>> 0).toString(16).padStart(8, "0");
-  }
-  function authStampFromAuth(auth){ return fnv1a(`${auth.user}|${auth.pass ?? ""}`); }
-
-  function rebuildUserDropdown(preselectUser){
-    const sel = $("loginUser");
-    const rows = loadAuthTable();
-    const users = rows.map(r => pickUsername(r)).filter(Boolean);
-
-    const seen = new Set();
-    const uniq = [];
-    for(const u of users){
-      const k = u.toLowerCase();
-      if(seen.has(k)) continue;
-      seen.add(k);
-      uniq.push(u);
+    function toast(msg, ms){
+      var t = $("toast");
+      t.textContent = msg;
+      t.style.display = "block";
+      clearTimeout(toast._tm);
+      var dur = Number(ms);
+      if(!Number.isFinite(dur) || dur<=0) dur = 2600;
+      toast._tm = setTimeout(function(){ t.style.display="none"; }, dur);
     }
 
-    sel.innerHTML = `<option value="">請選擇帳號</option>` + uniq.map(u=>{
-      const s = (preselectUser && u.toLowerCase() === preselectUser.toLowerCase()) ? "selected" : "";
-      return `<option value="${u.replace(/"/g,"&quot;")}" ${s}>${u}</option>`;
-    }).join("");
-  }
-
-  function openLoginModal(msg){
-    $("loginErr").style.display="none";
-    if(msg){
-      $("loginErr").textContent = msg;
-      $("loginErr").style.display="block";
-    }
-    loadCurrentUser();
-    rebuildUserDropdown(currentUser?.user || "");
-    $("loginPass").value="";
-    $("loginMask").classList.add("show");
-    $("loginMask").setAttribute("aria-hidden","false");
-    setTimeout(()=>{ if($("loginUser").value) $("loginPass").focus(); else $("loginUser").focus(); },0);
-  }
-  function closeLoginModal(){
-    $("loginMask").classList.remove("show");
-    $("loginMask").setAttribute("aria-hidden","true");
-  }
-
-  function ensureLoggedIn(){
-    loadCurrentUser();
-    const rows = loadAuthTable();
-    if(!Array.isArray(rows) || rows.length === 0){
-      openLoginModal("尚未建立權限表：請先到「權限表.html」建立帳號。");
-      return false;
-    }
-    if(!currentUser || !currentUser.user){
-      openLoginModal();
-      return false;
-    }
-    const auth = findAuthUser(currentUser.user);
-    if(!auth){ openLoginModal("帳號已被移除，請重新登入"); return false; }
-    const stampNow = authStampFromAuth(auth);
-    if(currentUser.authStamp && currentUser.authStamp !== stampNow){
-      openLoginModal("密碼已更新，請重新登入");
-      return false;
-    }
-    setCurrentUser(auth.user, auth.role || "read", stampNow);
-    return true;
-  }
-
-  function doLogin(){
-    const u = norm($("loginUser").value);
-    const p = ($("loginPass").value ?? "").toString();
-    const rows = loadAuthTable();
-
-    if(!Array.isArray(rows) || rows.length === 0){
-      $("loginErr").textContent = "尚未建立權限表：請先到「權限表.html」建立帳號。";
-      $("loginErr").style.display = "block";
-      return;
-    }
-    if(!u){
-      $("loginErr").textContent = "請先選擇帳號。";
-      $("loginErr").style.display = "block";
-      return;
-    }
-    if(!p){
-      $("loginErr").textContent = "請輸入密碼。";
-      $("loginErr").style.display = "block";
-      return;
+    function escHtml(s){
+      return (s ?? "").toString()
+        .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;").replaceAll("'","&#39;");
     }
 
-    const auth = findAuthUser(u);
-    if(!auth){
-      $("loginErr").textContent = "帳號不存在（以權限表為準）。";
-      $("loginErr").style.display = "block";
-      return;
-    }
-    if((auth.pass ?? "") !== p){
-      $("loginErr").textContent = "密碼錯誤（以權限表為準）。";
-      $("loginErr").style.display = "block";
-      return;
+    function addV(url){
+      if(!url) return url;
+      if(url.startsWith("http://") || url.startsWith("https://")){
+        try{ var u = new URL(url); u.searchParams.set("v", APP_VER); return u.toString(); }catch(e){ return url; }
+      }
+      return url + (url.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(APP_VER);
     }
 
-    const stampNow = authStampFromAuth(auth);
-    setCurrentUser(auth.user, auth.role || "read", stampNow);
-
-    closeLoginModal();
-    if(typeof window.__onAuthed === "function") window.__onAuthed();
-  }
-
-  function validateSession(){
-    const lm = $("loginMask");
-    if(lm && lm.classList.contains("show")) return;
-
-    loadCurrentUser();
-    if(!currentUser || !currentUser.user) return;
-
-    const auth = findAuthUser(currentUser.user);
-    if(!auth){ openLoginModal("帳號已被移除，請重新登入"); return; }
-
-    const stampNow = authStampFromAuth(auth);
-    if(!currentUser.authStamp){
-      setCurrentUser(auth.user, auth.role || "read", stampNow);
-      return;
+    // ---------------------------
+    // Auth
+    // ---------------------------
+    function ensureAuthTable(){
+      var t = safeJSON(localStorage.getItem(AUTH_KEY));
+      if(!t || typeof t !== "object"){
+        t = {
+          users: [
+            { user:"alex", pass:"alex", role:"admin", name:"alex" },
+            { user:"tasun", pass:"tasun", role:"write", name:"tasun" },
+            { user:"wu", pass:"wu", role:"read", name:"wu" }
+          ],
+          updatedAt: nowISO(),
+          rev: "seed"
+        };
+        localStorage.setItem(AUTH_KEY, JSON.stringify(t));
+      }
+      if(!Array.isArray(t.users)) t.users = [];
+      return t;
     }
-    if(currentUser.authStamp !== stampNow){
-      openLoginModal("密碼已更新，請重新登入");
-      return;
+
+    function getCurrentUser(){
+      var cur = safeJSON(localStorage.getItem(CURRENT_KEY));
+      if(cur && cur.user && cur.role) return cur;
+      return null;
     }
-    const r = auth.role || "read";
-    if(mapRole(currentUser.role) !== r){
-      setCurrentUser(auth.user, r, stampNow);
+
+    function setCurrentUser(u){
+      if(!u) localStorage.removeItem(CURRENT_KEY);
+      else localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
     }
-  }
 
-  function startWatch(){
-    if(_watchStarted) return;
-    _watchStarted=true;
-    window.addEventListener("storage",(e)=>{
-      if(e.key === AUTH_KEY || e.key === CURRENT_KEY) validateSession();
-    });
-    setInterval(validateSession, SESSION_WATCH_MS);
-  }
+    function roleRank(role){
+      if(role==="admin") return 3;
+      if(role==="write") return 2;
+      return 1;
+    }
 
-  function bindLogin(){
-    $("loginClose").onclick = closeLoginModal;
-    $("loginToAuth").onclick = ()=> location.href = (window.__withAPPVER ? window.__withAPPVER("權限表.html") : "權限表.html");
-    $("loginBtn").onclick = doLogin;
+    // ---------------------------
+    // Cloud config
+    // ---------------------------
+    function parseJsonLenient(raw){
+      raw = (raw===undefined||raw===null) ? "" : String(raw);
+      try{ return JSON.parse(raw); }catch(e){}
+      try{
+        var cleaned = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/,\s*([}\]])/g, "$1");
+        return JSON.parse(cleaned);
+      }catch(e2){}
+      return null;
+    }
 
-    $("loginMask").addEventListener("click",(e)=>{
-      if(e.target === $("loginMask")) closeLoginModal();
-    });
+    function normalizeEndpoints(ep){
+      ep = (ep && typeof ep==="object") ? ep : {};
+      return {
+        health: norm(ep.health || "/health") || "/health",
+        read:   norm(ep.read   || "/api/read") || "/api/read",
+        merge:  norm(ep.merge  || "/api/merge") || "/api/merge"
+      };
+    }
 
-    window.addEventListener("keydown",(e)=>{
-      if(e.key === "Escape" && $("loginMask").classList.contains("show")) closeLoginModal();
-      if(e.key === "Enter" && $("loginMask").classList.contains("show")) doLogin();
-    });
+    function joinApiBase(base, path){
+      base = norm(base).replace(/\/+$/,"");
+      path = norm(path);
+      if(!path) return base;
+      if(/^https?:\/\//i.test(path)) return path;
+      if(path.charAt(0)!="/") path = "/" + path;
+      return base + path;
+    }
 
-    $("loginUser").addEventListener("change", ()=>{
-      if($("loginUser").value) $("loginPass").focus();
-    });
-  }
-
-  function init(){ bindLogin(); startWatch(); }
-  function current(){ loadCurrentUser(); return currentUser; }
-
-  return { init, ensureLoggedIn, validateSession, open: openLoginModal, current, role: ()=>{ loadCurrentUser(); return role(); } };
-})();
-
-/* ===========================
-   Standard v1 · sxdh-detail
-   =========================== */
-const PAGE_KEY = "sxdh-detail-query";
-const RESOURCE_KEY = "tasun-sxdh-detail";
-const CACHE_KEY = "tasun_cloud_cache_v1:" + RESOURCE_KEY;
-
-const $ = (id)=>document.getElementById(id);
-const norm = (s)=>(s??"").toString().trim();
-let db = [];
-
-function go(url){ location.href = (window.__withAPPVER ? window.__withAPPVER(url) : url); }
-
-function toast(msg){
-  const t=$("toast");
-  t.textContent=msg;
-  t.style.display="block";
-  clearTimeout(toast._tm);
-  toast._tm=setTimeout(()=>t.style.display="none",2200);
-}
-function escHtml(s){
-  return (s??"").toString()
-    .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
-    .replaceAll('"',"&quot;").replaceAll("'","&#39;");
-}
-function normalizeRec(r){
-  if(!r || typeof r!=="object") return null;
-  const uid = (r.uid ?? "").toString();
-  if(!uid) return null;
-  return {
-    uid,
-    rev: Number(r.rev||0)||0,
-    updatedAt: (r.updatedAt ?? "").toString(),
-    deleted: !!r.deleted,
-    id: r.id ?? "",
-    docName: (r.docName ?? "").toString(),
-    trade: (r.trade ?? "").toString(),
-    system: (r.system ?? "").toString(),
-    regDate: (r.regDate ?? "").toString(),
-    fileUrl: (r.fileUrl ?? "").toString(),
-    note: (r.note ?? "").toString(),
-  };
-}
-
-function loadDB(){
-  try{
-    const raw = localStorage.getItem(CACHE_KEY) || "[]";
-    const arr = JSON.parse(raw);
-    db = Array.isArray(arr) ? arr.map(normalizeRec).filter(Boolean).filter(r=>!r.deleted) : [];
-    db.sort((a,b)=>(b.updatedAt||"").localeCompare(a.updatedAt||"zh-Hant"));
-  }catch(e){ db=[]; }
-}
-async function cloudPull(){
-  const ck = window.TasunCloudKit;
-  if(!ck || typeof ck.pull !== "function") return;
-  try{
-    const res = await ck.pull(RESOURCE_KEY);
-    const items = Array.isArray(res) ? res : (res && Array.isArray(res.items) ? res.items : []);
-    if(!items.length) return;
-
-    const cur = new Map(db.map(x=>[x.uid, x]));
-    items.map(normalizeRec).filter(Boolean).forEach(nr=>{
-      const old = cur.get(nr.uid);
-      if(!old){ cur.set(nr.uid, nr); return; }
-      const a = (old.updatedAt||""); const b = (nr.updatedAt||"");
-      if(b > a || (b===a && (nr.rev||0) >= (old.rev||0))) cur.set(nr.uid, nr);
-    });
-    const out = Array.from(cur.values()).filter(r=>!r.deleted);
-    out.sort((a,b)=>(b.updatedAt||"").localeCompare(a.updatedAt||"zh-Hant"));
-    localStorage.setItem(CACHE_KEY, JSON.stringify(out));
-  }catch(e){}
-}
-
-function rebuildSelects(){
-  const tradeSel = $("trade");
-  const sysSel = $("system");
-  const keepT = norm(tradeSel.value);
-  const keepS = norm(sysSel.value);
-
-  const trades = Array.from(new Set(db.map(r=>norm(r.trade)).filter(Boolean))).sort((a,b)=>a.localeCompare(b,"zh-Hant"));
-  const systems = Array.from(new Set(db.map(r=>norm(r.system)).filter(Boolean))).sort((a,b)=>a.localeCompare(b,"zh-Hant"));
-
-  tradeSel.innerHTML = '<option value="">全部</option>' + trades.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
-  sysSel.innerHTML   = '<option value="">全部</option>' + systems.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
-
-  if(keepT) tradeSel.value = keepT;
-  if(keepS) sysSel.value = keepS;
-}
-
-function filtered(){
-  const q = norm($("q").value).toLowerCase();
-  const trade = norm($("trade").value);
-  const system = norm($("system").value);
-  const from = norm($("from").value);
-  const to = norm($("to").value);
-
-  let rows = db.slice();
-
-  if(trade) rows = rows.filter(r=>norm(r.trade)===trade);
-  if(system) rows = rows.filter(r=>norm(r.system)===system);
-
-  if(from || to){
-    rows = rows.filter(r=>{
-      const d = norm(r.regDate);
-      if(!d) return false;
-      if(from && d < from) return false;
-      if(to && d > to) return false;
+    function isValidApiBase(v){
+      v = norm(v);
+      if(!v) return false;
+      if(!/^https?:\/\//i.test(v)) return false;
+      if(/YOUR-WORKER-DOMAIN/i.test(v)) return false;
       return true;
-    });
-  }
-
-  if(q){
-    rows = rows.filter(r=>{
-      const hay = [r.docName, r.trade, r.system, r.regDate, r.fileUrl, r.note].map(x=>(x??"").toString().toLowerCase()).join(" | ");
-      return hay.includes(q);
-    });
-  }
-
-  rows.sort((a,b)=>(b.updatedAt||"").localeCompare(a.updatedAt||"zh-Hant"));
-  return rows;
-}
-
-function render(){
-  const rows = filtered();
-
-  $("tbody").innerHTML = rows.map((r, idx)=>{
-    const url = norm(r.fileUrl);
-    const link = url ? `<a class="link" href="${escHtml(url)}" target="_blank" rel="noopener noreferrer">開啟</a>` : `<span class="muted">—</span>`;
-    const upd = (r.updatedAt||"").replace("T"," ").replace("Z","");
-    return `
-      <tr>
-        <td>${idx+1}</td>
-        <td>${escHtml(r.regDate) || `<span class="muted">—</span>`}</td>
-        <td>${escHtml(r.docName) || `<span class="muted">—</span>`}</td>
-        <td>${escHtml(r.trade) || `<span class="muted">—</span>`}</td>
-        <td>${escHtml(r.system) || `<span class="muted">—</span>`}</td>
-        <td>${link}</td>
-        <td>${escHtml(r.note) || `<span class="muted">—</span>`}</td>
-        <td>${escHtml(upd) || `<span class="muted">—</span>`}</td>
-      </tr>
-    `;
-  }).join("") || `<tr><td colspan="8" class="muted" style="padding:18px;">尚無符合資料</td></tr>`;
-
-  $("hint").innerHTML = `筆數：<b style="color:var(--gold)">${rows.length}</b>。resourceKey：<b style="color:var(--gold)">${RESOURCE_KEY}</b>`;
-}
-
-function setupMoreMenu(backHref){
-  const backBtn = $("mBack");
-  const moreBtn = $("mMoreBtn");
-  const menu = $("mMoreMenu");
-  if(!backBtn || !moreBtn || !menu) return;
-
-  const close = ()=> menu.classList.remove("open");
-  const toggle = (e)=>{ e.preventDefault(); e.stopPropagation(); menu.classList.toggle("open"); };
-
-  backBtn.onclick = ()=> go(backHref);
-  moreBtn.addEventListener("click", toggle);
-
-  menu.addEventListener("click", (e)=>{
-    e.stopPropagation();
-    const item = e.target.closest("button.menuItem[data-href]");
-    if(!item) return;
-    const href = item.getAttribute("data-href");
-    if(href) go(href);
-  });
-
-  document.addEventListener("click", close);
-  window.addEventListener("keydown", (e)=>{ if(e.key === "Escape") close(); });
-}
-
-function syncUserUI(){
-  const u = TasunAuth.current();
-  $("uName").textContent = u?.user || u?.username || "—";
-  $("uRole").textContent = TasunAuth.role();
-}
-
-const WATCH_MS = 1500;
-function startWatch(){
-  let last = null;
-  setInterval(()=>{
-    const raw = localStorage.getItem(CACHE_KEY) || "";
-    if(raw !== last){
-      last = raw;
-      loadDB();
-      rebuildSelects();
-      render();
     }
-  }, WATCH_MS);
 
-  window.addEventListener("storage",(e)=>{
-    if(e.key === CACHE_KEY){
-      loadDB(); rebuildSelects(); render();
+    function getFileName(){
+      try{
+        var p = location.pathname || "";
+        var fn = p.split("/").pop() || "";
+        return decodeURIComponent(fn) || fn;
+      }catch(e){ return (location.pathname||"").split("/").pop() || ""; }
     }
+
+    var _cloudCfgCache = null;
+
+    async function loadCloudCfg(){
+      if(_cloudCfgCache) return _cloudCfgCache;
+
+      // Start with defaults
+      var cfg = { apiBase: DEFAULT_API_BASE, endpoints: Object.assign({}, DEFAULT_ENDPOINTS), netDiskUrl: "https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88" };
+
+      // 1) resources.json (best)
+      try{
+        var res = await fetch(addV(RESOURCES_URL), { cache:"no-store" });
+        if(res && res.ok){
+          var text = await res.text();
+          var json = parseJsonLenient(text);
+          if(json && json.resources && typeof json.resources==="object"){
+            var fn = getFileName();
+            var r = json.resources;
+            var pick = r[fn] || r[PAGE_KEY] || r["*"] || null;
+            if(pick){
+              if(isValidApiBase(pick.apiBase)) cfg.apiBase = pick.apiBase;
+              if(pick.endpoints) cfg.endpoints = normalizeEndpoints(pick.endpoints);
+              if(pick.netDiskUrl) cfg.netDiskUrl = String(pick.netDiskUrl);
+              else if(pick.links && pick.links.netDiskUrl) cfg.netDiskUrl = String(pick.links.netDiskUrl);
+
+            }else{
+              if(isValidApiBase(json.apiBase)) cfg.apiBase = json.apiBase;
+              if(json.endpoints) cfg.endpoints = normalizeEndpoints(json.endpoints);
+              if(json.netDiskUrl) cfg.netDiskUrl = String(json.netDiskUrl);
+              else if(json.links && json.links.netDiskUrl) cfg.netDiskUrl = String(json.links.netDiskUrl);
+
+            }
+          }
+        }
+      }catch(e){ /* ignore */ }
+
+      // 2) local overrides (optional)
+      var ob = norm(localStorage.getItem(API_BASE_LS_KEY));
+      if(isValidApiBase(ob)) cfg.apiBase = ob;
+
+      var oe = safeJSON(localStorage.getItem(API_EP_LS_KEY));
+      if(oe) cfg.endpoints = normalizeEndpoints(Object.assign({}, cfg.endpoints, oe));
+
+      _cloudCfgCache = cfg;
+      return cfg;
+    }
+
+    // ---------------------------
+    // Local data + dicts
+    // ---------------------------
+        async function loadDb(){
+      // 1) try IDB
+      var meta = null, rows = [];
+      try{
+        meta = await idbGetMeta(PAGE_KEY);
+        rows = await idbGetAllRows(PAGE_KEY);
+      }catch(e){ meta=null; rows=[]; }
+
+      if(meta || (rows && rows.length)){
+        var counter = Number(meta && meta.counter || 0) || 0;
+        state.lastSyncAt = Number(meta && meta.lastSyncAt || 0) || 0;
+        state.clientId = norm(meta && meta.clientId) || getClientId();
+        return { db: rows||[], counter: counter };
+      }
+
+      // 2) migrate/load from localStorage (v1 single pack)
+      var pack = safeJSON(localStorage.getItem(DB_KEY));
+      if(!pack || typeof pack!=="object") pack = null;
+      var arr = (pack && (pack.items || pack.db)) || [];
+      if(!Array.isArray(arr)) arr = [];
+      var c = Number((pack && pack.counter) || 0) || 0;
+      if(!Number.isFinite(c) || c<0) c = 0;
+
+
+      state.lastSyncAt = 0;
+      state.clientId = getClientId();
+
+      // write into IDB for the first time
+      try{
+        await idbPutRows(PAGE_KEY, arr);
+        await idbPutMeta({ pageKey: PAGE_KEY, counter: c, lastSyncAt: 0, clientId: state.clientId, updatedAt: nowISO() });
+      }catch(e){}
+
+      return { db: arr, counter: c };
+    }
+
+    // 嘗試復原舊版本本機資料（不同 key / 舊備份格式），並合併回目前 db
+    function recoverLegacyLocal(){
+      // 以「內容特徵」找舊資料：任何 storage key 只要能解析出 {db:[{uid/text/trade/sys/...}], counter} 或直接是陣列，都納入合併
+      function tryParsePayload(parsed){
+        if(Array.isArray(parsed)){
+          // 直接是資料列陣列
+          return { db: parsed, counter: 0 };
+        }
+        if(parsed && typeof parsed==="object"){
+          // 可能包在 payload/data/result
+          var un = unwrap(parsed);
+          if(Array.isArray(un.db) && un.db.length) return { db: un.db, counter: un.counter||0 };
+          // 也可能就是 {records:[...]} 或 {rows:[...]} 等
+          if(Array.isArray(parsed.records) && parsed.records.length) return { db: parsed.records, counter: Number(parsed.counter||0)||0 };
+          if(Array.isArray(parsed.rows) && parsed.rows.length) return { db: parsed.rows, counter: Number(parsed.counter||0)||0 };
+          if(Array.isArray(parsed.items) && parsed.items.length) return { db: parsed.items, counter: Number(parsed.counter||0)||0 };
+        }
+        return null;
+      }
+
+      function looksLikeRow(x){
+        if(!x || typeof x!=="object") return false;
+        // 允許舊欄名：content/note/body 也視作 text
+        var hasUid = !!norm(x.uid || x.pk || x.key || x.uuid || "");
+        var hasText = !!norm(x.text || x.content || x.note || x.body || x.msg || "");
+        var hasMeta = !!norm(x.trade || x.kind || x.work || "") || !!norm(x.sys || x.system || "") || !!norm(x.date || x.createdAt || "");
+        return (hasUid && hasText) || (hasText && hasMeta);
+      }
+
+      function normalizeLegacyRows(arr){
+        var out = [];
+        for(var i=0;i<(arr||[]).length;i++){
+          var x = arr[i];
+          if(!x || typeof x!=="object") continue;
+          // map legacy fields
+          var uid = norm(x.uid || x.pk || x.key || x.uuid || "");
+          if(!uid) uid = uuid(); // fallback
+          out.push({
+            uid: uid,
+            id: Number(x.id||x.no||0)||0,
+            text: norm(x.text || x.content || x.note || x.body || x.msg || ""),
+            trade: norm(x.trade || x.kind || x.work || ""),
+            sys: norm(x.sys || x.system || ""),
+            source: norm(x.source || x.from || x.origin || ""),
+            attach: norm(x.attach || x.link || x.url || ""),
+            remark: norm(x.remark || x.memo || ""),
+            date: norm(x.date || (x.createdAt? String(x.createdAt).slice(0,10):"") || ""),
+            updatedAt: norm(x.updatedAt || x.updated || x.modifiedAt || x.ts || ""),
+            rev: norm(x.rev || x.version || ""),
+            deleted: !!(x.deleted || x.isDeleted)
+          });
+        }
+        return out;
+      }
+
+      function scanStorage(storage, storageName){
+        var keys = [];
+        try{
+          for(var i=0;i<storage.length;i++){
+            var k = storage.key(i);
+            if(k) keys.push(k);
+          }
+        }catch(e){}
+        var mergedAny = false;
+        var localNow = { db: state.db, counter: state.counter };
+        var matched = [];
+        for(var j=0;j<keys.length;j++){
+          var key = keys[j];
+          if(key===DB_KEY || key===COUNTER_KEY || key===READ_MODE_KEY) continue;
+          var raw = null;
+          try{ raw = storage.getItem(key); }catch(e){ raw=null; }
+          if(!raw || raw.length<2) continue;
+
+          var parsed = safeJSON(raw);
+          if(!parsed) continue;
+
+          var pay = tryParsePayload(parsed);
+          if(!pay || !Array.isArray(pay.db) || !pay.db.length) continue;
+
+          // 檢查是否像是我們的資料列（至少 1 筆符合）
+          var arr = pay.db;
+          var ok = false;
+          for(var k=0;k<Math.min(arr.length, 10);k++){
+            if(looksLikeRow(arr[k])) { ok = true; break; }
+          }
+          if(!ok) continue;
+
+          // normalize legacy
+          var normed = normalizeLegacyRows(arr);
+          if(!normed.length) continue;
+
+          var merged = mergePayload({ db: normed, counter: pay.counter||0 }, localNow);
+          localNow = { db: merged.db, counter: merged.counter };
+          mergedAny = true;
+          matched.push({ storage: storageName, key: key, rows: normed.length, bytes: raw.length });
+        }
+
+        if(mergedAny){
+          state.db = localNow.db;
+          state.counter = localNow.counter;
+          saveLocal({ db: state.db, counter: state.counter });
+          buildDictsFromDb();
+        }
+        return { mergedAny: mergedAny, matched: matched };
+      }
+
+      var res1 = scanStorage(localStorage, "localStorage");
+      var res2 = scanStorage(sessionStorage, "sessionStorage");
+
+      // expose last scan result for debugging
+      state._legacyScan = { local: res1, session: res2, at: nowISO() };
+
+      return !!(res1.mergedAny || res2.mergedAny);
+    }
+
+
+        async function saveLocal(payload){
+      var dbArr = payload.db||[];
+      var counter = Number(payload.counter||0)||0;
+
+      // IDB primary
+      try{
+        await idbPutRows(PAGE_KEY, dbArr);
+        await idbPutMeta({
+          pageKey: PAGE_KEY,
+          counter: counter,
+          lastSyncAt: Number(state.lastSyncAt||0)||0,
+          clientId: state.clientId || getClientId(),
+          updatedAt: nowISO()
+        });
+      }catch(e){}
+
+      // localStorage v1 single pack
+      try{
+        var pack = {
+          items: dbArr,
+          counter: counter,
+          rev: "r" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2,6),
+          updatedAt: nowISO()
+        };
+        localStorage.setItem(DB_KEY, JSON.stringify(pack));
+      }catch(e){}
+
+    }
+
+    function normalizeRow(x){
+      if(!x || typeof x!=="object") return null;
+      var r = Object.assign({}, x);
+
+      // 兼容舊欄位命名：system/系統、trade/工種、text/記事內容... 等
+      var pick = function(obj, keys){
+        for(var i=0;i<keys.length;i++){
+          var k = keys[i];
+          if(obj && obj[k]!==undefined && obj[k]!==null && String(obj[k]).trim()!=="") return obj[k];
+        }
+        return "";
+      };
+
+      // uid / pk
+      r.uid = norm(pick(r, ["uid","pk","_pk","uuid","_uid","user"])) || "";
+      if(!r.uid) return null;
+
+      // 顯示用 id（允許舊資料用「項次/序號」）
+      var rawId = pick(r, ["id","_id","no","項次","序號"]);
+      r.id = Number(rawId || 0);
+
+      r.text = norm(pick(r, ["text","content","記事內容","事項內容","內容","記事"])) || "";
+      r.trade = norm(pick(r, ["trade","工種","類別","工程","工別"])) || "";
+      r.sys = norm(pick(r, ["sys","system","系統","系統項目","系統別"])) || "";
+      r.source = norm(pick(r, ["source","src","出處","來源"])) || "";
+      r.attach = norm(pick(r, ["attach","附件","file","files","附件連結"])) || "";
+      r.remark = norm(pick(r, ["remark","備註","note","註記"])) || "";
+
+      // 日期欄位兼容（仍以字串顯示）
+      r.date = norm(pick(r, ["date","登錄日期","日期","createdAt","created_at"])) || "";
+      r.updatedAt = norm(pick(r, ["updatedAt","updated_at","updateAt","ts","time"])) || "";
+      r.rev = norm(pick(r, ["rev","_rev","version"])) || "";
+
+      r.deleted = !!(r.deleted || r._deleted);
+      return r;
+    }
+
+    // ---------------------------
+    // Legacy UID migration (deterministic)
+    // ---------------------------
+    // Some older localStorage rows may not contain uid/pk.
+    // To keep multi-device merge stable, we derive a deterministic uid from row content,
+    // then persist it back into DB_KEY once per device.
+    function fnv1a32(str){
+      str = (str===undefined||str===null) ? "" : String(str);
+      var h = 0x811c9dc5;
+      for(var i=0;i<str.length;i++){
+        h ^= str.charCodeAt(i);
+        // h *= 16777619 (with 32-bit overflow)
+        h = (h + ((h<<1) + (h<<4) + (h<<7) + (h<<8) + (h<<24))) >>> 0;
+      }
+      return ("00000000" + h.toString(16)).slice(-8);
+    }
+
+    function deriveLegacyUid(rawRow){
+      if(!rawRow || typeof rawRow!=="object") return "";
+      // Use the same pick logic as normalizeRow, but allow missing uid
+      var pick = function(obj, keys){
+        for(var i=0;i<keys.length;i++){
+          var k = keys[i];
+          if(obj && obj[k]!==undefined && obj[k]!==null && String(obj[k]).trim()!=="") return obj[k];
+        }
+        return "";
+      };
+      var id = String(pick(rawRow, ["id","_id","no","項次","序號"]) || "");
+      var text = norm(pick(rawRow, ["text","content","記事內容","事項內容","內容","記事"]) || "");
+      var trade = norm(pick(rawRow, ["trade","工種","類別","工程","工別"]) || "");
+      var sys = norm(pick(rawRow, ["sys","system","系統","系統項目","系統別"]) || "");
+      var source = norm(pick(rawRow, ["source","src","出處","來源"]) || "");
+      var attach = norm(pick(rawRow, ["attach","附件","file","files","附件連結"]) || "");
+      var remark = norm(pick(rawRow, ["remark","備註","note","註記"]) || "");
+      var date = norm(pick(rawRow, ["date","登錄日期","日期","createdAt","created_at"]) || "");
+      // If we still have nothing meaningful, skip
+      if(!text && !trade && !sys && !source && !attach && !remark && !id && !date) return "";
+      var key = [PAGE_KEY, id, date, trade, sys, source, attach, remark, text].join("|");
+      return "l" + fnv1a32(key);
+    }
+
+    function migrateEnsureUidInPlace(){
+      var changed = false;
+      for(var i=0;i<(state.db||[]).length;i++){
+        var x = state.db[i];
+        if(!x || typeof x!=="object") continue;
+        var uid = norm(x.uid || x.pk || x._pk || x.uuid || x._uid || "");
+        if(!uid){
+          uid = deriveLegacyUid(x);
+          if(uid){
+            x.uid = uid;
+            x.pk = uid;
+            changed = true;
+          }
+        }else{
+          // normalize pk convenience
+          if(!x.pk) { x.pk = uid; changed = true; }
+          if(!x.uid) { x.uid = uid; changed = true; }
+        }
+        // normalize minimal fields so normalizeRow can work
+        if(x.deleted===undefined && x._deleted!==undefined){ x.deleted = !!x._deleted; changed = true; }
+        if(x.deleted===undefined) x.deleted = !!x.deleted;
+        if(!x.rev){ x.rev = "r" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2,6); changed = true; }
+        if(!x.updatedAt){ x.updatedAt = nowISO(); changed = true; }
+      }
+      if(changed){
+        saveLocal({ db: state.db, counter: state.counter });
+      }
+      return changed;
+    }
+
+function getVisibleRows(){
+      var q = norm($("qText").value).toLowerCase();
+      var ft = norm($("fTrade").value);
+      var fs = norm($("fSys").value);
+      var rows = state.db
+        .map(normalizeRow)
+        .filter(Boolean)
+        .filter(function(r){ return !r.deleted; });
+
+      // sort by id asc
+      rows.sort(function(a,b){ return (Number(a.id||0)-Number(b.id||0)) || (tsOf(a)-tsOf(b)); });
+
+      if(q){
+        rows = rows.filter(function(r){ return (r.text||"").toLowerCase().includes(q); });
+      }
+      if(ft){
+        rows = rows.filter(function(r){ return r.trade===ft; });
+      }
+      if(fs){
+        rows = rows.filter(function(r){ return r.sys===fs; });
+      }
+      return rows;
+    }
+
+    function displayNoOf(uid){
+      uid = norm(uid);
+      if(!uid) return 0;
+      var rows = getVisibleRows();
+      for(var i=0;i<rows.length;i++){
+        if(rows[i] && rows[i].uid===uid) return i+1;
+      }
+      return 0;
+    }
+
+
+    function buildDictsFromDb(){
+      var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
+      var trades = new Set(loadDict(TRADE_DICT_KEY));
+      var syss = new Set(loadDict(SYS_DICT_KEY));
+      var sources = new Set(loadDict(SOURCE_DICT_KEY));
+
+      var map = loadMap(); // trade -> [sys]
+      for(var i=0;i<rows.length;i++){
+        var r = rows[i];
+        if(r.trade) trades.add(r.trade);
+        if(r.sys) syss.add(r.sys);
+        if(r.source) sources.add(r.source);
+        if(r.trade && r.sys){
+          map[r.trade] = map[r.trade] || [];
+          if(!map[r.trade].includes(r.sys)) map[r.trade].push(r.sys);
+        }
+      }
+      saveDict(TRADE_DICT_KEY, Array.from(trades).sort());
+      saveDict(SYS_DICT_KEY, Array.from(syss).sort());
+      saveDict(SOURCE_DICT_KEY, Array.from(sources).sort());
+      saveMap(map);
+    }
+
+    // 修訂2：依工種取得系統清單（來源：工種-系統綁定表 + 本頁資料），並去重排序
+    function collectSysForTrade(trade, dbArr){
+      trade = norm(trade);
+      var set = new Set();
+
+      // 來源1：工種-系統綁定表（指定工種）
+      var bound = (TRADE_SYS_MAP && trade && TRADE_SYS_MAP[trade]) ? TRADE_SYS_MAP[trade] : [];
+      for(var i=0;i<bound.length;i++){ if(bound[i]) set.add(String(bound[i])); }
+
+      // 來源2：本頁資料庫中該工種實際出現過的系統（補強：避免綁定表漏掉）
+      var rows = (dbArr||[]).map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
+      for(var j=0;j<rows.length;j++){
+        if(rows[j].trade===trade && rows[j].sys) set.add(rows[j].sys);
+      }
+
+      return Array.from(set).sort();
+    }
+
+
+
+
+
+
+
+    // ---------------------------
+    // Dict / Map helpers
+    // ---------------------------
+    function loadDict(key){
+      var a = safeJSON(localStorage.getItem(key));
+      return Array.isArray(a) ? a.filter(Boolean).map(function(x){return norm(x);}).filter(Boolean) : [];
+    }
+    function saveDict(key, arr){
+      arr = Array.isArray(arr) ? arr.filter(Boolean).map(function(x){return norm(x);}).filter(Boolean) : [];
+      // unique + sort
+      var set = new Set(arr);
+      localStorage.setItem(key, JSON.stringify(Array.from(set).sort()));
+    }
+    function loadMap(){
+      var m = safeJSON(localStorage.getItem(TRADE_SYS_MAP_KEY));
+      return (m && typeof m==="object") ? m : {};
+    }
+    function saveMap(m){
+      if(!m || typeof m!=="object") m = {};
+      // normalize arrays
+      Object.keys(m).forEach(function(k){
+        var a = m[k];
+        if(!Array.isArray(a)) a = [];
+        var set = new Set(a.map(function(x){return norm(x);}).filter(Boolean));
+        m[k] = Array.from(set).sort();
+      });
+      localStorage.setItem(TRADE_SYS_MAP_KEY, JSON.stringify(m));
+    }
+
+    function unwrap(obj){
+      if(!obj || typeof obj!=="object") return obj;
+      return obj.payload ?? obj.data ?? obj.result ?? obj;
+    }
+
+    function tsOf(r){
+      var t = norm(r && (r.updatedAt||r.ts||r.time||""));
+      if(!t) return 0;
+      var n = Date.parse(t);
+      return Number.isFinite(n) ? n : 0;
+    }
+
+    // ---------------------------
+    // State
+    // ---------------------------
+    var state = {
+      lastSyncAt:0,
+      clientId:'',
+      db: [],
+      counter: 0,
+      user: null,
+      role: "read",
+      selectedUid: "",
+      mode: "view",
+      readMode: false,
+      cloud: { ok:false, apiBase:"", endpoints:null, lastSyncAt:"", lastOkAt:"" },
+      _legacyScan: null
+    };
+
+    // load map once (kept in memory + persisted on change)
+    var TRADE_SYS_MAP = loadMap();
+
+    // ---------------------------
+    // Merge logic (cloud/local)
+    // ---------------------------
+    function ensureRowV1(r){
+      r = normalizeRow(r);
+      if(!r) return null;
+
+      // mandatory fields per v1
+      r.uid = norm(r.uid);
+      if(!r.uid) return null;
+      r.pk = r.uid; // internal convenience
+      if(!r.updatedAt) r.updatedAt = nowISO();
+      if(!r.rev) r.rev = "r" + Date.now().toString(16) + Math.random().toString(16).slice(2,6);
+      r.deleted = !!r.deleted;
+
+      // id is display only; keep numeric but not required
+      if(!Number.isFinite(Number(r.id))) r.id = 0;
+
+      // normalize date value (YYYY-MM-DD preferred)
+      if(r.date && /^\d{4}-\d{2}-\d{2}/.test(r.date)===false){
+        // accept ISO -> slice
+        if(/^\d{4}-\d{2}-\d{2}T/.test(r.date)) r.date = r.date.slice(0,10);
+      }
+      return r;
+    }
+
+    function mergeTwo(a, b){
+      // choose newer by updatedAt; tie -> keep non-empty fields of either
+      var ta = tsOf(a), tb = tsOf(b);
+      var newer = (tb>ta) ? b : a;
+      var older = (newer===a) ? b : a;
+      var out = Object.assign({}, older, newer);
+      // ✅ 修訂：避免「系統 sys」在雲端合併時被空字串覆蓋（曾造成表格顯示異常）
+// 但其他欄位（例如附件 attach）必須允許使用者清空，所以只保護 sys。
+(["sys"]).forEach(function(k){
+  var touched = !!(newer && newer._touch && newer._touch[k]);
+  // 若非刻意清空，且新值為空、舊值不空，則保留舊值
+  if(!touched && !norm(newer && newer[k]) && norm(older && older[k])) out[k] = older[k];
+});
+
+// if either says deleted true and it's newer, keep deleted true
+      out.deleted = !!newer.deleted;
+
+      // keep essential fields
+      out.uid = norm(out.uid || newer.uid || older.uid);
+      out.updatedAt = norm(out.updatedAt) || nowISO();
+      out.rev = norm(out.rev || newer.rev || older.rev) || ("r"+Date.now().toString(16));
+      out.pk = out.uid;
+      return out;
+    }
+
+    function mergePayload(remote, local){
+      // payload: {db:[rows], counter}
+      var ldb = (local && Array.isArray(local.db)) ? local.db : [];
+      var rdb = (remote && (Array.isArray(remote.items)?remote.items:(Array.isArray(remote.db)?remote.db:[]))) || [];
+
+      var map = new Map();
+      function put(x){
+        var r = ensureRowV1(x);
+        if(!r) return;
+        var key = r.uid;
+        if(!map.has(key)) map.set(key, r);
+        else map.set(key, mergeTwo(map.get(key), r));
+      }
+      ldb.forEach(put);
+      rdb.forEach(put);
+
+      var outDb = Array.from(map.values());
+      // keep stable order: by date desc then updatedAt desc, else uid
+      outDb.sort(function(a,b){
+        var da = norm(a.date), db = norm(b.date);
+        if(da && db && da!==db) return db.localeCompare(da);
+        var ta = tsOf(a), tb = tsOf(b);
+        if(tb!==ta) return tb-ta;
+        return norm(a.uid).localeCompare(norm(b.uid));
+      });
+
+      var lc = Number(local && local.counter || 0) || 0;
+      var rc = Number(remote && remote.counter || 0) || 0;
+      return { db: outDb, counter: Math.max(lc, rc) };
+    }
+
+    // ---------------------------
+    // UI: filters and selects
+    // ---------------------------
+    function setOptions(el, arr, keepValue, opt){
+      opt = opt || {};
+      if(!el) return;
+      var cur = keepValue ? norm(el.value) : "";
+      var tag = (el.tagName||"").toUpperCase();
+
+      // SELECT: rebuild <option>
+      if(tag==="SELECT"){
+        el.innerHTML = "";
+        if(opt.includeAll){
+          var op0 = document.createElement("option");
+          op0.value = ""; op0.textContent = "全部";
+          el.appendChild(op0);
+        }
+        (arr||[]).forEach(function(v){
+          v = norm(v);
+          if(!v) return;
+          var op = document.createElement("option");
+          op.value = v; op.textContent = v;
+          el.appendChild(op);
+        });
+        if(opt.forceValue!==undefined) el.value = String(opt.forceValue);
+        if(keepValue && cur && Array.from(el.options).some(function(o){return o.value===cur;})){
+          el.value = cur;
+        }
+        return;
+      }
+
+      // INPUT + datalist: rebuild datalist options (keep input value as-is)
+      var listId = el.getAttribute("list");
+      var dl = listId ? $(listId) : null;
+      if(dl){
+        dl.innerHTML = "";
+        (arr||[]).forEach(function(v){
+          v = norm(v);
+          if(!v) return;
+          var op = document.createElement("option");
+          op.value = v;
+          dl.appendChild(op);
+        });
+      }
+      if(keepValue && cur) el.value = cur;
+    }
+
+    function uniqueOf(arr){
+      var set = new Set();
+      (arr||[]).forEach(function(x){ x = norm(x); if(x) set.add(x); });
+      return Array.from(set).sort();
+    }
+
+    // ✅ 系統篩選清單：需與「目前搜尋/工種」顯示結果一致（不含系統本身的篩選）
+    function getBaseRowsForSysFilter(){
+      var q = norm($("qText").value).toLowerCase();
+      var ft = norm($("fTrade").value);
+      var rows = state.db
+        .map(normalizeRow)
+        .filter(Boolean)
+        .filter(function(r){ return !r.deleted; });
+
+      if(ft){
+        rows = rows.filter(function(r){ return r.trade===ft; });
+      }
+      if(q){
+        rows = rows.filter(function(r){ return (r.text||"").toLowerCase().includes(q); });
+      }
+      return rows;
+    }
+
+
+    function rebuildFilterOptions(){
+      // build dicts first
+      buildDictsFromDb();
+
+      var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
+
+      // ✅ 主頁「工種」篩選：只顯示目前資料表工種不重複
+      var tradesTable = uniqueOf(rows.map(function(r){return r.trade;}));
+      setOptions($("fTrade"), tradesTable, true, { includeAll:true });
+
+      // ✅ 主頁「系統」篩選：需與「目前搜尋/工種」顯示結果一致（避免下拉選單與列表不一致）
+      var sysList;
+      var ft = norm($("fTrade").value);
+      if(ft){
+        var baseRows = getBaseRowsForSysFilter(); // 已套用 工種 + 搜尋（不含系統篩選）
+        sysList = uniqueOf(baseRows.map(function(r){ return r.sys; }));
+        // 若目前搜尋結果剛好 0 筆，仍保留「工種所屬系統」作為備援（避免空選單）
+        if(!sysList.length){
+          sysList = collectSysForTrade(ft, state.db);
+        }
+      }else{
+        var q = norm($("qText").value).toLowerCase();
+        var baseRows2 = rows.slice();
+        if(q){
+          baseRows2 = baseRows2.filter(function(r){ return (r.text||"").toLowerCase().includes(q); });
+        }
+        sysList = uniqueOf(baseRows2.map(function(r){ return r.sys; }));
+        if(!sysList.length){
+          // 備援：字典 + 本頁資料
+          sysList = uniqueOf(rows.map(function(r){return r.sys;})).concat(loadDict(SYS_DICT_KEY));
+          sysList = uniqueOf(sysList);
+        }
+      }
+      setOptions($("fSys"), sysList, true, { includeAll:true });
+
+      // ✅「新增/編輯」視窗  工種：依字典不重複（若字典空，回退用表格不重複）
+      var tradeDict = uniqueOf(loadDict(TRADE_DICT_KEY));
+      if(!tradeDict.length) tradeDict = tradesTable.slice();
+      setOptions($("mTradeSel"), tradeDict, true, { includeBlank:true });
+
+      // ✅「新增/編輯」視窗  系統：依字典工種所屬不重複系統（工種-系統綁定表 + 本頁資料）
+      var mTrade = norm($("mTradeSel").value);
+      var mSysList = mTrade ? collectSysForTrade(mTrade, state.db) : uniqueOf(loadDict(SYS_DICT_KEY));
+      setOptions($("mSysSel"), mSysList, true, { includeBlank:true });
+
+      // ✅ 出處：字典 + 本頁資料去重；輸入框的 datalist 由 mSourceSel 來填
+      var sources = uniqueOf(rows.map(function(r){return r.source;})).concat(loadDict(SOURCE_DICT_KEY));
+      sources = uniqueOf(sources);
+      setOptions($("mSourceSel"), sources, true, { includeBlank:true });
+    }
+
+    // when trade filter changes, system filter must be recomputed (修訂2), system filter must be recomputed (修訂2)
+    function onTradeFilterChanged(){
+      var ft = norm($("fTrade").value);
+      var fsOld = norm($("fSys").value);
+
+      // ✅ 系統下拉需跟著「工種 + 目前搜尋」同步（不含系統本身）
+      var sysList;
+      if(ft){
+        var baseRows = getBaseRowsForSysFilter();
+        sysList = uniqueOf(baseRows.map(function(r){ return r.sys; }));
+        if(!sysList.length){
+          sysList = collectSysForTrade(ft, state.db);
+        }
+      }else{
+        var q = norm($("qText").value).toLowerCase();
+        var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
+        if(q){
+          rows = rows.filter(function(r){ return (r.text||"").toLowerCase().includes(q); });
+        }
+        sysList = uniqueOf(rows.map(function(r){return r.sys;}));
+        if(!sysList.length){
+          sysList = uniqueOf(state.db.map(normalizeRow).filter(Boolean).filter(function(r){return !r.deleted;}).map(function(r){return r.sys;})).concat(loadDict(SYS_DICT_KEY));
+          sysList = uniqueOf(sysList);
+        }
+      }
+
+      setOptions($("fSys"), sysList, false, { includeAll:true, forceValue:"" });
+      if(fsOld && sysList.includes(fsOld)) $("fSys").value = fsOld;
+      refresh();
+    }
+
+    // modal trade changed => update modal system options (修訂2)
+    function onModalTradeChanged(){
+      var t = norm($("mTradeSel").value);
+      var curSys = norm($("mSysSel").value);
+      var list = t ? collectSysForTrade(t, state.db) : uniqueOf(loadDict(SYS_DICT_KEY));
+      setOptions($("mSysSel"), list, false, { includeBlank:true });
+      if(curSys && list.includes(curSys)) $("mSysSel").value = curSys;
+    }
+
+    // ---------------------------
+    // Render: table + cards
+    // ---------------------------
+    function attachCell(attach){
+      attach = norm(attach);
+      if(!attach) return document.createTextNode("—");
+      var a = document.createElement("a");
+      a.href = addV(attach);
+      a.target="_blank";
+      a.rel="noopener";
+      a.textContent = "開啟";
+      a.style.fontWeight="900";
+      a.style.color="rgba(120,64,6,.96)";
+      return a;
+    }
+
+    function mkBtn(text, onClick){
+      var b = document.createElement("button");
+      b.className="attBtn";
+      b.type="button";
+      var span = document.createElement("span");
+      span.className="t";
+      span.textContent = text;
+      b.appendChild(span);
+      b.addEventListener("click", onClick);
+      return b;
+    }
+
+    function renderTable(rows){
+      var tb = $("tbody");
+      tb.innerHTML = "";
+      for(var i=0;i<rows.length;i++){
+        var r = rows[i];
+        var tr = document.createElement("tr");
+        if(r.uid===state.selectedUid) tr.classList.add("sel");
+
+        var tdNo = document.createElement("td");
+        tdNo.style.textAlign="center";
+        tdNo.textContent = String(i+1); // 修訂3：依顯示列排序顯示項次
+        tr.appendChild(tdNo);
+
+        var tdText = document.createElement("td");
+        tdText.textContent = r.text || "";
+        tr.appendChild(tdText);
+
+        var tdTrade = document.createElement("td");
+        tdTrade.style.textAlign="center";
+        tdTrade.textContent = r.trade || "";
+        tr.appendChild(tdTrade);
+
+        var tdSys = document.createElement("td");
+        tdSys.style.textAlign="center";
+        tdSys.textContent = r.sys || "";
+        tr.appendChild(tdSys);
+
+        var tdSrc = document.createElement("td");
+        tdSrc.style.textAlign="center";
+        tdSrc.textContent = r.source || "";
+        tr.appendChild(tdSrc);
+
+        var tdAtt = document.createElement("td");
+        tdAtt.style.textAlign="center";
+        tdAtt.appendChild(attachCell(r.attach));
+        tr.appendChild(tdAtt);
+
+        var tdRem = document.createElement("td");
+        tdRem.textContent = r.remark || "";
+        tr.appendChild(tdRem);
+
+        var tdDate = document.createElement("td");
+        tdDate.style.textAlign="center";
+        tdDate.textContent = r.date || "";
+        tr.appendChild(tdDate);
+
+        var tdAct = document.createElement("td");
+        tdAct.style.textAlign="center";
+        tdAct.appendChild(mkBtn("選取", (function(uid){ return function(e){
+          e.stopPropagation();
+          selectRow(uid);
+        };})(r.uid)));
+        tr.appendChild(tdAct);
+
+        tr.addEventListener("click", (function(uid){ return function(){
+          selectRow(uid);
+        };})(r.uid));
+
+        tb.appendChild(tr);
+      }
+    }
+
+    function renderCards(rows){
+      var box = $("cards");
+      box.innerHTML = "";
+      for(var i=0;i<rows.length;i++){
+        var r = rows[i];
+        var card = document.createElement("div");
+        card.className = "noteCard" + (r.uid===state.selectedUid ? " sel": "");
+        card.dataset.uid = r.uid;
+
+        var head = document.createElement("div");
+        head.className = "noteHead";
+        var meta = document.createElement("div");
+        meta.className = "noteMeta";
+
+        function tag(txt){
+          var s=document.createElement("span");
+          s.className="noteTag";
+          s.textContent=txt;
+          return s;
+        }
+        meta.appendChild(tag("項次 " + (i+1)));
+        if(r.trade) meta.appendChild(tag(r.trade));
+        if(r.sys) meta.appendChild(tag(r.sys));
+        if(r.source) meta.appendChild(tag(r.source));
+        if(r.date) meta.appendChild(tag(r.date));
+
+        head.appendChild(meta);
+
+        var btn = mkBtn("選取", (function(uid){ return function(e){ e.stopPropagation(); selectRow(uid); };})(r.uid));
+        head.appendChild(btn);
+
+        var body = document.createElement("div");
+        body.className="noteBody";
+        body.textContent = r.text || "";
+
+        var more = document.createElement("div");
+        more.className="noteMore miniHint";
+        more.textContent = "點一下展開/收合內容";
+
+        card.appendChild(head);
+        card.appendChild(body);
+        card.appendChild(more);
+
+        card.addEventListener("click", function(){
+          var uid = this.dataset.uid;
+          selectRow(uid);
+          this.classList.toggle("open");
+        });
+
+        box.appendChild(card);
+      }
+    }
+
+    function refresh(){
+      rebuildFilterOptions();
+      var rows = getVisibleRows();
+
+      renderTable(rows);
+      renderCards(rows);
+
+      // hint
+      var cloudTxt = state.cloud.ok ? "已同步" : "未設定";
+      var lastTxt = state.cloud.lastOkAt ? fmtClock(state.cloud.lastOkAt) : "—";
+      var roleTxt = state.role==="admin" ? "admin" : (state.role==="write"?"可編輯":"唯讀");
+
+      $("hint").innerHTML = "";
+      function hb(k,v,bad){
+        var s=document.createElement("span");
+        s.className="hb"+(bad?" bad":"");
+        s.innerHTML = '<span class="k">'+escHtml(k)+'</span><span class="v">'+escHtml(v)+'</span>';
+        return s;
+      }
+      $("hint").appendChild(hb("版本", APP_VER));
+      $("hint").appendChild(hb("筆數", String(rows.length) + " / " + String(state.db.map(normalizeRow).filter(Boolean).filter(function(r){return !r.deleted;}).length)));
+      $("hint").appendChild(hb("選取", state.selectedUid ? "已選取" : "未選取", !state.selectedUid));
+      $("hint").appendChild(hb("雲端", cloudTxt, !state.cloud.ok));
+      $("hint").appendChild(hb("最後", lastTxt));
+      $("hint").appendChild(hb("權限", roleTxt));
+    }
+
+    function selectRow(uid){
+      uid = norm(uid);
+      state.selectedUid = uid;
+      refresh();
+    }
+
+    // ---------------------------
+    // Modal logic
+    // ---------------------------
+    function openMask(mode){
+      state.mode = mode;
+      // (v12) prevent background scroll while modal is open
+      if(state._prevBodyOverflow===undefined){ state._prevBodyOverflow = document.body.style.overflow || ""; }
+      document.body.style.overflow = "hidden";
+      $("mask").style.display = "flex";
+      $("mTitle").textContent = (mode==="add") ? "新增" : (mode==="edit" ? "編輯" : "查看");
+      var canEdit = (state.role==="admin" || state.role==="write") && (mode!=="view");
+      $("btnSave").style.display = canEdit ? "" : "none";
+      $("btnDelete").style.display = (canEdit && mode!=="add") ? "" : "none";
+      // lock inputs in view mode
+      var ro = (mode==="view");
+      ["mText","mAttach","mRemark","mDate"].forEach(function(id){ $(id).disabled = ro; });
+      ["mTradeSel","mSysSel","mSourceSel"].forEach(function(id){ $(id).disabled = ro; });
+      ["btnAddTrade","btnAddSys","btnAddSource","btnNetDisk"].forEach(function(id){ $(id).disabled = ro; });
+    }
+
+    function closeMask(){
+      $("mask").style.display = "none";
+      // (v12) restore page scroll
+      try{ document.body.style.overflow = (state._prevBodyOverflow===undefined) ? "" : state._prevBodyOverflow; }catch(e){}
+    }
+
+    function fillModal(row){
+      row = row || {};
+      $("mText").value = norm(row.text);
+      $("mTradeSel").value = norm(row.trade);
+      onModalTradeChanged();
+      $("mSysSel").value = norm(row.sys);
+      $("mSourceSel").value = norm(row.source);
+      $("mAttach").value = norm(row.attach);
+      $("mRemark").value = norm(row.remark);
+      $("mDate").value = norm(row.date) || todayISO();
+      $("mNo").value = row.uid ? String(displayNoOf(row.uid) || "") : "";
+    }
+
+    function currentRowByUid(uid){
+      uid = norm(uid);
+      if(!uid) return null;
+      for(var i=0;i<state.db.length;i++){
+        var r = ensureRowV1(state.db[i]);
+        if(r && r.uid===uid) return r;
+      }
+      return null;
+    }
+
+    function openView(){
+      if(!state.selectedUid){ toast("請先選取一筆"); return; }
+      var r = currentRowByUid(state.selectedUid);
+      if(!r){ toast("找不到資料"); return; }
+      fillModal(r);
+      openMask("view");
+    }
+
+    function openEdit(){
+      if(!state.selectedUid){ toast("請先選取一筆"); return; }
+      if(!(state.role==="admin" || state.role==="write")){ toast("目前權限不可編輯"); return; }
+      var r = currentRowByUid(state.selectedUid);
+      if(!r){ toast("找不到資料"); return; }
+      fillModal(r);
+      openMask("edit");
+    }
+
+    function openAdd(){
+      if(!(state.role==="admin" || state.role==="write")){ toast("目前權限不可新增"); return; }
+      state.selectedUid = "";
+      fillModal({ date: todayISO() });
+      openMask("add");
+    }
+
+    function modalToRow(existingUid){
+      var uid = existingUid ? norm(existingUid) : uuid();
+      // ✅ _touch：標記本次「表單有改動/有填寫」的欄位，讓 mergeTwo 判斷「刻意清空」也要生效
+      var touch = { text:1, trade:1, sys:1, source:1, attach:1, remark:1, date:1 };
+      var r = {
+        uid: uid,
+        id: 0, // display only
+        text: norm($("mText").value),
+        trade: norm($("mTradeSel").value),
+        sys: norm($("mSysSel").value),
+        source: norm($("mSourceSel").value),
+        attach: norm($("mAttach").value),
+        remark: norm($("mRemark").value),
+        date: norm($("mDate").value) || todayISO(),
+        updatedAt: nowISO(),
+        rev: "r" + Date.now().toString(16) + Math.random().toString(16).slice(2,6),
+        deleted: false,
+        _touch: touch
+      };
+      return ensureRowV1(r);
+    }
+
+    function upsertRow(row){
+      var found = false;
+      for(var i=0;i<state.db.length;i++){
+        var r = ensureRowV1(state.db[i]);
+        if(r && r.uid===row.uid){
+          state.db[i] = mergeTwo(r, row);
+          found = true;
+          break;
+        }
+      }
+      if(!found) state.db.push(row);
+      markDirty(row.uid);
+      saveLocal({ db: state.db, counter: state.counter });
+      buildDictsFromDb();
+      refresh();
+    }
+
+    function deleteRow(uid){
+      uid = norm(uid);
+      if(!uid) return;
+      for(var i=0;i<state.db.length;i++){
+        var r = ensureRowV1(state.db[i]);
+        if(r && r.uid===uid){
+          r.deleted = true;
+          r.updatedAt = nowISO();
+          r.rev = "r" + Date.now().toString(16) + Math.random().toString(16).slice(2,6);
+          state.db[i] = r;
+          break;
+        }
+      }
+      markDirty(uid);
+      saveLocal({ db: state.db, counter: state.counter });
+      refresh();
+    }
+
+    // ---------------------------
+    // Prompt modal (add trade/sys/source)
+    // ---------------------------
+    var promptMode = "";
+
+function setPromptListOptions(arr){
+  var dl = $("pList");
+  if(!dl) return;
+  dl.innerHTML = "";
+  (arr||[]).forEach(function(v){
+    v = norm(v);
+    if(!v) return;
+    var op = document.createElement("option");
+    op.value = v;
+    dl.appendChild(op);
   });
 }
 
-function start(){
-  if(!TasunAuth.ensureLoggedIn()) return;
-  syncUserUI();
-
-  $("navToEntry").onclick = ()=>go("捷運汐止東湖線統包工程-資料明細表登錄.html");
-  $("navBackDB").onclick = ()=>go("捷運汐止東湖線統包工程-資料庫.html");
-  $("navBackXidong").onclick = ()=>go("汐東工程管理表.html");
-  setupMoreMenu("捷運汐止東湖線統包工程-資料庫.html");
-
-  $("btnHome").onclick = ()=>go("index.html");
-  $("btnReLogin").onclick = ()=> TasunAuth.open("請重新登入或切換帳號");
-
-  $("btnClear").onclick = ()=>{
-    $("q").value=""; $("trade").value=""; $("system").value=""; $("from").value=""; $("to").value="";
-    render();
-  };
-
-  $("btnSync").onclick = ()=>{ toast("同步中…"); cloudPull().then(()=>{ loadDB(); rebuildSelects(); render(); toast("同步完成"); }); };
-
-  loadDB();
-  rebuildSelects();
-  render();
-
-  ["q","trade","system","from","to"].forEach(id=>{
-    $(id).addEventListener("input", render);
-    $(id).addEventListener("change", render);
-  });
-
-  cloudPull().then(()=>{ loadDB(); rebuildSelects(); render(); }).catch(()=>{});
-  startWatch();
+function getPromptOptions(mode){
+  var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
+  if(mode==="trade"){
+    return uniqueOf(rows.map(function(r){return r.trade;})).concat(loadDict(TRADE_DICT_KEY)).filter(Boolean);
+  }
+  if(mode==="sys"){
+    var t = norm($("mTradeSel").value);
+    if(t) return collectSysForTrade(t, state.db);
+    return uniqueOf(rows.map(function(r){return r.sys;})).concat(loadDict(SYS_DICT_KEY)).filter(Boolean);
+  }
+  if(mode==="source"){
+    return uniqueOf(rows.map(function(r){return r.source;})).concat(loadDict(SOURCE_DICT_KEY)).filter(Boolean);
+  }
+  return [];
 }
 
-window.__onAuthed = ()=>{ toast("登入成功"); start(); };
+ // "trade" | "sys" | "source"
+    function openPrompt(mode){
+      promptMode = mode;
+      $("pMask").style.display="flex";
+      $("pInput").value="";
+      if(mode==="trade"){
+        $("pTitle").textContent="新增工種";
+        $("pLabel").textContent="請輸入工種";
+        $("pHint").textContent="新增後會加入「工種字典」。";
+      }else if(mode==="sys"){
+        $("pTitle").textContent="新增系統";
+        $("pLabel").textContent="請輸入系統";
+        $("pHint").textContent="新增後會加入「系統字典」，並綁定到目前工種。";
+      }else{
+        $("pTitle").textContent="新增出處";
+        $("pLabel").textContent="請輸入出處";
+        $("pHint").textContent="新增後會加入「出處字典」。";
+      }
+      // ✅ 讓「新增」視窗也能用下拉建議（不改 UI；用 datalist）
+      setPromptListOptions(uniqueOf(getPromptOptions(mode)));
+      setTimeout(function(){ $("pInput").focus(); }, 50);
+    }
+    function closePrompt(){ $("pMask").style.display="none"; promptMode=""; }
 
-TasunAuth.init();
-start();
+    function commitPrompt(){
+      var val = norm($("pInput").value);
+      if(!val){ toast("請輸入內容"); return; }
+
+      if(promptMode==="trade"){
+        var trades = uniqueOf(loadDict(TRADE_DICT_KEY).concat([val]));
+        saveDict(TRADE_DICT_KEY, trades);
+        rebuildFilterOptions();
+        $("mTradeSel").value = val;
+        onModalTradeChanged();
+        toast("已新增工種");
+      }else if(promptMode==="sys"){
+        var syss = uniqueOf(loadDict(SYS_DICT_KEY).concat([val]));
+        saveDict(SYS_DICT_KEY, syss);
+
+        var t = norm($("mTradeSel").value);
+        if(t){
+          TRADE_SYS_MAP[t] = TRADE_SYS_MAP[t] || [];
+          if(!TRADE_SYS_MAP[t].includes(val)) TRADE_SYS_MAP[t].push(val);
+          saveMap(TRADE_SYS_MAP);
+        }
+        rebuildFilterOptions();
+        $("mSysSel").value = val;
+        toast("已新增系統並綁定");
+      }else if(promptMode==="source"){
+        var srcs = uniqueOf(loadDict(SOURCE_DICT_KEY).concat([val]));
+        saveDict(SOURCE_DICT_KEY, srcs);
+        rebuildFilterOptions();
+        $("mSourceSel").value = val;
+        toast("已新增出處");
+      }
+      closePrompt();
+    }
+
+    // ---------------------------
+    // Cloud API
+    // ---------------------------
+    async function cloudHealth(){
+      var cfg = await loadCloudCfg();
+      state.cloud.apiBase = cfg.apiBase;
+      state.cloud.endpoints = cfg.endpoints;
+
+      try{
+        var url = joinApiBase(cfg.apiBase, cfg.endpoints.health);
+        var res = await fetch(addV(url), { cache:"no-store" });
+        state.cloud.ok = !!(res && res.ok);
+        if(state.cloud.ok) state.cloud.lastOkAt = Date.now();
+      }catch(e){
+        state.cloud.ok = false;
+      }
+      refresh();
+      return state.cloud.ok;
+    }
+
+    function buildCloudEnvelope(payload){
+      // Worker side commonly accepts JSON body; keep flexible
+      return {
+        pageKey: PAGE_KEY,
+        resourceKey: PAGE_KEY,
+        pk: "uid",
+        client: { appVer: APP_VER, ua: navigator.userAgent, at: nowISO() },
+        payload: payload
+      };
+    }
+
+    async function cloudRead(){
+      var cfg = await loadCloudCfg();
+      var url = joinApiBase(cfg.apiBase, cfg.endpoints.read);
+      var body = buildCloudEnvelope({ op:"read" });
+      var res = await fetch(addV(url), {
+        method:"POST",
+        headers: { "content-type":"application/json" },
+        body: JSON.stringify(body)
+      });
+      if(!res.ok) throw new Error("read failed");
+      var json = await res.json();
+      var un = unwrap(json);
+      // accept shapes: {db:[...], counter}, {data:{db:[]}}, {payload:{db:[]}}
+      var items = un && (un.items || un.db || (un.data && (un.data.items||un.data.db)) || (un.payload && (un.payload.items||un.payload.db)) || un.rows) || [];
+      var counter = un && (un.counter || (un.data && un.data.counter) || 0) || 0;
+      if(!Array.isArray(items)) items = [];
+      return { items: items, counter: Number(counter||0)||0 };
+    }
+
+    async function cloudMerge(localPayload){
+      var cfg = await loadCloudCfg();
+      var url = joinApiBase(cfg.apiBase, cfg.endpoints.merge);
+      var body = buildCloudEnvelope({ op:"merge", items: localPayload.items, counter: localPayload.counter });
+      var res = await fetch(addV(url), {
+        method:"POST",
+        headers: { "content-type":"application/json" },
+        body: JSON.stringify(body)
+      });
+      if(!res.ok) throw new Error("merge failed");
+      var json = await res.json();
+      var un = unwrap(json);
+      var items = un && (un.items || un.db || (un.data && (un.data.items||un.data.db)) || (un.payload && (un.payload.items||un.payload.db)) || un.rows) || [];
+      var counter = un && (un.counter || (un.data && un.data.counter) || 0) || 0;
+      if(!Array.isArray(items)) items = [];
+      return { items: items, counter: Number(counter||0)||0 };
+    }
+
+        async function syncFromCloud(){
+      var silent = false;
+      var cfg = await loadCloudCfg();
+      if(!cfg || !isValidApiBase(cfg.apiBase)){
+        toast("雲端未設定/無效"); return;
+      }
+      try{
+        var remote = await cloudRead();
+        var out = mergePayload(remote, { db: state.db, counter: state.counter });
+        state.db = out.db;
+        state.counter = out.counter;
+
+        state.lastSyncAt = Date.now();
+        await idbClearOps(PAGE_KEY);
+        await saveLocal({ db: state.db, counter: state.counter });
+
+        buildDictsFromDb();
+        refresh();
+        toast("已從雲端更新");
+      }catch(e){
+        toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
+      }
+    }
+
+        async function syncToCloud(opts){
+      opts = (opts && typeof opts==="object") ? opts : {};
+      var silent = !!opts.silent;
+      var reason = opts.reason || "";
+
+      var cfg = await loadCloudCfg();
+      if(!cfg || !isValidApiBase(cfg.apiBase)){
+        toast("雲端未設定/無效"); return;
+      }
+
+      var meta = null;
+      try{ meta = await idbGetMeta(PAGE_KEY); }catch(e){ meta=null; }
+      var lastSyncAt = Number(state.lastSyncAt || (meta && meta.lastSyncAt) || 0) || 0;
+
+      var dirtyUids = [];
+      try{ dirtyUids = await idbGetDirtyUids(PAGE_KEY, lastSyncAt); }catch(e){ dirtyUids = []; }
+
+      if(!dirtyUids.length){
+        if(!silent) toast("沒有需要上傳的本機變更");
+        return;
+      }
+
+      var dirtySet = new Set(dirtyUids.map(norm));
+      var sendRows = state.db
+        .map(ensureRowV1)
+        .filter(Boolean)
+        .filter(function(r){ return dirtySet.has(norm(r.uid)); });
+
+      var payload = {
+        pageKey: PAGE_KEY,
+        clientId: state.clientId || getClientId(),
+        since: lastSyncAt || 0,
+        partial: true,
+        payload: { items: sendRows, counter: state.counter }
+      };
+
+      try{
+        var merged = await cloudMerge(payload);
+        var out = mergePayload(merged, { db: state.db, counter: state.counter });
+        state.db = out.db;
+        state.counter = out.counter;
+
+        state.lastSyncAt = Date.now();
+        await idbClearOps(PAGE_KEY);
+        await saveLocal({ db: state.db, counter: state.counter });
+
+        buildDictsFromDb();
+        refresh();
+        if(!silent) toast("雲端同步完成（增量）");
+      }catch(e){
+        toast("雲端同步失敗：" + (e && e.message ? e.message : String(e)));
+      }
+    }
+
+    // ---------------------------
+    // Export / Import helpers (backup)
+    // ---------------------------
+    function downloadText(filename, text){
+      var blob = new Blob([text], {type:"application/json;charset=utf-8"});
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function(){
+        URL.revokeObjectURL(a.href);
+        a.remove();
+      }, 0);
+    }
+
+    function exportBackup(){
+      var pack = {
+        meta: { app:"Tasun sxdh-notes", ver: APP_VER, exportedAt: nowISO(), pageKey: PAGE_KEY },
+        items: state.db.map(ensureRowV1).filter(Boolean),
+        counter: state.counter,
+        dicts: {
+          trades: loadDict(TRADE_DICT_KEY),
+          syss: loadDict(SYS_DICT_KEY),
+          sources: loadDict(SOURCE_DICT_KEY),
+          tradeSysMap: loadMap()
+        }
+      };
+      downloadText("捷運汐東線事項記錄_backup_"+APP_VER+".json", JSON.stringify(pack, null, 2));
+      toast("已匯出備份");
+    }
+
+    // ---------------------------
+    // Read mode
+    // ---------------------------
+    function applyReadMode(on){
+      state.readMode = !!on;
+      document.body.classList.toggle("readMode", state.readMode);
+      $("btnRead").querySelector(".t").textContent = "閱讀模式：" + (state.readMode ? "開" : "關");
+      localStorage.setItem(READ_MODE_KEY, state.readMode ? "1" : "0");
+      refresh();
+    }
+
+    // ---------------------------
+    // Nav / menus
+    // ---------------------------
+    function navTo(href){
+      href = norm(href);
+      if(!href) return;
+      location.href = addV(href);
+    }
+
+    function setupMobileMenu(){
+      var btn = $("mMoreBtn");
+      var menu = $("mMoreMenu");
+      if(!btn || !menu) return;
+
+      btn.addEventListener("click", function(e){
+        e.stopPropagation();
+        menu.style.display = (menu.style.display==="none" || !menu.style.display) ? "block" : "none";
+      });
+      document.addEventListener("click", function(){ menu.style.display="none"; });
+      menu.querySelectorAll(".menuItem").forEach(function(it){
+        it.addEventListener("click", function(){
+          navTo(this.dataset.href);
+        });
+      });
+    }
+
+    // ---------------------------
+    // Login
+    // ---------------------------
+    function openLogin(){
+      $("loginMask").style.display="flex";
+      $("loginErr").style.display="none";
+      $("loginPass").value="";
+      var auth = ensureAuthTable();
+      var sel = $("loginUser");
+      sel.innerHTML = '<option value="">請選擇帳號</option>';
+      auth.users.forEach(function(u){
+        var op = document.createElement("option");
+        op.value = u.user;
+        op.textContent = (u.name||u.user) + " ("+(u.role||"read")+")";
+        sel.appendChild(op);
+      });
+    }
+    function closeLogin(){ $("loginMask").style.display="none"; }
+
+    function applyUser(u){
+      state.user = u;
+      state.role = u && u.role ? u.role : "read";
+      $("uName").textContent = u && (u.name||u.user) ? (u.name||u.user) : "—";
+      $("uRole").textContent = state.role || "—";
+
+      var canWrite = (state.role==="admin" || state.role==="write");
+      $("btnAdd").style.display = canWrite ? "" : "none";
+      $("btnEdit").style.display = canWrite ? "" : "none";
+      $("btnToken").style.display = (state.role==="admin") ? "" : "none";
+      refresh();
+    }
+
+    function doLogin(){
+      var user = norm($("loginUser").value);
+      var pass = norm($("loginPass").value);
+      if(!user || !pass){
+        $("loginErr").style.display="block";
+        $("loginErr").textContent="請選擇帳號並輸入密碼";
+        return;
+      }
+      var auth = ensureAuthTable();
+      var hit = auth.users.find(function(u){ return u.user===user && u.pass===pass; });
+      if(!hit){
+        $("loginErr").style.display="block";
+        $("loginErr").textContent="帳號或密碼錯誤";
+        return;
+      }
+      var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
+      setCurrentUser(cur);
+      applyUser(cur);
+      closeLogin();
+      toast("登入成功");
+    }
+
+    // ---------------------------
+    // Cloud setting modal
+    // ---------------------------
+    function openToken(){
+      $("tokenMask").style.display="flex";
+      $("tokenErr").style.display="none";
+      $("tokenInput").value = "";
+      updateTokenHint();
+    }
+    function closeToken(){ $("tokenMask").style.display="none"; }
+
+    async function updateTokenHint(){
+      var cfg = await loadCloudCfg();
+      var txt = (cfg && cfg.apiBase) ? cfg.apiBase : "—";
+      $("tokenHint").textContent = "目前狀態：" + txt;
+    }
+
+    function saveToken(){
+      var raw = norm($("tokenInput").value);
+      if(!raw){
+        $("tokenErr").style.display="block";
+        $("tokenErr").textContent="請貼上 apiBase 或 JSON";
+        return;
+      }
+      var js = parseJsonLenient(raw);
+      if(js && typeof js==="object" && (js.apiBase || js.endpoints)){
+        if(js.apiBase){
+          if(!isValidApiBase(js.apiBase)){
+            $("tokenErr").style.display="block";
+            $("tokenErr").textContent="apiBase 格式不正確";
+            return;
+          }
+          localStorage.setItem(API_BASE_LS_KEY, norm(js.apiBase));
+        }
+        if(js.endpoints){
+          localStorage.setItem(API_EP_LS_KEY, JSON.stringify(normalizeEndpoints(js.endpoints)));
+        }
+      }else{
+        if(!isValidApiBase(raw)){
+          $("tokenErr").style.display="block";
+          $("tokenErr").textContent="apiBase 格式不正確";
+          return;
+        }
+        localStorage.setItem(API_BASE_LS_KEY, raw);
+      }
+      _cloudCfgCache = null;
+      toast("已儲存雲端設定");
+      updateTokenHint();
+      cloudHealth();
+    }
+
+    function clearToken(){
+      localStorage.removeItem(API_BASE_LS_KEY);
+      localStorage.removeItem(API_EP_LS_KEY);
+      _cloudCfgCache = null;
+      toast("已清除雲端設定");
+      updateTokenHint();
+      cloudHealth();
+    }
+
+    function toggleTokenVis(){
+      var inp = $("tokenInput");
+      inp.type = (inp.type==="password") ? "text" : "password";
+    }
+
+    // ---------------------------
+    // Wire events
+    // ---------------------------
+    function wire(){
+      $("navBack").addEventListener("click", function(){ navTo("汐東工程管理表.html"); });
+      $("mBack").addEventListener("click", function(){ navTo("汐東工程管理表.html"); });
+      setupMobileMenu();
+
+      $("btnView").addEventListener("click", openView);
+      $("btnEdit").addEventListener("click", openEdit);
+      $("btnAdd").addEventListener("click", openAdd);
+
+      $("btnCloud").addEventListener("click", syncFromCloud);
+      $("btnExport").addEventListener("click", exportBackup);
+      $("btnClear").addEventListener("click", function(){
+        $("qText").value="";
+        $("fTrade").value="";
+        $("fSys").value="";
+        refresh();
+      });
+
+      $("qText").addEventListener("input", function(){ refresh(); });
+      $("fTrade").addEventListener("change", onTradeFilterChanged);
+      $("fSys").addEventListener("change", function(){ refresh(); });
+
+      $("btnRead").addEventListener("click", function(){ applyReadMode(!state.readMode); });
+
+      // modal buttons
+      $("btnClose").addEventListener("click", closeMask);
+      $("btnCancel").addEventListener("click", closeMask);
+
+      $("mTradeSel").addEventListener("change", onModalTradeChanged);
+
+      $("btnAddTrade").addEventListener("click", function(){ openPrompt("trade"); });
+      $("btnAddSys").addEventListener("click", function(){ openPrompt("sys"); });
+      $("btnAddSource").addEventListener("click", function(){ openPrompt("source"); });
+
+      $("btnNetDisk").addEventListener("click", async function(){
+  // ✅ 行為修正：附件欄位為空時，「網路硬碟」仍可打開預設網路硬碟（不影響 UI）
+  var v = norm($("mAttach").value);
+  if(v){
+    window.open(addV(v), "_blank", "noopener");
+    return;
+  }
+  try{
+    var cfg = await loadCloudCfg();
+    var url = (cfg && cfg.netDiskUrl) ? String(cfg.netDiskUrl) : "https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88";
+    window.open(addV(url), "_blank", "noopener");
+  }catch(e){
+    window.open("https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88", "_blank", "noopener");
+  }
+});
+
+$("btnSave").addEventListener("click", async function(){
+        if(state.mode==="view"){ closeMask(); return; }
+        var existing = (state.mode==="edit") ? state.selectedUid : "";
+        var row = modalToRow(existing);
+        if(!row.text){ toast("請輸入記事內容"); return; }
+        if(!row.trade){ toast("請選擇工種"); return; }
+        // record trade-sys binding if both set
+        if(row.trade && row.sys){
+          TRADE_SYS_MAP[row.trade] = TRADE_SYS_MAP[row.trade] || [];
+          if(!TRADE_SYS_MAP[row.trade].includes(row.sys)) TRADE_SYS_MAP[row.trade].push(row.sys);
+          saveMap(TRADE_SYS_MAP);
+        }
+        upsertRow(row);
+        state.selectedUid = row.uid;
+        closeMask();
+        // ✅ 自動同步：不阻塞 UI（離線會自動重試）
+        scheduleSync("save", true);
+      });
+
+      $("btnDelete").addEventListener("click", async function(){
+        if(!(state.role==="admin" || state.role==="write")){ toast("目前權限不可刪除"); return; }
+        if(!state.selectedUid){ toast("請先選取一筆"); return; }
+        if(!confirm("確定刪除？（可在雲端同步後仍保留刪除狀態）")) return;
+        deleteRow(state.selectedUid);
+        closeMask();
+        // ✅ 自動同步：不阻塞 UI（離線會自動重試）
+        scheduleSync("delete", true);
+      });
+
+      // prompt
+      $("pClose").addEventListener("click", closePrompt);
+      $("pCancel").addEventListener("click", closePrompt);
+      $("pOk").addEventListener("click", commitPrompt);
+      $("pInput").addEventListener("keydown", function(e){
+        if(e.key==="Enter"){ e.preventDefault(); commitPrompt(); }
+      });
+
+      // token modal
+      $("btnToken").addEventListener("click", openToken);
+      $("tokenClose").addEventListener("click", closeToken);
+      $("tokenSave").addEventListener("click", saveToken);
+      $("tokenClear").addEventListener("click", clearToken);
+      $("tokenToggle").addEventListener("click", toggleTokenVis);
+
+      // login modal
+      $("loginClose").addEventListener("click", closeLogin);
+      $("loginBtn").addEventListener("click", doLogin);
+      $("loginPass").addEventListener("keydown", function(e){ if(e.key==="Enter") doLogin(); });
+      $("loginToAuth").addEventListener("click", function(){ navTo("權限表.html"); });
+      // ---------------------------
+      // ✅ Auto sync triggers
+      // ---------------------------
+      window.addEventListener("online", function(){ scheduleSync("online", true); });
+      window.addEventListener("focus", function(){ scheduleSync("focus"); });
+      document.addEventListener("visibilitychange", function(){
+        if(!document.hidden) scheduleSync("visible");
+      });
+      // 週期保底同步（避免長時間開著頁面但沒互動）
+      setInterval(function(){ scheduleSync("periodic"); }, SYNC_PERIODIC_MS);
+
+    }
+
+    // ---------------------------
+    // Boot
+    // ---------------------------
+        async function boot(){
+      try{ await openIDB(); }catch(e){}
+
+      var p = await loadDb();
+      state.db = p.db;
+      state.counter = p.counter;
+
+      state.clientId = state.clientId || getClientId();
+
+      recoverLegacyLocal();
+      migrateEnsureUidInPlace();
+
+      state.readMode = localStorage.getItem(READ_MODE_KEY)==="1";
+      applyReadMode(state.readMode);
+
+      ensureAuthTable();
+      var cur = getCurrentUser();
+      if(cur) applyUser(cur);
+      else applyUser({ user:"—", role:"read", name:"—" });
+
+      wire();
+      refresh();
+      cloudHealth();
+      if(!cur) openLogin();
+
+      try{
+        await idbPutMeta({
+          pageKey: PAGE_KEY,
+          counter: state.counter,
+          lastSyncAt: Number(state.lastSyncAt||0)||0,
+          clientId: state.clientId,
+          updatedAt: nowISO()
+        });
+      }catch(e){}
+    }
+
+    boot().catch(function(e){ console.error(e); });
+  })();
   </script>
 </body>
 </html>
