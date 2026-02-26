@@ -834,7 +834,7 @@
     // ---------------------------
     // Constants / Keys
     // ---------------------------
-    var PAGE_KEY = "sxdh-notes";
+    var PAGE_KEY = "捷運汐東線事項記錄.html";
     var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || "dev";
     var RESOURCES_URL = "tasun-resources.json";
 
@@ -2355,21 +2355,21 @@ function getPromptOptions(mode){
       return state.cloud.ok;
     }
 
-    function buildCloudEnvelope(payload, rk){
+    function buildCloudEnvelope(payload){
       // Worker side commonly accepts JSON body; keep flexible
       return {
         pageKey: PAGE_KEY,
-        resourceKey: (rk || CLOUD_RESOURCE_KEY),
+        resourceKey: PAGE_KEY,
         pk: "uid",
         client: { appVer: APP_VER, ua: navigator.userAgent, at: nowISO() },
         payload: payload
       };
     }
 
-    async function cloudRead(rk){
+    async function cloudRead(){
       var cfg = await loadCloudCfg();
       var url = joinApiBase(cfg.apiBase, cfg.endpoints.read);
-      var body = buildCloudEnvelope({ op:"read" }, (rk || CLOUD_RESOURCE_KEY));
+      var body = buildCloudEnvelope({ op:"read" });
       var res = await fetch(addV(url), {
         method:"POST",
         headers: { "content-type":"application/json" },
@@ -2378,16 +2378,17 @@ function getPromptOptions(mode){
       if(!res.ok) throw new Error("read failed");
       var json = await res.json();
       var un = unwrap(json);
+      // accept shapes: {db:[...], counter}, {data:{db:[]}}, {payload:{db:[]}}
       var db = un && (un.db || (un.data && un.data.db) || (un.payload && un.payload.db) || un.rows) || [];
       var counter = un && (un.counter || (un.data && un.data.counter) || 0) || 0;
       if(!Array.isArray(db)) db = [];
       return { db: db, counter: Number(counter||0)||0 };
     }
 
-    async function cloudMerge(localPayload, rk){
+    async function cloudMerge(localPayload){
       var cfg = await loadCloudCfg();
       var url = joinApiBase(cfg.apiBase, cfg.endpoints.merge);
-      var body = buildCloudEnvelope({ op:"merge", db: localPayload.db, counter: localPayload.counter }, (rk || CLOUD_RESOURCE_KEY));
+      var body = buildCloudEnvelope({ op:"merge", db: localPayload.db, counter: localPayload.counter });
       var res = await fetch(addV(url), {
         method:"POST",
         headers: { "content-type":"application/json" },
@@ -2402,65 +2403,27 @@ function getPromptOptions(mode){
       return { db: db, counter: Number(counter||0)||0 };
     }
 
-        async function syncFromCloud(opts){
-      opts = opts||{};
-      var silent = !!opts.silent;
+        async function syncFromCloud(){
+      var silent = false;
+      var cfg = await loadCloudCfg();
+      if(!cfg || !isValidApiBase(cfg.apiBase)){
+        if(!silent) toast("雲端未設定/無效"); return;
+      }
       try{
-        if(!CLOUD_CFG || !CLOUD_CFG.enabled) return;
-        if(cloudSyncLock) return;
-        cloudSyncLock = true;
-        setCloudStat("同步中…");
+        var remote = await cloudRead();
+        var out = mergePayload(remote, { db: state.db, counter: state.counter });
+        state.db = out.db;
+        state.counter = out.counter;
 
-        // 先讀新制 key
-        var res = await cloudRead(CLOUD_RESOURCE_KEY);
+        state.lastSyncAt = Date.now();
+        await idbClearOps(PAGE_KEY);
+        await saveLocal({ db: state.db, counter: state.counter });
 
-        // ✅ 若新制沒資料，讀舊制 key（相容既有雲端資料），並自動搬移到新制
-        var migrate = false;
-        if(res && Array.isArray(res.db) && res.db.length===0){
-          try{
-            var legacy = await cloudRead(CLOUD_LEGACY_KEY);
-            if(legacy && Array.isArray(legacy.db) && legacy.db.length>0){
-              res = legacy;
-              migrate = true;
-            }
-          }catch(e){}
-        }
-
-        // 合併到本機（雲端勝：同 uid updatedAt 新者勝，並確保 uid 去重）
-        var remoteDb = Array.isArray(res.db) ? res.db : [];
-        var remoteCounter = Number(res.counter||0)||0;
-
-        // 讀出本機
-        var localPack = await loadLocalPack();
-        var localDb = Array.isArray(localPack.items) ? localPack.items : [];
-        var localCounter = Number(localPack.counter||0)||0;
-
-        // 合併（updatedAt 新者勝；同時刻 rev 字典序決勝）
-        var merged = mergeItems(localDb, remoteDb);
-        var nextCounter = Math.max(localCounter, remoteCounter, merged.length);
-
-        await saveLocalPack({ items: merged, counter: nextCounter }, { silent:true });
-
-        // 立即刷新畫面
-        try{
-          DB = merged.slice();
-          rebuildDerived();
-          render();
-        }catch(e){}
-
-        if(migrate){
-          // ✅ 搬移：把舊制資料寫回新制 key（不阻塞 UI）
-          setTimeout(function(){
-            try{ syncToCloud({ force:true, silent:true }); }catch(e){}
-          }, 50);
-        }
-
-        setCloudStat("已同步");
+        buildDictsFromDb();
+        refresh();
+        toast("已從雲端更新");
       }catch(e){
-        if(!silent) toast("雲端讀取失敗（將使用本機資料）");
-        setCloudStat("同步失敗");
-      }finally{
-        cloudSyncLock = false;
+        toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
       }
     }
 
@@ -2501,7 +2464,7 @@ function getPromptOptions(mode){
       };
 
       try{
-        var merged = await cloudMerge(payload, CLOUD_RESOURCE_KEY);
+        var merged = await cloudMerge(payload);
         var out = mergePayload(merged, { db: state.db, counter: state.counter });
         state.db = out.db;
         state.counter = out.counter;
