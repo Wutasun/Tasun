@@ -2107,24 +2107,45 @@ function unwrap(obj){
     }
 
     function refresh(){
-      rebuildFilterOptions();
-      var rows = getVisibleRows();
+      var rows = [];
+      try{ rebuildFilterOptions(); }catch(e){}
+      try{ rows = getVisibleRows(); }catch(e){ rows = []; }
 
-      renderTable(rows);
-      renderCards(rows);
+      try{ renderTable(rows); }catch(e){}
+      try{ renderCards(rows); }catch(e){}
 
-      // hint
-      var cloudTxt = state.cloud.ok ? "已同步" : "未設定";
-      var lastTxt = state.cloud.lastOkAt ? fmtClock(state.cloud.lastOkAt) : "—";
-      var roleTxt = state.role==="admin" ? "admin" : (state.role==="write"?"可編輯":"唯讀");
+      // hint（狀態列）—不讓前面任何錯誤影響顯示
+      try{
+        var total = 0;
+        try{
+          total = String(state.db.map(normalizeRow).filter(Boolean).filter(function(r){return !r.deleted;}).length);
+        }catch(_e){
+          total = String(Array.isArray(state.db)?state.db.length:0);
+        }
 
-      $("hint").innerHTML = "";
-      function hb(k,v,bad){
-        var s=document.createElement("span");
-        s.className="hb"+(bad?" bad":"");
-        s.innerHTML = '<span class="k">'+escHtml(k)+'</span><span class="v">'+escHtml(v)+'</span>';
-        return s;
-      }
+        var cfgOk = !!state.cloud.cfgOk;
+        var cloudTxt = cfgOk ? (state.cloud.ok ? "已同步" : "待同步") : "未設定";
+        var lastTxt = state.cloud.lastOkAt ? fmtClock(state.cloud.lastOkAt) : "—";
+        var roleTxt = state.role==="admin" ? "admin" : (state.role==="write"?"可編輯":"唯讀");
+
+        var hintEl = $("hint");
+        if(!hintEl) return;
+
+        hintEl.innerHTML = "";
+        function hb(k,v,bad){
+          var s=document.createElement("span");
+          s.className="hb"+(bad?" bad":"");
+          s.innerHTML = '<span class="k">'+escHtml(k)+'</span><span class="v">'+escHtml(v)+'</span>';
+          return s;
+        }
+        hintEl.appendChild(hb("版本", APP_VER));
+        hintEl.appendChild(hb("筆數", String(rows.length) + " / " + total));
+        hintEl.appendChild(hb("選取", state.selectedUid ? "已選取" : "未選取", !state.selectedUid));
+        hintEl.appendChild(hb("雲端", cloudTxt, !cfgOk || !state.cloud.ok));
+        hintEl.appendChild(hb("最後", lastTxt));
+        hintEl.appendChild(hb("權限", roleTxt));
+      }catch(e){}
+    }
       $("hint").appendChild(hb("版本", APP_VER));
       $("hint").appendChild(hb("筆數", String(rows.length) + " / " + String(state.db.map(normalizeRow).filter(Boolean).filter(function(r){return !r.deleted;}).length)));
       $("hint").appendChild(hb("選取", state.selectedUid ? "已選取" : "未選取", !state.selectedUid));
@@ -2422,6 +2443,14 @@ function getPromptOptions(mode){
       var cfg = await loadCloudCfg();
       state.cloud.apiBase = cfg.apiBase;
       state.cloud.endpoints = cfg.endpoints;
+      // 是否已配置（apiBase 合法）—用於狀態列顯示，避免把「離線/未健康」誤判成「未設定」
+      state.cloud.cfgOk = isValidApiBase(cfg.apiBase);
+
+      if(!state.cloud.cfgOk){
+        state.cloud.ok = false;
+        refresh();
+        return false;
+      }
 
       try{
         var url = joinApiBase(cfg.apiBase, cfg.endpoints.health);
