@@ -831,26 +831,6 @@
   (function(){
     "use strict";
 
-
-    // ---------------------------
-    // Storage wrapper (file:// opaque origin safe) - NO UI change
-    // ---------------------------
-    var LS = (function(){
-      try{
-        var t="__tasun_ls_test__";
-        window.LS.setItem(t,"1");
-        window.LS.removeItem(t);
-        return window.localStorage;
-      }catch(e){
-        var mem = Object.create(null);
-        return {
-          getItem: function(k){ return Object.prototype.hasOwnProperty.call(mem,k) ? mem[k] : null; },
-          setItem: function(k,v){ mem[k] = String(v); },
-          removeItem: function(k){ try{ delete mem[k]; }catch(_){} }
-        };
-      }
-    })();
-
     // ---------------------------
     // Constants / Keys
     // ---------------------------
@@ -899,7 +879,7 @@
     var READ_MODE_KEY  = "readMode";
     var TRADE_SYS_MAP_KEY = "tradeSysMap";
     function _loadPack(){
-      var p = safeJSON(LS.getItem(DB_KEY));
+      var p = safeJSON(localStorage.getItem(DB_KEY));
       if(!p) p = {};
       var items = p.items || p.db || p.rows || [];
       var counter = Number(p.counter || p.cnt || 0);
@@ -907,7 +887,7 @@
     }
     function _savePack(pack){
       var out = { items: Array.isArray(pack.items)? pack.items: [], counter: Number(pack.counter||0), rev: (pack.rev||""), updatedAt: (pack.updatedAt|| new Date().toISOString()) };
-      LS.setItem(DB_KEY, JSON.stringify(out));
+      localStorage.setItem(DB_KEY, JSON.stringify(out));
     }
     function _loadMeta(){
       var m = safeJSON(sessionStorage.getItem(META_KEY));
@@ -949,10 +929,10 @@
     var _idb = null;
 
     function getClientId(){
-      var cid = norm(LS.getItem(CLIENT_ID_KEY));
+      var cid = norm(localStorage.getItem(CLIENT_ID_KEY));
       if(!cid){
         cid = "c" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2);
-        LS.setItem(CLIENT_ID_KEY, cid);
+        localStorage.setItem(CLIENT_ID_KEY, cid);
       }
       return cid;
     }
@@ -1149,7 +1129,7 @@
     // Auth
     // ---------------------------
     function ensureAuthTable(){
-      var t = safeJSON(LS.getItem(AUTH_KEY));
+      var t = safeJSON(localStorage.getItem(AUTH_KEY));
       if(!t || typeof t !== "object"){
         t = {
           users: [
@@ -1160,21 +1140,39 @@
           updatedAt: nowISO(),
           rev: "seed"
         };
-        LS.setItem(AUTH_KEY, JSON.stringify(t));
+        localStorage.setItem(AUTH_KEY, JSON.stringify(t));
       }
       if(!Array.isArray(t.users)) t.users = [];
       return t;
     }
 
     function getCurrentUser(){
-      var cur = safeJSON(LS.getItem(CURRENT_KEY));
-      if(cur && cur.user && cur.role) return cur;
-      return null;
+      var cur = safeJSON(localStorage.getItem(CURRENT_KEY));
+      if(!(cur && cur.user && cur.role)) return null;
+
+      // ✅ 嚴格驗證：避免留下 user="-" / role="-" 造成按鈕永遠不顯示
+      var role = String(cur.role||"").trim();
+      if(role!=="admin" && role!=="write" && role!=="read") return null;
+
+      var auth = null;
+      try{ auth = ensureAuthTable(); }catch(e){ auth = null; }
+      var okUser = false;
+      if(auth && Array.isArray(auth.users)){
+        okUser = auth.users.some(function(u){ return u && u.user===cur.user; });
+      }
+      if(!okUser) return null;
+
+      // 正規化回傳
+      return {
+        user: String(cur.user||"").trim(),
+        role: role,
+        name: String(cur.name||cur.user||"").trim() || "—"
+      };
     }
 
     function setCurrentUser(u){
-      if(!u) LS.removeItem(CURRENT_KEY);
-      else LS.setItem(CURRENT_KEY, JSON.stringify(u));
+      if(!u) localStorage.removeItem(CURRENT_KEY);
+      else localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
     }
 
     function roleRank(role){
@@ -1266,10 +1264,10 @@
       }catch(e){ /* ignore */ }
 
       // 2) local overrides (optional)
-      var ob = norm(LS.getItem(API_BASE_LS_KEY));
+      var ob = norm(localStorage.getItem(API_BASE_LS_KEY));
       if(isValidApiBase(ob)) cfg.apiBase = ob;
 
-      var oe = safeJSON(LS.getItem(API_EP_LS_KEY));
+      var oe = safeJSON(localStorage.getItem(API_EP_LS_KEY));
       if(oe) cfg.endpoints = normalizeEndpoints(Object.assign({}, cfg.endpoints, oe));
 
       _cloudCfgCache = cfg;
@@ -1295,7 +1293,7 @@
       }
 
       // 2) migrate from localStorage (legacy)
-      var arr = safeJSON(LS.getItem(DB_KEY));
+      var arr = safeJSON(localStorage.getItem(DB_KEY));
       if(!Array.isArray(arr)) arr = [];
       var c = Number(_loadPack().counter||"0");
       if(!Number.isFinite(c) || c<0) c = 0;
@@ -1446,8 +1444,8 @@
 
       // localStorage fallback
       try{
-        LS.setItem(DB_KEY, JSON.stringify(dbArr));
-        LS.setItem(COUNTER_KEY, String(counter));
+        localStorage.setItem(DB_KEY, JSON.stringify(dbArr));
+        localStorage.setItem(COUNTER_KEY, String(counter));
       }catch(e){}
     }
 
@@ -1702,7 +1700,7 @@ function saveTradeSysMap(m){
       arr.sort(function(a,b){ return a.localeCompare(b,"zh-Hant"); });
       m[k] = arr;
     });
-    LS.setItem(TRADE_SYS_MAP_KEY, JSON.stringify(m));
+    localStorage.setItem(TRADE_SYS_MAP_KEY, JSON.stringify(m));
   }catch(e){}
 }
 
@@ -2155,7 +2153,9 @@ function unwrap(obj){
         function hb(k,v,bad){
           var s=document.createElement("span");
           s.className="hb"+(bad?" bad":"");
-          s.innerHTML = '<span class="k">'+escHtml(k)+'</span><span class="v">'+escHtml(v)+'</span>';
+          var kk = (k==null?"":String(k));
+          var vv = (v==null?"":String(v));
+          s.innerHTML = '<span class="k">'+escHtml(kk)+'</span><span class="v">'+escHtml(vv)+'</span>';
           return s;
         }
         hintEl.appendChild(hb("版本", APP_VER));
@@ -2659,7 +2659,7 @@ function getPromptOptions(mode){
       state.readMode = !!on;
       document.body.classList.toggle("readMode", state.readMode);
       $("btnRead").querySelector(".t").textContent = "閱讀模式：" + (state.readMode ? "開" : "關");
-      LS.setItem(READ_MODE_KEY, state.readMode ? "1" : "0");
+      localStorage.setItem(READ_MODE_KEY, state.readMode ? "1" : "0");
       refresh();
     }
 
@@ -2775,10 +2775,10 @@ function getPromptOptions(mode){
             $("tokenErr").textContent="apiBase 格式不正確";
             return;
           }
-          LS.setItem(API_BASE_LS_KEY, norm(js.apiBase));
+          localStorage.setItem(API_BASE_LS_KEY, norm(js.apiBase));
         }
         if(js.endpoints){
-          LS.setItem(API_EP_LS_KEY, JSON.stringify(normalizeEndpoints(js.endpoints)));
+          localStorage.setItem(API_EP_LS_KEY, JSON.stringify(normalizeEndpoints(js.endpoints)));
         }
       }else{
         if(!isValidApiBase(raw)){
@@ -2786,7 +2786,7 @@ function getPromptOptions(mode){
           $("tokenErr").textContent="apiBase 格式不正確";
           return;
         }
-        LS.setItem(API_BASE_LS_KEY, raw);
+        localStorage.setItem(API_BASE_LS_KEY, raw);
       }
       _cloudCfgCache = null;
       toast("已儲存雲端設定");
@@ -2795,8 +2795,8 @@ function getPromptOptions(mode){
     }
 
     function clearToken(){
-      LS.removeItem(API_BASE_LS_KEY);
-      LS.removeItem(API_EP_LS_KEY);
+      localStorage.removeItem(API_BASE_LS_KEY);
+      localStorage.removeItem(API_EP_LS_KEY);
       _cloudCfgCache = null;
       toast("已清除雲端設定");
       updateTokenHint();
@@ -2948,34 +2948,21 @@ $("btnSave").addEventListener("click", async function(){
         try{ migrateEnsureUidInPlace(); }catch(e){}
 
         try{
-          state.readMode = LS.getItem(READ_MODE_KEY)==="1";
+          state.readMode = localStorage.getItem(READ_MODE_KEY)==="1";
           applyReadMode(state.readMode);
         }catch(e){ state.readMode = false; }
 
-        
         try{ ensureAuthTable(); }catch(e){}
         try{ cur = getCurrentUser(); }catch(e){ cur = null; }
-
-        // ✅ file:// 預覽（Chrome 可能因 opaque origin 導致 localStorage 不可用）
-        //    目標：仍要能顯示「新增/編輯/雲端設定」並可登入，不改 UI。
-        if(!cur){
-          try{
-            if(location && String(location.protocol||"").toLowerCase()==="file:"){
-              var a = ensureAuthTable();
-              if(a && a.users && a.users.length){
-                var u0 = a.users[0];
-                cur = { user:u0.user, role:u0.role||"read", name:u0.name||u0.user, at: nowISO() };
-                setCurrentUser(cur);
-              }
-            }
-          }catch(_){}
-        }
+        // 若 current user 無效，清掉避免一直卡住「- / dev / 未設定」
+        if(!cur){ try{ setCurrentUser(null); }catch(_e){} }
 
         try{
           if(cur) applyUser(cur);
           else applyUser({ user:"—", role:"read", name:"—" });
         }catch(e){}
-try{ wire(); }catch(e){}
+
+        try{ wire(); }catch(e){}
         try{ refresh(); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
         try{ await autoCloudSyncOnStart(); }catch(e){}
