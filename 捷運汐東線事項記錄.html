@@ -2764,40 +2764,60 @@ $("btnSave").addEventListener("click", async function(){
     // ---------------------------
     // Boot
     // ---------------------------
-        async function boot(){
-      try{ await openIDB(); }catch(e){}
-
-      var p = await loadDb();
-      state.db = p.db;
-      state.counter = p.counter;
-
-      state.clientId = state.clientId || getClientId();
-
-      recoverLegacyLocal();
-      migrateEnsureUidInPlace();
-
-      state.readMode = localStorage.getItem(READ_MODE_KEY)==="1";
-      applyReadMode(state.readMode);
-
-      ensureAuthTable();
-      var cur = getCurrentUser();
-      if(cur) applyUser(cur);
-      else applyUser({ user:"—", role:"read", name:"—" });
-
-      wire();
-      refresh();
-      cloudHealth();
-      if(!cur) openLogin();
-
+    async function boot(){
+      // ✅ 目的：無論雲端/IndexedDB 是否異常，都要「先畫出」版本/筆數/選取/雲端/最後 等資訊。
+      // 這段只加防護，不改 UI/DOM/CSS。
+      var cur = null;
       try{
-        await idbPutMeta({
-          pageKey: PAGE_KEY,
-          counter: state.counter,
-          lastSyncAt: Number(state.lastSyncAt||0)||0,
-          clientId: state.clientId,
-          updatedAt: nowISO()
-        });
-      }catch(e){}
+        try{ await openIDB(); }catch(e){}
+
+        try{
+          var p = await loadDb();
+          state.db = p.db;
+          state.counter = p.counter;
+        }catch(e){
+          state.db = Array.isArray(state.db) ? state.db : [];
+          state.counter = Number(state.counter||0)||0;
+        }
+
+        try{ state.clientId = state.clientId || getClientId(); }catch(e){}
+
+        try{ recoverLegacyLocal(); }catch(e){}
+        try{ migrateEnsureUidInPlace(); }catch(e){}
+
+        try{
+          state.readMode = localStorage.getItem(READ_MODE_KEY)==="1";
+          applyReadMode(state.readMode);
+        }catch(e){ state.readMode = false; }
+
+        try{ ensureAuthTable(); }catch(e){}
+        try{ cur = getCurrentUser(); }catch(e){ cur = null; }
+        try{
+          if(cur) applyUser(cur);
+          else applyUser({ user:"—", role:"read", name:"—" });
+        }catch(e){}
+
+        try{ wire(); }catch(e){}
+        try{ refresh(); }catch(e){}
+        try{ cloudHealth(); }catch(e){}
+        try{ if(!cur) openLogin(); }catch(e){}
+
+        try{
+          await idbPutMeta({
+            pageKey: PAGE_KEY,
+            counter: state.counter,
+            lastSyncAt: Number(state.lastSyncAt||0)||0,
+            clientId: state.clientId,
+            updatedAt: nowISO()
+          });
+        }catch(e){}
+      }catch(e){
+        // 任何未預期錯誤：仍然嘗試畫出狀態列，避免出現「空白資訊列」。
+        try{ wire(); }catch(_e){}
+        try{ refresh(); }catch(_e){}
+        try{ if(!cur) openLogin(); }catch(_e){}
+        console.error(e);
+      }
     }
 
     boot().catch(function(e){ console.error(e); });
