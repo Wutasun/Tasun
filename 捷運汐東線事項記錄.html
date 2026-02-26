@@ -844,16 +844,33 @@
     var AUTH_KEY = "tasunAuthTable_v1";
     var CURRENT_KEY = "tasunCurrentUser_v1";
 
-    var DB_KEY = "tasunSxdhNotes_v1";
-    var COUNTER_KEY = "tasunSxdhNotes_counter_v1";
-    var READ_MODE_KEY  = "tasunSxdhNotes_readMode_v1";
-
-    var TRADE_DICT_KEY = "tasunSxdhNotes_tradeDict_v1";
-    var SYS_DICT_KEY   = "tasunSxdhNotes_sysDict_v1";
-    var SOURCE_DICT_KEY = "tasunSxdhNotes_sourceDict_v1";
-    var TRADE_SYS_MAP_KEY = "tasunSxdhNotes_tradeSysMap_v1";
-
-    // Optional overrides
+    var DB_KEY = "tasun_db_v1__" + PAGE_KEY; // localStorage 單一封包
+    var META_KEY = "tasun_meta_v1__" + PAGE_KEY; // sessionStorage（不影響「本機封包」規範）
+    var COUNTER_KEY = DB_KEY; // 相容（已改由 DB 封包 counter 取用）
+    var TRADE_DICT_KEY = "tradeDict";
+    var SYS_DICT_KEY   = "sysDict";
+    var SOURCE_DICT_KEY= "sourceDict";
+    var READ_MODE_KEY  = "readMode";
+    var TRADE_SYS_MAP_KEY = "tradeSysMap";
+    function _loadPack(){
+      var p = safeJSON(localStorage.getItem(DB_KEY));
+      if(!p) p = {};
+      var items = p.items || p.db || p.rows || [];
+      var counter = Number(p.counter || p.cnt || 0);
+      return { items: Array.isArray(items)? items: [], counter: Number.isFinite(counter)? counter: 0, rev: (p.rev||""), updatedAt: (p.updatedAt||"") };
+    }
+    function _savePack(pack){
+      var out = { items: Array.isArray(pack.items)? pack.items: [], counter: Number(pack.counter||0), rev: (pack.rev||""), updatedAt: (pack.updatedAt|| new Date().toISOString()) };
+      localStorage.setItem(DB_KEY, JSON.stringify(out));
+    }
+    function _loadMeta(){
+      var m = safeJSON(sessionStorage.getItem(META_KEY));
+      return (m && typeof m==="object") ? m : {};
+    }
+    function _saveMeta(m){
+      sessionStorage.setItem(META_KEY, JSON.stringify(m||{}));
+    }
+// Optional overrides
     var API_BASE_LS_KEY = "tasunApiBase_v1";
     var API_EP_LS_KEY   = "tasunApiEndpoints_v1__" + PAGE_KEY;
 
@@ -1234,7 +1251,7 @@
       // 2) migrate from localStorage (legacy)
       var arr = safeJSON(localStorage.getItem(DB_KEY));
       if(!Array.isArray(arr)) arr = [];
-      var c = Number(localStorage.getItem(COUNTER_KEY)||"0");
+      var c = Number(_loadPack().counter||"0");
       if(!Number.isFinite(c) || c<0) c = 0;
 
       state.lastSyncAt = 0;
@@ -1581,22 +1598,35 @@ function getVisibleRows(){
     // ---------------------------
     // Dict / Map helpers
     // ---------------------------
+    function _fieldOf(key){
+      if(key===TRADE_DICT_KEY) return "tradeDict";
+      if(key===SYS_DICT_KEY) return "sysDict";
+      if(key===SOURCE_DICT_KEY) return "sourceDict";
+      if(key===TRADE_SYS_MAP_KEY) return "tradeSysMap";
+      if(key===READ_MODE_KEY) return "readMode";
+      return String(key||"");
+    }
     function loadDict(key){
-      var a = safeJSON(localStorage.getItem(key));
+      var m = _loadMeta();
+      var a = m[_fieldOf(key)];
       return Array.isArray(a) ? a.filter(Boolean).map(function(x){return norm(x);}).filter(Boolean) : [];
     }
     function saveDict(key, arr){
-      arr = Array.isArray(arr) ? arr.filter(Boolean).map(function(x){return norm(x);}).filter(Boolean) : [];
-      // unique + sort
-      var set = new Set(arr);
-      localStorage.setItem(key, JSON.stringify(Array.from(set).sort()));
+      var m = _loadMeta();
+      m[_fieldOf(key)] = Array.isArray(arr) ? arr.filter(Boolean).map(function(x){return norm(x);}).filter(Boolean) : [];
+      _saveMeta(m);
     }
-    function loadMap(){
-      var m = safeJSON(localStorage.getItem(TRADE_SYS_MAP_KEY));
-      return (m && typeof m==="object") ? m : {};
+    function loadMap(key){
+      var m = _loadMeta();
+      var o = m[_fieldOf(key)];
+      return (o && typeof o==="object" && !Array.isArray(o)) ? o : {};
     }
-    function saveMap(m){
-      if(!m || typeof m!=="object") m = {};
+    function saveMap(key, obj){
+      var m = _loadMeta();
+      m[_fieldOf(key)] = (obj && typeof obj==="object") ? obj : {};
+      _saveMeta(m);
+    }
+;
       // normalize arrays
       Object.keys(m).forEach(function(k){
         var a = m[k];
