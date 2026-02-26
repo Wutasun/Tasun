@@ -2468,7 +2468,24 @@ function getPromptOptions(mode){
     async function cloudMerge(localPayload){
       var cfg = await loadCloudCfg();
       var url = joinApiBase(cfg.apiBase, cfg.endpoints.merge);
-      var body = buildCloudEnvelope({ op:"merge", db: localPayload.db, counter: localPayload.counter });
+
+      // ✅ 修正：相容兩種呼叫形狀
+      // 1) cloudMerge({db, counter})
+      // 2) cloudMerge({ payload:{db, counter}, partial, since, clientId ... })
+      var lp = (localPayload && typeof localPayload==="object") ? localPayload : {};
+      var inner = (lp.payload && typeof lp.payload==="object") ? lp.payload : lp;
+
+      var dbToSend = inner.db || inner.rows || inner.items || [];
+      var counterToSend = Number(inner.counter||0) || 0;
+
+      // 把可選的控制欄位一併放進 payload（Worker 若不認得會忽略）
+      var extra = {};
+      if(lp.partial!==undefined) extra.partial = !!lp.partial;
+      if(lp.since!==undefined) extra.since = Number(lp.since||0) || 0;
+      if(lp.clientId) extra.clientId = String(lp.clientId);
+
+      var body = buildCloudEnvelope(Object.assign({ op:"merge", db: dbToSend, counter: counterToSend }, extra));
+
       var res = await fetch(addV(url), {
         method:"POST",
         headers: { "content-type":"application/json" },
