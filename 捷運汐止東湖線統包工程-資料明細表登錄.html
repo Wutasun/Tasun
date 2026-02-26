@@ -6,6 +6,67 @@
   <title>捷運汐止東湖線統包工程-資料明細表登錄 · Tasun</title>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet">
 
+  <!-- ✅✅✅ 企業標準 v1：全站版本鎖定（以 tasun-version.json 為準） -->
+  <script>
+  (function(){
+    const VER_KEY = "tasun_app_ver_v1";
+    function pickVer(j){
+      try{
+        return String(
+          (j && (j.appVer ?? j.version ?? j.ver ?? j.APP_VER ?? j.TASUN_APP_VER ?? j.tasunAppVer ?? j.build)) || ""
+        ).trim();
+      }catch(e){ return ""; }
+    }
+    function withV(url){
+      const vv = (window.__CACHE_V || "").trim();
+      if(!vv) return url;
+      try{
+        const uu = new URL(url, document.baseURI);
+        if(uu.origin === location.origin){
+          uu.searchParams.set("v", vv);
+          return uu.toString();
+        }
+      }catch(e){}
+      return url;
+    }
+    function syncTo(ver){
+      try{ sessionStorage.setItem(VER_KEY, ver); }catch(e){}
+      try{ localStorage.setItem(VER_KEY, ver); }catch(e){}
+      window.__CACHE_V = ver;
+      window.__withV = withV;
+    }
+
+    (async function(){
+      try{
+        const u = new URL(location.href);
+        const cur = String(u.searchParams.get("v") || "").trim();
+        const saved = String((sessionStorage.getItem(VER_KEY) || localStorage.getItem(VER_KEY) || "")).trim();
+
+        let target = "";
+        try{
+          const r = await fetch("tasun-version.json", { cache: "no-store" });
+          if(r && r.ok){
+            const j = await r.json();
+            target = pickVer(j);
+          }
+        }catch(e){}
+
+        target = String(target || cur || saved || "").trim();
+        if(!target) return;
+
+        syncTo(target);
+
+        // 強制跳轉到最新版（避免多人多設備版本不一致）
+        if(cur !== target){
+          u.searchParams.set("v", target);
+          location.replace(u.toString());
+          return;
+        }
+      }catch(e){}
+    })();
+  })();
+  </script>
+
   <style>
     :root{
       --bg0:#070809;
@@ -159,7 +220,6 @@
     .field{display:flex; flex-direction:column; gap:6px}
     .label{font-size:12px; letter-spacing:.08em; color:var(--muted)}
 
-    /* ✅ 統一 input/select/textarea 玻璃樣式 */
     input,select,textarea{
       width:100%;
       border-radius:14px;
@@ -211,7 +271,6 @@
       backdrop-filter:blur(10px);
     }
 
-    /* ===== Login Modal ===== */
     .loginMask{
       position:fixed; inset:0;
       background:rgba(0,0,0,.68);
@@ -262,7 +321,6 @@
       line-height:1.6;
     }
 
-    /* ✅ 下拉旁邊「＋」與新增小輸入框（沿用明細表.html 的架構/視覺） */
     .selPlus{
       display:flex;
       gap:8px;
@@ -381,7 +439,6 @@
           <input id="name" placeholder="例如：電氣系統施工圖（核准版）" />
         </div>
 
-        <!-- ✅ 工種：下拉 + 旁邊「＋」可手動新增（即時更新項目） -->
         <div class="field">
           <div class="label">工種（下拉項目＝明細表不重複項目；可按「＋」新增自訂值）</div>
           <div class="selPlus">
@@ -398,7 +455,6 @@
           </div>
         </div>
 
-        <!-- ✅ 系統：依工種篩選 + 旁邊「＋」可手動新增 -->
         <div class="field">
           <div class="label">系統（會依工種篩選；可按「＋」新增自訂值）</div>
           <div class="selPlus">
@@ -439,7 +495,6 @@
     </div>
   </div>
 
-  <!-- Login Modal（共用） -->
   <div class="loginMask" id="loginMask" aria-hidden="true">
     <div class="loginModal" role="dialog" aria-modal="true" aria-label="登入">
       <div class="loginHead">
@@ -475,16 +530,17 @@
     const CURRENT_KEY = "tasunCurrentUser_v1";
     const AUTH_KEY = "tasunAuthTable_v1";
 
-    const DB_KEY = "tasunSxdhDetail_v1";
-    const COUNTER_KEY = "tasunSxdhDetail_counter_v1";
+    // ✅ 企業標準 v1：每頁唯一 pageKey（resourceKey=pageKey）
+    const pageKey = "sxdh-detail-entry";
+    const DB_KEY = `tasun_db_v1__${pageKey}`;
 
     const CLOUD_DB_URL = "https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88";
 
-    // ✅「新增…」選項固定值（與明細表.html 一致）
     const ADD_VALUE = "__add__";
 
     let currentUser=null;
-    let db=[];
+    let env = null;      // { items:[], counter:number, rev:string, updatedAt:string }
+    let db  = [];        // items (已過濾 deleted=false)
     let _watchStarted=false;
 
     const $=(id)=>document.getElementById(id);
@@ -504,6 +560,12 @@
         .replaceAll(">","&gt;")
         .replaceAll('"',"&quot;")
         .replaceAll("'","&#39;");
+    }
+
+    // ✅ 站內導頁：自動附加 ?v（全站同版）
+    function go(href){
+      const h = (typeof window.__withV === "function") ? window.__withV(href) : href;
+      location.href = h;
     }
 
     // ===== Auth =====
@@ -754,24 +816,120 @@
       start();
     }
 
-    // ===== Data =====
-    function loadDB(){
+    // ===== 企業標準 v1：資料封包 / items =====
+    function nowIso(){ return new Date().toISOString(); }
+    function newRev(){
+      return (Date.now().toString(36) + "-" + Math.random().toString(36).slice(2,10)).toLowerCase();
+    }
+    function newUid(){
       try{
-        db = JSON.parse(localStorage.getItem(DB_KEY) || "[]");
-        if(!Array.isArray(db)) db=[];
-      }catch(e){ db=[]; }
+        if(window.crypto && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+      }catch(e){}
+      // fallback
+      const s = () => Math.floor((1 + Math.random()) * 0x10000).toString(16).slice(1);
+      return `${s()}${s()}-${s()}-${s()}-${s()}-${s()}${s()}${s()}`;
     }
-    function saveDB(){ localStorage.setItem(DB_KEY, JSON.stringify(db)); }
 
-    function getCounter(){
-      const n = Number(localStorage.getItem(COUNTER_KEY) || "0");
-      return Number.isFinite(n) ? n : 0;
+    function normalizeItem(it){
+      if(!it || typeof it !== "object") return null;
+      const uid = String(it.uid || "").trim() || newUid();
+      const updatedAt = String(it.updatedAt || "").trim() || nowIso();
+      const rev = String(it.rev || "").trim() || newRev();
+      const deleted = !!it.deleted;
+      const id = (it.id == null) ? "" : it.id;
+      return {
+        ...it,
+        uid, rev, updatedAt, deleted,
+        id
+      };
     }
+
+    function loadEnv(){
+      try{
+        const raw = localStorage.getItem(DB_KEY);
+        if(!raw) return { items:[], counter:0, rev:"", updatedAt:"" };
+        const p = JSON.parse(raw);
+        if(p && typeof p === "object"){
+          const items = Array.isArray(p.items) ? p.items : [];
+          const counter = Number(p.counter || 0);
+          const rev = String(p.rev || "").trim();
+          const updatedAt = String(p.updatedAt || "").trim();
+          return {
+            items: items.map(normalizeItem).filter(Boolean),
+            counter: Number.isFinite(counter) ? counter : 0,
+            rev,
+            updatedAt
+          };
+        }
+      }catch(e){}
+      return { items:[], counter:0, rev:"", updatedAt:"" };
+    }
+
+    function saveEnv(next){
+      try{
+        localStorage.setItem(DB_KEY, JSON.stringify(next));
+      }catch(e){
+        console.error("saveEnv failed", e);
+      }
+    }
+
+    function loadDB(){
+      env = loadEnv();
+
+      // 舊格式相容（若偵測到舊 DB_key 仍是 array，轉成封包一次）
+      //（這段只針對歷史資料：不改 UI，不影響新規格）
+      try{
+        const raw = localStorage.getItem(DB_KEY);
+        if(raw && raw.trim().startsWith("[")){
+          const arr = JSON.parse(raw);
+          if(Array.isArray(arr)){
+            const migrated = {
+              items: arr.map(r=>{
+                const it = normalizeItem({
+                  uid: r.uid, rev: r.rev, updatedAt: r.updatedAt, deleted: !!r.deleted,
+                  id: r.id,
+                  docName: r.docName ?? r.name ?? "",
+                  system: r.system ?? "",
+                  trade: r.trade ?? "",
+                  regDate: r.regDate ?? r.date ?? "",
+                  fileUrl: r.fileUrl ?? r.url ?? "",
+                  note: r.note ?? ""
+                });
+                return it;
+              }).filter(Boolean),
+              counter: arr.reduce((m,r)=>Math.max(m, Number(r?.id||0)||0), 0),
+              rev: newRev(),
+              updatedAt: nowIso()
+            };
+            saveEnv(migrated);
+            env = migrated;
+          }
+        }
+      }catch(e){}
+
+      db = (env.items || []).filter(it => it && !it.deleted);
+    }
+
+    function bumpEnvAndSave(){
+      if(!env) env = { items:[], counter:0, rev:"", updatedAt:"" };
+      env.rev = newRev();
+      env.updatedAt = nowIso();
+      saveEnv(env);
+      // 同頁觸發「storage」讓其他監聽點可重建（同分頁不會自動觸發）
+      try{
+        window.dispatchEvent(new StorageEvent("storage", { key: DB_KEY, storageArea: localStorage }));
+      }catch(e){
+        try{ window.dispatchEvent(new Event("storage")); }catch(_){}
+      }
+    }
+
+    function getCounter(){ return Number(env?.counter || 0) || 0; }
     function nextCounter(){
-      const n = getCounter() + 1;
-      localStorage.setItem(COUNTER_KEY, String(n));
-      return n;
+      env.counter = getCounter() + 1;
+      bumpEnvAndSave();
+      return env.counter;
     }
+
     function rebuildNo(){
       $("no").value = String(getCounter() + 1);
       $("date").value = new Date().toISOString().slice(0,10);
@@ -789,7 +947,6 @@
       return arr;
     }
 
-    // ✅ 統一填充 select：附加「新增…」
     function fillSelect(sel, opts, keep, firstLabel, withAdd){
       const first = `<option value="">${escHtml(firstLabel || "請選擇")}</option>`;
       const addOpt = withAdd ? `<option value="${ADD_VALUE}">新增…</option>` : "";
@@ -801,7 +958,6 @@
       if(keep && opts.includes(keep)){
         sel.value = keep;
       }else if(keep && !opts.includes(keep) && keep !== ADD_VALUE){
-        // 保留使用者原本選的值（即使目前 db 還沒有）
         const op = document.createElement("option");
         op.value = keep;
         op.textContent = keep;
@@ -814,7 +970,6 @@
       }
     }
 
-    // ✅ 依工種篩選系統下拉項目
     function rebuildSysSelectByTrade(keep){
       const t = norm($("trade").value);
       const sys = t
@@ -885,9 +1040,21 @@
       const regDate = norm($("date").value) || new Date().toISOString().slice(0,10);
       const note    = norm($("note").value);
 
-      const id = nextCounter();
-      db.unshift({ id, docName, system, trade, regDate, fileUrl, note });
-      saveDB();
+      const id = nextCounter(); // ✅ id 只作顯示用（可重排/補號），不可當主鍵
+      const uid = newUid();
+      const updatedAt = nowIso();
+      const rev = newRev();
+
+      const item = normalizeItem({ uid, rev, updatedAt, deleted:false, id, docName, system, trade, regDate, fileUrl, note });
+
+      if(!env) env = { items:[], counter:0, rev:"", updatedAt:"" };
+      env.items = Array.isArray(env.items) ? env.items : [];
+      env.items.unshift(item);
+      // 更新封包 meta
+      env.rev = rev;
+      env.updatedAt = updatedAt;
+
+      saveEnv(env);
 
       toast("登錄成功");
       resetForm();
@@ -905,7 +1072,7 @@
         menu.classList.toggle("open");
       };
 
-      backBtn.onclick=()=>location.href=backHref;
+      backBtn.onclick=()=>go(backHref);
       moreBtn.addEventListener("click", toggle);
 
       menu.addEventListener("click",(e)=>{
@@ -913,14 +1080,13 @@
         const item=e.target.closest("button.menuItem[data-href]");
         if(!item) return;
         const href=item.getAttribute("data-href");
-        if(href) location.href=href;
+        if(href) go(href);
       });
 
       document.addEventListener("click", close);
       window.addEventListener("keydown",(e)=>{ if(e.key==="Escape") close(); });
     }
 
-    // ===== ✅ 下拉即時更新：點開前先讀最新 DB =====
     function refreshOptionsNow(){
       loadDB();
       rebuildSelects(true);
@@ -940,7 +1106,6 @@
       });
     }
 
-    // ===== ✅ 新增工種/系統（＋按鈕 + 新增框）=====
     function hideAddBox(kind){
       if(kind==="trade"){
         $("addTradeBox").style.display = "none";
@@ -989,7 +1154,6 @@
       const tradeSel = $("trade");
       const sysSel   = $("sys");
 
-      // 「＋」直接開新增框
       $("tradePlus").onclick = ()=>{
         if(tradeSel.disabled) return;
         tradeSel.dataset.prev = (tradeSel.value ?? "").toString();
@@ -1001,16 +1165,13 @@
         showAddBox("sys");
       };
 
-      // 也支援：選到「新增…」就開新增框
       tradeSel.addEventListener("change", ()=>{
-        // 工種變動 → 系統依工種重建
         if(tradeSel.value === ADD_VALUE){
           showAddBox("trade");
         }else{
           hideAddBox("trade");
           tradeSel.dataset.prev = (tradeSel.value ?? "").toString();
         }
-        // 工種一改，系統立即依工種刷新（保留若仍存在）
         const keepS = norm(sysSel.value);
         rebuildSysSelectByTrade(keepS);
         hideAddBox("sys");
@@ -1025,7 +1186,6 @@
         }
       });
 
-      // 取消：回復上一個值
       $("addTradeCancel").onclick = ()=>{
         const prev = (tradeSel.dataset.prev ?? "").toString();
         hideAddBox("trade");
@@ -1037,14 +1197,12 @@
         sysSel.value = prev;
       };
 
-      // 加入：新增 option + 選取（會在保存後寫入 DB，之後全站即時可見）
       $("addTradeOk").onclick = ()=>{
         const v = norm($("addTradeInput").value);
         if(!v){ toast("工種不可空白"); $("addTradeInput").focus(); return; }
         if(addOptionToSelect(tradeSel, v)){
           hideAddBox("trade");
           toast("已加入工種");
-          // 工種新增後，系統依工種刷新
           rebuildSysSelectByTrade(norm(sysSel.value));
         }
       };
@@ -1057,7 +1215,6 @@
         }
       };
 
-      // Enter 快速加入 / Esc 取消
       $("addTradeInput").addEventListener("keydown",(e)=>{
         if(e.key==="Enter"){ e.preventDefault(); $("addTradeOk").click(); }
         if(e.key==="Escape"){ e.preventDefault(); $("addTradeCancel").click(); }
@@ -1076,11 +1233,11 @@
       rebuildSelects(false);
       applyPermissionUI();
 
-      $("navBackList").onclick = ()=>location.href="捷運汐止東湖線統包工程-資料明細表.html";
+      $("navBackList").onclick = ()=>go("捷運汐止東湖線統包工程-資料明細表.html");
       setupMoreMenu("捷運汐止東湖線統包工程-資料明細表.html");
 
-      $("btnBackXidong").onclick = ()=>location.href="汐東工程管理表.html";
-      $("btnHome").onclick = ()=>location.href="index.html";
+      $("btnBackXidong").onclick = ()=>go("汐東工程管理表.html");
+      $("btnHome").onclick = ()=>go("index.html");
 
       $("btnCloudDB").onclick = ()=>{
         window.open(CLOUD_DB_URL, "_blank", "noopener,noreferrer");
@@ -1102,7 +1259,7 @@
 
     (function bindLogin(){
       $("loginClose").onclick = closeLoginModal;
-      $("loginToAuth").onclick = ()=> location.href="權限表.html";
+      $("loginToAuth").onclick = ()=> go("權限表.html");
       $("loginBtn").onclick = doLogin;
 
       $("loginUser").addEventListener("change", ()=>{
@@ -1121,6 +1278,109 @@
 
     startSessionWatch();
     start();
+
+    // =========================
+    // ✅ 雲端同步接入（企業標準 v1）
+    // resourceKey = pageKey、pk = uid
+    // =========================
+    (function(){
+      function getLocal(){
+        // 送出單一封包（items / counter / rev / updatedAt）
+        const e = loadEnv();
+        return {
+          items: Array.isArray(e.items) ? e.items : [],
+          counter: Number(e.counter || 0) || 0,
+          rev: String(e.rev || "").trim(),
+          updatedAt: String(e.updatedAt || "").trim()
+        };
+      }
+
+      function apply(payload){
+        // 相容：payload.items 或 payload.db
+        const p = (payload && typeof payload === "object") ? payload : {};
+        const base = (p.items && typeof p.items === "object") ? p : (p.db && typeof p.db === "object" ? p.db : p);
+
+        const next = {
+          items: Array.isArray(base.items) ? base.items.map(normalizeItem).filter(Boolean) : [],
+          counter: Number(base.counter || 0) || 0,
+          rev: String(base.rev || "").trim(),
+          updatedAt: String(base.updatedAt || "").trim()
+        };
+        saveEnv(next);
+
+        // 即時刷新 UI（同頁）
+        try{
+          loadDB();
+          rebuildSelects(true);
+          rebuildNo();
+          applyPermissionUI();
+        }catch(e){}
+
+        // 觸發同頁監聽
+        try{
+          window.dispatchEvent(new StorageEvent("storage", { key: DB_KEY, storageArea: localStorage }));
+        }catch(e){
+          try{ window.dispatchEvent(new Event("storage")); }catch(_){}
+        }
+      }
+
+      // 若 TasunCloudKit 尚未載入，靜默跳過（不影響 UI/功能）
+      if(!window.TasunCloudKit || !window.TasunCloudKit.init || !window.TasunCloudKit.mount){
+        console.warn("[enterprise v1] TasunCloudKit not found.");
+        return;
+      }
+
+      const APP_VER = (window.__CACHE_V || (new URL(location.href)).searchParams.get("v") || "").trim();
+
+      window.TasunCloudKit.init({
+        appVer: APP_VER,
+        resourcesUrl: "tasun-resources.json",
+        resourceKey: pageKey,
+        pk: "uid",
+        ui: { enabled:false },
+        lock: { enabled:false },
+        getLocal,
+        apply
+      });
+
+      let ctrl = null;
+      try{
+        ctrl = window.TasunCloudKit.mount({
+          resourceKey: pageKey,
+          resourcesUrl: "tasun-resources.json",
+          pk: "uid",
+          getLocal,
+          apply
+        });
+      }catch(e){
+        console.error("[enterprise v1] mount failed", e);
+        return;
+      }
+
+      // 初次拉取（讓多設備立即一致）
+      try{ ctrl && ctrl.pullNow && setTimeout(()=>{ try{ ctrl.pullNow(); }catch(_){ } }, 250); }catch(_){}
+
+      // 偵測本機封包變化 → 雲端同步（穩定且不侵入 UI）
+      let lastHash = "";
+      function hashEnv(){
+        try{
+          const raw = localStorage.getItem(DB_KEY) || "";
+          return String(raw.length) + "|" + fnv1a(raw);
+        }catch(e){ return String(Date.now()); }
+      }
+      try{ lastHash = hashEnv(); }catch(_){}
+
+      setInterval(()=>{
+        const h = hashEnv();
+        if(h !== lastHash){
+          lastHash = h;
+          try{ ctrl && ctrl.saveMerged && ctrl.saveMerged(); }catch(e){}
+        }
+      }, 10000);
+    })();
   </script>
+
+  <!-- ✅ 企業版：雲端同步核心（必須與全站同版號，由 tasun-version.json + ?v 控制快取） -->
+  <script src="tasun-cloud-kit.js"></script>
 </body>
 </html>
