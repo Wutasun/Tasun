@@ -836,6 +836,21 @@
     // ---------------------------
     var PAGE_KEY = "捷運汐東線事項記錄.html";
     var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || "dev";
+    // 若 tasun-version-loader.js 尚未完成，等版本就緒後再更新 APP_VER（避免手機端一直顯示 dev）
+    (function(){
+      try {
+        window.__TASUN_READY_Q = window.__TASUN_READY_Q || [];
+        var apply = function(){
+          try {
+            var v = (window.TASUN_APP_VER||"").toString().trim();
+            if(v) APP_VER = v;
+            if(typeof updateStatusLine==="function") updateStatusLine();
+          } catch(_){}
+        };
+        if(window.__TASUN_VERSION_READY__) apply();
+        else window.__TASUN_READY_Q.push(apply);
+      } catch(_){}
+    })();
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
@@ -2338,7 +2353,54 @@ function getPromptOptions(mode){
     // ---------------------------
     // Cloud API
     // ---------------------------
-    async function cloudHealth(){
+  
+  // 啟動時自動做一次「雲端 merge」：手機端常見情況是先渲染本機舊資料，導致筆數/項次與桌機不一致。
+  // 這裡使用 merge API 取得一致的最新資料（同時上傳本機未同步變更），成功後再刷新畫面。
+  let __AUTO_SYNC_INFLIGHT = false;
+  async function autoCloudSyncOnStart(){
+    if(__AUTO_SYNC_INFLIGHT) return;
+    __AUTO_SYNC_INFLIGHT = true;
+    try{
+      if(!navigator.onLine) return;
+
+      const cfg = await loadCloudCfg();
+      if(!cfg || !cfg.apiBase) return;
+
+      const h = await cloudHealth();
+      if(!h || !h.ok) return;
+
+      const payload = { db: Array.isArray(state.db)? state.db : [], counter: Number(state.counter||0) };
+      const r = await cloudMerge(payload);
+      if(!r || !r.ok || !r.data || !Array.isArray(r.data.db)) return;
+
+      state.db = r.data.db;
+      state.counter = Number(r.data.counter||0);
+
+      // 重新建立字典/索引（避免選單/篩選不一致）
+      if(typeof buildDictsFromDb === "function"){
+        try{ buildDictsFromDb(); }catch(_){}
+      }
+
+      await saveLocal();
+      refresh();
+      try{ updateStatusLine(); }catch(_){}
+    }catch(_){
+      // 靜默失敗：不顯示錯誤，不影響既有流程
+    }finally{
+      __AUTO_SYNC_INFLIGHT = false;
+    }
+  }
+
+  // iOS/Safari 常見：切回分頁才會恢復網路/JS，恢復可視時再補一次（仍採用靜默）
+  document.addEventListener("visibilitychange", function(){
+    try{
+      if(document.visibilityState==="visible"){
+        autoCloudSyncOnStart();
+      }
+    }catch(_){}
+  });
+
+  async function cloudHealth(){
       var cfg = await loadCloudCfg();
       state.cloud.apiBase = cfg.apiBase;
       state.cloud.endpoints = cfg.endpoints;
