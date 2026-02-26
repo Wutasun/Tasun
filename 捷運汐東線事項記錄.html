@@ -2170,6 +2170,8 @@ function getVisibleRows(){
         try{ renderCards(rows); }catch(_e){}
       }
 
+      try{ state._lastRows = rows; }catch(e){}
+
       // hint（狀態列）
       try{
         var cloudTxt = state.cloud && state.cloud.ok ? "已同步" : (state.cloud && state.cloud.cfgOk ? "待同步" : "未設定");
@@ -2195,7 +2197,54 @@ function getVisibleRows(){
           hintEl.appendChild(hb("雲端", cloudTxt, !(state.cloud && state.cloud.ok)));
           hintEl.appendChild(hb("最後", lastTxt));
         }
-      }catch(_e){}
+      }catch(_e){ try{ renderHintFallback(); }catch(__e){} }
+    }
+
+    function renderHintFallback(){
+      try{
+        var hintEl = $("hint");
+        if(!hintEl) return;
+        // 若已有內容就不覆蓋（避免影響既有流程）
+        if(hintEl.children && hintEl.children.length>0) return;
+        // 最低限度狀態列：不依賴任何可能丟錯的函式
+        var cloudTxt = (state && state.cloud && state.cloud.ok) ? "已同步" : ((state && state.cloud && state.cloud.cfgOk) ? "待同步" : "未設定");
+        var lastTxt = (state && state.cloud && state.cloud.lastOkAt) ? fmtClock(state.cloud.lastOkAt) : "—";
+        var verTxt = (typeof APP_VER!=="undefined" && APP_VER) ? String(APP_VER) : "dev";
+        var rowsLen = 0, total = 0;
+        try{ rowsLen = Array.isArray(state._lastRows) ? state._lastRows.length : 0; }catch(e){}
+        try{
+          if(Array.isArray(state.db)){
+            total = state.db.filter(function(r){ return r && !r.deleted; }).length;
+          }
+        }catch(e){}
+        hintEl.innerHTML = "";
+        function hbTxt(k,v,bad){
+          var s=document.createElement("span");
+          s.className="hb"+(bad?" bad":"");
+          var kSpan=document.createElement("span"); kSpan.className="k"; kSpan.textContent=String(k);
+          var vSpan=document.createElement("span"); vSpan.className="v"; vSpan.textContent=String(v);
+          s.appendChild(kSpan); s.appendChild(vSpan);
+          return s;
+        }
+        hintEl.appendChild(hbTxt("版本", verTxt));
+        hintEl.appendChild(hbTxt("筆數", String(rowsLen)+" / "+String(total)));
+        hintEl.appendChild(hbTxt("選取", (state && state.selectedUid) ? "已選取" : "未選取", !(state && state.selectedUid)));
+        hintEl.appendChild(hbTxt("雲端", cloudTxt, !(state && state.cloud && state.cloud.ok)));
+        hintEl.appendChild(hbTxt("最後", lastTxt));
+      }catch(e){}
+    }
+
+    function ensureHintAlive(){
+      try{
+        var hintEl = $("hint");
+        if(!hintEl) return;
+        if(!hintEl.children || hintEl.children.length===0){
+          // 嘗試正常 refresh，一次就好
+          try{ refresh(); }catch(e){}
+          // 若仍空白，用 fallback 補上
+          try{ renderHintFallback(); }catch(e){}
+        }
+      }catch(e){}
     }
 
 function selectRow(uid){
@@ -3076,6 +3125,10 @@ $("btnSave").addEventListener("click", async function(){
     }
 
     boot().catch(function(e){ console.error(e); });
+    // ✅ 防呆：確保狀態列不會因任何例外而空白
+    setTimeout(function(){ try{ ensureHintAlive(); }catch(e){} }, 200);
+    window.addEventListener("focus", function(){ try{ ensureHintAlive(); }catch(e){} }, {passive:true});
+    document.addEventListener("visibilitychange", function(){ if(!document.hidden){ try{ ensureHintAlive(); }catch(e){} } }, {passive:true});
   })();
   </script>
 </body>
