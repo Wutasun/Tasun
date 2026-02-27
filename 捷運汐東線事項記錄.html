@@ -841,7 +841,7 @@
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
-    var DEFAULT_ENDPOINTS = { health:"/health", read:"/api/read", merge:"/api/merge" };
+    var DEFAULT_ENDPOINTS = { health: "/health", read: "/api/tasun/pull", merge: "/api/tasun/merge" };
 
     var AUTH_KEY = "tasunAuthTable_v1";
     var CURRENT_KEY = "tasunCurrentUser_v1";
@@ -2386,15 +2386,33 @@ function getPromptOptions(mode){
       return state.cloud.ok;
     }
 
-    function buildCloudEnvelope(payload){
-      // Worker side commonly accepts JSON body; keep flexible
+    function buildCloudEnvelope(p){
+      p = (p && typeof p==="object") ? p : {};
+      var db = Array.isArray(p.db) ? p.db : [];
+      var counter = Number(p.counter||0)||0;
+
+      // Always include key for GitHub-backend worker compatibility.
+      var key = PAGE_KEY;
+
+      var user = (state.user && (state.user.user || state.user.name)) || state.username || "";
+      var role = (state.user && state.user.role) || state.role || "";
+
+      var payload = { db: db, counter: counter };
+
+      // Keep backward-compatible fields too (some old workers read top-level db/counter)
       return {
-        pageKey: PAGE_KEY,
-        resourceKey: "tasun-index-db",
-        pk: "uid",
-        client: { appVer: APP_VER, ua: navigator.userAgent, at: nowISO() },
-        payload: payload
+        key: key,
+        pageKey: key,
+        op: p.op || "",
+        payload: payload,
+        db: db,
+        counter: counter,
+        reason: p.reason || "",
+        client: { user: user, role: role, ua: navigator.userAgent },
+        v: APP_VER,
+        ts: Date.now()
       };
+    };
     }
 
 
@@ -2422,18 +2440,68 @@ function getPromptOptions(mode){
     }
     async function __cloudReadOnce(){
       var cfg = await loadCloudCfg();
-      if(!cfg || !isValidApiBase(cfg.apiBase)) throw new Error("雲端未設定/無效");
-      var api = joinApiBase(cfg.apiBase, cfg.endpoints.read);
-      var u = new URL(api);
-      u.searchParams.set('_ts', String(Date.now()));
-      var body = buildCloudEnvelope({ op:"read" });
-      var res = await fetch(u.toString(), {
+      if(!cfg || !isValidApiBase(cfg.apiBase)) throw new Error("cloud not configured");
+
+      // Decide primary read strategy:
+      // - If endpoint looks like /api/tasun/pull => GET with ?key=
+      // - Else try POST (legacy), and fallback to GET pull when 404/405.
+      var ep = (cfg.endpoints && cfg.endpoints.read) ? cfg.endpoints.read : "";
+      ep = String(ep||"");
+      var apiBase = cfg.apiBase;
+
+      async function parseReadResponse(res){
+        var json = await res.json().catch(function(){ return null; });
+        if(!json) throw new Error("bad json");
+        // Worker (GitHub backend) shape: { ok:true, payload:{db,counter} }
+        if(json && json.ok===true && json.payload){
+          var p = json.payload || {};
+          var db = Array.isArray(p.db) ? p.db : [];
+          var counter = Number(p.counter||0)||0;
+          return { db: db, counter: counter };
+        }
+        // Legacy shapes
+        var un = unwrap(json);
+        var db2 = (un && (un.db || (un.data && un.data.db) || (un.payload && un.payload.db) || un.rows)) || [];
+        var counter2 = (un && (un.counter || (un.data && un.data.counter) || (un.payload && un.payload.counter))) || 0;
+        if(!Array.isArray(db2)) db2 = [];
+        return { db: db2, counter: Number(counter2||0)||0 };
+      }
+
+      async function doGetPull(){
+        var url = joinApiBase(apiBase, "/api/tasun/pull") + "?key=" + encodeURIComponent(PAGE_KEY);
+        var res = await fetch(addV(url), { method:"GET", credentials:"include", cache:"no-store" });
+        if(!res.ok) throw new Error("read failed ("+res.status+")");
+        return await parseReadResponse(res);
+      }
+
+      if(ep.includes("/api/tasun/pull") || ep.includes("pull")){
+        // Respect config but enforce GET style for pull
+        var url0 = joinApiBase(apiBase, ep);
+        if(url0.indexOf("?")>=0) url0 += "&key="+encodeURIComponent(PAGE_KEY);
+        else url0 += "?key="+encodeURIComponent(PAGE_KEY);
+        var res0 = await fetch(addV(url0), { method:"GET", credentials:"include", cache:"no-store" });
+        if(!res0.ok) throw new Error("read failed ("+res0.status+")");
+        return await parseReadResponse(res0);
+      }
+
+      // Legacy POST read
+      var url1 = joinApiBase(apiBase, ep || "/api/read");
+      var body = buildCloudEnvelope({ op:"read", db: [], counter: 0 });
+      var res1 = await fetch(addV(url1), {
         method:"POST",
         headers: { "content-type":"application/json" },
-        credentials: "include",
-        cache: "no-store",
+        credentials:"include",
+        cache:"no-store",
         body: JSON.stringify(body)
       });
+
+      if(res1.status===404 || res1.status===405){
+        // Fallback: GitHub backend worker pull
+        return await doGetPull();
+      }
+      if(!res1.ok) throw new Error("read failed ("+res1.status+")");
+      return await parseReadResponse(res1);
+    });
       if(!res.ok) throw new Error("read 失敗 " + res.status);
       return await res.json();
     }
@@ -2464,15 +2532,66 @@ function getPromptOptions(mode){
 
     async function cloudMerge(localPayload){
       var cfg = await loadCloudCfg();
-      var url = joinApiBase(cfg.apiBase, cfg.endpoints.merge);
+      if(!cfg || !isValidApiBase(cfg.apiBase)) throw new Error("cloud not configured");
+
+      localPayload = normalizePayload(localPayload);
+
+      var apiBase = cfg.apiBase;
+      var ep = (cfg.endpoints && cfg.endpoints.merge) ? cfg.endpoints.merge : "/api/tasun/merge";
+      ep = String(ep||"");
+
       var body = buildCloudEnvelope({ op:"merge", db: localPayload.db, counter: localPayload.counter });
-      var res = await fetch(addV(url), {
-        method:"POST",
-        headers: { "content-type":"application/json" },
-        credentials: "include",
-        cache: "no-store",
-        body: JSON.stringify(body)
-      });
+
+      async function postMerge(url){
+        var res = await fetch(addV(url), {
+          method:"POST",
+          headers: { "content-type":"application/json" },
+          credentials:"include",
+          cache:"no-store",
+          body: JSON.stringify(body)
+        });
+        if(!res.ok){
+          var t = await res.text().catch(function(){ return ""; });
+          var err = new Error("merge failed ("+res.status+")" + (t ? (": "+t.slice(0,200)) : ""));
+          err.status = res.status;
+          throw err;
+        }
+        var json = await res.json().catch(function(){ return null; });
+        if(!json) throw new Error("bad json");
+        if(json && json.ok===true && json.payload){
+          var p = json.payload || {};
+          var db = Array.isArray(p.db) ? p.db : [];
+          var counter = Number(p.counter||0)||0;
+          return { db: db, counter: counter };
+        }
+        var un = unwrap(json);
+        var db2 = un && (un.db || (un.data && un.data.db) || (un.payload && un.payload.db) || un.rows) || [];
+        var counter2 = un && (un.counter || (un.data && un.data.counter) || (un.payload && un.payload.counter) || 0) || 0;
+        if(!Array.isArray(db2)) db2 = [];
+        return { db: db2, counter: Number(counter2||0)||0 };
+      }
+
+      // Try configured endpoint first, then fallbacks for GitHub backend worker.
+      var tried = [];
+      function u(epp){ return joinApiBase(apiBase, epp); }
+
+      var primaryUrl = u(ep || "/api/tasun/merge");
+      tried.push(primaryUrl);
+
+      try{
+        return await postMerge(primaryUrl);
+      }catch(e){
+        var st = e && e.status;
+        // On 404/405/400, try known worker aliases.
+        var fallbacks = ["/api/tasun/merge", "/api/merge"];
+        for(var i=0;i<fallbacks.length;i++){
+          var uu = u(fallbacks[i]);
+          if(tried.indexOf(uu)>=0) continue;
+          try{ return await postMerge(uu); }catch(_e){}
+        }
+        throw e;
+      }
+    });
       if(!res.ok) throw new Error("merge failed");
       var json = await res.json();
       var un = unwrap(json);
