@@ -1153,6 +1153,78 @@
       return base + path;
     }
 
+// --- cloud endpoint auto-detect (defensive) ---
+// Some devices may have old localStorage that points to working endpoints while fresh browsers
+// may default to "/api/*". If the Worker does not expose "/api/*" (404), desktop shows no rows.
+// We probe the read/merge endpoints once and persist the working paths.
+async function ensureCloudEndpoints(cfg){
+  try{
+    if(!cfg || !cfg.apiBase) return cfg;
+    if(cfg.__endpointsChecked) return cfg;
+    cfg.__endpointsChecked = true;
+
+    const uniq = (arr)=> Array.from(new Set((arr||[]).filter(Boolean)));
+    const candRead  = uniq([cfg.endpoints && cfg.endpoints.read,  "/read",  "/api/read"]);
+    const candMerge = uniq([cfg.endpoints && cfg.endpoints.merge, "/merge", "/api/merge"]);
+    const candHealth= uniq([cfg.endpoints && cfg.endpoints.health,"/health","/api/health"]);
+
+    const probe = async (path, method="POST")=>{
+      const url = joinApiBase(cfg.apiBase, path);
+      try{
+        const res = await fetch(url, {
+          method,
+          credentials: "include",
+          headers: {"content-type":"application/json"},
+          // Use a minimal envelope so the Worker can reply 200/401/400 instead of 404.
+          body: JSON.stringify({op:"ping"})
+        });
+        // If it's NOT 404, this path exists (even if auth/validation fails).
+        return res && res.status !== 404;
+      }catch(e){
+        // network error: treat as unknown, keep probing other candidates
+        return false;
+      }
+    };
+
+    // health (GET) optional
+    for(const p of candHealth){
+      const ok = await (async()=>{
+        try{
+          const res = await fetch(joinApiBase(cfg.apiBase, p), {method:"GET", credentials:"include"});
+          return res && res.status !== 404;
+        }catch(e){ return false; }
+      })();
+      if(ok){
+        cfg.endpoints.health = p;
+        break;
+      }
+    }
+
+    // read (POST)
+    for(const p of candRead){
+      if(await probe(p, "POST")){
+        cfg.endpoints.read = p;
+        break;
+      }
+    }
+
+    // merge (POST)
+    for(const p of candMerge){
+      if(await probe(p, "POST")){
+        cfg.endpoints.merge = p;
+        break;
+      }
+    }
+
+    // persist (do not change UI)
+    try{ localStorage.setItem(API_BASE_LS_KEY, String(cfg.apiBase||"")); }catch(e){}
+    try{ localStorage.setItem(API_EP_LS_KEY, JSON.stringify(cfg.endpoints||{})); }catch(e){}
+  }catch(e){}
+  return cfg;
+}
+// --- end defensive endpoint auto-detect ---
+
+
     function isValidApiBase(v){
       v = norm(v);
       if(!v) return false;
@@ -1210,6 +1282,8 @@
 
       var oe = safeJSON(localStorage.getItem(API_EP_LS_KEY));
       if(oe) cfg.endpoints = normalizeEndpoints(Object.assign({}, cfg.endpoints, oe));
+
+      cfg = await ensureCloudEndpoints(cfg);
 
       _cloudCfgCache = cfg;
       return cfg;
