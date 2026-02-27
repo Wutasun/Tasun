@@ -2322,87 +2322,69 @@ function getPromptOptions(mode){
         payload: payload
       };
     }
-    // v35: 允許指定 pageKey 送出雲端請求（用於自動遷移舊 pageKey -> PAGE_KEY）
-    function buildCloudEnvelopeWithPageKey(pageKey, payload){
-      var env = buildCloudEnvelope(payload || {});
-      env.pageKey = pageKey || PAGE_KEY;
-      return env;
+
+
+    // --- 雲端 rev/updatedAt 一致性檢查（用於 #repair 自動清 hash 的防呆）
+    function __stableMetaDigest(db){
+      try{
+        var arr = Array.isArray(db)? db : [];
+        var meta = arr.map(function(r){
+          return String(r && r.uid || "") + "|" + String(r && r.rev || 0) + "|" + String(r && r.updatedAt || "");
+        }).sort();
+        var h = 0x811c9dc5;
+        for (var i=0;i<meta.length;i++){
+          var s = meta[i];
+          for (var j=0;j<s.length;j++){
+            h ^= s.charCodeAt(j);
+            h = (h + ((h<<1) + (h<<4) + (h<<7) + (h<<8) + (h<<24))) >>> 0;
+          }
+          h ^= 0x0a;
+          h = (h + ((h<<1) + (h<<4) + (h<<7) + (h<<8) + (h<<24))) >>> 0;
+        }
+        return ("00000000" + h.toString(16)).slice(-8) + ":" + meta.length;
+      }catch(e){
+        return "00000000:0";
+      }
     }
-    async function cloudMergeToPageKey(targetPageKey, payload){
+    async function __cloudReadOnce(){
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)) throw new Error("雲端未設定/無效");
-      var api = joinApiBase(cfg.apiBase, cfg.endpoints.merge);
+      var api = joinApiBase(cfg.apiBase, cfg.endpoints.read);
       var u = new URL(api);
       u.searchParams.set('_ts', String(Date.now()));
-      var env = buildCloudEnvelopeWithPageKey(targetPageKey, { op: "merge", db: (payload && payload.db) || [], counter: (payload && payload.counter) || 0, _migrateFrom: payload && payload._migrateFrom, _migrateAt: payload && payload._migrateAt });
-      var r = await fetch(u.toString(), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      var body = buildCloudEnvelope({ op:"read" });
+      var res = await fetch(u.toString(), {
+        method:"POST",
+        headers: { "content-type":"application/json" },
         credentials: "include",
         cache: "no-store",
-        body: JSON.stringify(env)
+        body: JSON.stringify(body)
       });
-      if(!r.ok) throw new Error("merge 失敗 " + r.status);
-      return await r.json();
+      if(!res.ok) throw new Error("read 失敗 " + res.status);
+      return await res.json();
+    }
+    async function __cloudReadStable(){
+      var a = await __cloudReadOnce();
+      var dbA = (a && a.db) || [];
+      var digA = __stableMetaDigest(dbA);
+      await new Promise(function(res){ setTimeout(res, 120); });
+      var b = await __cloudReadOnce();
+      var dbB = (b && b.db) || [];
+      var digB = __stableMetaDigest(dbB);
+      return { stable: (digA===digB), digestA:digA, digestB:digB, a:a, b:b, db: dbB };
     }
 
 
-    async function __fnv1a32(str){
-      var h = 0x811c9dc5;
-      for (var i=0;i<str.length;i++){
-        h ^= str.charCodeAt(i);
-        h = (h + ((h<<1) + (h<<4) + (h<<7) + (h<<8) + (h<<24))) >>> 0;
-      }
-      return ("00000000" + h.toString(16)).slice(-8);
-    }
-    function __cloudMetaString(db){
-      try{
-        if(!Array.isArray(db)) return "";
-        return db.map(function(r){
-          var uid = (r && (r.uid||r.pk||r.id||"")) + "";
-          var rev = (r && (r.rev||"")) + "";
-          var ua  = (r && (r.updatedAt||r.updated_at||"")) + "";
-          return uid + "|" + rev + "|" + ua;
-        }).sort().join("\n");
-      }catch(e){ return ""; }
-    }
-
-    async function cloudRead(localPayload){
-      // Always read from cloud; keep payload format compatible with the existing code.
-      var cfg = await loadCloudCfg();
-      var api = joinApiBase(cfg.apiBase, cfg.endpoints.read);
-
-      var payload = (localPayload && typeof localPayload==="object") ? localPayload : {};
-      if (!payload.pageKey) payload.pageKey = PAGE_KEY;
-
-      // IMPORTANT: do not inherit current page querystring (?v=...) into API url.
-      var u;
-      try{ u = new URL(api); }catch(e){ u = new URL(api, location.origin); }
-      u.searchParams.set("_ts", Date.now().toString()); // cache bust only
-
-      var r = await fetch(u.toString(), {
-        method:"POST",
-        credentials:"include",
-        headers:{"content-type":"application/json"},
-        body: JSON.stringify(payload)
-      });
-      if(!r.ok) throw new Error("HTTP " + r.status);
-      var j = await r.json();
-
-      var db = (j && j.payload && Array.isArray(j.payload.db)) ? j.payload.db : [];
-      // meta digest by uid|rev|updatedAt to verify consistency across reads/devices
-      try{
-        var metaStr = __cloudMetaString(db);
-        var digest = await __fnv1a32(metaStr);
-        window.__TASUN_CLOUD_META__ = { pageKey: payload.pageKey, count: db.length|0, digest: digest, at: Date.now() };
-      }catch(_e){}
-
-      return {
-        payload: {
-          db: db,
-          counter: (j && j.payload && typeof j.payload.counter==="number") ? j.payload.counter : null
-        }
-      };
+    
+    async function cloudRead(){
+      // 顯示資料以雲端 read 為準；回傳格式維持 {payload:{db,counter}}
+      var res = await __cloudReadStable();
+      var out = res && (res.b || res.a) || {};
+      var db = (out && out.db) || [];
+      var counter = (out && out.counter) || { total: db.length, selected: 0 };
+      window.__tasunCloudMetaStable = !!(res && res.stable);
+      window.__tasunCloudMetaDigest = String(res && (res.stable?res.digestB:(res.digestA+"!="+res.digestB)) || "");
+      return { payload: { db: db, counter: counter } };
     }
 
 
@@ -2410,10 +2392,11 @@ function getPromptOptions(mode){
       var cfg = await loadCloudCfg();
       var url = joinApiBase(cfg.apiBase, cfg.endpoints.merge);
       var body = buildCloudEnvelope({ op:"merge", db: localPayload.db, counter: localPayload.counter });
-      var res = await fetch(url, {
+      var res = await fetch(addV(url), {
         method:"POST",
-        headers: { "content-type":"application/json", "cache-control":"no-store" },
+        headers: { "content-type":"application/json" },
         credentials: "include",
+        cache: "no-store",
         body: JSON.stringify(body)
       });
       if(!res.ok) throw new Error("merge failed");
@@ -2432,71 +2415,18 @@ function getPromptOptions(mode){
         if(!silent) toast("雲端未設定/無效"); return;
       }
       try{
-        // 1) 先讀主要 PAGE_KEY
-        var remote = await cloudRead(PAGE_KEY);
-
-        // 2) 若主要 key 沒資料，嘗試舊 key（檔名/舊固定 key），找出「有資料者」並自動遷移到 PAGE_KEY，避免桌機/手機顯示不一致
-        try{
-          var cand = [];
-          var seen = {};
-          function pushCand(k){
-            if(!k) return;
-            if(seen[k]) return;
-            seen[k]=1; cand.push(k);
-          }
-          pushCand(PAGE_KEY);
-          try{
-            var fn = (location.pathname||'').split('/').pop() || '';
-            pushCand(fn);
-            try{ pushCand(decodeURIComponent(fn)); }catch(_e){}
-          }catch(_e){}
-          pushCand('捷運汐東線事項記錄.html');
-          pushCand('捷運汐東線事項記錄');
-
-          var mainEmpty = !!(remote && remote.payload && Array.isArray(remote.payload.db) && remote.payload.db.length===0);
-          if(mainEmpty){
-            var found = null;
-            for(var i=0;i<cand.length;i++){
-              var k = cand[i];
-              if(!k || k===PAGE_KEY) continue;
-              var r2 = await cloudRead(k);
-              if(r2 && r2.payload && Array.isArray(r2.payload.db) && r2.payload.db.length){
-                found = { key: k, remote: r2 };
-                break;
-              }
-            }
-            if(found){
-              try{
-                await cloudMergeToPageKey(PAGE_KEY, { db: found.remote.payload.db || [], counter: found.remote.payload.counter || 0, _migrateFrom: found.key, _migrateAt: new Date().toISOString() });
-              }catch(_e){}
-              remote = await cloudRead(PAGE_KEY);
-            }
-          }
-        }catch(_e){}
-
+        var remote = await cloudRead();
         var out = mergePayload(remote, { db: state.db, counter: state.counter });
         state.db = out.db;
         state.counter = out.counter;
 
         state.lastSyncAt = Date.now();
         await idbClearOps(PAGE_KEY);
+        await saveLocal({ db: state.db, counter: state.counter });
 
         buildDictsFromDb();
         refresh();
         toast("已從雲端更新");
-
-        // #repair：只有在「雲端 read 回來的 rev/updatedAt（digest）」連續兩次一致時，才清除 hash
-        try{
-          if(location.hash && /repair/i.test(location.hash)){
-            var d1 = window.__TASUN_CLOUD_META__ && window.__TASUN_CLOUD_META__.digest;
-            await cloudRead(PAGE_KEY); // 注意：參數必須是字串 pageKey
-            var d2 = window.__TASUN_CLOUD_META__ && window.__TASUN_CLOUD_META__.digest;
-            if(d1 && d2 && d1===d2){
-              history.replaceState(null, "", location.pathname + location.search);
-            }
-          }
-        }catch(_e){}
-
       }catch(e){
         toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
       }
@@ -2898,6 +2828,34 @@ $("btnSave").addEventListener("click", async function(){
         try{ wire(); }catch(e){}
         try{ refresh(); }catch(e){}
         try{ cloudHealth(); }catch(e){}
+
+        // ✅ 開站即以雲端 read 為主：避免桌機/手機因本機快取不同而顯示不一致
+        try{
+          var cfg0 = await loadCloudCfg();
+          if(cfg0 && isValidApiBase(cfg0.apiBase)){
+            var cr = await cloudRead(); // 內含 rev/updatedAt 穩定比對
+            if(cr && cr.payload){
+              state.db = Array.isArray(cr.payload.db) ? cr.payload.db : [];
+              state.counter = cr.payload.counter || { total: state.db.length, selected: 0 };
+              state.cloudOk = true;
+              state.cloudMsg = "已同步";
+              state.lastSyncAt = Date.now();
+              try{ await saveDb(state.db, state.counter); }catch(_e){}
+              try{ refresh(); }catch(_e){}
+              // #repair：只有在雲端 read 回來的 rev/updatedAt 穩定一致時，才自動清 hash，避免反覆觸發
+              try{
+                var h = String(location.hash||"");
+                if(h && /repair/i.test(h) && window.__tasunCloudMetaStable){
+                  history.replaceState(null, "", location.pathname + location.search);
+                }
+              }catch(_e){}
+            }
+          }
+        }catch(e){
+          // 雲端讀取失敗：保留本機顯示，並標記未同步
+          try{ state.cloudOk = false; state.cloudMsg = "未同步"; }catch(_e){}
+          try{ refresh(); }catch(_e){}
+        }
         try{ if(!cur) openLogin(); }catch(e){}
 
         try{
@@ -2913,7 +2871,7 @@ $("btnSave").addEventListener("click", async function(){
         // 任何未預期錯誤：仍然嘗試畫出狀態列，避免出現「空白資訊列」。
         try{ wire(); }catch(_e){}
         try{ refresh(); }catch(_e){}
-        try{ /* 不自動彈出登入：可用「檢視/新增/編輯」按鍵時再提示 */ }catch(_e){}
+        try{ if(!cur) openLogin(); }catch(_e){}
         console.error(e);
       }
     }
