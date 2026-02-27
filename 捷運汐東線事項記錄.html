@@ -158,7 +158,8 @@
 
       /* ✅ 修訂：舞台兩側距離網頁邊框固定 1cm（桌機）
          注意：wrap 內有左右 padding 16px，因此外側留白需扣除 16px 才能讓舞台外框到視窗邊緣為 1cm */
-      --stageSide: calc(1cm - 16px);
+      --stagePad: 18px;
+      --stageSide: calc(var(--stagePad) - 16px);
 
       --tableWrapBg: rgba(255,252,244,.94);
       --tableBg: rgba(255,252,244,.92);
@@ -214,9 +215,9 @@
     }
 
     .wrap{
-      width:min(1720px, calc(100vw - (2*var(--stageSide))));
+      width: calc(100vw - (2*var(--stageSide)));
       margin:0 auto;
-      padding: 18px 16px 18px;
+      padding: var(--stagePad) 16px var(--stagePad);
       height:var(--appH,100vh);
       min-height:var(--appH,100vh);
       display:flex; flex-direction:column; gap:16px;
@@ -493,8 +494,9 @@
 
     @media (max-width:720px){
       :root{
-        /* 手機維持原本緊湊邊距 */
-        --stageSide: 10px;
+        /* 手機維持原本緊湊邊距（四邊等寬） */
+        --stagePad: 10px;
+        --stageSide: calc(var(--stagePad) - 16px);
         --titleSize: clamp(20px, 5.0vw, 28px);
         --subSize: clamp(11px, 3.2vw, 13px);
         --btnFont: 14px;
@@ -835,7 +837,7 @@
     // Constants / Keys
     // ---------------------------
     var PAGE_KEY = "sxdh-notes";
-    var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || "dev";
+    var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || (function(){try{var u=new URL(location.href);return (u.searchParams.get("v")||"").trim();}catch(e){return ""}})() || "dev";
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
@@ -1632,7 +1634,7 @@ function getVisibleRows(){
       selectedUid: "",
       mode: "view",
       readMode: false,
-      cloud: { ok:false, apiBase:"", endpoints:null, lastSyncAt:"", lastOkAt:"" },
+      cloud: { ok:false, cfgOk:false, apiBase:"", endpoints:null, lastSyncAt:"", lastOkAt:"" },
       _legacyScan: null
     };
 
@@ -2035,7 +2037,7 @@ function getVisibleRows(){
       renderCards(rows);
 
       // hint
-      var cloudTxt = state.cloud.ok ? "已同步" : "未設定";
+      var cloudTxt = state.cloud.ok ? "已同步" : (state.cloud.cfgOk ? "待同步" : "未設定");
       var lastTxt = state.cloud.lastOkAt ? fmtClock(state.cloud.lastOkAt) : "—";
       var roleTxt = state.role==="admin" ? "admin" : (state.role==="write"?"可編輯":"唯讀");
 
@@ -2051,8 +2053,7 @@ function getVisibleRows(){
       $("hint").appendChild(hb("選取", state.selectedUid ? "已選取" : "未選取", !state.selectedUid));
       $("hint").appendChild(hb("雲端", cloudTxt, !state.cloud.ok));
       $("hint").appendChild(hb("最後", lastTxt));
-      $("hint").appendChild(hb("權限", roleTxt));
-    }
+      }
 
     function selectRow(uid){
       uid = norm(uid);
@@ -2289,6 +2290,14 @@ function getPromptOptions(mode){
       var cfg = await loadCloudCfg();
       state.cloud.apiBase = cfg.apiBase;
       state.cloud.endpoints = cfg.endpoints;
+      state.cloud.cfgOk = !!(cfg && isValidApiBase(cfg.apiBase));
+
+      // 若 apiBase 不合法，直接判未設定
+      if(!state.cloud.cfgOk){
+        state.cloud.ok = false;
+        refresh();
+        return false;
+      }
 
       try{
         var url = joinApiBase(cfg.apiBase, cfg.endpoints.health);
@@ -2296,6 +2305,7 @@ function getPromptOptions(mode){
         state.cloud.ok = !!(res && res.ok);
         if(state.cloud.ok) state.cloud.lastOkAt = Date.now();
       }catch(e){
+        // 可能是 CORS/離線/暫時網路問題：保持 cfgOk=true，但 ok=false
         state.cloud.ok = false;
       }
       refresh();
@@ -2312,33 +2322,98 @@ function getPromptOptions(mode){
         payload: payload
       };
     }
-
-    async function cloudRead(){
-      var cfg = await loadCloudCfg();
-      var url = joinApiBase(cfg.apiBase, cfg.endpoints.read);
-      var body = buildCloudEnvelope({ op:"read" });
-      var res = await fetch(addV(url), {
-        method:"POST",
-        headers: { "content-type":"application/json" },
-        body: JSON.stringify(body)
-      });
-      if(!res.ok) throw new Error("read failed");
-      var json = await res.json();
-      var un = unwrap(json);
-      // accept shapes: {db:[...], counter}, {data:{db:[]}}, {payload:{db:[]}}
-      var db = un && (un.db || (un.data && un.data.db) || (un.payload && un.payload.db) || un.rows) || [];
-      var counter = un && (un.counter || (un.data && un.data.counter) || 0) || 0;
-      if(!Array.isArray(db)) db = [];
-      return { db: db, counter: Number(counter||0)||0 };
+    // v35: 允許指定 pageKey 送出雲端請求（用於自動遷移舊 pageKey -> PAGE_KEY）
+    function buildCloudEnvelopeWithPageKey(pageKey, payload){
+      var env = buildCloudEnvelope(payload || {});
+      env.pageKey = pageKey || PAGE_KEY;
+      return env;
     }
+    async function cloudMergeToPageKey(targetPageKey, payload){
+      var cfg = await loadCloudCfg();
+      if(!cfg || !isValidApiBase(cfg.apiBase)) throw new Error("雲端未設定/無效");
+      var api = joinApiBase(cfg.apiBase, cfg.endpoints.merge);
+      var u = new URL(api);
+      u.searchParams.set('_ts', String(Date.now()));
+      var env = buildCloudEnvelopeWithPageKey(targetPageKey, { op: "merge", db: (payload && payload.db) || [], counter: (payload && payload.counter) || 0, _migrateFrom: payload && payload._migrateFrom, _migrateAt: payload && payload._migrateAt });
+      var r = await fetch(u.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        cache: "no-store",
+        body: JSON.stringify(env)
+      });
+      if(!r.ok) throw new Error("merge 失敗 " + r.status);
+      return await r.json();
+    }
+
+
+    async function __fnv1a32(str){
+      var h = 0x811c9dc5;
+      for (var i=0;i<str.length;i++){
+        h ^= str.charCodeAt(i);
+        h = (h + ((h<<1) + (h<<4) + (h<<7) + (h<<8) + (h<<24))) >>> 0;
+      }
+      return ("00000000" + h.toString(16)).slice(-8);
+    }
+    function __cloudMetaString(db){
+      try{
+        if(!Array.isArray(db)) return "";
+        return db.map(function(r){
+          var uid = (r && (r.uid||r.pk||r.id||"")) + "";
+          var rev = (r && (r.rev||"")) + "";
+          var ua  = (r && (r.updatedAt||r.updated_at||"")) + "";
+          return uid + "|" + rev + "|" + ua;
+        }).sort().join("\n");
+      }catch(e){ return ""; }
+    }
+
+    async function cloudRead(localPayload){
+      // Always read from cloud; keep payload format compatible with the existing code.
+      var cfg = await loadCloudCfg();
+      var api = joinApiBase(cfg.apiBase, cfg.endpoints.read);
+
+      var payload = (localPayload && typeof localPayload==="object") ? localPayload : {};
+      if (!payload.pageKey) payload.pageKey = PAGE_KEY;
+
+      // IMPORTANT: do not inherit current page querystring (?v=...) into API url.
+      var u;
+      try{ u = new URL(api); }catch(e){ u = new URL(api, location.origin); }
+      u.searchParams.set("_ts", Date.now().toString()); // cache bust only
+
+      var r = await fetch(u.toString(), {
+        method:"POST",
+        credentials:"include",
+        headers:{"content-type":"application/json"},
+        body: JSON.stringify(payload)
+      });
+      if(!r.ok) throw new Error("HTTP " + r.status);
+      var j = await r.json();
+
+      var db = (j && j.payload && Array.isArray(j.payload.db)) ? j.payload.db : [];
+      // meta digest by uid|rev|updatedAt to verify consistency across reads/devices
+      try{
+        var metaStr = __cloudMetaString(db);
+        var digest = await __fnv1a32(metaStr);
+        window.__TASUN_CLOUD_META__ = { pageKey: payload.pageKey, count: db.length|0, digest: digest, at: Date.now() };
+      }catch(_e){}
+
+      return {
+        payload: {
+          db: db,
+          counter: (j && j.payload && typeof j.payload.counter==="number") ? j.payload.counter : null
+        }
+      };
+    }
+
 
     async function cloudMerge(localPayload){
       var cfg = await loadCloudCfg();
       var url = joinApiBase(cfg.apiBase, cfg.endpoints.merge);
       var body = buildCloudEnvelope({ op:"merge", db: localPayload.db, counter: localPayload.counter });
-      var res = await fetch(addV(url), {
+      var res = await fetch(url, {
         method:"POST",
-        headers: { "content-type":"application/json" },
+        headers: { "content-type":"application/json", "cache-control":"no-store" },
+        credentials: "include",
         body: JSON.stringify(body)
       });
       if(!res.ok) throw new Error("merge failed");
@@ -2357,18 +2432,71 @@ function getPromptOptions(mode){
         if(!silent) toast("雲端未設定/無效"); return;
       }
       try{
-        var remote = await cloudRead();
+        // 1) 先讀主要 PAGE_KEY
+        var remote = await cloudRead(PAGE_KEY);
+
+        // 2) 若主要 key 沒資料，嘗試舊 key（檔名/舊固定 key），找出「有資料者」並自動遷移到 PAGE_KEY，避免桌機/手機顯示不一致
+        try{
+          var cand = [];
+          var seen = {};
+          function pushCand(k){
+            if(!k) return;
+            if(seen[k]) return;
+            seen[k]=1; cand.push(k);
+          }
+          pushCand(PAGE_KEY);
+          try{
+            var fn = (location.pathname||'').split('/').pop() || '';
+            pushCand(fn);
+            try{ pushCand(decodeURIComponent(fn)); }catch(_e){}
+          }catch(_e){}
+          pushCand('捷運汐東線事項記錄.html');
+          pushCand('捷運汐東線事項記錄');
+
+          var mainEmpty = !!(remote && remote.payload && Array.isArray(remote.payload.db) && remote.payload.db.length===0);
+          if(mainEmpty){
+            var found = null;
+            for(var i=0;i<cand.length;i++){
+              var k = cand[i];
+              if(!k || k===PAGE_KEY) continue;
+              var r2 = await cloudRead(k);
+              if(r2 && r2.payload && Array.isArray(r2.payload.db) && r2.payload.db.length){
+                found = { key: k, remote: r2 };
+                break;
+              }
+            }
+            if(found){
+              try{
+                await cloudMergeToPageKey(PAGE_KEY, { db: found.remote.payload.db || [], counter: found.remote.payload.counter || 0, _migrateFrom: found.key, _migrateAt: new Date().toISOString() });
+              }catch(_e){}
+              remote = await cloudRead(PAGE_KEY);
+            }
+          }
+        }catch(_e){}
+
         var out = mergePayload(remote, { db: state.db, counter: state.counter });
         state.db = out.db;
         state.counter = out.counter;
 
         state.lastSyncAt = Date.now();
         await idbClearOps(PAGE_KEY);
-        await saveLocal({ db: state.db, counter: state.counter });
 
         buildDictsFromDb();
         refresh();
         toast("已從雲端更新");
+
+        // #repair：只有在「雲端 read 回來的 rev/updatedAt（digest）」連續兩次一致時，才清除 hash
+        try{
+          if(location.hash && /repair/i.test(location.hash)){
+            var d1 = window.__TASUN_CLOUD_META__ && window.__TASUN_CLOUD_META__.digest;
+            await cloudRead(PAGE_KEY); // 注意：參數必須是字串 pageKey
+            var d2 = window.__TASUN_CLOUD_META__ && window.__TASUN_CLOUD_META__.digest;
+            if(d1 && d2 && d1===d2){
+              history.replaceState(null, "", location.pathname + location.search);
+            }
+          }
+        }catch(_e){}
+
       }catch(e){
         toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
       }
@@ -2735,39 +2863,59 @@ $("btnSave").addEventListener("click", async function(){
     // Boot
     // ---------------------------
         async function boot(){
-      try{ await openIDB(); }catch(e){}
-
-      var p = await loadDb();
-      state.db = p.db;
-      state.counter = p.counter;
-
-      state.clientId = state.clientId || getClientId();
-
-      recoverLegacyLocal();
-      migrateEnsureUidInPlace();
-
-      state.readMode = localStorage.getItem(READ_MODE_KEY)==="1";
-      applyReadMode(state.readMode);
-
-      ensureAuthTable();
-      var cur = getCurrentUser();
-      if(cur) applyUser(cur);
-      else applyUser({ user:"—", role:"read", name:"—" });
-
-      wire();
-      refresh();
-      cloudHealth();
-      if(!cur) openLogin();
-
+      // ✅ 目的：無論雲端/IndexedDB 是否異常，都要「先畫出」版本/筆數/選取/雲端/最後 等資訊。
+      // 這段只加防護，不改 UI/DOM/CSS。
+      var cur = null;
       try{
-        await idbPutMeta({
-          pageKey: PAGE_KEY,
-          counter: state.counter,
-          lastSyncAt: Number(state.lastSyncAt||0)||0,
-          clientId: state.clientId,
-          updatedAt: nowISO()
-        });
-      }catch(e){}
+        try{ await openIDB(); }catch(e){}
+
+        try{
+          var p = await loadDb();
+          state.db = p.db;
+          state.counter = p.counter;
+        }catch(e){
+          state.db = Array.isArray(state.db) ? state.db : [];
+          state.counter = Number(state.counter||0)||0;
+        }
+
+        try{ state.clientId = state.clientId || getClientId(); }catch(e){}
+
+        try{ recoverLegacyLocal(); }catch(e){}
+        try{ migrateEnsureUidInPlace(); }catch(e){}
+
+        try{
+          state.readMode = localStorage.getItem(READ_MODE_KEY)==="1";
+          applyReadMode(state.readMode);
+        }catch(e){ state.readMode = false; }
+
+        try{ ensureAuthTable(); }catch(e){}
+        try{ cur = getCurrentUser(); }catch(e){ cur = null; }
+        try{
+          if(cur) applyUser(cur);
+          else applyUser({ user:"—", role:"read", name:"—" });
+        }catch(e){}
+
+        try{ wire(); }catch(e){}
+        try{ refresh(); }catch(e){}
+        try{ cloudHealth(); }catch(e){}
+        try{ if(!cur) openLogin(); }catch(e){}
+
+        try{
+          await idbPutMeta({
+            pageKey: PAGE_KEY,
+            counter: state.counter,
+            lastSyncAt: Number(state.lastSyncAt||0)||0,
+            clientId: state.clientId,
+            updatedAt: nowISO()
+          });
+        }catch(e){}
+      }catch(e){
+        // 任何未預期錯誤：仍然嘗試畫出狀態列，避免出現「空白資訊列」。
+        try{ wire(); }catch(_e){}
+        try{ refresh(); }catch(_e){}
+        try{ /* 不自動彈出登入：可用「檢視/新增/編輯」按鍵時再提示 */ }catch(_e){}
+        console.error(e);
+      }
     }
 
     boot().catch(function(e){ console.error(e); });
