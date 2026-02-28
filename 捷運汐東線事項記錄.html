@@ -2414,44 +2414,44 @@ function getPromptOptions(mode){
         // If cloud is empty but local has data, offer to bootstrap to cloud (one-time)
         var cloudEmpty = !remote || !Array.isArray(remote.db) || remote.db.length===0;
         var localHas = Array.isArray(state.db) && state.db.length>0;
-        var bootKey = "tasunCloudBootstrapped_v1_" + PAGE_KEY;
-        var booted = localStorage.getItem(bootKey)==="1";
+        var bootKey = "tasunCloudBooted_" + PAGE_KEY;
+        var autoFillKey = "tasunCloudAutoFill_" + PAGE_KEY;
+        var localDb = (state.db || []);
+        var remoteDb = (remote && remote.payload && Array.isArray(remote.payload.db)) ? remote.payload.db : [];
 
-        if(cloudEmpty && localHas && !booted){
-          try{ toast("雲端無資料，正在自動倒入本機 " + (state.db||[]).length + " 筆…"); }catch(_e){}
-          // Auto bootstrap: push local -> cloud once (guarded by bootKey)
-          var fullRows = (state.db||[]).slice();
-          // Ensure Standard v1 fields
-          for(var bi=0; bi<fullRows.length; bi++){
-            fullRows[bi] = normalizeRow(fullRows[bi], bi+1);
-          }
-          var localPayload = { db: fullRows, counter: state.counter||0 };
-          try{
-            var merged = await cloudMergeOnce("bootstrap", localPayload);
-            if(merged && merged.payload && Array.isArray(merged.payload.db)){
-              state.db = merged.payload.db;
-              state.counter = merged.payload.counter||state.counter||0;
-            }
-            localStorage.setItem(bootKey, "1");
-            try{ toast("已自動倒入雲端：" + (state.db||[]).length + " 筆"); }catch(_e2){}
-          }catch(bootErr){
-            console.warn("bootstrap failed", bootErr);
-            try{ toast("自動倒入雲端失敗：" + (bootErr && bootErr.message ? bootErr.message : bootErr)); }catch(_e3){}
-          }
-          persist();
-          state.lastSyncAt = Date.now();
-await idbClearOps(PAGE_KEY);
-            await saveLocal({ db: state.db, counter: state.counter });
-            buildDictsFromDb();
-            refresh();
-            if(!silent) toast("已上傳本機資料到雲端");
-            return;
-          }else{
-            localStorage.setItem(bootKey, "1"); // don't ask again
-          }
+        function _uid(x){
+          if(!x) return "";
+          return String(x.uid || x.pk || x.Uid || x.ID || x.id || "");
         }
 
-        var out = mergePayload(remote, { db: state.db, counter: state.counter });
+        var rSet = new Set(remoteDb.map(_uid).filter(Boolean));
+        var missing = localDb.filter(function(it){
+          var u = _uid(it);
+          return u && !rSet.has(u);
+        });
+
+        var remoteEmpty = (!remoteDb || remoteDb.length === 0);
+        var localHas = (localDb.length > 0);
+
+        // Auto bootstrap when cloud empty OR auto-fill when cloud has fewer items than local.
+        // Run once per page-load to avoid loops.
+        if(localHas && (remoteEmpty || missing.length > 0) && !sessionStorage.getItem(autoFillKey)){
+          sessionStorage.setItem(autoFillKey, "1");
+          try{
+            var reason = remoteEmpty ? "auto-bootstrap-cloud-empty" : "auto-fill-cloud-missing";
+            var merged = await cloudMerge({ payload: { db: localDb, counter: state.counter }, reason: reason });
+            if(merged && merged.ok && merged.payload){
+              remote = merged; // use merged payload as latest remote snapshot
+              if(remoteEmpty) localStorage.setItem(bootKey, "1");
+              toast(remoteEmpty
+                ? ("雲端空白，已自動倒入本機資料：" + localDb.length + " 筆")
+                : ("已自動補齊雲端缺少資料：" + missing.length + " 筆"), "ok");
+            }
+          }catch(e){
+            toast("雲端自動補齊失敗：" + (e && (e.message||e) ? (e.message||e) : e), "warn");
+          }
+        }
+var out = mergePayload(remote, { db: state.db, counter: state.counter });
         state.db = out.db;
         state.counter = out.counter;
 
