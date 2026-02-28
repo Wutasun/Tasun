@@ -841,7 +841,7 @@
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
-    var DEFAULT_ENDPOINTS = { health: "/health", read: "/api/tasun/pull", merge: "/api/tasun/merge" };
+    var DEFAULT_ENDPOINTS = { health:"/health", read:"/api/read", merge:"/api/merge" };
 
     var AUTH_KEY = "tasunAuthTable_v1";
     var CURRENT_KEY = "tasunCurrentUser_v1";
@@ -1153,78 +1153,6 @@
       return base + path;
     }
 
-// --- cloud endpoint auto-detect (defensive) ---
-// Some devices may have old localStorage that points to working endpoints while fresh browsers
-// may default to "/api/*". If the Worker does not expose "/api/*" (404), desktop shows no rows.
-// We probe the read/merge endpoints once and persist the working paths.
-async function ensureCloudEndpoints(cfg){
-  try{
-    if(!cfg || !cfg.apiBase) return cfg;
-    if(cfg.__endpointsChecked) return cfg;
-    cfg.__endpointsChecked = true;
-
-    const uniq = (arr)=> Array.from(new Set((arr||[]).filter(Boolean)));
-    const candRead  = uniq([cfg.endpoints && cfg.endpoints.read,  "/read",  "/api/read"]);
-    const candMerge = uniq([cfg.endpoints && cfg.endpoints.merge, "/merge", "/api/merge"]);
-    const candHealth= uniq([cfg.endpoints && cfg.endpoints.health,"/health","/api/health"]);
-
-    const probe = async (path, method="POST")=>{
-      const url = joinApiBase(cfg.apiBase, path);
-      try{
-        const res = await fetch(url, {
-          method,
-          credentials: "include",
-          headers: {"content-type":"application/json"},
-          // Use a minimal envelope so the Worker can reply 200/401/400 instead of 404.
-          body: JSON.stringify({op:"ping"})
-        });
-        // If it's NOT 404, this path exists (even if auth/validation fails).
-        return res && res.status !== 404;
-      }catch(e){
-        // network error: treat as unknown, keep probing other candidates
-        return false;
-      }
-    };
-
-    // health (GET) optional
-    for(const p of candHealth){
-      const ok = await (async()=>{
-        try{
-          const res = await fetch(joinApiBase(cfg.apiBase, p), {method:"GET", credentials:"include"});
-          return res && res.status !== 404;
-        }catch(e){ return false; }
-      })();
-      if(ok){
-        cfg.endpoints.health = p;
-        break;
-      }
-    }
-
-    // read (POST)
-    for(const p of candRead){
-      if(await probe(p, "POST")){
-        cfg.endpoints.read = p;
-        break;
-      }
-    }
-
-    // merge (POST)
-    for(const p of candMerge){
-      if(await probe(p, "POST")){
-        cfg.endpoints.merge = p;
-        break;
-      }
-    }
-
-    // persist (do not change UI)
-    try{ localStorage.setItem(API_BASE_LS_KEY, String(cfg.apiBase||"")); }catch(e){}
-    try{ localStorage.setItem(API_EP_LS_KEY, JSON.stringify(cfg.endpoints||{})); }catch(e){}
-  }catch(e){}
-  return cfg;
-}
-// --- end defensive endpoint auto-detect ---
-
-
     function isValidApiBase(v){
       v = norm(v);
       if(!v) return false;
@@ -1282,8 +1210,6 @@ async function ensureCloudEndpoints(cfg){
 
       var oe = safeJSON(localStorage.getItem(API_EP_LS_KEY));
       if(oe) cfg.endpoints = normalizeEndpoints(Object.assign({}, cfg.endpoints, oe));
-
-      cfg = await ensureCloudEndpoints(cfg);
 
       _cloudCfgCache = cfg;
       return cfg;
@@ -2360,243 +2286,171 @@ function getPromptOptions(mode){
     // ---------------------------
     // Cloud API
     // ---------------------------
-    async function cloudHealth(){
-      var cfg = await loadCloudCfg();
-      state.cloud.apiBase = cfg.apiBase;
-      state.cloud.endpoints = cfg.endpoints;
-      state.cloud.cfgOk = !!(cfg && isValidApiBase(cfg.apiBase));
+      // --- Cloud API (Worker pull/merge compatible) ---
+      // Worker supports:
+      //   GET  /api/tasun/pull?key=PAGE_KEY   (or GET /api/read?key=PAGE_KEY)
+      //   POST /api/tasun/merge              (or POST /api/merge) body: { key, payload:{db,counter}, client:{user,...} }
+      // Response payload shape: { ok:true, payload:{db,counter}, ... }
 
-      // 若 apiBase 不合法，直接判未設定
-      if(!state.cloud.cfgOk){
-        state.cloud.ok = false;
-        refresh();
-        return false;
+      function _joinUrl(base, path){
+        base = (base || "").replace(/\/+$/,"");
+        path = (path || "").trim();
+        if(!path) return base;
+        if(path.startsWith("http://") || path.startsWith("https://")) return path;
+        if(!path.startsWith("/")) path = "/" + path;
+        return base + path;
       }
 
-      try{
-        var url = joinApiBase(cfg.apiBase, cfg.endpoints.health);
-        var res = await fetch(addV(url), { cache:"no-store" });
-        state.cloud.ok = !!(res && res.ok);
-        if(state.cloud.ok) state.cloud.lastOkAt = Date.now();
-      }catch(e){
-        // 可能是 CORS/離線/暫時網路問題：保持 cfgOk=true，但 ok=false
-        state.cloud.ok = false;
-      }
-      refresh();
-      return state.cloud.ok;
-    }
+      async function cloudHealth(cfg){
+        try{
+          cfg = cfg || loadCloudCfg();
+          const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
+          const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
+          const candidates = [];
+          if(eps && eps.health) candidates.push(_joinUrl(apiBase, eps.health));
+          // common fallbacks
+          candidates.push(_joinUrl(apiBase, "/health"));
+          candidates.push(_joinUrl(apiBase, "/api/tasun/ping"));
+          candidates.push(_joinUrl(apiBase, "/api/ping"));
 
-    function buildCloudEnvelope(p){
-      p = (p && typeof p==="object") ? p : {};
-      var db = Array.isArray(p.db) ? p.db : [];
-      var counter = Number(p.counter||0)||0;
-
-      // Always include key for GitHub-backend worker compatibility.
-      var key = PAGE_KEY;
-
-      var user = (state.user && (state.user.user || state.user.name)) || state.username || "";
-      var role = (state.user && state.user.role) || state.role || "";
-
-      var payload = { db: db, counter: counter };
-
-      // Keep backward-compatible fields too (some old workers read top-level db/counter)
-      return {
-        key: key,
-        pageKey: key,
-        op: p.op || "",
-        payload: payload,
-        db: db,
-        counter: counter,
-        reason: p.reason || "",
-        client: { user: user, role: role, ua: navigator.userAgent },
-        v: APP_VER,
-        ts: Date.now()
-      };
-    }
-
-
-    // --- 雲端 rev/updatedAt 一致性檢查（用於 #repair 自動清 hash 的防呆）
-    function __stableMetaDigest(db){
-      try{
-        var arr = Array.isArray(db)? db : [];
-        var meta = arr.map(function(r){
-          return String(r && r.uid || "") + "|" + String(r && r.rev || 0) + "|" + String(r && r.updatedAt || "");
-        }).sort();
-        var h = 0x811c9dc5;
-        for (var i=0;i<meta.length;i++){
-          var s = meta[i];
-          for (var j=0;j<s.length;j++){
-            h ^= s.charCodeAt(j);
-            h = (h + ((h<<1) + (h<<4) + (h<<7) + (h<<8) + (h<<24))) >>> 0;
+          for(const url of candidates){
+            try{
+              const r = await fetch(url, { method:"GET", credentials: (cfg && cfg.credentials) ? "include" : "omit", cache:"no-store" });
+              if(r.ok) return true;
+            }catch(_e){}
           }
-          h ^= 0x0a;
-          h = (h + ((h<<1) + (h<<4) + (h<<7) + (h<<8) + (h<<24))) >>> 0;
+          return false;
+        }catch(_e){
+          return false;
         }
-        return ("00000000" + h.toString(16)).slice(-8) + ":" + meta.length;
-      }catch(e){
-        return "00000000:0";
       }
-    }
-    async function __cloudReadOnce(){
-      var cfg = await loadCloudCfg();
-      if(!cfg || !isValidApiBase(cfg.apiBase)) throw new Error("cloud not configured");
 
-      // Decide primary read strategy:
-      // - If endpoint looks like /api/tasun/pull => GET with ?key=
-      // - Else try POST (legacy), and fallback to GET pull when 404/405.
-      var ep = (cfg.endpoints && cfg.endpoints.read) ? cfg.endpoints.read : "";
-      ep = String(ep||"");
-      var apiBase = cfg.apiBase;
+      function buildCloudEnvelope(pageKey, payload){
+        // Backward compatible wrapper; cloudMerge/cloudRead no longer require this shape,
+        // but keep it to avoid touching other code paths.
+        return { key: pageKey, payload: payload || { db:[], counter:0 } };
+      }
 
-      async function parseReadResponse(res){
-        var json = await res.json().catch(function(){ return null; });
-        if(!json) throw new Error("bad json");
-        // Worker (GitHub backend) shape: { ok:true, payload:{db,counter} }
-        if(json && json.ok===true && json.payload){
-          var p = json.payload || {};
-          var db = Array.isArray(p.db) ? p.db : [];
-          var counter = Number(p.counter||0)||0;
-          return { db: db, counter: counter };
+      function _normalizePullResponse(json){
+        // Accept both {ok:true,payload:{db,counter}} and legacy {payload:{...}} and raw payload.
+        const j = (json && typeof json==="object") ? json : {};
+        const payload = (j.payload && typeof j.payload==="object") ? j.payload : (j.data && typeof j.data==="object") ? j.data : j;
+        const db = Array.isArray(payload.db) ? payload.db : (Array.isArray(payload.items) ? payload.items : []);
+        const counter = Number.isFinite(Number(payload.counter)) ? Number(payload.counter) : 0;
+        return { db, counter };
+      }
+
+      async function cloudRead(cfg, pageKey){
+        cfg = cfg || loadCloudCfg();
+        const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
+        const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
+        const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/pull";
+
+        const url = _joinUrl(apiBase, readPath) + (readPath.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(pageKey);
+
+        const r = await fetch(url, {
+          method: "GET",
+          cache: "no-store",
+          credentials: (cfg && cfg.credentials) ? "include" : "omit",
+          headers: { "accept":"application/json" }
+        });
+        if(!r.ok){
+          const t = await r.text().catch(()=> "");
+          throw new Error("cloud read failed: " + r.status + " " + t.slice(0,200));
         }
-        // Legacy shapes
-        var un = unwrap(json);
-        var db2 = (un && (un.db || (un.data && un.data.db) || (un.payload && un.payload.db) || un.rows)) || [];
-        var counter2 = (un && (un.counter || (un.data && un.data.counter) || (un.payload && un.payload.counter))) || 0;
-        if(!Array.isArray(db2)) db2 = [];
-        return { db: db2, counter: Number(counter2||0)||0 };
+        const j = await r.json();
+        return _normalizePullResponse(j);
       }
 
-      async function doGetPull(){
-        var url = joinApiBase(apiBase, "/api/tasun/pull") + "?key=" + encodeURIComponent(PAGE_KEY);
-        var res = await fetch(addV(url), { method:"GET", credentials:"include", cache:"no-store" });
+      async function cloudMerge(cfg, pageKey, payloadLike, clientInfo){
+        cfg = cfg || loadCloudCfg();
+        const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
+        const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
+        const mergePath = (eps && eps.merge) ? String(eps.merge) : "/api/tasun/merge";
 
-      if(ep.includes("/api/tasun/pull") || ep.includes("pull")){
-        // Respect config but enforce GET style for pull
-        var url0 = joinApiBase(apiBase, ep);
-        if(url0.indexOf("?")>=0) url0 += "&key="+encodeURIComponent(PAGE_KEY);
-        else url0 += "?key="+encodeURIComponent(PAGE_KEY);
-        var res0 = await fetch(addV(url0), { method:"GET", credentials:"include", cache:"no-store" });
-        if(!res0.ok) throw new Error("read failed ("+res0.status+")");
-        return await parseReadResponse(res0);
-      }
+        // Accept: {key,payload:{db,counter}} / {payload:{db,counter}} / raw {db,counter}
+        let payload = payloadLike;
+        if(payload && typeof payload === "object"){
+          if(payload.payload && typeof payload.payload==="object") payload = payload.payload;
+          if(payload.data && typeof payload.data==="object") payload = payload.data;
+        }
+        payload = payload || { db:[], counter:0 };
 
-      // Legacy POST read
-      var url1 = joinApiBase(apiBase, ep || "/api/read");
-      var body = buildCloudEnvelope({ op:"read", db: [], counter: 0 });
-      var res1 = await fetch(addV(url1), {
-        method:"POST",
-        headers: { "content-type":"application/json" },
-        credentials:"include",
-        cache:"no-store",
-        body: JSON.stringify(body)
-      });
+        const body = {
+          key: pageKey,
+          payload: { db: Array.isArray(payload.db)? payload.db : [], counter: Number(payload.counter)||0 },
+          client: clientInfo && typeof clientInfo==="object" ? clientInfo : {}
+        };
 
-      if(res1.status===404 || res1.status===405){
-        // Fallback: GitHub backend worker pull
-        return await doGetPull();
-      }
-      if(!res1.ok) throw new Error("read failed ("+res1.status+")");
-      return await parseReadResponse(res1);
-    });
-      if(!res.ok) throw new Error("read 失敗 " + res.status);
-      return await res.json();
-    }
-    async function __cloudReadStable(){
-      var a = await __cloudReadOnce();
-      var dbA = (a && a.db) || [];
-      var digA = __stableMetaDigest(dbA);
-      await new Promise(function(res){ setTimeout(res, 120); });
-      var b = await __cloudReadOnce();
-      var dbB = (b && b.db) || [];
-      var digB = __stableMetaDigest(dbB);
-      return { stable: (digA===digB), digestA:digA, digestB:digB, a:a, b:b, db: dbB };
-    }
+        const url = _joinUrl(apiBase, mergePath);
 
-
-    
-    async function cloudRead(){
-      // 顯示資料以雲端 read 為準；回傳格式維持 {payload:{db,counter}}
-      var res = await __cloudReadStable();
-      var out = res && (res.b || res.a) || {};
-      var db = (out && out.db) || [];
-      var counter = (out && out.counter) || { total: db.length, selected: 0 };
-      window.__tasunCloudMetaStable = !!(res && res.stable);
-      window.__tasunCloudMetaDigest = String(res && (res.stable?res.digestB:(res.digestA+"!="+res.digestB)) || "");
-      return { payload: { db: db, counter: counter } };
-    }
-
-
-    async function cloudMerge(localPayload){
-      var cfg = await loadCloudCfg();
-      if(!cfg || !isValidApiBase(cfg.apiBase)) throw new Error("cloud not configured");
-
-      localPayload = normalizePayload(localPayload);
-
-      var apiBase = cfg.apiBase;
-      var ep = (cfg.endpoints && cfg.endpoints.merge) ? cfg.endpoints.merge : "/api/tasun/merge";
-      ep = String(ep||"");
-
-      var body = buildCloudEnvelope({ op:"merge", db: localPayload.db, counter: localPayload.counter });
-
-      async function postMerge(url){
-        var res = await fetch(addV(url), {
-          method:"POST",
-          headers: { "content-type":"application/json" },
-          credentials:"include",
-          cache:"no-store",
+        const r = await fetch(url, {
+          method: "POST",
+          cache: "no-store",
+          credentials: (cfg && cfg.credentials) ? "include" : "omit",
+          headers: { "content-type":"application/json", "accept":"application/json" },
           body: JSON.stringify(body)
         });
-        if(!res.ok){
-          var t = await res.text().catch(function(){ return ""; });
-          var err = new Error("merge failed ("+res.status+")" + (t ? (": "+t.slice(0,200)) : ""));
-          err.status = res.status;
-          throw err;
+        if(!r.ok){
+          const t = await r.text().catch(()=> "");
+          throw new Error("cloud merge failed: " + r.status + " " + t.slice(0,200));
         }
-        var json = await res.json().catch(function(){ return null; });
-        if(!json) throw new Error("bad json");
-        if(json && json.ok===true && json.payload){
-          var p = json.payload || {};
-          var db = Array.isArray(p.db) ? p.db : [];
-          var counter = Number(p.counter||0)||0;
-          return { db: db, counter: counter };
-        }
-        var un = unwrap(json);
-        var db2 = un && (un.db || (un.data && un.data.db) || (un.payload && un.payload.db) || un.rows) || [];
-        var counter2 = un && (un.counter || (un.data && un.data.counter) || (un.payload && un.payload.counter) || 0) || 0;
-        if(!Array.isArray(db2)) db2 = [];
-        return { db: db2, counter: Number(counter2||0)||0 };
+        const j = await r.json();
+        return _normalizePullResponse(j);
       }
+    async function syncFromCloud(opts){
+      opts = (opts && typeof opts==="object") ? opts : {};
+      var silent = !!opts.silent;
 
-      // Try configured endpoint first, then fallbacks for GitHub backend worker.
-      var tried = [];
-      function u(epp){ return joinApiBase(apiBase, epp); }
-
-      var primaryUrl = u(ep || "/api/tasun/merge");
-      tried.push(primaryUrl);
-
-      try{
-        return await postMerge(primaryUrl);
-      }catch(e){
-        var st = e && e.status;
-        // On 404/405/400, try known worker aliases.
-        var fallbacks = ["/api/tasun/merge", "/api/merge"];
-        for(var i=0;i<fallbacks.length;i++){
-          var uu = u(fallbacks[i]);
-          if(tried.indexOf(uu)>=0) continue;
-          try{ return await postMerge(uu); }catch(_e){}
-        }
-        throw e;
-      }
-    });
-
-        async function syncFromCloud(){
-      var silent = false;
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)){
-        if(!silent) toast("雲端未設定/無效"); return;
+        if(!silent) toast("雲端未設定/無效"); 
+        return;
       }
+
       try{
-        var remote = await cloudRead();
+        var remote = await cloudRead(cfg, PAGE_KEY);
+
+        // If cloud is empty but local has data, offer to bootstrap to cloud (one-time)
+        var cloudEmpty = !remote || !Array.isArray(remote.db) || remote.db.length===0;
+        var localHas = Array.isArray(state.db) && state.db.length>0;
+        var bootKey = "tasunCloudBootstrapped_v1_" + PAGE_KEY;
+        var booted = localStorage.getItem(bootKey)==="1";
+
+        if(cloudEmpty && localHas && !booted){
+          try{ toast("雲端無資料，正在自動倒入本機 " + (state.db||[]).length + " 筆…"); }catch(_e){}
+          // Auto bootstrap: push local -> cloud once (guarded by bootKey)
+          var fullRows = (state.db||[]).slice();
+          // Ensure Standard v1 fields
+          for(var bi=0; bi<fullRows.length; bi++){
+            fullRows[bi] = normalizeRow(fullRows[bi], bi+1);
+          }
+          var localPayload = { db: fullRows, counter: state.counter||0 };
+          try{
+            var merged = await cloudMergeOnce("bootstrap", localPayload);
+            if(merged && merged.payload && Array.isArray(merged.payload.db)){
+              state.db = merged.payload.db;
+              state.counter = merged.payload.counter||state.counter||0;
+            }
+            localStorage.setItem(bootKey, "1");
+            try{ toast("已自動倒入雲端：" + (state.db||[]).length + " 筆"); }catch(_e2){}
+          }catch(bootErr){
+            console.warn("bootstrap failed", bootErr);
+            try{ toast("自動倒入雲端失敗：" + (bootErr && bootErr.message ? bootErr.message : bootErr)); }catch(_e3){}
+          }
+          persist();
+          state.lastSyncAt = Date.now();
+await idbClearOps(PAGE_KEY);
+            await saveLocal({ db: state.db, counter: state.counter });
+            buildDictsFromDb();
+            refresh();
+            if(!silent) toast("已上傳本機資料到雲端");
+            return;
+          }else{
+            localStorage.setItem(bootKey, "1"); // don't ask again
+          }
+        }
+
         var out = mergePayload(remote, { db: state.db, counter: state.counter });
         state.db = out.db;
         state.counter = out.counter;
@@ -2607,50 +2461,56 @@ function getPromptOptions(mode){
 
         buildDictsFromDb();
         refresh();
-        toast("已從雲端更新");
+        if(!silent) toast("已從雲端更新");
       }catch(e){
-        toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
+        if(!silent) toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
       }
     }
-
-        async function syncToCloud(opts){
+    async function syncToCloud(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
       var silent = !!opts.silent;
       var reason = opts.reason || "";
+      var fullUpload = !!opts.fullUpload;
 
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)){
-        if(!silent) toast("雲端未設定/無效"); return;
+        if(!silent) toast("雲端未設定/無效"); 
+        return;
       }
 
       var meta = null;
       try{ meta = await idbGetMeta(PAGE_KEY); }catch(e){ meta=null; }
       var lastSyncAt = Number(state.lastSyncAt || (meta && meta.lastSyncAt) || 0) || 0;
 
-      var dirtyUids = [];
-      try{ dirtyUids = await idbGetDirtyUids(PAGE_KEY, lastSyncAt); }catch(e){ dirtyUids = []; }
+      var sendRows = [];
+      if(fullUpload){
+        sendRows = (state.db||[]).map(ensureRowV1).filter(Boolean);
+      }else{
+        var dirtyUids = [];
+        try{ dirtyUids = await idbGetDirtyUids(PAGE_KEY, lastSyncAt); }catch(e){ dirtyUids = []; }
 
-      if(!dirtyUids.length){
-        if(!silent) toast("沒有需要上傳的本機變更");
-        return;
+        if(!dirtyUids.length){
+          if(!silent) toast("沒有需要上傳的本機變更");
+          return;
+        }
+
+        var dirtySet = new Set(dirtyUids.map(norm));
+        sendRows = (state.db||[])
+          .map(ensureRowV1)
+          .filter(Boolean)
+          .filter(function(r){ return dirtySet.has(norm(r.uid)); });
       }
 
-      var dirtySet = new Set(dirtyUids.map(norm));
-      var sendRows = state.db
-        .map(ensureRowV1)
-        .filter(Boolean)
-        .filter(function(r){ return dirtySet.has(norm(r.uid)); });
-
-      var payload = {
-        pageKey: PAGE_KEY,
-        clientId: state.clientId || getClientId(),
-        since: lastSyncAt || 0,
-        partial: true,
-        payload: { db: sendRows, counter: state.counter }
-      };
-
       try{
-        var merged = await cloudMerge(payload);
+        var merged = await cloudMerge(cfg, PAGE_KEY, { db: sendRows, counter: state.counter }, {
+          user: state.user || "",
+          role: state.role || "",
+          appVer: APP_VER,
+          clientId: state.clientId || getClientId(),
+          at: nowISO(),
+          reason: reason || (fullUpload ? "fullUpload" : "incremental")
+        });
+
         var out = mergePayload(merged, { db: state.db, counter: state.counter });
         state.db = out.db;
         state.counter = out.counter;
@@ -2661,9 +2521,9 @@ function getPromptOptions(mode){
 
         buildDictsFromDb();
         refresh();
-        if(!silent) toast("雲端同步完成（增量）");
+        if(!silent) toast(fullUpload ? "雲端同步完成（全量）" : "雲端同步完成（增量）");
       }catch(e){
-        toast("雲端同步失敗：" + (e && e.message ? e.message : String(e)));
+        if(!silent) toast("雲端同步失敗：" + (e && e.message ? e.message : String(e)));
       }
     }
 
@@ -3009,34 +2869,6 @@ $("btnSave").addEventListener("click", async function(){
         try{ wire(); }catch(e){}
         try{ refresh(); }catch(e){}
         try{ cloudHealth(); }catch(e){}
-
-        // ✅ 開站即以雲端 read 為主：避免桌機/手機因本機快取不同而顯示不一致
-        try{
-          var cfg0 = await loadCloudCfg();
-          if(cfg0 && isValidApiBase(cfg0.apiBase)){
-            var cr = await cloudRead(); // 內含 rev/updatedAt 穩定比對
-            if(cr && cr.payload){
-              state.db = Array.isArray(cr.payload.db) ? cr.payload.db : [];
-              state.counter = cr.payload.counter || { total: state.db.length, selected: 0 };
-              state.cloudOk = true;
-              state.cloudMsg = "已同步";
-              state.lastSyncAt = Date.now();
-              try{ await saveDb(state.db, state.counter); }catch(_e){}
-              try{ refresh(); }catch(_e){}
-              // #repair：只有在雲端 read 回來的 rev/updatedAt 穩定一致時，才自動清 hash，避免反覆觸發
-              try{
-                var h = String(location.hash||"");
-                if(h && /repair/i.test(h) && window.__tasunCloudMetaStable){
-                  history.replaceState(null, "", location.pathname + location.search);
-                }
-              }catch(_e){}
-            }
-          }
-        }catch(e){
-          // 雲端讀取失敗：保留本機顯示，並標記未同步
-          try{ state.cloudOk = false; state.cloudMsg = "未同步"; }catch(_e){}
-          try{ refresh(); }catch(_e){}
-        }
         try{ if(!cur) openLogin(); }catch(e){}
 
         try{
