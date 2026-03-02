@@ -1185,9 +1185,12 @@
 
     function markDirty(uid){
       try{ idbAddOp(PAGE_KEY, uid); }catch(e){}
-      // ✅ 企業級最佳做法：任何變更都排程自動同步（去抖 + 互斥 + 離線重試）
-      try{ scheduleSync("dirty"); }catch(e){}
+      // ✅ 防止「剛新增/編輯」就被自動下拉覆蓋：暫停 auto pull 一小段時間
+      try{ _pullSuppressUntil = Date.now() + 12000; }catch(e){}
+      // ✅ 任何變更都立即排程同步（去抖 + 互斥 + 離線重試）
+      try{ scheduleSync("dirty", true); }catch(e){}
     }
+}
 
     // ---------------------------
     // Auto Sync (enterprise best practice)
@@ -1205,6 +1208,7 @@
     var PULL_DEBOUNCE_MS = 700;
     var PULL_MIN_GAP_MS = 1500;
     var _pull = { timer:null, inFlight:false, pending:false, lastRun:0, lastReason:"" };
+    var _pullSuppressUntil = 0; // 變更後暫停下拉，避免覆蓋未上傳的新資料
 
     function schedulePull(reason, immediate){
       if(!AUTO_PULL) return;
@@ -1219,6 +1223,17 @@
 
     async function runAutoPull(){
       if(!_pull.pending) return;
+      // ✅ 若本機有待上傳（sync pending / inFlight），或剛變更在保護窗內 → 暫停下拉，避免覆蓋新資料
+      if(_sync && (_sync.inFlight || _sync.pending)){
+        _pull.pending = true;
+        schedulePull("wait-sync");
+        return;
+      }
+      if(_pullSuppressUntil && Date.now() < _pullSuppressUntil){
+        _pull.pending = true;
+        schedulePull("wait-suppress");
+        return;
+      }
       if(_pull.inFlight) { _pull.pending = true; return; }
       _pull.inFlight = true;
       _pull.pending = false;
@@ -2685,7 +2700,17 @@ function buildCloudEnvelope(pageKey, payload){
         const j = await r.json();
         return _normalizePullResponse(j);
       }
-    async function syncFromCloud(opts){
+    
+      // ✅ 重要：若本機還有未上傳變更，先上傳再下拉（避免新增後變 14 又被拉回 13）
+      var _pendingUids = [];
+      try{ _pendingUids = await idbGetDirtyUids(PAGE_KEY, lastSyncAt); }catch(e){ _pendingUids = []; }
+      if(_pendingUids && _pendingUids.length){
+        try{ scheduleSync("pre-pull", true); }catch(e){}
+        try{ _pullSuppressUntil = Date.now() + 12000; }catch(e){}
+        if(!silent){ toast("本機有未上傳變更，先上傳再同步雲端…"); }
+        return;
+      }
+async function syncFromCloud(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
       var silent = !!opts.silent;
 
