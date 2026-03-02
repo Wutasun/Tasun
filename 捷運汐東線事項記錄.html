@@ -2656,90 +2656,36 @@ function buildCloudEnvelope(pageKey, payload){
         var remoteEmpty = (remoteDb.length===0);
         var autoFillKey = "tasunCloudAutoFill_" + PAGE_KEY;
 
-        // ✅ 首次偵測：雲端較少/缺漏/較舊 → 自動以本機資料觸發一次 cloudMerge（server 端仍會做合併，安全）
-        var _canWrite = (state.role==="admin" || state.role==="write");
-        var localCount = localDb.filter(function(r){return r && !r.deleted;}).length;
-        var remoteCount = remoteDb.filter(function(r){return r && !r.deleted;}).length;
+        
+        // ✅ 雲端為唯一真相（以雲端筆數/內容為主；避免桌機一般視窗吃到舊快取而變 23 筆）
+        // 原則：
+        // 1) 進站/同步讀取：永遠採用雲端 payload 覆蓋本機 state（所有設備一致）
+        // 2) 若偵測本機比雲端多（例如 23 > 13）：視為「舊本機快取/歷史殘留」
+        //    → 自動封存到 localStorage（可救回），並以雲端 13 筆顯示
+        // 3) 有雲端上傳功能：新增/編輯/刪除仍透過既有流程寫回雲端（多人協作以雲端合併為準）
+        var localActive = localDb.filter(function(r){ return r && !r.deleted; }).length;
+        var remoteActive = remoteDb.filter(function(r){ return r && !r.deleted; }).length;
 
-        // ✅ 首次偵測：雲端較少/缺漏/較舊 → 若可寫入則嘗試把本機較完整資料補到雲端
-        if(_canWrite && localDb.length && (remoteEmpty || missing.length>0 || newerLocal.length>0 || (remoteCount < localCount)) && !sessionStorage.getItem(autoFillKey)){
-
-          sessionStorage.setItem(autoFillKey, "1");
+        if(localActive > remoteActive){
           try{
-            var reason = remoteEmpty ? "auto-bootstrap-cloud-empty" : (missing.length>0 ? "auto-fill-cloud-missing" : "auto-fill-cloud-older");
-            var mergedRemote = await cloudMerge(cfg, PAGE_KEY, { db: localDb, counter: state.counter }, {
-              user: state.user || "",
-              role: state.role || "",
-              appVer: APP_VER,
-              clientId: state.clientId || getClientId(),
-              at: nowISO(),
-              reason: reason
-            });
-            if(mergedRemote && typeof mergedRemote==="object"){
-              mergedRemote.db = Array.isArray(mergedRemote.db) ? mergedRemote.db : [];
-              mergedRemote.counter = Number(mergedRemote.counter||0)||0;
-              remote = mergedRemote;
-              if(!silent){
-                toast(remoteEmpty
-                  ? ("雲端空白，已自動倒入本機資料：" + localDb.length + " 筆")
-                  : ("已自動補齊雲端缺少資料：" + missing.length + " 筆"));
-              }
+            var ts = Date.now();
+            var key = "tasunArchive_" + PAGE_KEY + "_" + ts;
+            var snap = { at: nowISO(), reason: "cloud_authoritative_discard_local_extra", local:{ db: localDb, counter: state.counter }, remote:{ db: remoteDb, counter: remote.counter } };
+            localStorage.setItem(key, JSON.stringify(snap));
+            // 只在本次提示一次（避免一直跳）
+            var onceKey = "tasunArchiveOnce_" + PAGE_KEY;
+            if(!sessionStorage.getItem(onceKey) && !silent){
+              sessionStorage.setItem(onceKey, "1");
+              toast("已偵測本機快取較多（" + localActive + " > " + remoteActive + "），已自動封存並以雲端為準。");
             }
-          }catch(e){
-            if(!silent) toast("雲端自動補齊失敗：" + (e && (e.message||e) ? (e.message||e) : e));
-          }
+          }catch(_e){}
         }
 
-        // ✅ 強制一致（雲端為主）：避免不同裝置因本機快取/舊資料而筆數不一致
-        // 規則：
-        // 1) 讀取權限（read）→ 永遠以雲端為準（不合併本機多出來的資料）
-        // 2) 可寫入（admin/write）：
-        //    - 若本機筆數 > 雲端筆數：視為本機較完整 → 嘗試把本機資料補到雲端（若補齊成功再以雲端為準）
-        //    - 其餘：以雲端為基礎合併本機變更（確保內容不倒退）
-        if(!_canWrite){
-          // read-only：保持強一致（雲端權威）
-          state.db = remote.db;
-          state.counter = remote.counter;
-        }else{
-          if(localCount > remoteCount){
-            var pushLessKey = "tasunCloudAutoPushLess_" + PAGE_KEY;
-            if(!sessionStorage.getItem(pushLessKey)){
-              sessionStorage.setItem(pushLessKey, "1");
-              try{
-                var merged2 = await cloudMerge(cfg, PAGE_KEY, { db: localDb, counter: state.counter }, {
-                  user: state.user || "",
-                  role: state.role || "",
-                  appVer: APP_VER,
-                  clientId: state.clientId || getClientId(),
-                  at: nowISO(),
-                  reason: "auto-reconcile-cloud-less"
-                });
-                if(merged2 && typeof merged2==="object"){
-                  merged2.db = Array.isArray(merged2.db) ? merged2.db : [];
-                  merged2.counter = Number(merged2.counter||0)||0;
-                  remote = merged2;
-                  remoteDb = (remote.db||[]).map(ensureRowV1).filter(Boolean);
-                  remoteCount = remoteDb.filter(function(r){return r && !r.deleted;}).length;
-                }
-              }catch(e){
-                if(!silent) toast("雲端補齊失敗（暫用本機）："+(e && (e.message||e) ? (e.message||e) : e));
-              }
-            }
-          }
+        // ✅ 強一致：永遠採用雲端
+        state.db = remote.db;
+        state.counter = remote.counter;
 
-          // 若補齊成功或本就雲端較完整 → 直接採用雲端
-          if(remoteCount >= localCount){
-            state.db = remote.db;
-            state.counter = remote.counter;
-          }else{
-            // 補齊未成功：暫時維持本機，但仍把雲端合併進來，避免倒退
-            var out = mergePayload(remote, { db: state.db, counter: state.counter });
-            state.db = out.db;
-            state.counter = out.counter;
-          }
-        }
-
-        state.lastSyncAt = Date.now();
+state.lastSyncAt = Date.now();
         await idbClearOps(PAGE_KEY);
         await saveLocal({ db: state.db, counter: state.counter });
 
