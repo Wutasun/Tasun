@@ -1050,6 +1050,45 @@
     var SYNC_PERIODIC_MS = 2*60*1000;// 週期保底同步
     var _sync = { timer:null, inFlight:false, pending:false, lastRun:0, lastReason:"" };
 
+    // ---------------------------
+    // Auto Pull (keep multi-device consistent)
+    // ---------------------------
+    var AUTO_PULL = true;
+    var PULL_DEBOUNCE_MS = 700;
+    var PULL_MIN_GAP_MS = 1500;
+    var _pull = { timer:null, inFlight:false, pending:false, lastRun:0, lastReason:"" };
+
+    function schedulePull(reason, immediate){
+      if(!AUTO_PULL) return;
+      _pull.pending = true;
+      _pull.lastReason = reason || _pull.lastReason || "auto";
+      if(_pull.timer) clearTimeout(_pull.timer);
+      var now = Date.now();
+      var gap = Math.max(0, (PULL_MIN_GAP_MS - (now - (_pull.lastRun||0))));
+      var wait = immediate ? Math.min(50, gap) : Math.max(PULL_DEBOUNCE_MS, gap);
+      _pull.timer = setTimeout(function(){ _pull.timer=null; runAutoPull(); }, wait);
+    }
+
+    async function runAutoPull(){
+      if(!_pull.pending) return;
+      if(_pull.inFlight) { _pull.pending = true; return; }
+      _pull.inFlight = true;
+      _pull.pending = false;
+      try{
+        if(navigator && navigator.onLine===false){
+          _pull.pending = true;
+          return;
+        }
+        await syncFromCloud({ silent:true, reason:_pull.lastReason||"auto" });
+      }catch(e){
+        _pull.pending = true;
+      }finally{
+        _pull.lastRun = Date.now();
+        _pull.inFlight = false;
+        if(_pull.pending) schedulePull("retry");
+      }
+    }
+
     function scheduleSync(reason, immediate){
       if(!AUTO_SYNC) return;
       _sync.pending = true;
@@ -2333,7 +2372,7 @@ function getPromptOptions(mode){
         return base + path;
       }
 
-      async function cloudHealth(cfg){
+      async function cloudHealthProbe(cfg){
         try{
           cfg = cfg || await loadCloudCfg();
           const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
@@ -2357,7 +2396,32 @@ function getPromptOptions(mode){
         }
       }
 
-      function buildCloudEnvelope(pageKey, payload){
+      
+      // ✅ 更新雲端狀態（不改 UI，只更新狀態列顯示）
+      async function cloudHealth(){
+        try{
+          var cfg = await loadCloudCfg();
+          state.cloud.cfgOk = !!(cfg && isValidApiBase(cfg.apiBase));
+          state.cloud.apiBase = cfg && cfg.apiBase ? String(cfg.apiBase) : "";
+          state.cloud.endpoints = cfg && cfg.endpoints ? cfg.endpoints : null;
+
+          if(!state.cloud.cfgOk){
+            state.cloud.ok = false;
+            return false;
+          }
+
+          var ok = await cloudHealthProbe(cfg);
+          state.cloud.ok = !!ok;
+          if(ok) state.cloud.lastOkAt = Date.now();
+          refresh();
+          return ok;
+        }catch(e){
+          try{ state.cloud.ok = false; refresh(); }catch(_e){}
+          return false;
+        }
+      }
+
+function buildCloudEnvelope(pageKey, payload){
         // Backward compatible wrapper; cloudMerge/cloudRead no longer require this shape,
         // but keep it to avoid touching other code paths.
         return { key: pageKey, payload: payload || { db:[], counter:0 } };
@@ -2436,54 +2500,59 @@ function getPromptOptions(mode){
 
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)){
-        if(!silent) toast("雲端未設定/無效"); 
+        if(!silent) toast("雲端未設定/無效");
         return;
       }
 
       try{
+        // ✅ cloudRead 回傳格式：{db,counter}
         var remote = await cloudRead(cfg, PAGE_KEY);
+        remote = remote && typeof remote==="object" ? remote : { db:[], counter:0 };
+        remote.db = Array.isArray(remote.db) ? remote.db : [];
+        remote.counter = Number(remote.counter||0)||0;
 
-        // If cloud is empty but local has data, offer to bootstrap to cloud (one-time)
-        var cloudEmpty = !remote || !Array.isArray(remote.db) || remote.db.length===0;
-        var localHas = Array.isArray(state.db) && state.db.length>0;
-        var bootKey = "tasunCloudBooted_" + PAGE_KEY;
-        var autoFillKey = "tasunCloudAutoFill_" + PAGE_KEY;
-        var localDb = (state.db || []);
-        var remoteDb = (remote && remote.payload && Array.isArray(remote.payload.db)) ? remote.payload.db : [];
+        // ✅ 若雲端空白或缺少本機資料：自動補齊一次（避免不同裝置看到不同筆數）
+        var localDb = (state.db||[]).map(ensureRowV1).filter(Boolean);
+        var remoteDb = (remote.db||[]).map(ensureRowV1).filter(Boolean);
 
-        function _uid(x){
-          if(!x) return "";
-          return String(x.uid || x.pk || x.Uid || x.ID || x.id || "");
-        }
-
+        function _uid(x){ return norm(x && (x.uid || x.pk || "")); }
         var rSet = new Set(remoteDb.map(_uid).filter(Boolean));
         var missing = localDb.filter(function(it){
           var u = _uid(it);
           return u && !rSet.has(u);
         });
 
-        var remoteEmpty = (!remoteDb || remoteDb.length === 0);
-        var localHas = (localDb.length > 0);
+        var remoteEmpty = (remoteDb.length===0);
+        var autoFillKey = "tasunCloudAutoFill_" + PAGE_KEY;
 
-        // Auto bootstrap when cloud empty OR auto-fill when cloud has fewer items than local.
-        // Run once per page-load to avoid loops.
-        if(localHas && (remoteEmpty || missing.length > 0) && !sessionStorage.getItem(autoFillKey)){
+        if(localDb.length && (remoteEmpty || missing.length>0) && !sessionStorage.getItem(autoFillKey)){
           sessionStorage.setItem(autoFillKey, "1");
           try{
             var reason = remoteEmpty ? "auto-bootstrap-cloud-empty" : "auto-fill-cloud-missing";
-            var merged = await cloudMerge({ payload: { db: localDb, counter: state.counter }, reason: reason });
-            if(merged && merged.ok && merged.payload){
-              remote = merged; // use merged payload as latest remote snapshot
-              if(remoteEmpty) localStorage.setItem(bootKey, "1");
-              toast(remoteEmpty
-                ? ("雲端空白，已自動倒入本機資料：" + localDb.length + " 筆")
-                : ("已自動補齊雲端缺少資料：" + missing.length + " 筆"), "ok");
+            var mergedRemote = await cloudMerge(cfg, PAGE_KEY, { db: localDb, counter: state.counter }, {
+              user: state.user || "",
+              role: state.role || "",
+              appVer: APP_VER,
+              clientId: state.clientId || getClientId(),
+              at: nowISO(),
+              reason: reason
+            });
+            if(mergedRemote && typeof mergedRemote==="object"){
+              mergedRemote.db = Array.isArray(mergedRemote.db) ? mergedRemote.db : [];
+              mergedRemote.counter = Number(mergedRemote.counter||0)||0;
+              remote = mergedRemote;
+              if(!silent){
+                toast(remoteEmpty
+                  ? ("雲端空白，已自動倒入本機資料：" + localDb.length + " 筆")
+                  : ("已自動補齊雲端缺少資料：" + missing.length + " 筆"));
+              }
             }
           }catch(e){
-            toast("雲端自動補齊失敗：" + (e && (e.message||e) ? (e.message||e) : e), "warn");
+            if(!silent) toast("雲端自動補齊失敗：" + (e && (e.message||e) ? (e.message||e) : e));
           }
         }
-var out = mergePayload(remote, { db: state.db, counter: state.counter });
+
+        var out = mergePayload(remote, { db: state.db, counter: state.counter });
         state.db = out.db;
         state.counter = out.counter;
 
@@ -2862,13 +2931,13 @@ $("btnSave").addEventListener("click", async function(){
       // ---------------------------
       // ✅ Auto sync triggers
       // ---------------------------
-      window.addEventListener("online", function(){ scheduleSync("online", true); });
-      window.addEventListener("focus", function(){ scheduleSync("focus"); });
+      window.addEventListener("online", function(){ schedulePull("online", true); scheduleSync("online", true); });
+      window.addEventListener("focus", function(){ schedulePull("focus"); scheduleSync("focus"); });
       document.addEventListener("visibilitychange", function(){
-        if(!document.hidden) scheduleSync("visible");
+        if(!document.hidden){ schedulePull("visible"); scheduleSync("visible"); }
       });
       // 週期保底同步（避免長時間開著頁面但沒互動）
-      setInterval(function(){ scheduleSync("periodic"); }, SYNC_PERIODIC_MS);
+      setInterval(function(){ schedulePull("periodic"); scheduleSync("periodic"); }, SYNC_PERIODIC_MS);
 
     }
 
@@ -2911,6 +2980,8 @@ $("btnSave").addEventListener("click", async function(){
         try{ wire(); }catch(e){}
         try{ refresh(); }catch(e){}
         try{ cloudHealth(); }catch(e){}
+        try{ schedulePull("boot", true); }catch(e){}
+
         try{ if(!cur) openLogin(); }catch(e){}
 
         try{
