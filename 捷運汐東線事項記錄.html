@@ -2883,6 +2883,23 @@ function buildCloudEnvelope(pageKey, payload){
         if(j && j.ok && j.user){
           return { user: j.user.user||"", role: j.user.role||"read", name: j.user.name||j.user.user||"", at: nowISO() };
         }
+
+
+    async function sessionUsers(){
+      // 公開使用者清單（不含密碼）— 用於填充登入下拉
+      try{
+        var cfg = await loadCloudCfg();
+        var apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
+        var eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
+        var p = (eps && eps.sessionUsers) ? String(eps.sessionUsers) : "/api/tasun/session/users";
+        var url = _joinUrl(apiBase, p);
+        var r = await fetch(url, { method:"GET", cache:"no-store", credentials:"include", headers:{ "accept":"application/json" } });
+        if(!r.ok) return null;
+        var j = await r.json().catch(()=> null);
+        if(j && j.ok && Array.isArray(j.users)) return j.users;
+      }catch(e){}
+      return null;
+    }
       }catch(e){}
       return null;
     }
@@ -3144,6 +3161,22 @@ $("btnSave").addEventListener("click", async function(){
         }catch(e){ state.readMode = false; }
 
         try{ ensureAuthTable(); }catch(e){}
+
+        // ✅ 以 Worker 公開使用者清單刷新登入下拉（不改 UI，只更新選單資料）
+        ;(async function(){
+          var list = await sessionUsers();
+          if(list && list.length){
+            try{
+              var auth = ensureAuthTable();
+              // 只覆蓋 user/role/name，不動 pass（避免前端存密碼）
+              auth.users = (list||[]).map(function(u){ return { user:u.user, role:u.role||"read", name:u.name||u.user, pass:"" }; });
+              // 若你仍要支援本機密碼表：可在 權限表.html 管理；此處只做「帳號清單」刷新
+              saveAuthTable(auth);
+              fillLoginUsers(auth);
+            }catch(e){}
+          }
+        })();
+
         try{ cur = getCurrentUser(); }catch(e){ cur = null; }
         try{
           if(cur) applyUser(cur);
