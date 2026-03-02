@@ -88,21 +88,33 @@
       if(APP) window.TASUN_APP_VER = APP;
 
       // 2) 進站必鎖定最新版 ?v=APP_VER（避免不同裝置卡舊版）
+      //    ✅ 另外支援「使用者手動加 ?v=時間戳」作為防快取：會自動轉成 &_=時間戳，但仍維持 v=APP_VER
       try{
         if(APP){
           var u = new URL(location.href);
           var cur = norm(u.searchParams.get("v"));
-          var KEY = "tasun_force_v_once__sxdh_notes__" + (cur||"none") + "_to_" + APP;
-          if(cur !== APP && !sessionStorage.getItem(KEY)){
+
+          // 若 v 看起來是時間戳（10+ 位數），視為 cache-buster，不當作版本號
+          var vts = "";
+          if(cur && /^\d{10,}$/.test(cur) && cur !== APP){
+            vts = cur;
+          }
+
+          var curKey = vts ? ("ts_" + vts) : (cur||"none");
+          var KEY = "tasun_force_v_once__sxdh_notes__" + curKey + "_to_" + APP;
+
+          // 需要替換成 APP_VER，並補上一個 cache-buster（_）
+          if((cur !== APP || vts) && !sessionStorage.getItem(KEY)){
             sessionStorage.setItem(KEY, "1");
             u.searchParams.set("v", APP);
+            u.searchParams.set("_", vts || String(Date.now()));
             location.replace(u.toString());
             return;
           }
         }
       }catch(e){}
 
-      // 3) 載入 tasun-core / tasun-boot（都帶 ?v=APP_VER）
+// 3) 載入 tasun-core / tasun-boot（都帶 ?v=APP_VER）
       try{
         if(APP){
           if(!window.TasunCore) await loadOnce("tasun-core", addV("tasun-core.js", APP));
@@ -849,6 +861,10 @@
     var FORCE_API_BASE = "https://tasun-worker.wutasun.workers.dev";
     var FORCE_ENDPOINTS = { health:"/api/tasun/health", read:"/api/tasun/read", merge:"/api/tasun/merge" };
 
+
+
+    // === 雲端設定視窗鎖定（只顯示、不可修改；外觀不變）===
+    var LOCK_CLOUD_CFG_UI = true;
 
     var AUTH_KEY = "tasunAuthTable_v1";
     var CURRENT_KEY = "tasunCurrentUser_v1";
@@ -2672,18 +2688,27 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
     function openToken(){
       $("tokenMask").style.display="flex";
       $("tokenErr").style.display="none";
+
+      // ✅ 鎖定模式：只顯示，不可修改（外觀不變：仍使用同一個 input + 按鈕）
       $("tokenInput").value = "";
-      updateTokenHint();
+      try{ $("tokenInput").readOnly = !!LOCK_CLOUD_CFG_UI; }catch(e){}
+      updateTokenHint(true);
     }
     function closeToken(){ $("tokenMask").style.display="none"; }
 
-    async function updateTokenHint(){
+    async function updateTokenHint(fillInput){
       var cfg = await loadCloudCfg();
       var txt = (cfg && cfg.apiBase) ? cfg.apiBase : "—";
       $("tokenHint").textContent = "目前狀態：" + txt;
+
+      // 鎖定模式：自動把目前 apiBase 放進輸入框（只讀；可用「顯示/隱藏」看內容）
+      if(fillInput && LOCK_CLOUD_CFG_UI){
+        try{ $("tokenInput").value = txt || ""; }catch(e){}
+      }
     }
 
     function saveToken(){
+      if(LOCK_CLOUD_CFG_UI){ toast("雲端設定已鎖定（只顯示）"); return; }
       var raw = norm($("tokenInput").value);
       if(!raw){
         $("tokenErr").style.display="block";
@@ -2718,6 +2743,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
     }
 
     function clearToken(){
+      if(LOCK_CLOUD_CFG_UI){ toast("雲端設定已鎖定（只顯示）"); return; }
       localStorage.removeItem(API_BASE_LS_KEY);
       localStorage.removeItem(API_EP_LS_KEY);
       _cloudCfgCache = null;
