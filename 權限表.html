@@ -850,7 +850,152 @@
   let tokenExpired = false;
   let tokenInvalid = false;
 
-  // ====== Auto cloud sync (TasunCloudKit) ======
+  
+
+  // ====== Enterprise D1 權限表同步（UI 不變） ======
+  // 目標：權限表 → 一鍵寫入 D1；任何裝置（含無痕）以雲端為準，保持一致。
+  // 說明：
+  // - 讀取：優先嘗試 admin 版（含密碼），失敗則讀 public 版（不含密碼）
+  // - 寫入：僅 admin 且已建立 Session Cookie 才能寫入（/api/admin/auth/table）
+  const D1_AUTH_TABLE_ENDPOINT_ADMIN = "/api/admin/auth/table";
+  const D1_AUTH_TABLE_ENDPOINT_FULL  = "/api/auth/table";
+  const D1_AUTH_TABLE_ENDPOINT_PUB   = "/api/auth/public";
+
+  function getApiBaseLocked(){
+    // ✅ 不提供任何可修改 apiBase 的 UI；僅程式自動偵測/讀取既有設定
+    const v = (localStorage.getItem("tasunApiBase_v1") || "").trim();
+    const base = v || "https://tasun-worker.wutasun.workers.dev";
+    return String(base).replace(/\/+$/,"");
+  }
+  function withNoCache(u){
+    try{
+      const url = new URL(u, location.href);
+      if(!url.searchParams.has("_")) url.searchParams.set("_", String(Date.now()));
+      return url.toString();
+    }catch(_){
+      const ts = Date.now();
+      return (u.includes("?") ? (u + "&_=" + ts) : (u + "?_=" + ts));
+    }
+  }
+  async function d1GetJson(path){
+    const base = getApiBaseLocked();
+    const url = withNoCache(base + path);
+    const res = await fetch(url, { method:"GET", credentials:"include", cache:"no-store" });
+    const j = await res.json().catch(()=>null);
+    return { ok: res.ok, status: res.status, json: j };
+  }
+  async function d1PostJson(path, body){
+    const base = getApiBaseLocked();
+    const url = withNoCache(base + path);
+    const res = await fetch(url, {
+      method:"POST",
+      credentials:"include",
+      cache:"no-store",
+      headers:{ "content-type":"application/json" },
+      body: JSON.stringify(body || {})
+    });
+    const j = await res.json().catch(()=>null);
+    return { ok: res.ok, status: res.status, json: j };
+  }
+
+  function snapshotAuthTableForCloud(){
+    const navButtons = safeJsonParse(localStorage.getItem(NAV_KEY) || "[]", []);
+    const routes     = safeJsonParse(localStorage.getItem(ROUTE_KEY) || "[]", []);
+    const entrySel   = safeJsonParse(localStorage.getItem(ENTRY_SELECTED_KEY) || JSON.stringify("index.html"), "index.html");
+    const entryReg   = safeJsonParse(localStorage.getItem(ENTRY_REGISTRY_KEY) || "[]", []);
+    const btnMetaLs  = safeJsonParse(localStorage.getItem(BTN_META_KEY) || "[]", []);
+    const permMat    = safeJsonParse(localStorage.getItem(PERM_MATRIX_KEY) || "{}", { users:{} });
+
+    return {
+      auth: Array.isArray(auth) ? auth : [],
+      navButtons: Array.isArray(navButtons) ? navButtons : [],
+      routes: Array.isArray(routes) ? routes : [],
+      btnMeta: Array.isArray(btnMetaLs) ? btnMetaLs : (Array.isArray(btnMeta) ? btnMeta : []),
+      permMatrix: (permMat && typeof permMat==="object") ? permMat : { users:{} },
+      entrySelected: entrySel || "index.html",
+      entryRegistry: Array.isArray(entryReg) ? entryReg : []
+    };
+  }
+
+  function applyAuthTableFromCloud(data, sourceTag){
+    if(!data || typeof data !== "object") return false;
+
+    // data 可能是 { ok:true, data:{...}} 或直接 {...}
+    const d = (data.data && typeof data.data==="object") ? data.data : data;
+
+    // ✅ auth：若是 public（無 pass），則只覆蓋 role/name；密碼保留本機（避免 admin 編輯被清空）
+    if(Array.isArray(d.auth)){
+      const hasPass = d.auth.some(u => u && typeof u==="object" && String(u.pass||"").length>0);
+      if(hasPass){
+        localStorage.setItem(AUTH_KEY, JSON.stringify(d.auth));
+      }else{
+        // public-only merge
+        const local = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
+        const map = new Map(Array.isArray(local)? local.map(x=>[String(x.user||""), x]) : []);
+        for(const u of d.auth){
+          if(!u || typeof u!=="object") continue;
+          const key = String(u.user||"");
+          if(!key) continue;
+          const cur = map.get(key) || { user:key, pass:"", role:"read", name:key };
+          cur.role = String(u.role||cur.role||"read");
+          cur.name = String(u.name||cur.name||key);
+          map.set(key, cur);
+        }
+        localStorage.setItem(AUTH_KEY, JSON.stringify(Array.from(map.values())));
+      }
+    }
+
+    if(Array.isArray(d.navButtons)) localStorage.setItem(NAV_KEY, JSON.stringify(d.navButtons));
+    if(Array.isArray(d.routes))     localStorage.setItem(ROUTE_KEY, JSON.stringify(d.routes));
+    if(Array.isArray(d.btnMeta))    localStorage.setItem(BTN_META_KEY, JSON.stringify(d.btnMeta));
+    if(d.permMatrix && typeof d.permMatrix==="object") localStorage.setItem(PERM_MATRIX_KEY, JSON.stringify(d.permMatrix));
+    if(typeof d.entrySelected === "string") localStorage.setItem(ENTRY_SELECTED_KEY, JSON.stringify(d.entrySelected));
+    if(Array.isArray(d.entryRegistry)) localStorage.setItem(ENTRY_REGISTRY_KEY, JSON.stringify(d.entryRegistry));
+
+    localState.textContent = "本機：已更新";
+    cloudState.textContent = "雲端：已拉取" + (sourceTag ? ("（" + sourceTag + "）") : "");
+    return true;
+  }
+
+  async function d1PullAuthTable(reason){
+    // ✅ 更積極：每次 load 都先拉一次（確保跨裝置一致）
+    try{
+      // 1) admin full
+      let r = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_FULL);
+      if(r.ok && r.json && r.json.ok){
+        applyAuthTableFromCloud(r.json, "admin");
+        return { ok:true, mode:"admin" };
+      }
+
+      // 2) public
+      r = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_PUB);
+      if(r.ok && r.json && r.json.ok){
+        applyAuthTableFromCloud(r.json, "public");
+        return { ok:true, mode:"public" };
+      }
+    }catch(_){}
+    return { ok:false };
+  }
+
+  async function d1PushAuthTable(reason){
+    try{
+      const role = (getEffectiveRole() || "read").toLowerCase();
+      if(role !== "admin"){
+        return { ok:false, skipped:true, reason:"not_admin" };
+      }
+      const payload = snapshotAuthTableForCloud();
+      const r = await d1PostJson(D1_AUTH_TABLE_ENDPOINT_ADMIN, payload);
+      if(r.ok && r.json && r.json.ok){
+        cloudState.textContent = "雲端：已寫入 D1";
+        return { ok:true };
+      }
+      return { ok:false, status:r.status, json:r.json };
+    }catch(e){
+      return { ok:false, error:String(e?.message||e) };
+    }
+  }
+
+// ====== Auto cloud sync (TasunCloudKit) ======
   let _cloudPushTimer = 0;
   let _cloudPullTimer = 0;
   let _cloudLastPushAt = 0;
@@ -1683,6 +1828,8 @@
     normalizeAuth();
     saveLocal();
     updateStates('已儲存本機（localStorage）。\n並已排程同步雲端（若 Token OK）。');
+    // ✅ 一鍵寫入 D1（以權限表為主，需 admin + Session Cookie）
+    d1PushAuthTable('save-btn');
     scheduleCloudPush('save-btn');
   });
 
@@ -2032,8 +2179,11 @@
   navSaveBtn.addEventListener('click', saveNavNamesFromInputs);
 
   // 初始化
-  function load(){
+  async function load(){
     seedAuthIfMissing();
+
+    // ✅ 先拉雲端權限表（D1）→ 再以本機渲染（確保跨裝置一致）
+    await d1PullAuthTable('page-load');
 
     auth = safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []);
     if(!Array.isArray(auth)) auth = [];
@@ -2070,7 +2220,7 @@
     renderAll();
     updateStates('已載入本機資料。');
 
-    // 可見時嘗試 pull（確保跨裝置一致）
+    // 可見時仍保留舊 Dropbox pull（相容）；D1 已在上方優先拉取
     scheduleCloudPull('page-load');
   }
 
@@ -2083,7 +2233,7 @@
       return;
     }
     if(e.key === AUTH_KEY || e.key === CURRENT_KEY || e.key === TOKEN_KEY || e.key === PERM_MATRIX_KEY || e.key === ENTRY_SELECTED_KEY){
-      load();
+      await load();
     }
   });
 
