@@ -867,6 +867,64 @@
     var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || (function(){try{var u=new URL(location.href);return (u.searchParams.get("v")||"").trim();}catch(e){return ""}})() || "dev";
     var RESOURCES_URL = "tasun-resources.json";
 
+    // ============================
+    // ENTERPRISE 發佈控制（不改 UI）
+    // - 以 URL 的 ?v= 版本為準（已在 APP_VER 解析）
+    // - 若偵測版本變更：清除本機快取/IndexedDB，強制重新拉雲端（雲端唯一真相）
+    // ============================
+    (function enterprisePublishControl(){
+      try{
+        var cur = (APP_VER||"").trim();
+        var verKey = "tasunAppVer_v1__" + PAGE_KEY;
+        if(!cur) cur = "dev";
+        var prev = "";
+        try{ prev = (localStorage.getItem(verKey)||"").trim(); }catch(e){ prev = ""; }
+
+        // 只在「有明確版本」且版本變更時做清除（避免 dev 開發環境一直清）
+        var shouldReset = (cur !== "dev") && (cur !== prev) && (prev !== "");
+
+        // 第一次遇到版本：只記錄，不清除（避免第一次上線就清掉使用者尚未上傳的草稿）
+        if(prev === ""){
+          try{ localStorage.setItem(verKey, cur); }catch(e){}
+          return;
+        }
+
+        if(!shouldReset) return;
+
+        // 1) 清 localStorage 快取（資料/字典/計數器/顯示模式）
+        var keys = [
+          DB_KEY, COUNTER_KEY, READ_MODE_KEY,
+          TRADE_DICT_KEY, SYS_DICT_KEY, SOURCE_DICT_KEY, TRADE_SYS_MAP_KEY
+        ];
+        // 不清 AUTH_KEY / CURRENT_KEY（避免把登入/權限表抹掉）
+        for(var i=0;i<keys.length;i++){
+          try{ localStorage.removeItem(keys[i]); }catch(e){}
+        }
+
+        // 2) 清 IndexedDB（真正資料庫）
+        try{
+          if(window.indexedDB && IDB_NAME){
+            indexedDB.deleteDatabase(IDB_NAME);
+          }
+        }catch(e){}
+
+        // 3) 更新版本記錄
+        try{ localStorage.setItem(verKey, cur); }catch(e){}
+
+        // 4) 強制破快取重載（補 _= 時間戳）
+        try{
+          var u = new URL(location.href);
+          u.searchParams.set("v", cur);
+          u.searchParams.set("_", Date.now().toString());
+          // 避免重複 reset：加旗標
+          u.searchParams.set("__ver_reset", "1");
+          location.replace(u.toString());
+        }catch(e){}
+      }catch(_e){}
+    })();
+
+
+
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
     var DEFAULT_ENDPOINTS = { health:"/api/tasun/health", read:"/api/tasun/read", merge:"/api/tasun/merge" };
     // === 前端 API Base 強制鎖定（穩定鎖定版）===
@@ -3259,3 +3317,4 @@ $("btnSave").addEventListener("click", async function(){
   </script>
 </body>
 </html>
+<!DOCTYPE html>
