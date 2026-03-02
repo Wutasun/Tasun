@@ -1237,6 +1237,41 @@
         };
         storageSet(AUTH_KEY, JSON.stringify(t));
       }
+
+    function saveAuthTable(auth){
+      try{
+        if(!auth || typeof auth!=="object") return;
+        storageSet(AUTH_KEY, auth);
+      }catch(e){}
+    }
+    function fillLoginUsers(auth){
+      try{
+        var sel = $("loginUser");
+        if(!sel) return;
+        var curVal = sel.value || "";
+        var users = (auth && Array.isArray(auth.users)) ? auth.users : [];
+        // 保留第一個 placeholder option
+        var firstOpt = sel.options && sel.options.length ? sel.options[0].cloneNode(true) : null;
+        sel.innerHTML = "";
+        if(firstOpt){
+          sel.appendChild(firstOpt);
+        }else{
+          var o0 = document.createElement("option");
+          o0.value = "";
+          o0.textContent = "請選擇帳號";
+          sel.appendChild(o0);
+        }
+        users.forEach(function(u){
+          if(!u || !u.user) return;
+          var opt = document.createElement("option");
+          opt.value = u.user;
+          opt.textContent = (u.user || "") + (u.role ? (" ("+u.role+")") : "");
+          sel.appendChild(opt);
+        });
+        if(curVal) sel.value = curVal;
+      }catch(e){}
+    }
+
       if(!Array.isArray(t.users)) t.users = [];
       return t;
     }
@@ -2622,7 +2657,12 @@ function buildCloudEnvelope(pageKey, payload){
         var autoFillKey = "tasunCloudAutoFill_" + PAGE_KEY;
 
         // ✅ 首次偵測：雲端較少/缺漏/較舊 → 自動以本機資料觸發一次 cloudMerge（server 端仍會做合併，安全）
-        if(localDb.length && (remoteEmpty || missing.length>0 || newerLocal.length>0) && !sessionStorage.getItem(autoFillKey)){
+        var _canWrite = (state.role==="admin" || state.role==="write");
+        var localCount = localDb.filter(function(r){return r && !r.deleted;}).length;
+        var remoteCount = remoteDb.filter(function(r){return r && !r.deleted;}).length;
+
+        // ✅ 首次偵測：雲端較少/缺漏/較舊 → 若可寫入則嘗試把本機較完整資料補到雲端
+        if(_canWrite && localDb.length && (remoteEmpty || missing.length>0 || newerLocal.length>0 || (remoteCount < localCount)) && !sessionStorage.getItem(autoFillKey)){
 
           sessionStorage.setItem(autoFillKey, "1");
           try{
@@ -2650,17 +2690,53 @@ function buildCloudEnvelope(pageKey, payload){
           }
         }
 
-        // ✅ 強制一致（更積極）：若雲端筆數較多，視為雲端較完整 → 直接以雲端為主（避免不同裝置各自停在舊本機快取）
-        var localCount = localDb.filter(function(r){return r && !r.deleted;}).length;
-        var remoteCount = remoteDb.filter(function(r){return r && !r.deleted;}).length;
-        if(remoteCount > localCount){
-          try{ console.info("[cloud] remote has more rows => force use remote", {remoteCount:remoteCount, localCount:localCount}); }catch(_e){}
+        // ✅ 強制一致（雲端為主）：避免不同裝置因本機快取/舊資料而筆數不一致
+        // 規則：
+        // 1) 讀取權限（read）→ 永遠以雲端為準（不合併本機多出來的資料）
+        // 2) 可寫入（admin/write）：
+        //    - 若本機筆數 > 雲端筆數：視為本機較完整 → 嘗試把本機資料補到雲端（若補齊成功再以雲端為準）
+        //    - 其餘：以雲端為基礎合併本機變更（確保內容不倒退）
+        if(!_canWrite){
+          // read-only：保持強一致（雲端權威）
           state.db = remote.db;
           state.counter = remote.counter;
-        } else {
-          var out = mergePayload(remote, { db: state.db, counter: state.counter });
-          state.db = out.db;
-          state.counter = out.counter;
+        }else{
+          if(localCount > remoteCount){
+            var pushLessKey = "tasunCloudAutoPushLess_" + PAGE_KEY;
+            if(!sessionStorage.getItem(pushLessKey)){
+              sessionStorage.setItem(pushLessKey, "1");
+              try{
+                var merged2 = await cloudMerge(cfg, PAGE_KEY, { db: localDb, counter: state.counter }, {
+                  user: state.user || "",
+                  role: state.role || "",
+                  appVer: APP_VER,
+                  clientId: state.clientId || getClientId(),
+                  at: nowISO(),
+                  reason: "auto-reconcile-cloud-less"
+                });
+                if(merged2 && typeof merged2==="object"){
+                  merged2.db = Array.isArray(merged2.db) ? merged2.db : [];
+                  merged2.counter = Number(merged2.counter||0)||0;
+                  remote = merged2;
+                  remoteDb = (remote.db||[]).map(ensureRowV1).filter(Boolean);
+                  remoteCount = remoteDb.filter(function(r){return r && !r.deleted;}).length;
+                }
+              }catch(e){
+                if(!silent) toast("雲端補齊失敗（暫用本機）："+(e && (e.message||e) ? (e.message||e) : e));
+              }
+            }
+          }
+
+          // 若補齊成功或本就雲端較完整 → 直接採用雲端
+          if(remoteCount >= localCount){
+            state.db = remote.db;
+            state.counter = remote.counter;
+          }else{
+            // 補齊未成功：暫時維持本機，但仍把雲端合併進來，避免倒退
+            var out = mergePayload(remote, { db: state.db, counter: state.counter });
+            state.db = out.db;
+            state.counter = out.counter;
+          }
         }
 
         state.lastSyncAt = Date.now();
@@ -2883,7 +2959,9 @@ function buildCloudEnvelope(pageKey, payload){
         if(j && j.ok && j.user){
           return { user: j.user.user||"", role: j.user.role||"read", name: j.user.name||j.user.user||"", at: nowISO() };
         }
-
+      }catch(e){}
+      return null;
+    }
 
     async function sessionUsers(){
       // 公開使用者清單（不含密碼）— 用於填充登入下拉
@@ -2900,9 +2978,7 @@ function buildCloudEnvelope(pageKey, payload){
       }catch(e){}
       return null;
     }
-      }catch(e){}
-      return null;
-    }
+
 
 async function doLogin(){
       var user = norm($("loginUser").value);
