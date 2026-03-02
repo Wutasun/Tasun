@@ -2522,13 +2522,29 @@ function buildCloudEnvelope(pageKey, payload){
           return u && !rSet.has(u);
         });
 
+        // ✅ 更積極：同 uid 若本機較新，也視為需要補齊（避免不同裝置看到不同內容/筆數）
+        var rMap = new Map();
+        remoteDb.forEach(function(x){
+          var u = _uid(x);
+          if(u) rMap.set(u, x);
+        });
+        var newerLocal = localDb.filter(function(it){
+          var u = _uid(it);
+          if(!u) return false;
+          var rx = rMap.get(u);
+          if(!rx) return false;
+          return tsOf(it) > tsOf(rx);
+        });
+
         var remoteEmpty = (remoteDb.length===0);
         var autoFillKey = "tasunCloudAutoFill_" + PAGE_KEY;
 
-        if(localDb.length && (remoteEmpty || missing.length>0) && !sessionStorage.getItem(autoFillKey)){
+        // ✅ 首次偵測：雲端較少/缺漏/較舊 → 自動以本機資料觸發一次 cloudMerge（server 端仍會做合併，安全）
+        if(localDb.length && (remoteEmpty || missing.length>0 || newerLocal.length>0) && !sessionStorage.getItem(autoFillKey)){
+
           sessionStorage.setItem(autoFillKey, "1");
           try{
-            var reason = remoteEmpty ? "auto-bootstrap-cloud-empty" : "auto-fill-cloud-missing";
+            var reason = remoteEmpty ? "auto-bootstrap-cloud-empty" : (missing.length>0 ? "auto-fill-cloud-missing" : "auto-fill-cloud-older");
             var mergedRemote = await cloudMerge(cfg, PAGE_KEY, { db: localDb, counter: state.counter }, {
               user: state.user || "",
               role: state.role || "",
