@@ -2466,7 +2466,7 @@ function getPromptOptions(mode){
 
           for(const url of candidates){
             try{
-              const r = await fetch(url, { method:"GET", credentials: (cfg && cfg.credentials) ? "include" : "omit", cache:"no-store" });
+              const r = await fetch(url, { method:"GET", credentials: "include", cache:"no-store" });
               if(r.ok) return true;
             }catch(_e){}
           }
@@ -2527,7 +2527,7 @@ function buildCloudEnvelope(pageKey, payload){
         const r = await fetch(url, {
           method: "GET",
           cache: "no-store",
-          credentials: (cfg && cfg.credentials) ? "include" : "omit",
+          credentials: "include",
           headers: { "accept":"application/json" }
         });
         if(!r.ok){
@@ -2565,7 +2565,7 @@ function buildCloudEnvelope(pageKey, payload){
         const r = await fetch(url, {
           method: "POST",
           cache: "no-store",
-          credentials: (cfg && cfg.credentials) ? "include" : "omit",
+          credentials: "include",
           headers: { "content-type":"application/json", "accept":"application/json" },
           body: JSON.stringify(body)
         });
@@ -2843,7 +2843,51 @@ function buildCloudEnvelope(pageKey, payload){
       refresh();
     }
 
-    function doLogin(){
+    
+    async function sessionLogin(user, pass){
+      // 企業級 Cookie：由 Worker 簽發 HttpOnly session cookie
+      try{
+        var cfg = await loadCloudCfg();
+        var apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
+        var eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
+        var p = (eps && (eps.sessionLogin || eps.login)) ? String(eps.sessionLogin || eps.login) : "/api/tasun/session/login";
+        var url = _joinUrl(apiBase, p);
+        var r = await fetch(url, {
+          method: "POST",
+          cache: "no-store",
+          credentials: "include",
+          headers: { "content-type":"application/json", "accept":"application/json" },
+          body: JSON.stringify({ user:user, pass:pass })
+        });
+        if(!r.ok){
+          var t = await r.text().catch(()=> "");
+          return { ok:false, status:r.status, text:t.slice(0,200) };
+        }
+        var j = await r.json().catch(()=> null);
+        return (j && j.ok) ? { ok:true, user:j.user||null } : { ok:false, status:0, text:"bad_response" };
+      }catch(e){
+        return { ok:false, status:0, text:String(e && e.message ? e.message : e) };
+      }
+    }
+
+    async function sessionMe(){
+      try{
+        var cfg = await loadCloudCfg();
+        var apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
+        var eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
+        var p = (eps && eps.sessionMe) ? String(eps.sessionMe) : "/api/tasun/session/me";
+        var url = _joinUrl(apiBase, p);
+        var r = await fetch(url, { method:"GET", cache:"no-store", credentials:"include", headers:{ "accept":"application/json" } });
+        if(!r.ok) return null;
+        var j = await r.json().catch(()=> null);
+        if(j && j.ok && j.user){
+          return { user: j.user.user||"", role: j.user.role||"read", name: j.user.name||j.user.user||"", at: nowISO() };
+        }
+      }catch(e){}
+      return null;
+    }
+
+async function doLogin(){
       var user = norm($("loginUser").value);
       var pass = norm($("loginPass").value);
       if(!user || !pass){
@@ -2859,6 +2903,21 @@ function buildCloudEnvelope(pageKey, payload){
         return;
       }
       var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
+
+      // ✅ 企業級 Cookie（寫入權限需要 server session）
+      if((cur.role==="admin" || cur.role==="write")){
+        var sres = await sessionLogin(cur.user, pass);
+        if(!sres.ok){
+          $("loginErr").style.display="block";
+          $("loginErr").textContent="雲端登入失敗（Cookie）：" + (sres.status ? ("HTTP "+sres.status) : "") + " " + (sres.text||"");
+          return;
+        }
+      }else{
+        // read：允許只本機登入（唯讀），但仍可讀雲端
+        // best-effort 也可嘗試建立 session（不失敗也不阻擋）
+        await sessionLogin(cur.user, pass).catch(()=>{});
+      }
+
       setCurrentUser(cur);
       applyUser(cur);
       closeLogin();
@@ -3090,6 +3149,15 @@ $("btnSave").addEventListener("click", async function(){
           if(cur) applyUser(cur);
           else applyUser({ user:"—", role:"read", name:"—" });
         }catch(e){}
+
+        // ✅ Cookie session：若存在 server session，優先使用（可跨裝置/無痕只要 session 存在就一致）
+        ;(async function(){
+          var su = await sessionMe();
+          if(su){
+            try{ setCurrentUser(su); }catch(e){}
+            try{ applyUser(su); }catch(e){}
+          }
+        })();
 
         try{ wire(); }catch(e){}
         try{ refresh(); }catch(e){}
