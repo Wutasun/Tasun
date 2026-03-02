@@ -869,6 +869,80 @@
     var AUTH_KEY = "tasunAuthTable_v1";
     var CURRENT_KEY = "tasunCurrentUser_v1";
 
+    // ---------------------------
+    // Storage wrapper (safe for iOS Private Mode)
+    // - localStorage may throw in Safari Private Browsing.
+    // - We fallback to in-memory storage (per-tab) to keep app usable.
+    // ---------------------------
+    var __memStore = Object.create(null);
+    function __lsOk(){
+      try{
+        var k="__t_ls_test__";
+        localStorage.setItem(k,"1");
+        localStorage.removeItem(k);
+        return true;
+      }catch(e){ return false; }
+    }
+    function __ckGet(name){
+      try{
+        var m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.$?*|{}()\[\]\\\/\+^]/g,'\\$&') + '=([^;]*)'));
+        return m ? decodeURIComponent(m[1]) : null;
+      }catch(e){ return null; }
+    }
+    function __ckSet(name, value, days){
+      try{
+        var maxAge = days ? ('; Max-Age=' + String(Math.floor(days*86400))) : '';
+        document.cookie = name + '=' + encodeURIComponent(value) + maxAge + '; Path=/; SameSite=Lax';
+        return true;
+      }catch(e){ return false; }
+    }
+    function __ckDel(name){
+      try{ document.cookie = name + '=; Max-Age=0; Path=/; SameSite=Lax'; }catch(e){}
+    }
+
+    // STORAGE_MODE:
+    // - "local": use localStorage when available, else memory fallback.
+    // - "cookie": prefer cookie for AUTH/CURRENT, else localStorage/memory.
+    var STORAGE_MODE = "local";
+
+    // Incognito-friendly: if no current user is stored (e.g., Safari Private mode),
+    // automatically enter read-only mode as user "wu" to allow cloud READ.
+    var AUTO_ANON_READ = true;
+
+
+    function storageGet(key){
+      if(STORAGE_MODE==="cookie"){
+        var v = __ckGet(key);
+        if(v!==null && v!==undefined) return v;
+      }
+      if(__lsOk()){
+        try{ return localStorage.getItem(key); }catch(e){}
+      }
+      return (key in __memStore) ? __memStore[key] : null;
+    }
+    function storageSet(key, val){
+      if(val===undefined) val=null;
+      if(STORAGE_MODE==="cookie"){
+        // keep cookies reasonably small; if too large, fall back.
+        if(typeof val==="string" && val.length<=3500){
+          if(__ckSet(key, val, 30)) return true;
+        }
+      }
+      if(__lsOk()){
+        try{ localStorage.setItem(key, val); return true; }catch(e){}
+      }
+      __memStore[key]=val;
+      return true;
+    }
+    function storageRemove(key){
+      if(STORAGE_MODE==="cookie") __ckDel(key);
+      if(__lsOk()){
+        try{ localStorage.removeItem(key); }catch(e){}
+      }
+      try{ delete __memStore[key]; }catch(e){}
+    }
+
+
     var DB_KEY = "tasunSxdhNotes_v1";
     var COUNTER_KEY = "tasunSxdhNotes_counter_v1";
     var READ_MODE_KEY  = "tasunSxdhNotes_readMode_v1";
@@ -1150,7 +1224,7 @@
     // Auth
     // ---------------------------
     function ensureAuthTable(){
-      var t = safeJSON(localStorage.getItem(AUTH_KEY));
+      var t = safeJSON(storageGet(AUTH_KEY));
       if(!t || typeof t !== "object"){
         t = {
           users: [
@@ -1161,21 +1235,27 @@
           updatedAt: nowISO(),
           rev: "seed"
         };
-        localStorage.setItem(AUTH_KEY, JSON.stringify(t));
+        storageSet(AUTH_KEY, JSON.stringify(t));
       }
       if(!Array.isArray(t.users)) t.users = [];
       return t;
     }
 
     function getCurrentUser(){
-      var cur = safeJSON(localStorage.getItem(CURRENT_KEY));
+      var cur = safeJSON(storageGet(CURRENT_KEY));
       if(cur && cur.user && cur.role) return cur;
+      if(AUTO_ANON_READ){
+        // per-tab fallback (won't persist if storage is blocked)
+        var anon = { user:"wu", pass:"", role:"read", name:"wu", anon:true };
+        try{ storageSet(CURRENT_KEY, JSON.stringify(anon)); }catch(e){}
+        return anon;
+      }
       return null;
     }
 
     function setCurrentUser(u){
-      if(!u) localStorage.removeItem(CURRENT_KEY);
-      else localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
+      if(!u) storageRemove(CURRENT_KEY);
+      else storageSet(CURRENT_KEY, JSON.stringify(u));
     }
 
     function roleRank(role){
@@ -2451,6 +2531,8 @@ function buildCloudEnvelope(pageKey, payload){
           headers: { "accept":"application/json" }
         });
         if(!r.ok){
+          try{ console.warn("[cloud] read HTTP", r.status, url); }catch(_e){}
+
           const t = await r.text().catch(()=> "");
           throw new Error("cloud read failed: " + r.status + " " + t.slice(0,200));
         }
@@ -2568,9 +2650,18 @@ function buildCloudEnvelope(pageKey, payload){
           }
         }
 
-        var out = mergePayload(remote, { db: state.db, counter: state.counter });
-        state.db = out.db;
-        state.counter = out.counter;
+        // ✅ 強制一致（更積極）：若雲端筆數較多，視為雲端較完整 → 直接以雲端為主（避免不同裝置各自停在舊本機快取）
+        var localCount = localDb.filter(function(r){return r && !r.deleted;}).length;
+        var remoteCount = remoteDb.filter(function(r){return r && !r.deleted;}).length;
+        if(remoteCount > localCount){
+          try{ console.info("[cloud] remote has more rows => force use remote", {remoteCount:remoteCount, localCount:localCount}); }catch(_e){}
+          state.db = remote.db;
+          state.counter = remote.counter;
+        } else {
+          var out = mergePayload(remote, { db: state.db, counter: state.counter });
+          state.db = out.db;
+          state.counter = out.counter;
+        }
 
         state.lastSyncAt = Date.now();
         await idbClearOps(PAGE_KEY);
@@ -2592,6 +2683,13 @@ function buildCloudEnvelope(pageKey, payload){
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)){
         if(!silent) toast("雲端未設定/無效"); 
+        return;
+      }
+
+      // Permission gate: read-only users can read cloud but MUST NOT upload/merge.
+      var _canWrite = (state.role==="admin" || state.role==="write");
+      if(!_canWrite){
+        if(!silent) toast("唯讀權限：不可上傳（可讀雲端）");
         return;
       }
 
