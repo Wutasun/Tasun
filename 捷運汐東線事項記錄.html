@@ -1,21 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-
-<script>
-// ✅ 自動破快取機制（不改 UI、不影響功能）
-// 若網址沒有 _= 參數，自動補上當下時間戳，避免桌機一般視窗吃到舊版快取
-(function(){
-  try{
-    var url = new URL(location.href);
-    if(!url.searchParams.get("_")){
-      url.searchParams.set("_", Date.now().toString());
-      location.replace(url.toString());
-    }
-  }catch(e){}
-})();
-</script>
-
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>捷運汐東線事項記錄 · Tasun</title>
@@ -864,67 +849,13 @@
     // Constants / Keys
     // ---------------------------
     var PAGE_KEY = "sxdh-notes";
+// ✅ B方案：提供 TasunCloudKit mount() 必要的 resourceKey（避免 MOUNT_MISSING_KEY）
+window.TASUN_RESOURCE_KEY = window.TASUN_RESOURCE_KEY || PAGE_KEY;
+window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
+window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
+
     var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || (function(){try{var u=new URL(location.href);return (u.searchParams.get("v")||"").trim();}catch(e){return ""}})() || "dev";
     var RESOURCES_URL = "tasun-resources.json";
-
-    // ============================
-    // ENTERPRISE 發佈控制（不改 UI）
-    // - 以 URL 的 ?v= 版本為準（已在 APP_VER 解析）
-    // - 若偵測版本變更：清除本機快取/IndexedDB，強制重新拉雲端（雲端唯一真相）
-    // ============================
-    (function enterprisePublishControl(){
-      try{
-        var cur = (APP_VER||"").trim();
-        var verKey = "tasunAppVer_v1__" + PAGE_KEY;
-        if(!cur) cur = "dev";
-        var prev = "";
-        try{ prev = (localStorage.getItem(verKey)||"").trim(); }catch(e){ prev = ""; }
-
-        // 只在「有明確版本」且版本變更時做清除（避免 dev 開發環境一直清）
-        var shouldReset = (cur !== "dev") && (cur !== prev);
-
-        // 第一次遇到版本：也要強制清一次（企業級發佈控制：首次也收斂到雲端唯一真相）
-        var shouldResetFirst = (prev === "");
-        if(shouldResetFirst){
-          // 讓 shouldReset 成立以進行清除
-          shouldReset = (cur !== "dev");
-        }
-
-        if(!shouldReset) return;
-
-        // 1) 清 localStorage 快取（資料/字典/計數器/顯示模式）
-        var keys = [
-          DB_KEY, COUNTER_KEY, READ_MODE_KEY,
-          TRADE_DICT_KEY, SYS_DICT_KEY, SOURCE_DICT_KEY, TRADE_SYS_MAP_KEY
-        ];
-        // 不清 AUTH_KEY / CURRENT_KEY（避免把登入/權限表抹掉）
-        for(var i=0;i<keys.length;i++){
-          try{ localStorage.removeItem(keys[i]); }catch(e){}
-        }
-
-        // 2) 清 IndexedDB（真正資料庫）
-        try{
-          if(window.indexedDB && IDB_NAME){
-            indexedDB.deleteDatabase(IDB_NAME);
-          }
-        }catch(e){}
-
-        // 3) 更新版本記錄
-        try{ localStorage.setItem(verKey, cur); }catch(e){}
-
-        // 4) 強制破快取重載（補 _= 時間戳）
-        try{
-          var u = new URL(location.href);
-          u.searchParams.set("v", cur);
-          u.searchParams.set("_", Date.now().toString());
-          // 避免重複 reset：加旗標
-          u.searchParams.set("__ver_reset", "1");
-          location.replace(u.toString());
-        }catch(e){}
-      }catch(_e){}
-    })();
-
-
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
     var DEFAULT_ENDPOINTS = { health:"/api/tasun/health", read:"/api/tasun/read", merge:"/api/tasun/merge" };
@@ -942,80 +873,6 @@
 
     var AUTH_KEY = "tasunAuthTable_v1";
     var CURRENT_KEY = "tasunCurrentUser_v1";
-
-    // ---------------------------
-    // Storage wrapper (safe for iOS Private Mode)
-    // - localStorage may throw in Safari Private Browsing.
-    // - We fallback to in-memory storage (per-tab) to keep app usable.
-    // ---------------------------
-    var __memStore = Object.create(null);
-    function __lsOk(){
-      try{
-        var k="__t_ls_test__";
-        localStorage.setItem(k,"1");
-        localStorage.removeItem(k);
-        return true;
-      }catch(e){ return false; }
-    }
-    function __ckGet(name){
-      try{
-        var m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.$?*|{}()\[\]\\\/\+^]/g,'\\$&') + '=([^;]*)'));
-        return m ? decodeURIComponent(m[1]) : null;
-      }catch(e){ return null; }
-    }
-    function __ckSet(name, value, days){
-      try{
-        var maxAge = days ? ('; Max-Age=' + String(Math.floor(days*86400))) : '';
-        document.cookie = name + '=' + encodeURIComponent(value) + maxAge + '; Path=/; SameSite=Lax';
-        return true;
-      }catch(e){ return false; }
-    }
-    function __ckDel(name){
-      try{ document.cookie = name + '=; Max-Age=0; Path=/; SameSite=Lax'; }catch(e){}
-    }
-
-    // STORAGE_MODE:
-    // - "local": use localStorage when available, else memory fallback.
-    // - "cookie": prefer cookie for AUTH/CURRENT, else localStorage/memory.
-    var STORAGE_MODE = "local";
-
-    // Incognito-friendly: if no current user is stored (e.g., Safari Private mode),
-    // automatically enter read-only mode as user "wu" to allow cloud READ.
-    var AUTO_ANON_READ = true;
-
-
-    function storageGet(key){
-      if(STORAGE_MODE==="cookie"){
-        var v = __ckGet(key);
-        if(v!==null && v!==undefined) return v;
-      }
-      if(__lsOk()){
-        try{ return localStorage.getItem(key); }catch(e){}
-      }
-      return (key in __memStore) ? __memStore[key] : null;
-    }
-    function storageSet(key, val){
-      if(val===undefined) val=null;
-      if(STORAGE_MODE==="cookie"){
-        // keep cookies reasonably small; if too large, fall back.
-        if(typeof val==="string" && val.length<=3500){
-          if(__ckSet(key, val, 30)) return true;
-        }
-      }
-      if(__lsOk()){
-        try{ localStorage.setItem(key, val); return true; }catch(e){}
-      }
-      __memStore[key]=val;
-      return true;
-    }
-    function storageRemove(key){
-      if(STORAGE_MODE==="cookie") __ckDel(key);
-      if(__lsOk()){
-        try{ localStorage.removeItem(key); }catch(e){}
-      }
-      try{ delete __memStore[key]; }catch(e){}
-    }
-
 
     var DB_KEY = "tasunSxdhNotes_v1";
     var COUNTER_KEY = "tasunSxdhNotes_counter_v1";
@@ -1185,10 +1042,8 @@
 
     function markDirty(uid){
       try{ idbAddOp(PAGE_KEY, uid); }catch(e){}
-      // ✅ 防止「剛新增/編輯」就被自動下拉覆蓋：暫停 auto pull 一小段時間
-      try{ _pullSuppressUntil = Date.now() + 12000; }catch(e){}
-      // ✅ 任何變更都立即排程同步（去抖 + 互斥 + 離線重試）
-      try{ scheduleSync("dirty", true); }catch(e){}
+      // ✅ 企業級最佳做法：任何變更都排程自動同步（去抖 + 互斥 + 離線重試）
+      try{ scheduleSync("dirty"); }catch(e){}
     }
 
     // ---------------------------
@@ -1199,62 +1054,6 @@
     var SYNC_MIN_GAP_MS = 1500;      // 連續同步最小間隔
     var SYNC_PERIODIC_MS = 2*60*1000;// 週期保底同步
     var _sync = { timer:null, inFlight:false, pending:false, lastRun:0, lastReason:"" };
-
-    // ---------------------------
-    // Auto Pull (keep multi-device consistent)
-    // ---------------------------
-    var AUTO_PULL = true;
-    var PULL_DEBOUNCE_MS = 700;
-    var PULL_MIN_GAP_MS = 1500;
-    var _pull = { timer:null, inFlight:false, pending:false, lastRun:0, lastReason:"" };
-    var _pullSuppressUntil = 0; // 變更後暫停下拉，避免覆蓋未上傳的新資料
-
-    function schedulePull(reason, immediate){
-      if(!AUTO_PULL) return;
-      _pull.pending = true;
-      _pull.lastReason = reason || _pull.lastReason || "auto";
-      if(_pull.timer) clearTimeout(_pull.timer);
-      var now = Date.now();
-      var gap = Math.max(0, (PULL_MIN_GAP_MS - (now - (_pull.lastRun||0))));
-      var wait = immediate ? Math.min(50, gap) : Math.max(PULL_DEBOUNCE_MS, gap);
-      _pull.timer = setTimeout(function(){ _pull.timer=null; runAutoPull(); }, wait);
-    }
-
-    async function runAutoPull(){
-      if(!_pull.pending) return;
-      // ✅ 若本機有待上傳（sync pending / inFlight），或剛變更在保護窗內 → 暫停下拉，避免覆蓋新資料
-      if(_sync && (_sync.inFlight || _sync.pending)){
-        _pull.pending = true;
-        schedulePull("wait-sync");
-        return;
-      }
-      if(state && state._dirty){
-        _pull.pending = true;
-        schedulePull("wait-dirty");
-        return;
-      }
-      if(_pullSuppressUntil && Date.now() < _pullSuppressUntil){
-        _pull.pending = true;
-        schedulePull("wait-suppress");
-        return;
-      }
-      if(_pull.inFlight) { _pull.pending = true; return; }
-      _pull.inFlight = true;
-      _pull.pending = false;
-      try{
-        if(navigator && navigator.onLine===false){
-          _pull.pending = true;
-          return;
-        }
-        await syncFromCloud({ silent:true, reason:_pull.lastReason||"auto" });
-      }catch(e){
-        _pull.pending = true;
-      }finally{
-        _pull.lastRun = Date.now();
-        _pull.inFlight = false;
-        if(_pull.pending) schedulePull("retry");
-      }
-    }
 
     function scheduleSync(reason, immediate){
       if(!AUTO_SYNC) return;
@@ -1317,7 +1116,7 @@
     // Auth
     // ---------------------------
     function ensureAuthTable(){
-      var t = safeJSON(storageGet(AUTH_KEY));
+      var t = safeJSON(localStorage.getItem(AUTH_KEY));
       if(!t || typeof t !== "object"){
         t = {
           users: [
@@ -1328,62 +1127,21 @@
           updatedAt: nowISO(),
           rev: "seed"
         };
-        storageSet(AUTH_KEY, JSON.stringify(t));
+        localStorage.setItem(AUTH_KEY, JSON.stringify(t));
       }
-
-    function saveAuthTable(auth){
-      try{
-        if(!auth || typeof auth!=="object") return;
-        storageSet(AUTH_KEY, auth);
-      }catch(e){}
-    }
-    function fillLoginUsers(auth){
-      try{
-        var sel = $("loginUser");
-        if(!sel) return;
-        var curVal = sel.value || "";
-        var users = (auth && Array.isArray(auth.users)) ? auth.users : [];
-        // 保留第一個 placeholder option
-        var firstOpt = sel.options && sel.options.length ? sel.options[0].cloneNode(true) : null;
-        sel.innerHTML = "";
-        if(firstOpt){
-          sel.appendChild(firstOpt);
-        }else{
-          var o0 = document.createElement("option");
-          o0.value = "";
-          o0.textContent = "請選擇帳號";
-          sel.appendChild(o0);
-        }
-        users.forEach(function(u){
-          if(!u || !u.user) return;
-          var opt = document.createElement("option");
-          opt.value = u.user;
-          opt.textContent = (u.user || "") + (u.role ? (" ("+u.role+")") : "");
-          sel.appendChild(opt);
-        });
-        if(curVal) sel.value = curVal;
-      }catch(e){}
-    }
-
       if(!Array.isArray(t.users)) t.users = [];
       return t;
     }
 
     function getCurrentUser(){
-      var cur = safeJSON(storageGet(CURRENT_KEY));
+      var cur = safeJSON(localStorage.getItem(CURRENT_KEY));
       if(cur && cur.user && cur.role) return cur;
-      if(AUTO_ANON_READ){
-        // per-tab fallback (won't persist if storage is blocked)
-        var anon = { user:"wu", pass:"", role:"read", name:"wu", anon:true };
-        try{ storageSet(CURRENT_KEY, JSON.stringify(anon)); }catch(e){}
-        return anon;
-      }
       return null;
     }
 
     function setCurrentUser(u){
-      if(!u) storageRemove(CURRENT_KEY);
-      else storageSet(CURRENT_KEY, JSON.stringify(u));
+      if(!u) localStorage.removeItem(CURRENT_KEY);
+      else localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
     }
 
     function roleRank(role){
@@ -1489,19 +1247,6 @@
         cfg.apiBase = FORCE_API_BASE;
         cfg.endpoints = Object.assign({}, cfg.endpoints, FORCE_ENDPOINTS);
       }
-
-      
-      // expose config for debugging (no UI change)
-      try{
-        window.TASUN_CONFIG = Object.freeze({
-          pageKey: PAGE_KEY,
-          apiBase: cfg.apiBase,
-          endpoints: cfg.endpoints,
-          loadedAt: new Date().toISOString()
-        });
-        window.tasunCloud = window.tasunCloud || {};
-        window.tasunCloud.getConfig = function(){ return window.TASUN_CONFIG; };
-      }catch(_e){}
 
       _cloudCfgCache = cfg;
       return cfg;
@@ -1918,8 +1663,6 @@ function getVisibleRows(){
     // ---------------------------
     var state = {
       lastSyncAt:0,
-      _dirty:false,
-      _dirtySince:0,
       clientId:'',
       db: [],
       counter: 0,
@@ -2595,7 +2338,7 @@ function getPromptOptions(mode){
         return base + path;
       }
 
-      async function cloudHealthProbe(cfg){
+      async function cloudHealth(cfg){
         try{
           cfg = cfg || await loadCloudCfg();
           const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
@@ -2609,7 +2352,7 @@ function getPromptOptions(mode){
 
           for(const url of candidates){
             try{
-              const r = await fetch(url, { method:"GET", credentials: "include", cache:"no-store" });
+              const r = await fetch(url, { method:"GET", credentials: (cfg && cfg.credentials) ? "include" : "omit", cache:"no-store" });
               if(r.ok) return true;
             }catch(_e){}
           }
@@ -2619,32 +2362,7 @@ function getPromptOptions(mode){
         }
       }
 
-      
-      // ✅ 更新雲端狀態（不改 UI，只更新狀態列顯示）
-      async function cloudHealth(){
-        try{
-          var cfg = await loadCloudCfg();
-          state.cloud.cfgOk = !!(cfg && isValidApiBase(cfg.apiBase));
-          state.cloud.apiBase = cfg && cfg.apiBase ? String(cfg.apiBase) : "";
-          state.cloud.endpoints = cfg && cfg.endpoints ? cfg.endpoints : null;
-
-          if(!state.cloud.cfgOk){
-            state.cloud.ok = false;
-            return false;
-          }
-
-          var ok = await cloudHealthProbe(cfg);
-          state.cloud.ok = !!ok;
-          if(ok) state.cloud.lastOkAt = Date.now();
-          refresh();
-          return ok;
-        }catch(e){
-          try{ state.cloud.ok = false; refresh(); }catch(_e){}
-          return false;
-        }
-      }
-
-function buildCloudEnvelope(pageKey, payload){
+      function buildCloudEnvelope(pageKey, payload){
         // Backward compatible wrapper; cloudMerge/cloudRead no longer require this shape,
         // but keep it to avoid touching other code paths.
         return { key: pageKey, payload: payload || { db:[], counter:0 } };
@@ -2667,26 +2385,13 @@ function buildCloudEnvelope(pageKey, payload){
 
         const url = _joinUrl(apiBase, readPath) + (readPath.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(pageKey);
 
-        let r = await fetch(url, {
+        const r = await fetch(url, {
           method: "GET",
           cache: "no-store",
-          credentials: "include",
+          credentials: (cfg && cfg.credentials) ? "include" : "omit",
           headers: { "accept":"application/json" }
         });
-
-        // ✅ 企業級：若 cookie session 不存在（401/403），退回「公開讀取」模式（不帶 cookie）
-        if(!r.ok && (r.status === 401 || r.status === 403)){
-          try{ console.warn("[cloud] read unauthorized, retry as guest", r.status, url); }catch(_e){}
-          r = await fetch(url, {
-            method: "GET",
-            cache: "no-store",
-            credentials: "omit",
-            headers: { "accept":"application/json" }
-          });
-        }
-
         if(!r.ok){
-          try{ console.warn("[cloud] read HTTP", r.status, url); }catch(_e){}
           const t = await r.text().catch(()=> "");
           throw new Error("cloud read failed: " + r.status + " " + t.slice(0,200));
         }
@@ -2719,7 +2424,7 @@ function buildCloudEnvelope(pageKey, payload){
         const r = await fetch(url, {
           method: "POST",
           cache: "no-store",
-          credentials: "include",
+          credentials: (cfg && cfg.credentials) ? "include" : "omit",
           headers: { "content-type":"application/json", "accept":"application/json" },
           body: JSON.stringify(body)
         });
@@ -2730,99 +2435,65 @@ function buildCloudEnvelope(pageKey, payload){
         const j = await r.json();
         return _normalizePullResponse(j);
       }
-async function syncFromCloud(opts){
+    async function syncFromCloud(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
       var silent = !!opts.silent;
 
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)){
-        if(!silent) toast("雲端未設定/無效");
-        return;
-      }
-
-      if(state._dirty){
-        if(!silent) setCloudStatus("本端待上雲", "warn");
-        return;
-      }
-
-      // ✅ 重要：若本機還有未上傳變更，先上傳再下拉（避免新增後變 14 又被拉回 13）
-      var _pendingUids = [];
-      try{ _pendingUids = await idbGetDirtyUids(PAGE_KEY, lastSyncAt); }catch(e){ _pendingUids = []; }
-      if(_pendingUids && _pendingUids.length){
-        try{ scheduleSync("pre-pull", true); }catch(e){}
-        try{ _pullSuppressUntil = Date.now() + 12000; }catch(e){}
-        if(!silent){ toast("本機有未上傳變更，先上傳再同步雲端…"); }
+        if(!silent) toast("雲端未設定/無效"); 
         return;
       }
 
       try{
-        // ✅ cloudRead 回傳格式：{db,counter}
         var remote = await cloudRead(cfg, PAGE_KEY);
-        remote = remote && typeof remote==="object" ? remote : { db:[], counter:0 };
-        remote.db = Array.isArray(remote.db) ? remote.db : [];
-        remote.counter = Number(remote.counter||0)||0;
 
-        // ✅ 若雲端空白或缺少本機資料：自動補齊一次（避免不同裝置看到不同筆數）
-        var localDb = (state.db||[]).map(ensureRowV1).filter(Boolean);
-        var remoteDb = (remote.db||[]).map(ensureRowV1).filter(Boolean);
+        // If cloud is empty but local has data, offer to bootstrap to cloud (one-time)
+        var cloudEmpty = !remote || !Array.isArray(remote.db) || remote.db.length===0;
+        var localHas = Array.isArray(state.db) && state.db.length>0;
+        var bootKey = "tasunCloudBooted_" + PAGE_KEY;
+        var autoFillKey = "tasunCloudAutoFill_" + PAGE_KEY;
+        var localDb = (state.db || []);
+        var remoteDb = (remote && remote.payload && Array.isArray(remote.payload.db)) ? remote.payload.db : [];
 
-        function _uid(x){ return norm(x && (x.uid || x.pk || "")); }
+        function _uid(x){
+          if(!x) return "";
+          return String(x.uid || x.pk || x.Uid || x.ID || x.id || "");
+        }
+
         var rSet = new Set(remoteDb.map(_uid).filter(Boolean));
         var missing = localDb.filter(function(it){
           var u = _uid(it);
           return u && !rSet.has(u);
         });
 
-        // ✅ 更積極：同 uid 若本機較新，也視為需要補齊（避免不同裝置看到不同內容/筆數）
-        var rMap = new Map();
-        remoteDb.forEach(function(x){
-          var u = _uid(x);
-          if(u) rMap.set(u, x);
-        });
-        var newerLocal = localDb.filter(function(it){
-          var u = _uid(it);
-          if(!u) return false;
-          var rx = rMap.get(u);
-          if(!rx) return false;
-          return tsOf(it) > tsOf(rx);
-        });
+        var remoteEmpty = (!remoteDb || remoteDb.length === 0);
+        var localHas = (localDb.length > 0);
 
-        var remoteEmpty = (remoteDb.length===0);
-        var autoFillKey = "tasunCloudAutoFill_" + PAGE_KEY;
-
-        
-        // ✅ 雲端為唯一真相（以雲端筆數/內容為主；避免桌機一般視窗吃到舊快取而變 23 筆）
-        // 原則：
-        // 1) 進站/同步讀取：永遠採用雲端 payload 覆蓋本機 state（所有設備一致）
-        // 2) 若偵測本機比雲端多（例如 23 > 13）：視為「舊本機快取/歷史殘留」
-        //    → 自動封存到 localStorage（可救回），並以雲端 13 筆顯示
-        // 3) 有雲端上傳功能：新增/編輯/刪除仍透過既有流程寫回雲端（多人協作以雲端合併為準）
-        var localActive = localDb.filter(function(r){ return r && !r.deleted; }).length;
-        var remoteActive = remoteDb.filter(function(r){ return r && !r.deleted; }).length;
-
-        if(localActive > remoteActive){
+        // Auto bootstrap when cloud empty OR auto-fill when cloud has fewer items than local.
+        // Run once per page-load to avoid loops.
+        if(localHas && (remoteEmpty || missing.length > 0) && !sessionStorage.getItem(autoFillKey)){
+          sessionStorage.setItem(autoFillKey, "1");
           try{
-            var ts = Date.now();
-            var key = "tasunArchive_" + PAGE_KEY + "_" + ts;
-            var snap = { at: nowISO(), reason: "cloud_authoritative_discard_local_extra", local:{ db: localDb, counter: state.counter }, remote:{ db: remoteDb, counter: remote.counter } };
-            localStorage.setItem(key, JSON.stringify(snap));
-            // 只在本次提示一次（避免一直跳）
-            var onceKey = "tasunArchiveOnce_" + PAGE_KEY;
-            if(!sessionStorage.getItem(onceKey) && !silent){
-              sessionStorage.setItem(onceKey, "1");
-              toast("已偵測本機快取較多（" + localActive + " > " + remoteActive + "），已自動封存並以雲端為準。");
+            var reason = remoteEmpty ? "auto-bootstrap-cloud-empty" : "auto-fill-cloud-missing";
+            var merged = await cloudMerge({ payload: { db: localDb, counter: state.counter }, reason: reason });
+            if(merged && merged.ok && merged.payload){
+              remote = merged; // use merged payload as latest remote snapshot
+              if(remoteEmpty) localStorage.setItem(bootKey, "1");
+              toast(remoteEmpty
+                ? ("雲端空白，已自動倒入本機資料：" + localDb.length + " 筆")
+                : ("已自動補齊雲端缺少資料：" + missing.length + " 筆"), "ok");
             }
-          }catch(_e){}
+          }catch(e){
+            toast("雲端自動補齊失敗：" + (e && (e.message||e) ? (e.message||e) : e), "warn");
+          }
         }
+var out = mergePayload(remote, { db: state.db, counter: state.counter });
+        state.db = out.db;
+        state.counter = out.counter;
 
-        // ✅ 強一致：永遠採用雲端
-        state.db = remote.db;
-        state.counter = remote.counter;
-
-state.lastSyncAt = Date.now();
+        state.lastSyncAt = Date.now();
         await idbClearOps(PAGE_KEY);
-        state._dirty = false;
-        state._dirtySince = 0;
         await saveLocal({ db: state.db, counter: state.counter });
 
         buildDictsFromDb();
@@ -2841,13 +2512,6 @@ state.lastSyncAt = Date.now();
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)){
         if(!silent) toast("雲端未設定/無效"); 
-        return;
-      }
-
-      // Permission gate: read-only users can read cloud but MUST NOT upload/merge.
-      var _canWrite = (state.role==="admin" || state.role==="write");
-      if(!_canWrite){
-        if(!silent) toast("唯讀權限：不可上傳（可讀雲端）");
         return;
       }
 
@@ -2890,8 +2554,6 @@ state.lastSyncAt = Date.now();
 
         state.lastSyncAt = Date.now();
         await idbClearOps(PAGE_KEY);
-        state._dirty = false;
-        state._dirtySince = 0;
         await saveLocal({ db: state.db, counter: state.counter });
 
         buildDictsFromDb();
@@ -3003,68 +2665,7 @@ state.lastSyncAt = Date.now();
       refresh();
     }
 
-    
-    async function sessionLogin(user, pass){
-      // 企業級 Cookie：由 Worker 簽發 HttpOnly session cookie
-      try{
-        var cfg = await loadCloudCfg();
-        var apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
-        var eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-        var p = (eps && (eps.sessionLogin || eps.login)) ? String(eps.sessionLogin || eps.login) : "/api/tasun/session/login";
-        var url = _joinUrl(apiBase, p);
-        var r = await fetch(url, {
-          method: "POST",
-          cache: "no-store",
-          credentials: "include",
-          headers: { "content-type":"application/json", "accept":"application/json" },
-          body: JSON.stringify({ user:user, pass:pass })
-        });
-        if(!r.ok){
-          var t = await r.text().catch(()=> "");
-          return { ok:false, status:r.status, text:t.slice(0,200) };
-        }
-        var j = await r.json().catch(()=> null);
-        return (j && j.ok) ? { ok:true, user:j.user||null } : { ok:false, status:0, text:"bad_response" };
-      }catch(e){
-        return { ok:false, status:0, text:String(e && e.message ? e.message : e) };
-      }
-    }
-
-    async function sessionMe(){
-      try{
-        var cfg = await loadCloudCfg();
-        var apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
-        var eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-        var p = (eps && eps.sessionMe) ? String(eps.sessionMe) : "/api/tasun/session/me";
-        var url = _joinUrl(apiBase, p);
-        var r = await fetch(url, { method:"GET", cache:"no-store", credentials:"include", headers:{ "accept":"application/json" } });
-        if(!r.ok) return null;
-        var j = await r.json().catch(()=> null);
-        if(j && j.ok && j.user){
-          return { user: j.user.user||"", role: j.user.role||"read", name: j.user.name||j.user.user||"", at: nowISO() };
-        }
-      }catch(e){}
-      return null;
-    }
-
-    async function sessionUsers(){
-      // 公開使用者清單（不含密碼）— 用於填充登入下拉
-      try{
-        var cfg = await loadCloudCfg();
-        var apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
-        var eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-        var p = (eps && eps.sessionUsers) ? String(eps.sessionUsers) : "/api/tasun/session/users";
-        var url = _joinUrl(apiBase, p);
-        var r = await fetch(url, { method:"GET", cache:"no-store", credentials:"include", headers:{ "accept":"application/json" } });
-        if(!r.ok) return null;
-        var j = await r.json().catch(()=> null);
-        if(j && j.ok && Array.isArray(j.users)) return j.users;
-      }catch(e){}
-      return null;
-    }
-
-
-async function doLogin(){
+    function doLogin(){
       var user = norm($("loginUser").value);
       var pass = norm($("loginPass").value);
       if(!user || !pass){
@@ -3080,21 +2681,6 @@ async function doLogin(){
         return;
       }
       var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
-
-      // ✅ 企業級 Cookie（寫入權限需要 server session）
-      if((cur.role==="admin" || cur.role==="write")){
-        var sres = await sessionLogin(cur.user, pass);
-        if(!sres.ok){
-          $("loginErr").style.display="block";
-          $("loginErr").textContent="雲端登入失敗（Cookie）：" + (sres.status ? ("HTTP "+sres.status) : "") + " " + (sres.text||"");
-          return;
-        }
-      }else{
-        // read：允許只本機登入（唯讀），但仍可讀雲端
-        // best-effort 也可嘗試建立 session（不失敗也不阻擋）
-        await sessionLogin(cur.user, pass).catch(()=>{});
-      }
-
       setCurrentUser(cur);
       applyUser(cur);
       closeLogin();
@@ -3281,13 +2867,13 @@ $("btnSave").addEventListener("click", async function(){
       // ---------------------------
       // ✅ Auto sync triggers
       // ---------------------------
-      window.addEventListener("online", function(){ schedulePull("online", true); scheduleSync("online", true); });
-      window.addEventListener("focus", function(){ schedulePull("focus"); scheduleSync("focus"); });
+      window.addEventListener("online", function(){ scheduleSync("online", true); });
+      window.addEventListener("focus", function(){ scheduleSync("focus"); });
       document.addEventListener("visibilitychange", function(){
-        if(!document.hidden){ schedulePull("visible"); scheduleSync("visible"); }
+        if(!document.hidden) scheduleSync("visible");
       });
       // 週期保底同步（避免長時間開著頁面但沒互動）
-      setInterval(function(){ schedulePull("periodic"); scheduleSync("periodic"); }, SYNC_PERIODIC_MS);
+      setInterval(function(){ scheduleSync("periodic"); }, SYNC_PERIODIC_MS);
 
     }
 
@@ -3321,42 +2907,15 @@ $("btnSave").addEventListener("click", async function(){
         }catch(e){ state.readMode = false; }
 
         try{ ensureAuthTable(); }catch(e){}
-
-        // ✅ 以 Worker 公開使用者清單刷新登入下拉（不改 UI，只更新選單資料）
-        ;(async function(){
-          var list = await sessionUsers();
-          if(list && list.length){
-            try{
-              var auth = ensureAuthTable();
-              // 只覆蓋 user/role/name，不動 pass（避免前端存密碼）
-              auth.users = (list||[]).map(function(u){ return { user:u.user, role:u.role||"read", name:u.name||u.user, pass:"" }; });
-              // 若你仍要支援本機密碼表：可在 權限表.html 管理；此處只做「帳號清單」刷新
-              saveAuthTable(auth);
-              fillLoginUsers(auth);
-            }catch(e){}
-          }
-        })();
-
         try{ cur = getCurrentUser(); }catch(e){ cur = null; }
         try{
           if(cur) applyUser(cur);
           else applyUser({ user:"—", role:"read", name:"—" });
         }catch(e){}
 
-        // ✅ Cookie session：若存在 server session，優先使用（可跨裝置/無痕只要 session 存在就一致）
-        ;(async function(){
-          var su = await sessionMe();
-          if(su){
-            try{ setCurrentUser(su); }catch(e){}
-            try{ applyUser(su); }catch(e){}
-          }
-        })();
-
         try{ wire(); }catch(e){}
         try{ refresh(); }catch(e){}
         try{ cloudHealth(); }catch(e){}
-        try{ schedulePull("boot", true); }catch(e){}
-
         try{ if(!cur) openLogin(); }catch(e){}
 
         try{
