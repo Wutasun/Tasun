@@ -719,90 +719,98 @@
   // ✅ 改為支援 tasun-resources.json（新增 auth-table）
   const RESOURCES_URL  = 'tasun-resources.json';
   const RESOURCE_KEY   = 'auth-table';
+  // =========================
+  // 方案B：Cloudflare Worker + D1（權限表）
+  // - 讀取：任何人可讀 public
+  // - 修改：必須 admin Session（Cookie）
+  // =========================
+  let WORKER_BASE = "";
+  const WORKER_ENDPOINTS = {
+    sessionMe: "/api/session/me",
+    login: "/api/session/login",
+    logout: "/api/session/logout",
+    authPublic: "/api/auth/table/public",
+    authAdmin: "/api/auth/table"
+  };
 
-  // ================== ENTERPRISE D1 (Worker) ==================
-  // ✅ 以 Worker(D1) 做「權限表單一真相來源」：新增/改權限 → 一鍵寫入 D1，所有設備一致
-  const WORKER_BASE_DEFAULT = 'https://tasun-worker.wutasun.workers.dev';
-  let WORKER_BASE = WORKER_BASE_DEFAULT;
-
-  function apiUrl(path){
-    path = String(path||'');
-    const base = String(WORKER_BASE||WORKER_BASE_DEFAULT).replace(/\/+$/,'');
-    return base + path;
+  async function resolveWorkerBase(){
+    if(WORKER_BASE) return WORKER_BASE;
+    try{
+      const reg = window.TasunResourceRegistry;
+      if(reg && typeof reg.get === "function"){
+        const res = await reg.get(RESOURCE_KEY);
+        const base = res && res.apiBase ? String(res.apiBase) : "";
+        if(base) WORKER_BASE = base.replace(/\/+$/,"");
+      }
+    }catch(_e){}
+    if(!WORKER_BASE){
+      WORKER_BASE = "https://tasun-worker.wutasun.workers.dev";
+    }
+    return WORKER_BASE;
   }
 
-  async function d1FetchJSON(path, opt={}){
-    const url = apiUrl(path);
-    const res = await fetch(url, Object.assign({
-      method: 'GET',
-      credentials: 'include',
-      cache: 'no-store',
-      headers: { 'content-type':'application/json' }
-    }, opt));
-    const txt = await res.text().catch(()=> '');
-    let js = null;
-    try{ js = txt ? JSON.parse(txt) : null; }catch(_e){ js = null; }
+  async function apiFetch(path, opts={}){
+    const base = await resolveWorkerBase();
+    const headers = new Headers(opts.headers || {});
+    if(opts.body && !headers.has("content-type")) headers.set("content-type","application/json; charset=utf-8");
+    return fetch(base + path, { ...opts, headers, credentials:"include" });
+  }
+
+  async function apiJson(path, opts={}){
+    const res = await apiFetch(path, opts);
+    const txt = await res.text();
+    let data = null;
+    try{ data = txt ? JSON.parse(txt) : null; }catch{ data = null; }
     if(!res.ok){
-      const msg = (js && (js.message||js.error)) ? (js.message||js.error) : (txt || ('HTTP '+res.status));
+      const msg = (data && (data.message || data.error)) ? (data.message || data.error) : (txt || ("HTTP " + res.status));
       const err = new Error(msg);
       err.status = res.status;
-      err.body = js || txt;
+      err.data = data;
       throw err;
     }
-    return js;
+    return data;
   }
 
-  async function d1SessionMe(){
+  let SESSION = null;
+
+  async function refreshSession(){
     try{
-      const js = await d1FetchJSON('/api/tasun/session/me', { method:'GET' });
-      return js && js.user ? js.user : null;
+      const data = await apiJson(WORKER_ENDPOINTS.sessionMe, { method:"GET" });
+      SESSION = data && data.user ? data.user : null;
     }catch(_e){
-      return null;
+      SESSION = null;
     }
+    return SESSION;
   }
 
-  async function d1PullAuthTable(){
-    // admin：抓完整（含密碼）→ 更新本機權限表
-    const me = await d1SessionMe();
-    if(!me || String(me.role||'').toLowerCase()!=='admin') return { ok:false, reason:'not_admin' };
-
-    const js = await d1FetchJSON('/api/tasun/auth/table', { method:'GET' });
-    const tab = js && js.table ? js.table : null;
-    const users = Array.isArray(tab?.users) ? tab.users : null;
-    if(users){
-      auth = users;
-      normalizeAuth();
-      localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
-      renderAll();
-      updateStates('已從 D1 讀取最新權限表（admin）。');
-      setCloudState('雲端：已同步(D1)');
-      return { ok:true, me };
-    }
-    return { ok:false, reason:'bad_table' };
+  function isAdminSess(){
+    return !!SESSION && String(SESSION.role||"").toLowerCase() === "admin";
   }
 
-  async function d1PushAuthTable(){
-    // admin：把本機權限表（users）一鍵寫入 D1（並由 Worker 同步更新 users 清單）
-    const me = await d1SessionMe();
-    if(!me) return { ok:false, status:401, error:'no_session' };
-    if(String(me.role||'').toLowerCase()!=='admin') return { ok:false, status:403, error:'forbidden_role' };
+  async function promptLogin(){
+    const user = prompt("請輸入帳號（admin 才可修改）", "");
+    if(!user) return false;
+    const pass = prompt("請輸入密碼", "");
+    if(pass === null) return false;
+    await apiJson(WORKER_ENDPOINTS.login, { method:"POST", body: JSON.stringify({ user, pass }) });
+    await refreshSession();
+    return !!SESSION;
+  }
 
-    setCloudState('雲端：寫入 D1…');
-    const body = JSON.stringify({ table: { users: auth } });
-    const js = await d1FetchJSON('/api/tasun/auth/table', {
-      method:'POST',
-      headers: { 'content-type':'application/json' },
-      body
-    });
-    const tab = js && js.table ? js.table : null;
-    const users = Array.isArray(tab?.users) ? tab.users : null;
-    if(users){
-      auth = users;
-      normalizeAuth();
-      localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
+  async function ensureAdminSession(){
+    await refreshSession();
+    if(isAdminSess()) return true;
+    await promptLogin();
+    if(!isAdminSess()){
+      alert("需要 admin 登入才能修改。");
+      return false;
     }
-    setCloudState('雲端：已同步(D1)');
-    return { ok:true, me };
+    return true;
+  }
+
+  async function doLogoutSession(){
+    try{ await apiJson(WORKER_ENDPOINTS.logout, { method:"POST", body:"{}" }); }catch(_e){}
+    SESSION = null;
   }
 
 
@@ -1050,9 +1058,6 @@
       const lkPath = node?.lock?.path;
       if(typeof dbPath === 'string' && dbPath.trim()) DROPBOX_PATH = dbPath.trim();
       if(typeof lkPath === 'string' && lkPath.trim()) DROPBOX_LOCK_PATH = lkPath.trim();
-      // ✅ worker apiBase（可選）：auth-table.apiBase
-      const apiBase = node?.apiBase || node?.worker?.apiBase || node?.api_base;
-      if(typeof apiBase === 'string' && apiBase.trim()) WORKER_BASE = apiBase.trim().replace(/\/+$/,'');
 
       // entries / entryButtons（可選）
       const entries = node?.entries;
@@ -1236,17 +1241,9 @@
   }
 
   function seedAuthIfMissing(){
-    const a = safeJsonParse(localStorage.getItem(AUTH_KEY) || 'null', null);
-    if(Array.isArray(a) && a.length) return;
-
-    const seed = [
-      { user:'alex',  pass:'Tasun08040224', role:'admin' },
-      { user:'JOYCE', pass:'09220224',      role:'admin' },
-      { user:'tasun', pass:'tasun08040224', role:'write' },
-      { user:'wu',    pass:'123456',        role:'read'  },
-    ];
-    localStorage.setItem(AUTH_KEY, JSON.stringify(seed));
-  }
+  // 方案B：權限資料由 Worker(D1) 提供；前端不再內建預設密碼/名單（避免外洩）
+  return;
+}
 
   function normalizeAuth(){
     auth.forEach(u => {
@@ -1265,10 +1262,15 @@
   }
 
   function updateWho(){
-    const t = `目前使用者：${current.user} (${current.role})`;
-    whoDesk.textContent = t;
-    whoMobile.textContent = t;
-  }
+  // 方案B：以 Worker Session 為準（未登入則顯示本機）
+  const sess = SESSION;
+  const label = sess ? (`${s(sess.user||"")} (${s(sess.role||"read")})`) : (current.user ? (`${s(current.user)} (${s(current.role||"read")})`) : "未登入");
+  whoMobile.textContent = label;
+  whoDesk.textContent = label;
+
+  // isAdmin 以 Session 為主（未登入一律不可改）
+  isAdmin = !!sess && String(sess.role||"").toLowerCase() === "admin";
+}
 
   function loadPermMatrix(){
     const raw = safeJsonParse(localStorage.getItem(PERM_MATRIX_KEY) || 'null', null);
@@ -1690,10 +1692,33 @@
   backBtnD.addEventListener('click', goHome);
   backBtnM.addEventListener('click', () => { closeMoreMenu(); goHome(); });
 
-  function switchAccount(){
-    localStorage.removeItem(CURRENT_KEY);
-    goHome();
+  async function switchAccount(){
+  // 方案B：切換帳號 = 登出/重新登入
+  await refreshSession();
+  if(SESSION){
+    if(confirm("要登出目前帳號嗎？")){
+      await doLogoutSession();
+      current = { user:"", role:"read", name:"" };
+      try{ localStorage.removeItem(CURRENT_KEY); }catch(_e){}
+      await refreshSession();
+      updateWho();
+      await cloudDownload(null, true);
+      toast("已登出");
+    }
+    return;
   }
+
+  // 未登入：提示登入（僅 admin 可編輯）
+  try{
+    const ok = await promptLogin();
+    await refreshSession();
+    updateWho();
+    await cloudDownload(null, true);
+    if(ok) toast("已登入");
+  }catch(e){
+    toast("登入失敗：" + String(e?.message||e));
+  }
+}
   switchBtnD.addEventListener('click', switchAccount);
   switchBtnM.addEventListener('click', () => { closeMoreMenu(); switchAccount(); });
 
@@ -1707,21 +1732,11 @@
   tokenBtnD.addEventListener('click', setToken);
   tokenBtnM.addEventListener('click', () => { closeMoreMenu(); setToken(); });
 
-  function guardTokenOrHint(){
-    const token = getToken();
-    if(!token){
-      setMsg('尚未設定 Token。\n請按「設定 Token」貼上 Dropbox Access Token。', true);
-      updateStates();
-      return '';
-    }
-    if(!isTokenLooksValid(token)){
-      markTokenInvalid('貼上的內容不像 Dropbox Access Token');
-      return '';
-    }
-    if(tokenExpired){ markTokenExpired('expired_access_token'); return ''; }
-    if(tokenInvalid){ markTokenInvalid('malformed_access_token'); return ''; }
-    return token;
-  }
+  async function guardTokenOrHint(){
+  // 方案B：不需要 Dropbox Token；改為檢查 admin Session
+  const ok = await ensureAdminSession();
+  return ok ? "SESSION_OK" : null;
+}
 
   // Dropbox-API-Arg header 需要 ASCII
   function latin1Safe(s){
@@ -1773,16 +1788,6 @@
     saveLocal();
     updateStates('已儲存本機（localStorage）。\n並已排程同步雲端（若 Token OK）。');
     scheduleCloudPush('save-btn');
-
-    // ✅ ENTERPRISE：admin 登入狀態下，一鍵寫入 D1（以權限表為主）
-    Promise.resolve().then(() => d1PushAuthTable()).then((r) => {
-      if(r && r.ok){
-        updateStates('已儲存本機，並已一鍵寫入 D1（所有設備將以此權限表為準）。');
-      }
-    }).catch((_e) => {
-      // 不影響原流程：Dropbox/TasunCloudKit 仍可跑
-      setCloudState('雲端：D1 同步失敗', true);
-    });
   });
 
   addBtn.addEventListener('click', addRow);
@@ -1858,7 +1863,29 @@
   }
 
   // Dropbox
-  async function cloudDownload(token, opt = {}){
+  async function cloudDownload(_token, quiet=false){
+  try{
+    await refreshSession();
+    updateWho();
+
+    const path = isAdminSess() ? WORKER_ENDPOINTS.authAdmin : WORKER_ENDPOINTS.authPublic;
+    const data = await apiJson(path, { method:"GET" });
+
+    const tab = (data && data.table) ? data.table : null;
+    if(!tab || typeof tab !== "object") throw new Error("bad_table");
+
+    // 對齊既有資料結構
+    permMatrix = sanitizeAuthTable(tab); // 原本就有 sanitizeAuthTable()
+    lastCloudHash = ""; // Worker 端會控 rev/hash；此頁不再用 Dropbox hash
+
+    renderAll();
+    if(!quiet) toast(isAdminSess() ? "雲端已下載（admin）" : "雲端已下載（read-only）");
+    return true;
+  }catch(e){
+    if(!quiet) toast("雲端下載失敗：" + String(e?.message||e));
+    return false;
+  }
+}){
     const silent = !!opt.silent;
     try{
       if(!silent) setMsg('雲端下載中…');
@@ -1967,50 +1994,33 @@
     return { ok:true, retry:false };
   }
 
-  async function saveAndUpload(token){
-    if(!isAdmin){
-      setMsg('你不是 admin，禁止上傳。', true);
-      return;
-    }
+  async function saveAndUpload(_token){
+  // 方案B：直接寫入 Worker(D1)，需要 admin Session
+  const ok = await ensureAdminSession();
+  if(!ok) return false;
 
-    normalizeAuth();
-    saveLocal();
+  try{
+    // 取出畫面上目前資料（原本已有 readTableIntoPermMatrix()）
+    readTableIntoPermMatrix();
 
-    // ✅ 先保留本機快照（若遇到雲端已更新 → 下載後合併再上傳）
-    const localSnap = {
-      auth: safeJsonParse(JSON.stringify(auth), []),
-      permMatrix: safeJsonParse(JSON.stringify(permMatrix), { users:{} })
-    };
+    // 後端會 sanitize（但這裡也先做一次，避免脫序）
+    permMatrix = sanitizeAuthTable(permMatrix);
 
-    try{
-      setMsg('上傳中…');
+    const out = await apiJson(WORKER_ENDPOINTS.authAdmin, {
+      method:"POST",
+      body: JSON.stringify({ table: permMatrix })
+    });
 
-      let r = await doUploadOnce(token);
-      if(r.ok){
-        // ✅ 上傳成功後也推 cloud kit（確保跨裝置）
-        scheduleCloudPush('after-upload');
-        return;
-      }
+    // 寫入成功後，重新拉一次（確保一致）
+    await cloudDownload(null, true);
 
-      if(r.retry){
-        setMsg('偵測雲端已有更新，正在重新下載並合併後重試上傳…');
-        await cloudDownload(token, { silent:true });
-        // 下載後的 auth/permMatrix = 雲端最新，合併本機快照
-        mergeAuthByUser(localSnap.auth);
-        mergePermMatrix(localSnap.permMatrix);
-        normalizeAuth();
-        saveLocal();
-        setMsg('合併完成，重試上傳中…');
-        r = await doUploadOnce(token);
-        if(!r.ok && !r.retry){
-          return;
-        }
-        scheduleCloudPush('after-upload-retry');
-      }
-    }catch(err){
-      setMsg('上傳失敗：' + (err?.message || err), true);
-    }
+    toast("已寫入雲端（D1）");
+    return true;
+  }catch(e){
+    toast("雲端寫入失敗：" + String(e?.message||e));
+    return false;
   }
+}
 
   // 按鍵名稱設定（保留）
   function readNavButtons(){
@@ -2167,10 +2177,6 @@
     applyEntrySelectionUI();
 
     renderAll();
-
-  // ✅ ENTERPRISE：若已是 admin session，進站就以 D1 權限表覆蓋本機（確保一致）
-  Promise.resolve().then(() => d1PullAuthTable()).catch(()=>{});
-
     updateStates('已載入本機資料。');
 
     // 可見時嘗試 pull（確保跨裝置一致）
