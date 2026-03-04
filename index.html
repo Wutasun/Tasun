@@ -1356,6 +1356,50 @@
       const NAV_KEY     = "tasunNavButtons_v1";
       const ROUTE_KEY   = "tasunNavRoutes_v1";
 
+      // ====== B 架構：自動偵測 apiBase（不提供 UI；可用 localStorage 覆寫） ======
+      const API_BASE_KEY = "tasunApiBase_v1";
+      const DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
+
+      function normBase(u){ return String(u||"").trim().replace(/\/+$/,""); }
+
+      async function tryHealth(base){
+        const b = normBase(base);
+        if(!b) return false;
+        try{
+          const url = b + "/api/health?_=" + Date.now();
+          const r = await fetch(url, { method:"GET", cache:"no-store", credentials:"include" });
+          return !!(r && r.ok);
+        }catch(e){
+          return false;
+        }
+      }
+
+      async function autoDetectApiBase(){
+        try{
+          const saved = normBase(localStorage.getItem(API_BASE_KEY) || "");
+          if(saved) return saved;
+
+          // 優先：同網域（若你之後用自家網域反代 /api/*）
+          const same = normBase(location.origin);
+          if(await tryHealth(same)){
+            localStorage.setItem(API_BASE_KEY, same);
+            return same;
+          }
+
+          // 後備：預設 Worker
+          if(await tryHealth(DEFAULT_API_BASE)){
+            localStorage.setItem(API_BASE_KEY, normBase(DEFAULT_API_BASE));
+            return normBase(DEFAULT_API_BASE);
+          }
+
+          // 都失敗：仍寫入預設，讓使用者可手動覆寫
+          localStorage.setItem(API_BASE_KEY, normBase(DEFAULT_API_BASE));
+          return normBase(DEFAULT_API_BASE);
+        }catch(e){
+          return normBase(DEFAULT_API_BASE);
+        }
+      }
+
       const BACKUP_RING_KEY = "tasunBackupRing_v1";
       const BACKUP_RING_MAX = 10;
 
@@ -1705,28 +1749,35 @@
       }
 
       /* ✅FIX: 讀取權限表時，若舊資料沒有 btn1~btn5 欄位，不要誤判為全關（會只剩 systemBtn） */
-      function normalizeRowFromStorage(row, btnCount){
-        const username = (row?.username ?? row?.user ?? row?.name ?? row?.account ?? "").toString().trim();
-        const password = (row?.password ?? row?.pass ?? "").toString();
-        const level    = (row?.level ?? row?.role ?? "read").toString().trim().toLowerCase();
+      
+      // ====== 密碼安全：SHA-256（不存明碼） ======
+      async function sha256Hex(str){
+        try{
+          const enc = new TextEncoder();
+          const buf = await crypto.subtle.digest("SHA-256", enc.encode(String(str || "")));
+          const arr = Array.from(new Uint8Array(buf));
+          return arr.map(b => b.toString(16).padStart(2,"0")).join("");
+        }catch(e){
+          // 若瀏覽器不支援 crypto.subtle（極少見），退回「不可登入」狀態（避免明碼）
+          return "";
+        }
+      }
 
-        // 支援新格式：buttons: [true,false,...]
+      /* ✅FIX: 讀取權限表時，若舊資料沒有 btn1~btn5 欄位，不要誤判為全關（會只剩 systemBtn）
+         ✅NEW: 支援 passHash / passwordHash；若讀到舊版 pass/password 會自動轉成 passHash 並回寫 localStorage（不存明碼） */
+      function normalizeButtonsFromRow(row, btnCount, level){
         const arr = Array.isArray(row?.buttons) ? row.buttons : null;
-
         const buttons = [];
         for(let i=0;i<btnCount;i++){
           if(arr && i < arr.length){
             buttons[i] = !!arr[i];
             continue;
           }
-
           const k = `btn${i+1}`;
           const has = row && Object.prototype.hasOwnProperty.call(row, k);
-
           if(has){
             buttons[i] = !!row[k];
           }else{
-            // ✅舊表缺欄位時：admin/write 預設全開；read 預設只開最後一顆
             if(level === "read"){
               buttons[i] = (i === btnCount - 1);
             }else{
@@ -1734,28 +1785,50 @@
             }
           }
         }
-        return { username, password, level, buttons };
+        return buttons;
       }
 
-      function loadAuthTable(btnCount){
+      async function normalizeRowFromStorage(row, btnCount){
+        const username = (row?.username ?? row?.user ?? row?.name ?? row?.account ?? "").toString().trim();
+        const level    = (row?.level ?? row?.role ?? "read").toString().trim().toLowerCase();
+
+        const passHash = String(row?.passHash ?? row?.passwordHash ?? row?.pass_hash ?? "").trim();
+        const legacyPwd = (row?.password ?? row?.pass ?? "").toString();
+
+        const buttons = normalizeButtonsFromRow(row, btnCount, level);
+
+        // 不回傳明碼；若只有舊明碼，先轉 hash
+        const finalHash = passHash || (legacyPwd ? await sha256Hex(legacyPwd) : "");
+        return { username, passHash: finalHash, level, buttons };
+      }
+
+      function toStorageRow(u){
+        return { user: u.username, passHash: u.passHash, role: u.level, buttons: Array.isArray(u.buttons) ? u.buttons : [] };
+      }
+
+      async function loadAuthTable(btnCount){
         const raw = localStorage.getItem(AUTH_KEY);
-        if(!raw){
-          const legacy = getDefaultAuthTableLegacy(btnCount);
-          localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
-          return legacy.map(r => normalizeRowFromStorage(r, btnCount));
-        }
-        const parsed = safeJsonParse(raw, null);
+        const parsed = raw ? safeJsonParse(raw, null) : null;
         const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
-        if(Array.isArray(arr)){
-          const mapped = arr.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
-          if(mapped.length) return mapped;
+
+        let base = arr;
+        if(!Array.isArray(base) || !base.length){
+          // 初次：用內建預設（仍可正常跑），但會立刻轉 hash 並回寫
+          base = getDefaultAuthTableLegacy(btnCount);
         }
-        const legacy = getDefaultAuthTableLegacy(btnCount);
-        localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
-        return legacy.map(r => normalizeRowFromStorage(r, btnCount));
+
+        const mapped = (await Promise.all(base.map(r => normalizeRowFromStorage(r, btnCount))))
+          .filter(x => x && x.username);
+
+        // ✅永遠回寫成「只含 passHash」的新格式
+        try{
+          localStorage.setItem(AUTH_KEY, JSON.stringify(mapped.map(toStorageRow)));
+        }catch(e){}
+
+        return mapped;
       }
 
-      function setSession(user){
+      function setSession(user){(user){
         try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: user.username, role: user.level, t: Date.now() })); }catch(e){}
       }
       function clearSession(){ try{ sessionStorage.removeItem(SESSION_KEY); }catch(e){} }
@@ -1783,6 +1856,7 @@
       let AUTH_TABLE = [];
       let ROUTES = loadRoutes();
       let NAV_ARR = loadNavButtonsSeedIfMissing();
+      autoDetectApiBase().catch(()=>{});
 
       function isRoleAllowed(cfg, level){
         if(!cfg || !Array.isArray(cfg.roles)) return true;
@@ -1871,7 +1945,7 @@
         try{
           ROUTES = loadRoutes();
           NAV_ARR = loadNavButtonsSeedIfMissing();
-          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+          loadAuthTable(LEGACY_BUTTON_KEYS.length).then(t=>{ AUTH_TABLE = t || []; try{ if(loginOverlay && loginOverlay.style.display === \"flex\"){ populateUserSelect(); } }catch(e){} }).catch(()=>{ AUTH_TABLE = []; });
 
           try{
             if(loginOverlay && loginOverlay.style.display === "flex"){
@@ -2578,7 +2652,7 @@
       document.addEventListener("keydown", (e) => { if(e.key === "Escape") closeUsernameMenu(); });
 
       function populateUserSelect(){
-        AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+        loadAuthTable(LEGACY_BUTTON_KEYS.length).then(t=>{ AUTH_TABLE = t || []; try{ if(loginOverlay && loginOverlay.style.display === \"flex\"){ populateUserSelect(); } }catch(e){} }).catch(()=>{ AUTH_TABLE = []; });
         usernameSel.innerHTML = "";
 
         if(!AUTH_TABLE.length){
@@ -2702,7 +2776,7 @@
       const scheduleLayout = rafDebounce(layoutButtons);
       function scheduleAll(){ scheduleLayout(); }
 
-      AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+      loadAuthTable(LEGACY_BUTTON_KEYS.length).then(t=>{ AUTH_TABLE = t || []; try{ if(loginOverlay && loginOverlay.style.display === \"flex\"){ populateUserSelect(); } }catch(e){} }).catch(()=>{ AUTH_TABLE = []; });
       buildMainButtonsDOM();
 
       ensureCloudMounted(null).catch(()=>{});
@@ -2719,14 +2793,16 @@
         onFontsReady(() => scheduleAll());
       });
 
-      loginForm.addEventListener("submit", (e) => {
+      loginForm.addEventListener("submit", async (e) => {
         e.preventDefault();
         const username = usernameSel.value;
         const password = $("#password").value;
 
         if(!username){ loginError.textContent = "請先選擇使用者名稱。"; return; }
-        const user = AUTH_TABLE.find(row => row.username === username && row.password === password);
-        if(!user){ loginError.textContent = "帳號或密碼錯誤，請再試一次。"; return; }
+        const pwdHash = await sha256Hex(password);
+          const user = AUTH_TABLE.find(row => row.username === username && row.passHash && row.passHash === pwdHash);
+        if(!pwdHash){ loginError.textContent = "此瀏覽器不支援安全登入（缺少 SHA-256），請改用新版 Chrome/Edge。"; return; }
+          if(!user){ loginError.textContent = "帳號或密碼錯誤，請再試一次。"; return; }
 
         loginError.textContent = "";
         applyUser(user);
