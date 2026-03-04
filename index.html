@@ -2791,12 +2791,32 @@
 
         const inputPwd = String(password || "");
         const ok = await (async () => {
+          // 支援：
+          // 1) passHash = sha256(password)
+          // 2) passHash = sha256(salt + password)（若資料有 salt）
+          // 3) legacy 明碼：password / pass
           const ph = String(user.passHash || "").trim();
+          const salt = String(user.salt || user.passwordSalt || "").trim();
+
+          // ✅若有 hash，先嘗試比對（無 salt / 有 salt 兩種都試）
           if(ph){
-            try{ return (await sha256Hex(inputPwd)) === ph; }catch(_){ return false; }
+            try{
+              const h1 = await sha256Hex(inputPwd);
+              if(h1 === ph) return true;
+              if(salt){
+                const h2 = await sha256Hex(salt + inputPwd);
+                if(h2 === ph) return true;
+              }
+            }catch(_){
+              // ignore
+            }
           }
-          // legacy 明碼（會自動升級）
-          return String(user.password || "") === inputPwd;
+
+          // ✅legacy 明碼（會自動升級）：支援 user.password / user.pass
+          const legacyPwd = String(user.password || user.pass || "");
+          if(legacyPwd && legacyPwd === inputPwd) return true;
+
+          return false;
         })();
 
         if(!ok){
@@ -2817,23 +2837,32 @@
         sessionStorage.removeItem("tasun_login_cooldown_until_v1");
 
         // ✅若是 legacy 明碼 → 立刻轉 SHA-256（不存明碼）
-        if(!String(user.passHash||"").trim() && String(user.password||"")){
-          try{
-            const newHash = await sha256Hex(inputPwd);
-            // 更新 localStorage AUTH_KEY（同名 user）
-            const raw = localStorage.getItem(AUTH_KEY);
-            const arr = safeJsonParse(raw || "null", null);
-            if(Array.isArray(arr)){
-              const hit = arr.find(x => String(x.user||x.username||"").trim() === username);
-              if(hit){
-                hit.passHash = newHash;
-                delete hit.pass; delete hit.password;
-                localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
+        if(!String(user.passHash||"").trim()){
+          const legacyPwd = String(user.password || user.pass || "");
+          if(legacyPwd){
+            try{
+              const salt = String(user.salt || user.passwordSalt || "").trim();
+              const newHash = salt ? await sha256Hex(salt + inputPwd) : await sha256Hex(inputPwd);
+
+              // 更新 localStorage AUTH_KEY（同名 user）
+              const raw = localStorage.getItem(AUTH_KEY);
+              const arr = safeJsonParse(raw || "null", null);
+              if(Array.isArray(arr)){
+                const hit = arr.find(x => String(x.user||x.username||x.name||x.account||"").trim() === username);
+                if(hit){
+                  hit.passHash = newHash;
+                  // 保留 salt（若原本就有）
+                  if(salt && !hit.salt) hit.salt = salt;
+                  delete hit.pass;
+                  delete hit.password;
+                  localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
+                }
               }
-            }
-            user.passHash = newHash;
-            user.password = "";
-          }catch(_){}
+              user.passHash = newHash;
+              user.password = "";
+              user.pass = "";
+            }catch(_){}
+          }
         }
 
 
