@@ -318,6 +318,7 @@
 
       /* ✅（手機 keepout stack）JS 會寫入 */
       --stackMaxW: 340px;
+      --zw-bottom-x-shift: 18px; /* 只調水平置中，不動垂直 */
     }
 
     *{ box-sizing:border-box; margin:0; padding:0; }
@@ -618,18 +619,14 @@
     .zw-top-axis::before{
       content:"";
       position:absolute;
-      inset:-10px -16px;
-      border-radius: 24px;
-      background:
-        radial-gradient(260px 120px at 50% 35%, rgba(255,255,255,0.18), rgba(0,0,0,0) 70%),
-        linear-gradient(180deg, rgba(255,244,210,0.10), rgba(0,0,0,0.06));
-      border: 1px solid rgba(255,244,210,0.16);
-      box-shadow: 0 14px 34px rgba(0,0,0,0.14);
-      opacity: .42;
-      z-index:-1;
+      inset:0;
+      background: none;
+      border: none;
+      box-shadow: none;
+      opacity: 0;
       pointer-events:none;
+      z-index:-1;
     }
-
     .zw-axis-text{
       font-size: var(--axis-size);
       white-space: pre;
@@ -657,7 +654,7 @@
     .zw-bottom-line{
       position:absolute;
       left:50%;
-      transform: translateX(-50%);
+      transform: translateX(calc(-50% + var(--zw-bottom-x-shift)));
       bottom: var(--zw-bottom-pad);
       font-size: var(--bottom-size);
       letter-spacing: .28em;
@@ -1353,6 +1350,7 @@
 
       const AUTH_KEY    = "tasunAuthTable_v1";
       const CURRENT_KEY = "tasunCurrentUser_v1";
+      const INDEX_SESSION_KEY = "tasunIndexSessionAuthed_v1";
       const SESSION_KEY = "tasunSessionLogin_v1";
       const NAV_KEY     = "tasunNavButtons_v1";
       const ROUTE_KEY   = "tasunNavRoutes_v1";
@@ -1740,8 +1738,8 @@
             }
           }
         }
-        return { username, password,
-          passHash, level, buttons };
+        const passHash = (row?.passHash ?? row?.passwordHash ?? row?.hash ?? "").toString().trim();
+        return { username, password, passHash, level, buttons };
       }
 
       function loadAuthTable(btnCount){
@@ -1763,9 +1761,18 @@
       }
 
       function setSession(user){
-        try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: user.username, role: user.level, t: Date.now() })); }catch(e){}
+        try{
+          sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: user.username, role: user.level, t: Date.now() }));
+          // ✅需求：同一瀏覽器工作階段（同分頁/同視窗）回首頁免再登入；關閉瀏覽器後會清空
+          sessionStorage.setItem(INDEX_SESSION_KEY, "1");
+        }catch(e){}
       }
-      function clearSession(){ try{ sessionStorage.removeItem(SESSION_KEY); }catch(e){} }
+      function clearSession(){
+        try{
+          sessionStorage.removeItem(SESSION_KEY);
+          sessionStorage.removeItem(INDEX_SESSION_KEY);
+        }catch(e){}
+      }
       function getSession(){
         const obj = safeJsonParse(sessionStorage.getItem(SESSION_KEY) || "null", null);
         if(!obj || typeof obj !== "object") return null;
@@ -2635,8 +2642,11 @@
       }
 
       function tryEnterBySessionSilently(){
+        if(sessionStorage.getItem(INDEX_SESSION_KEY) !== "1") return false;
+
         const sess = getSession();
         if(!sess) return false;
+
         const u = AUTH_TABLE.find(r => r.username === sess.user);
         if(!u){ clearSession(); return false; }
         if(String(u.level||"").toLowerCase() !== String(sess.role||"").toLowerCase()){
@@ -2666,6 +2676,9 @@
       }
 
       function autoEnterIfSessionValid(){
+        // ✅只有本工作階段已成功登入過才允許自動帶入（避免第一次開啟就直接跳過登入）
+        if(sessionStorage.getItem(INDEX_SESSION_KEY) !== "1") return;
+
         const sess = getSession();
         if(!sess) return;
 
@@ -2679,7 +2692,7 @@
         setTimeout(() => {
           if(!getSession()) return;
           applyUser(u);
-        }, 150);
+        }, 220);
       }
 
       function applyUser(user){
