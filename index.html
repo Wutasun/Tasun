@@ -24,22 +24,53 @@
         document.documentElement.classList.add("perf-lite");
       }
     }catch(e){}
+// ✅防止 loader 把 JSON（如 tasun-resources.json / tasun-version.json）當成 <script> 執行而報「Unexpected token {」
+//   有些 loader 會用 <script src="*.json"> 方式載入版本/資源設定；瀏覽器會把 JSON 當 JS 執行而直接炸掉整頁初始化。
+//   這裡全域攔截「任何地方」append/insert 的 <script src="*.json">，強制改成 type="application/json"（不執行）。
+try{
+  function patchNodeAppend(fnName){
+    const proto = Node && Node.prototype;
+    if(!proto) return;
+    const orig = proto[fnName];
+    if(!orig || orig.__tasun_json_patched__) return;
+    const wrapped = function(node, ...args){
+      try{
+        if(node && node.tagName === "SCRIPT"){
+          const src = String(node.src || (node.getAttribute && node.getAttribute("src")) || "");
+          if(/\.json(\?|#|$)/i.test(src)){
+            node.type = "application/json";
+          }
+        }
+      }catch(e){}
+      return orig.call(this, node, ...args);
+    };
+    wrapped.__tasun_json_patched__ = true;
+    proto[fnName] = wrapped;
+  }
 
-    // ✅防止 loader 把 JSON（如 tasun-resources.json）當成 <script> 執行而報「Unexpected token {」
-    //   任何 <script src="*.json"> 都強制改成 application/json（不執行），避免整頁初始化中斷。
-    try{
-      const _origHeadAppend = document.head && document.head.appendChild ? document.head.appendChild.bind(document.head) : null;
-      if(_origHeadAppend && !document.head.__tasun_json_script_patched__){
-        Object.defineProperty(document.head, "__tasun_json_script_patched__", { value:true });
-        document.head.appendChild = function(node){
-          try{
-            if(node && node.tagName === "SCRIPT"){
-              const src = String(node.src || "");
-              if(/\.json(\?|#|$)/i.test(src)){
-                node.type = "application/json";
-              }
-            }
-          }catch(e){}
+  if(!window.__tasun_json_script_patched__){
+    window.__tasun_json_script_patched__ = true;
+    patchNodeAppend("appendChild");
+    patchNodeAppend("insertBefore");
+
+    // 少數情境會用 document.write 寫入 <script src="*.json">，也一併保護
+    const _dw = document.write && document.write.bind(document);
+    if(_dw && !document.__tasun_dw_patched__){
+      Object.defineProperty(document, "__tasun_dw_patched__", { value:true });
+      document.write = function(html){
+        try{
+          const h = String(html || "");
+          if(/<script[^>]+src=["'][^"']+\.json(\?|#|$)[^"']*["'][^>]*>\s*<\/script>/i.test(h)){
+            // 把 script 改成 type=application/json
+            const hh = h.replace(/<script([^>]+src=["'][^"']+\.json[^"']*["'][^>]*)>/ig, '<script$1 type="application/json">');
+            return _dw(hh);
+          }
+        }catch(e){}
+        return _dw(html);
+      };
+    }
+  }
+}catch(e){}
           return _origHeadAppend(node);
         };
       }
