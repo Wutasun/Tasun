@@ -860,6 +860,58 @@
   function safeJsonParse(s, fallback){
     try{ return JSON.parse(s); }catch(e){ return fallback; }
   }
+
+  // ====== Password hashing (SHA-256, no plain text persisted) ======
+  async function sha256Hex(str){
+    str = String(str == null ? '' : str);
+    if(!window.crypto || !crypto.subtle || !window.TextEncoder){
+      // Fallback: very old browsers (NOT cryptographically strong) - keep deterministic
+      // (GitHub Pages/modern Chrome will use crypto.subtle)
+      var h = 0, i;
+      for(i=0;i<str.length;i++){ h = ((h<<5)-h) + str.charCodeAt(i); h |= 0; }
+      return ('00000000' + (h>>>0).toString(16)).slice(-8);
+    }
+    var data = new TextEncoder().encode(str);
+    var buf = await crypto.subtle.digest('SHA-256', data);
+    var arr = Array.from(new Uint8Array(buf));
+    return arr.map(b => b.toString(16).padStart(2,'0')).join('');
+  }
+
+  function stripPassForStorage(u){
+    // never persist plaintext pass
+    var o = Object.assign({}, u);
+    delete o.pass;
+    if(o.passHash == null) o.passHash = '';
+    return o;
+  }
+
+  async function upgradeAuthToHash(){
+    // Convert legacy {pass} to {passHash}, then purge plaintext.
+    var changed = false;
+    for(var i=0;i<auth.length;i++){
+      var u = auth[i] || {};
+      var ph = String(u.passHash || '').trim();
+      var p  = (u.pass == null) ? '' : String(u.pass);
+
+      if(p){
+        u.passHash = await sha256Hex(p);
+        changed = true;
+      }
+      // Always purge plaintext from in-memory model (UI can keep blank)
+      if(u.pass !== undefined){
+        u.pass = '';
+        changed = true;
+      }
+      if(u.passHash == null) u.passHash = '';
+    }
+    if(changed){
+      try{
+        localStorage.setItem(AUTH_KEY, JSON.stringify(auth.map(stripPassForStorage)));
+      }catch(e){}
+    }
+    return changed;
+  }
+
   function stripInvisibles(s){
     return String(s ?? '')
       .replace(/\uFEFF/g, '')
@@ -1164,7 +1216,8 @@
       const r = String(u.role||'read').toLowerCase();
       u.role = roleOptions.includes(r) ? r : 'read';
       u.user = String(u.user||'').trim();
-      u.pass = String(u.pass||'');
+      u.passHash = String(u.passHash||'');
+      u.pass = String(u.pass||''); // display only (will not be persisted)
     });
     auth = auth.filter(u => (u.user||'').trim() !== '');
   }
@@ -1421,8 +1474,10 @@
     }).join('');
   }
 
-  function saveLocal(){
-    localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
+  async async function saveLocal(){
+    // ✅ 將密碼(若有輸入)轉成 passHash，並確保本機/雲端不存明碼
+    try{ await upgradeAuthToHash(); }catch(e){}
+    try{ localStorage.setItem(AUTH_KEY, JSON.stringify(auth.map(stripPassForStorage))); }catch(e){}
     savePermMatrix();
     localState.textContent = '本機：已儲存';
   }
@@ -2037,42 +2092,50 @@
 
     auth = safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []);
     if(!Array.isArray(auth)) auth = [];
-    normalizeAuth();
 
-    current = safeJsonParse(localStorage.getItem(CURRENT_KEY) || 'null', null);
-    if(!current || typeof current !== 'object'){
-      current = { user:'—', role:'read' };
-    }else{
-      current.user = String(current.user || '—');
-      current.role = String(current.role || 'read');
-    }
+    // ✅ 先把舊版明碼轉為 SHA-256(passHash)，並保證本機/雲端只存 passHash
+    upgradeAuthToHash().then(() => {
+      normalizeAuth();
 
-    loadPermMatrix();
+      current = safeJsonParse(localStorage.getItem(CURRENT_KEY) || 'null', null);
+      if(!current || typeof current !== 'object'){
+        current = { user:'—', role:'read' };
+      }else{
+        current.user = String(current.user || '—');
+        current.role = String(current.role || 'read');
+      }
 
-    current.role = getEffectiveRole();
-    isAdmin = (getEffectiveRole() === 'admin');
+      loadPermMatrix();
 
-    clearTokenFlags();
+      current.role = getEffectiveRole();
+      isAdmin = (getEffectiveRole() === 'admin');
 
-    buildEntrySelect();
-    loadSelectedEntry();
+      clearTokenFlags();
 
-    const inList = dynEntryFiles.includes(currentEntry);
-    if(inList){
-      entrySelect.value = currentEntry;
-      entryCustom.value = '';
-    }else{
-      entrySelect.value = '__custom__';
-      entryCustom.value = currentEntry;
-    }
-    applyEntrySelectionUI();
+      buildEntrySelect();
+      loadSelectedEntry();
 
-    renderAll();
-    updateStates('已載入本機資料。');
+      const inList = dynEntryFiles.includes(currentEntry);
+      if(inList){
+        entrySelect.value = currentEntry;
+        entryCustom.value = '';
+      }else{
+        entrySelect.value = '__custom__';
+        entryCustom.value = currentEntry;
+      }
+      applyEntrySelectionUI();
 
-    // 可見時嘗試 pull（確保跨裝置一致）
-    scheduleCloudPull('page-load');
-  }
+      renderAll();
+      updateStates('已載入本機資料。');
+
+      // 可見時嘗試 pull（確保跨裝置一致）
+      scheduleCloudPull('page-load');
+    });
+
+    return; // async path
+
+    /* (removed legacy sync load body; now handled in upgradeAuthToHash().then(...)) */
+}
 
   window.addEventListener('storage', (e) => {
     if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY){
@@ -2152,13 +2215,6 @@
         touched.push(r.k);
         continue;
       }
-
-  // ✅ CloudKit apply adapter (payload -> rows)
-  function apply(payload){
-    try{ applyRows((payload && payload.items) ? payload.items : (Array.isArray(payload)?payload:[])); }
-    catch(e){}
-  }
-
       localStorage.setItem(r.k, String(r.v));
       touched.push(r.k);
     }
@@ -2168,6 +2224,12 @@
       try{ window.dispatchEvent(new StorageEvent('storage',{ key:key, storageArea:localStorage })); }
       catch(e){ try{ window.dispatchEvent(new Event('storage')); }catch(_){ } }
     }
+  }
+
+  // ✅ CloudKit apply adapter (payload -> rows)
+  function apply(payload){
+    try{ applyRows((payload && payload.items) ? payload.items : (Array.isArray(payload)?payload:[])); }
+    catch(e){}
   }
 
   if(!window.TasunCloudKit || !window.TasunCloudKit.init || !window.TasunCloudKit.mount){
