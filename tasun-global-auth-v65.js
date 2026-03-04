@@ -324,7 +324,8 @@
 
   // ---------- Session ----------
   function readSession(){
-    var raw = getSS(S_SESSION);
+    // Prefer sessionStorage (same-tab). Fallback to localStorage to support SSO when links open a new tab/window.
+    var raw = getSS(S_SESSION) || getLS(S_SESSION);
     var j = safeJsonParse(raw);
     if(!j || typeof j!=="object") return null;
     // basic validation
@@ -343,21 +344,24 @@
     setSS(S_SESSION, JSON.stringify(sess));
       setLS(S_SESSION, JSON.stringify(sess));
     setSS(S_LASTACT, String(t));
+    setLS(S_LASTACT, String(t));
     // legacy current user (for existing UI)
     try{ setLS(S_CUR_LS, JSON.stringify({user:user, role:role||"read", at:t})); }catch(e){}
   }
   function clearSession(){
     delSS(S_SESSION);
     delSS(S_LASTACT);
+    delLS(S_LASTACT);
   }
   function touchActivity(){
-    try{ setSS(S_LASTACT, String(now())); }catch(e){}
+    try{ setSS(S_LASTACT, String(now()));
+    setLS(S_LASTACT, String(now())); }catch(e){}
   }
   function isSessionValid(sess){
     if(!sess) return false;
     if(now() > Number(sess.expiresAt||0)) return false;
     // idle
-    var la = Number(getSS(S_LASTACT) || "0") || 0;
+    var la = Number(getSS(S_LASTACT) || getLS(S_LASTACT) || "0") || 0;
     if(la && (now() - la > IDLE_MS)) return false;
     return true;
   }
