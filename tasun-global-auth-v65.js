@@ -1,6 +1,6 @@
 
 /* =========================================================
- * Tasun V6.5 Global Auth (Enterprise)
+ * Tasun V6.5 Global Auth (Enterprise) [forceAll]
  * - 全站強制驗證（同一組雲端密碼）
  * - Worker-first：自動偵測 apiBase（from tasun-resources.json / window.TASUN_API_BASE）
  * - SHA-256：只比對 hash，不存明碼（session/localStorage 都不存明碼）
@@ -28,10 +28,9 @@
   var CFG = window.TASUN_AUTH_CFG || {};
   var APP_VER = String(CFG.appVer || window.TASUN_APP_VER || "").trim();
 
-  // 全站強制驗證（如需讓部分頁面回首頁免登入，可在該頁 head 設：window.TASUN_AUTH_CFG={force:false};）
-  var FORCE_AUTH = (CFG.force === undefined) ? true : !!CFG.force;
-
-  // Idle timeout / TTL (ms)
+  // 全站強制驗證（Enterprise：每頁皆強制，忽略 page override）
+  var FORCE_AUTH = true; // ✅ 全站強制（忽略每頁 override）
+// Idle timeout / TTL (ms)
   var IDLE_MS = Number(CFG.idleMs || (30 * 60 * 1000));     // 30 min
   var TTL_MS  = Number(CFG.ttlMs  || (8  * 60 * 60 * 1000)); // 8 hr
 
@@ -325,7 +324,7 @@
 
   // ---------- Session ----------
   function readSession(){
-    var raw = getSS(S_SESSION) || getLS(S_SESSION);
+    var raw = getSS(S_SESSION);
     var j = safeJsonParse(raw);
     if(!j || typeof j!=="object") return null;
     // basic validation
@@ -342,6 +341,7 @@
       expiresAt: t + TTL_MS
     };
     setSS(S_SESSION, JSON.stringify(sess));
+      setLS(S_SESSION, JSON.stringify(sess));
     setSS(S_LASTACT, String(t));
     // legacy current user (for existing UI)
     try{ setLS(S_CUR_LS, JSON.stringify({user:user, role:role||"read", at:t})); }catch(e){}
