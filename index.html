@@ -1485,6 +1485,112 @@ function runIndexApp(){
       const CLOUD_KEYS = [AUTH_KEY, NAV_KEY, ROUTE_KEY];
       const CLOUD_KEY_SET = new Set(CLOUD_KEYS);
 
+      
+      // =========================
+      // ✅ Stable Worker API base (Cloudflare Worker)
+      // =========================
+      const TASUN_WORKER_BASE = "https://tasun-worker.wutasun.workers.dev";
+
+      // -------------------------
+      // Deterministic uid from (resourceKey + key)
+      // - Ensures multi-device consistency (same key => same uid)
+      // - Pure JS, no async crypto needed
+      // -------------------------
+      function __hash64(str){
+        // FNV-1a 64-bit (BigInt)
+        let h = 0xcbf29ce484222325n;
+        const prime = 0x100000001b3n;
+        for(let i=0;i<str.length;i++){
+          h ^= BigInt(str.charCodeAt(i));
+          h = (h * prime) & 0xFFFFFFFFFFFFFFFFn;
+        }
+        return h;
+      }
+      function __hex16(n){
+        let s = n.toString(16);
+        if(s.length < 16) s = "0".repeat(16 - s.length) + s;
+        return s.slice(-16);
+      }
+      function uidFromKey(resourceKey, k){
+        const seed = String(resourceKey||"") + "|" + String(k||"");
+        const h1 = __hash64("A|" + seed);
+        const h2 = __hash64("B|" + seed);
+        const a = __hex16(h1) + __hex16(h2); // 32 hex chars
+        // format UUID v4-like (but deterministic). Set version nibble to '4' and variant to '8'
+        const p1 = a.slice(0,8);
+        const p2 = a.slice(8,12);
+        const p3 = "4" + a.slice(13,16);
+        const p4 = (["8","9","a","b"][Number(a.slice(16,17),16)%4]) + a.slice(17,20);
+        const p5 = a.slice(20,32);
+        return `${p1}-${p2}-${p3}-${p4}-${p5}`;
+      }
+
+      // -------------------------
+      // CloudKit fetch proxy:
+      // The kit on GitHub Pages may call legacy endpoints like:
+      //   GET /api/read?key=xxx
+      //   GET /api/tasun/pull?key=xxx
+      //   POST /api/tasun/merge
+      // We rewrite them to Worker stable endpoints:
+      //   POST {resourceKey} -> /api/tasun/read
+      //   POST merge -> /api/tasun/merge
+      // -------------------------
+      (function installTasunFetchProxy(){
+        try{
+          if(window.__TASUN_FETCH_PROXY_INSTALLED__) return;
+          window.__TASUN_FETCH_PROXY_INSTALLED__ = true;
+
+          const _fetch = window.fetch.bind(window);
+          window.fetch = function(input, init){
+            try{
+              const reqUrl = (typeof input === "string") ? input : (input && input.url) ? input.url : "";
+              const u = new URL(reqUrl, location.href);
+
+              // Only rewrite same-origin legacy paths
+              const p = u.pathname;
+
+              // Legacy READ (GET)
+              if(p === "/api/read" || p === "/api/tasun/pull" || p === "/api/tasun/read"){
+                const key = u.searchParams.get("key") || u.searchParams.get("resourceKey") || "";
+                const rk = String(key || "").trim();
+                if(rk){
+                  const body = JSON.stringify({ resourceKey: rk });
+                  return _fetch(TASUN_WORKER_BASE + "/api/tasun/read", {
+                    method: "POST",
+                    headers: { "content-type":"application/json" },
+                    body
+                  });
+                }
+              }
+
+              // Legacy MERGE (POST) - forward as-is
+              if(p === "/api/merge" || p === "/api/tasun/merge"){
+                const target = TASUN_WORKER_BASE + "/api/tasun/merge";
+                if(typeof input === "string"){
+                  return _fetch(target, init || {});
+                }
+                const newReq = new Request(target, input);
+                return _fetch(newReq, init || {});
+              }
+
+            }catch(_e){}
+            return _fetch(input, init);
+          };
+        }catch(_e){}
+      })();
+
+      // -------------------------
+      // Per-key meta for sync v1: uid/rev/updatedAt/deleted
+      // Stored in localStorage as JSON to keep deterministic + stable across reloads
+      // -------------------------
+      const CLOUD_META_KEY = "tasunIndexCloudMeta_v1";
+      function loadCloudMeta(){
+        return safeJsonParse(localStorage.getItem(CLOUD_META_KEY) || "{}", {}) || {};
+      }
+      function saveCloudMeta(meta){
+        try{ localStorage.setItem(CLOUD_META_KEY, JSON.stringify(meta || {})); }catch(e){}
+      }
+
       let cloudCtrl = null;
       let cloudApplying = false;
       let cloudSaveTimer = 0;
@@ -1505,82 +1611,51 @@ function runIndexApp(){
         });
       }
 
-      // ✅ v1：每頁 pageKey 唯一、pk 一律 uid(uuid)、uid/rev/updatedAt/deleted 必備；id 只顯示
-      const CLOUD_META_KEY = "tasunIndexCloudMeta_v1";
-
-      function fnv1a32(str){
-        str = String(str==null?"":str);
-        let h = 0x811c9dc5;
-        for(let i=0;i<str.length;i++){
-          h ^= str.charCodeAt(i);
-          h = Math.imul(h, 0x01000193);
-        }
-        return (h>>>0);
-      }
-      function hex8(n){
-        let s = (n>>>0).toString(16);
-        return "00000000".slice(s.length) + s;
-      }
-      function stableUuidFromKey(k){
-        // deterministic 128-bit from key (4x32bit), formatted as UUIDv4-like
-        const a = fnv1a32("a|"+k);
-        const b = fnv1a32("b|"+k);
-        const c = fnv1a32("c|"+k);
-        const d = fnv1a32("d|"+k);
-        let hex = (hex8(a)+hex8(b)+hex8(c)+hex8(d)).slice(0,32);
-        // set version to 4
-        hex = hex.slice(0,12) + "4" + hex.slice(13);
-        // set variant to 8..b
-        const v = parseInt(hex.slice(16,17),16);
-        const vv = (v & 0x3) | 0x8;
-        hex = hex.slice(0,16) + vv.toString(16) + hex.slice(17);
-        return (
-          hex.slice(0,8)+"-"+
-          hex.slice(8,12)+"-"+
-          hex.slice(12,16)+"-"+
-          hex.slice(16,20)+"-"+
-          hex.slice(20)
-        );
-      }
-      function loadMeta(){
-        try{ return JSON.parse(localStorage.getItem(CLOUD_META_KEY) || "{}"); }catch(e){ return {}; }
-      }
-      function saveMeta(meta){
-        try{ localStorage.setItem(CLOUD_META_KEY, JSON.stringify(meta||{})); }catch(e){}
-      }
-
       function buildCloudPayloadFromLocal(){
         const rows = [];
         const keys = CLOUD_KEYS.slice().sort((a,b)=>a.localeCompare(b,"zh-Hant"));
-        const meta = loadMeta();
+        const meta = loadCloudMeta();
         const now = Date.now();
 
         keys.forEach((k, idx)=>{
           const raw = localStorage.getItem(k);
           const v = (raw == null ? "" : String(raw));
-          const uid = stableUuidFromKey(k);
 
-          const prev = meta[uid] || null;
-          // 只有值有變才 bump rev/updatedAt，避免每次都覆蓋造成抖動
-          const changed = !prev || prev.v !== v;
-          const updatedAt = changed ? now : (Number(prev.updatedAt)||now);
-          const rev = changed ? updatedAt : (Number(prev.rev)||updatedAt);
-          const deleted = false;
+          const uid = uidFromKey(CLOUD_RESOURCE_KEY, k);
+          const prev = meta[k] || {};
+          const prevV = ("v" in prev) ? String(prev.v ?? "") : null;
 
-          meta[uid] = { k, v, rev, updatedAt, deleted };
+          // Only bump rev/updatedAt when value actually changed
+          let rev = Number(prev.rev || 0);
+          let updatedAt = Number(prev.updatedAt || 0);
+          if(prevV === null){
+            // first time seen
+            rev = now;
+            updatedAt = now;
+          }else if(prevV !== v){
+            rev = now;
+            updatedAt = now;
+          }else{
+            // keep prior timestamps; if missing, set now
+            if(!rev) rev = now;
+            if(!updatedAt) updatedAt = now;
+          }
 
+          meta[k] = { uid, rev, updatedAt, deleted:false, v };
           rows.push({
             uid,
-            id: idx + 1,
+            id: idx + 1,       // display only
             k,
             v,
             rev,
             updatedAt,
-            deleted
+            deleted: false
           });
         });
 
-        saveMeta(meta);
+        saveCloudMeta(meta);
+        return { db: rows, counter: rows.length };
+      });
         return { db: rows, counter: rows.length };
       }
 
@@ -1631,23 +1706,24 @@ function runIndexApp(){
             if(!payload || !Array.isArray(payload.db)) return;
             cloudApplying = true;
             try{
-              const meta = loadMeta();
+              const meta = loadCloudMeta();
               payload.db.forEach(row=>{
                 const k = String(row?.k || "").trim();
                 if(!k || !CLOUD_KEY_SET.has(k)) return;
                 const v = (row?.v == null) ? "" : String(row.v);
-                const uid = String(row?.uid || stableUuidFromKey(k));
-                const rev = Number(row?.rev)||0;
-                const updatedAt = Number(row?.updatedAt)||0;
-                const deleted = !!row?.deleted;
 
-                // 套用到 localStorage（本頁三個 key）
+                // Write value
                 if(localStorage.getItem(k) !== v) localStorage.setItem(k, v);
 
-                // 更新 meta（避免下一次送出又被視為 changed）
-                meta[uid] = { k, v, rev, updatedAt, deleted };
+                // Sync meta so we don't re-upload the same data repeatedly
+                const uid = String(row?.uid || uidFromKey(CLOUD_RESOURCE_KEY, k));
+                const rev = Number(row?.rev || Date.now());
+                const updatedAt = Number(row?.updatedAt || Date.now());
+                const deleted = !!row?.deleted;
+
+                meta[k] = { uid, rev, updatedAt, deleted, v };
               });
-              saveMeta(meta);
+              saveCloudMeta(meta);
             }finally{
               cloudApplying = false;
             }
