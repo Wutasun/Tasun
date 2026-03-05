@@ -1,107 +1,111 @@
-/* tasun-next-fix.js
-   Fix: prevent recursive next= nesting that causes 414 URI Too Long on GitHub Pages / proxies.
-   - Captures ?next= once, stores to sessionStorage, then removes it from URL (no more growth)
-   - Normalizes and clamps next target (same-origin only; relative path preferred)
-*/
+/*!
+ * tasun-next-fix.js  (Tasun v4 stable)
+ * Purpose:
+ * - Prevent "next=...next=...next=..." infinite nesting that causes:
+ *   1) URL too long / HTTP 414
+ *   2) redirect loops between guarded pages and index
+ * - Keep UI unchanged (no DOM/CSS changes).
+ *
+ * Placement:
+ * - Put this file in the SAME folder as index.html (and all HTML pages).
+ * - Include it in <head> BEFORE any redirects/loader.
+ *
+ * Works with:
+ * - guard-all-html-*.js (or any guard that appends ?next=...)
+ */
 (function(){
   "use strict";
-  const NEXT_KEY = "tasunNextUrl_v1";
 
-  function safeDecode(s, maxPass){
-    let out = String(s||"");
-    const n = Math.max(0, Math.min(5, maxPass||2));
-    for(let i=0;i<n;i++){
-      try{
-        const dec = decodeURIComponent(out);
-        if(dec === out) break;
-        out = dec;
-      }catch(_e){ break; }
-    }
-    return out;
+  var KEY = "tasun_next_target_v1";
+  var MAX_URL = 1200;   // conservative: avoid 414 on GH Pages/CF/NGINX
+  var MAX_NEST = 2;     // allow small nesting, but stop the runaway
+
+  function safeDecode(s){
+    try{ return decodeURIComponent(s); }catch(_){ return String(s||""); }
   }
 
-  function stripNestedNext(raw){
-    let cur = String(raw||"");
-    for(let i=0;i<6;i++){
-      if(!/(\?|&)next=/i.test(cur)) break;
-      try{
-        const u = new URL(cur, location.href);
-        const n = u.searchParams.get("next");
-        if(!n) break;
-        cur = n;
-      }catch(_e){
-        const m = cur.match(/(?:\?|&)next=([^&#]+)/i);
-        if(!m) break;
-        cur = m[1];
-      }
-    }
-    return cur;
-  }
-
-  function normalizeNext(raw){
-    let s = safeDecode(raw, 3);
-    s = stripNestedNext(s);
-    s = safeDecode(s, 2).trim();
-
-    if(!s) return "";
-
-    // Clamp length (avoid proxy limits)
-    if(s.length > 512) s = s.slice(0, 512);
-
-    // Disallow javascript: and data:
-    if(/^\s*(javascript:|data:)/i.test(s)) return "";
-
-    // If absolute URL, force same-origin
-    if(/^https?:\/\//i.test(s)){
-      try{
-        const u = new URL(s);
-        if(u.origin !== location.origin) return "";
-        // Return origin-relative
-        return u.pathname + u.search + u.hash;
-      }catch(_e){ return ""; }
-    }
-
-    // Ensure it is a relative URL
-    if(s.startsWith("//")) return "";
-    return s;
-  }
-
-  function consumeNextParam(){
+  function normalizePath(p){
+    p = String(p||"").trim();
+    if(!p) return "";
+    // If full URL: keep only path+search+hash for same-origin navigation
     try{
-      const url = new URL(location.href);
-      const raw = url.searchParams.get("next");
-      if(!raw) return;
-
-      const next = normalizeNext(raw);
-
-      // Store only if it's not pointing back to current page (to avoid loops)
-      if(next){
-        const curPath = location.pathname.replace(/\/+$/,"");
-        const nextPath = String(next).split("?")[0].split("#")[0].replace(/\/+$/,"");
-        if(nextPath && nextPath !== curPath){
-          try{ sessionStorage.setItem(NEXT_KEY, next); }catch(_e){}
-        }
+      var u = new URL(p, location.href);
+      if(u.origin === location.origin){
+        return u.pathname + u.search + u.hash;
       }
-
-      // Remove next from URL (prevents growth on subsequent redirects)
-      url.searchParams.delete("next");
-      history.replaceState(null, "", url.toString());
-    }catch(_e){}
+    }catch(_){}
+    // if it looks like protocol URL -> do not store (safety)
+    if(/^https?:\/\//i.test(p)) return "";
+    return p;
   }
 
-  // Expose helper for index/app to redirect after login
-  window.TasunNextFix = {
-    KEY: NEXT_KEY,
-    consume: consumeNextParam,
-    take: function(){
-      try{
-        const v = sessionStorage.getItem(NEXT_KEY);
-        if(!v) return "";
-        sessionStorage.removeItem(NEXT_KEY);
-        return v;
-      }catch(_e){ return ""; }
-    }
-  };
+  function extractNext(urlObj){
+    var next = urlObj.searchParams.get("next");
+    if(!next) return "";
+    // Prefer first; if multiple next params exist, ignore the rest
+    next = String(next);
 
-  consumeNextParam();
+    // If already absurdly long, truncate by dropping nested query and hash
+    if(next.length > 4000){
+      next = next.slice(0, 4000);
+    }
+
+    // Try decode once (many guards encodeURIComponent)
+    var dec = safeDecode(next);
+
+    // If dec itself is a full URL (same-origin), normalize it
+    var norm = normalizePath(dec) || normalizePath(next);
+    if(!norm) return "";
+
+    return norm;
+  }
+
+  function stripNext(urlObj){
+    urlObj.searchParams.delete("next");
+    // also strip repeated next (some libs add next multiple times)
+    // delete() removes all instances
+  }
+
+  function countNestedNext(s){
+    var t = String(s||"");
+    var n = 0;
+    // crude: count "?next=" or "&next=" occurrences
+    var m = t.match(/(?:\?|&)next=/g);
+    n = m ? m.length : 0;
+    return n;
+  }
+
+  try{
+    var url = new URL(location.href);
+
+    var rawHref = url.href;
+    var hasNext = url.searchParams.has("next");
+    if(!hasNext) return;
+
+    var target = extractNext(url);
+    var nested = countNestedNext(rawHref);
+
+    // Store target if:
+    // - exists
+    // - is not current page
+    // - and nesting/length indicates danger OR always store if present
+    if(target){
+      // prevent redirect loop back to same index
+      var cur = location.pathname.replace(/\/+$/,"");
+      var tarPath = target.split("?")[0].split("#")[0].replace(/\/+$/,"");
+      if(tarPath && tarPath !== cur){
+        try{ sessionStorage.setItem(KEY, target); }catch(_){}
+      }
+    }
+
+    // Clean URL in-place to stop growth:
+    // If URL too long or nested too deep => remove next immediately.
+    // Even if not too long, removing next makes refresh stable.
+    if(rawHref.length > MAX_URL || nested > MAX_NEST || true){
+      stripNext(url);
+      var cleaned = url.pathname + (url.search || "") + (url.hash || "");
+      // replaceState: NO reload, no history growth
+      history.replaceState(null, "", cleaned);
+    }
+  }catch(_e){}
 })();
