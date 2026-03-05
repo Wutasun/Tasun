@@ -4,88 +4,45 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
-  <!-- ✅FIX: 防止 next 參數遞迴導致網址爆長（GitHub Pages 會回 414 / URI Too Long） -->
+  <!-- ✅FIX: next 不再寫入 URL（避免遞迴爆長 / 414）。改用 sessionStorage 暫存，並用 history.replaceState 清網址，不重載 -->
   <script>
   (function(){
-    // ✅注意：若伺服器已因網址過長回 414，這段 JS 來不及執行
-    // 你必須先用「乾淨網址」開一次：/Tasun/index.html（不要帶 ?next=...）
-    // 之後此頁會把 next 改存 sessionStorage，不再讓網址越疊越長。
     try{
-      const MAX_URL = 1800; // 保守：避免 414
-      const url = new URL(location.href);
-
-      // ✅把 next 改存 sessionStorage（避免 query 疊加成 URI Too Long）
-      const NEXT_STORE_KEY = "tasun_next_path_v1";
-
-      function safeStoreNext(val){
-        try{
-          if(!val) return;
-          const s = String(val);
-          // 避免存太長/惡意
-          if(s.length > 1400) return;
-          sessionStorage.setItem(NEXT_STORE_KEY, s);
-        }catch(_e){}
-      }
-
-      // 1) 若網址已過長：嘗試快速清掉 query（保留 v）
-      //    （但若已回 414，這段不會執行；需人工用乾淨網址進來一次）
-      if(String(url.href).length > MAX_URL){
-        const v = url.searchParams.get("v");
+      var url = new URL(location.href);
+      // 若帶 next：存到 sessionStorage，並把網址清乾淨（不觸發 reload）
+      if(url.searchParams.has("next")){
+        var raw = String(url.searchParams.get("next")||"");
+        // 解碼最多 3 次
+        var decoded = raw;
+        for(var i=0;i<3;i++){
+          try{ var d = decodeURIComponent(decoded); if(d===decoded) break; decoded=d; }catch(e){ break; }
+        }
+        // 只接受同站相對路徑，避免 open redirect
+        function safePath(s){
+          try{
+            var u = new URL(s, location.origin + location.pathname);
+            if(u.origin !== location.origin) return "";
+            return u.pathname + u.search + u.hash;
+          }catch(e){ return ""; }
+        }
+        var safe = safePath(decoded) || safePath(raw);
+        if(safe && safe.length < 900){
+          sessionStorage.setItem("tasun_next_path_v1", safe);
+        }
+        url.searchParams.delete("next");
+        // 保留 v
+        var v = url.searchParams.get("v");
         url.search = "";
         if(v) url.searchParams.set("v", v);
-        location.replace(url.toString());
-        return;
-      }
-
-      // 2) 清理 next：解碼最多 3 次，剝掉遞迴 next=index.html?next=...
-      if(url.searchParams.has("next")){
-        let next = String(url.searchParams.get("next") || "");
-        let decoded = next;
-
-        for(let i=0;i<3;i++){
-          try{
-            const d = decodeURIComponent(decoded);
-            if(d === decoded) break;
-            decoded = d;
-          }catch(_e){ break; }
-        }
-
-        // 解析成 URL（相對路徑也可）
-        function toUrl(s){
-          try{ return new URL(s, location.origin + location.pathname); }catch(e){ return null; }
-        }
-
-        // 剝掉遞迴 next（最多 6 層）
-        let u = toUrl(decoded) || toUrl(next);
-        for(let i=0;i<6 && u; i++){
-          const inner = u.searchParams.get("next");
-          if(!inner) break;
-          decoded = inner;
-          u = toUrl(inner);
-        }
-
-        // ✅先把最終 next 存起來（之後登入成功會跳轉）
-        safeStoreNext(decoded);
-
-        // 若 next 指回自己（或仍然超長）→ 直接移除
-        const finalU = toUrl(decoded);
-        const samePage = finalU && (finalU.pathname === location.pathname);
-        if(samePage || String(decoded).length > 900){
-          url.searchParams.delete("next");
-        }else{
-          // ✅仍然不保留在網址上：改用 sessionStorage
-          url.searchParams.delete("next");
-        }
-
-        // 最終再做一次長度保護
-        if(String(url.href).length > MAX_URL){
-          const v = url.searchParams.get("v");
-          url.search = "";
-          if(v) url.searchParams.set("v", v);
-        }
-
-        // ✅用 history.replaceState：不再發出第二次請求（避免又觸發導頁鏈）
         history.replaceState(null, "", url.toString());
+      }
+      // 防呆：網址過長直接清 query（保留 v）
+      if(String(location.href).length > 1800){
+        var u2 = new URL(location.href);
+        var v2 = u2.searchParams.get("v");
+        u2.search = "";
+        if(v2) u2.searchParams.set("v", v2);
+        history.replaceState(null, "", u2.toString());
       }
     }catch(e){}
   })();
@@ -127,203 +84,60 @@
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet">
   <script src="tasun-cloudwrap-v4.js?v=20260305_v4_1"></script>
   <script src="tasun-auth-v4.js?v=20260305_v4_1"></script>
-  <script>
-  // ✅FIX: index.html 是登入入口頁，不應被 guard 再次導回自己造成循環導頁/空白頁
-  // 只在「非 index」頁面才載入 guard（子頁請各自保留 guard；此處只避免首頁自我守門）
-  (function(){
-    try{
-      var p = String(location.pathname || "");
-      var isIndex = /\/index\.html$/i.test(p) || /\/Tasun\/?$/i.test(p);
-      if(isIndex){
-        window.__TASUN_SKIP_GUARD_ON_INDEX = true;
-        return;
-      }
-      var s = document.createElement("script");
-      s.src = "tasun-guard-v4.js?v=20260305_v4_1";
-      s.defer = true;
-      document.head.appendChild(s);
-    }catch(e){}
-  })();
-</script>
+  <!-- ✅index 為登入入口頁：不載入 guard，避免自我守門循環 -->
+
 </head>
 
 <body class="locked booting">
-  <!-- ✅版本鎖定 + appH 穩定（避免 iOS 地址列跳動）+ preload 主圖（減少首屏空白） -->
+    <!-- ✅首屏穩定：不做強制導頁、不做 v 參數重載。只提供 withV 與 viewport CSS 變數 -->
   <script>
-  (function () {
+  (function(){
     "use strict";
-
-    const VER = String(window.TASUN_APP_VER || window.APP_VER || "").trim();
-    const url = new URL(location.href);
-    const curV = url.searchParams.get("v") || "";
-
-    if (VER && curV !== VER) {
-      url.searchParams.set("v", VER);
-      location.replace(url.toString());
-      return;
-    }
-
-    window.__CACHE_V = VER || curV || "";
-
-    window.__withV = window.__withV || function (u) {
-      const vv = String(window.__CACHE_V || "").trim();
-      if (!vv) return u;
-      try {
-        const uu = new URL(u, document.baseURI);
-        if (uu.origin === location.origin) {
-          uu.searchParams.set("v", vv);
-          return uu.toString();
-        }
-        return u;
-      } catch (e) {
-        const s = String(u || "");
-        if (!s || /^https?:\/\//i.test(s) || /^mailto:/i.test(s)) return s;
-        const sep = s.includes("?") ? "&" : "?";
-        return s + sep + "v=" + encodeURIComponent(vv);
-      }
-    };
-
-    /* ✅ iOS 地址列跳動抑制：取「最小可視高度」作為 appH（只會變小，不會因收合而變大造成跳動）
-       ✅（手機修正）同時提供 appHLive（即時可視高度）→ 手機用它補滿畫面，避免底部留白 */
-    (function initViewportStabilizer(){
-      const root = document.documentElement;
-      let minH = 0;
-      let lastW = 0;
-
-      function calcVV(reset){
-        try{
-          const vv = window.visualViewport;
-          const h = Math.round(vv ? vv.height : window.innerHeight);
-          const w = Math.round(vv ? vv.width  : window.innerWidth);
-
-          const top = Math.round(vv ? vv.offsetTop : 0);
-          const bottom = Math.max(0, Math.round(window.innerHeight - (vv ? (vv.height + vv.offsetTop) : window.innerHeight)));
-
-          root.style.setProperty("--vv-top", top + "px");
-          root.style.setProperty("--vv-bottom", bottom + "px");
-
-          if(reset || !minH || Math.abs(w - lastW) > 180){
-            minH = h;
-            lastW = w;
-          }else{
-            minH = Math.min(minH, h);
-          }
-
-          // ✅原本穩定高度（最小高度）
-          root.style.setProperty("--appH", minH + "px");
-          // ✅新增：即時可視高度（手機用來補滿畫面避免留白）
-          root.style.setProperty("--appHLive", h + "px");
-
-          root.style.setProperty("--appW", w + "px");
-        }catch(e){
-          try{
-            root.style.setProperty("--appH", window.innerHeight + "px");
-            root.style.setProperty("--appHLive", window.innerHeight + "px");
-            root.style.setProperty("--appW", window.innerWidth + "px");
-          }catch(_){}
-        }
-      }
-
-      calcVV(true);
-
-      const onResize = () => calcVV(false);
-      const onOrient = () => calcVV(true);
-
-      window.addEventListener("resize", onResize, { passive:true });
-      window.addEventListener("orientationchange", onOrient, { passive:true });
-      if(window.visualViewport){
-        window.visualViewport.addEventListener("resize", onResize, { passive:true });
-        // ✅scroll 只更新 vv-top/vv-bottom/appH（不做 layout 量測，避免連續重排）
-        window.visualViewport.addEventListener("scroll", onResize, { passive:true });
-      }
-      document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible") calcVV(false); }, { passive:true });
-    })();
-
-    // ✅ preload 主圖（更快進來）
     try{
-      const id = "preloadZen";
-      if(!document.getElementById(id)){
-        const l = document.createElement("link");
-        l.id = id;
-        l.rel = "preload";
-        l.as = "image";
-        l.href = window.__withV("佛教禪意主視覺.png");
-        l.setAttribute("data-base", "佛教禪意主視覺.png");
-        document.head.appendChild(l);
+      // cache-bust helper：僅用於同站資源，不改當前網址
+      var vv = (new URL(location.href)).searchParams.get("v") || String(window.TASUN_APP_VER||window.APP_VER||"").trim();
+      window.__CACHE_V = vv || "";
+      window.__withV = window.__withV || function(u){
+        var v = String(window.__CACHE_V||"").trim();
+        if(!v) return u;
+        try{
+          var uu = new URL(u, document.baseURI);
+          if(uu.origin === location.origin){
+            uu.searchParams.set("v", v);
+            return uu.toString();
+          }
+          return u;
+        }catch(e){
+          return u;
+        }
+      };
+
+      // viewport CSS vars
+      var root = document.documentElement;
+      function setVV(){
+        var top = 0, h = window.innerHeight;
+        try{
+          var vvObj = window.visualViewport;
+          if(vvObj){
+            top = Math.round(vvObj.offsetTop || 0);
+            h = Math.round(vvObj.height || h);
+          }
+        }catch(e){}
+        root.style.setProperty("--vv-top", top + "px");
+        root.style.setProperty("--appH", h + "px");
       }
+      setVV();
+      window.addEventListener("resize", setVV, {passive:true});
+      if(window.visualViewport){
+        window.visualViewport.addEventListener("resize", setVV, {passive:true});
+        window.visualViewport.addEventListener("scroll", setVV, {passive:true});
+      }
+
+      // watchdog：避免任何初始化卡住造成白畫面
+      setTimeout(function(){
+        document.body && document.body.classList.remove("booting");
+      }, 600);
     }catch(e){}
-
-    function patchZenResources(){
-      const withV = window.__withV || ((u)=>u);
-      try{
-        const l = document.getElementById("preloadZen");
-        if(l){
-          const base = l.getAttribute("data-base") || l.getAttribute("href") || "";
-          if(base) l.href = withV(base);
-        }
-      }catch(e){}
-      try{
-        const img = document.getElementById("zenImg");
-        if(img){
-          const base = img.getAttribute("data-base") || img.getAttribute("src") || "";
-          if(base) img.src = withV(base);
-        }
-      }catch(e){}
-    }
-    patchZenResources();
-    document.addEventListener("DOMContentLoaded", patchZenResources, { once:true });
-
-    // ✅動態載入（維持你原本架構）
-    (function(){
-      const withV = window.__withV || ((u)=>u);
-      function loadScript(src){
-        return new Promise((resolve)=>{
-          try{
-            const s = document.createElement("script");
-            s.src = src;
-            s.async = false;
-            s.onload = ()=>resolve(true);
-            s.onerror = ()=>resolve(false);
-            document.head.appendChild(s);
-          }catch(e){ resolve(false); }
-        });
-      }
-
-      (async()=>{
-        await loadScript(withV("tasun-boot.js"));
-        await loadScript(withV("tasun-loader.js"));
-
-        function tryStart(){
-          try{
-            if(window.TasunLoader && typeof window.TasunLoader.start === "function"){
-              window.TasunLoader.start({
-                pageKey: "index",
-                verUrl: "tasun-version.json",
-                corePath: "tasun-core.js",
-                forceUrlV: true,
-                forceVersionSync: false,
-                patchResources: true,
-                networkToast: true,
-                appHeightVar: false,
-                preloadId: "preloadZen",
-                zenImgId: "zenImg",
-                appVer: window.TASUN_APP_VER
-              });
-              return true;
-            }
-          }catch(e){}
-          return false;
-        }
-
-        if(!tryStart()){
-          let n=0;
-          const t=setInterval(()=>{
-            n++;
-            if(tryStart() || n>120) clearInterval(t);
-          }, 50);
-        }
-      })();
-    })();
   })();
   </script>
 
@@ -3219,34 +3033,6 @@ return false; }
           // ✅applyUser 會關掉 overlay、更新按鍵、啟動雲端同步
           applyUser(user);
 
-          // ✅若網址原本帶 next（已被存到 sessionStorage），登入後導回目標頁（不再用 ?next=...）
-          try{
-            const NK = "tasun_next_path_v1";
-            const rawNext = sessionStorage.getItem(NK) || "";
-            if(rawNext){
-              sessionStorage.removeItem(NK);
-
-              // 僅允許同站相對路徑或同 origin（防開放式導向）
-              let target = "";
-              try{
-                const u = new URL(rawNext, location.origin + location.pathname);
-                if(u.origin === location.origin){
-                  target = u.pathname + u.search + u.hash;
-                }
-              }catch(_e){
-                // 相對路徑（例如 "xxx.html"）
-                if(!/^https?:\/\//i.test(rawNext) && !rawNext.startsWith("javascript:")){
-                  target = rawNext;
-                }
-              }
-
-              if(target){
-                location.href = withV(target);
-                return;
-              }
-            }
-          }catch(_e){}
-
           // 登入成功：清掉密碼欄位
           if(pwdEl) pwdEl.value = "";
           setLoginMsg("");
@@ -3313,7 +3099,18 @@ return false; }
   })();
   </script>
   <script src="tasun-auth-v4.js?v=20260305_v4_1"></script>
-  <script src="tasun-guard-v4.js?v=20260305_v4_1"></script>
-  <script src="tasun-cloudwrap-v4.js?v=20260305_v4_1"></script>
+  <!-- ✅index 為登入入口頁：不載入 guard，避免自我守門循環 -->
+<script src="tasun-cloudwrap-v4.js?v=20260305_v4_1"></script>
+
+  <script>
+    // ✅最終保險：3 秒後仍未解除 locked → 自動解除，避免整頁空白
+    setTimeout(function(){
+      try{
+        document.body.classList.remove("locked");
+        document.body.classList.remove("booting");
+      }catch(e){}
+    }, 3000);
+  </script>
+
 </body>
 </html>
