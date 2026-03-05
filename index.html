@@ -7,11 +7,28 @@
   <!-- ✅FIX: 防止 next 參數遞迴導致網址爆長（GitHub Pages 會回 414 / URI Too Long） -->
   <script>
   (function(){
+    // ✅注意：若伺服器已因網址過長回 414，這段 JS 來不及執行
+    // 你必須先用「乾淨網址」開一次：/Tasun/index.html（不要帶 ?next=...）
+    // 之後此頁會把 next 改存 sessionStorage，不再讓網址越疊越長。
     try{
       const MAX_URL = 1800; // 保守：避免 414
       const url = new URL(location.href);
 
-      // 1) 若網址已過長，先丟掉 next（保留 v）
+      // ✅把 next 改存 sessionStorage（避免 query 疊加成 URI Too Long）
+      const NEXT_STORE_KEY = "tasun_next_path_v1";
+
+      function safeStoreNext(val){
+        try{
+          if(!val) return;
+          const s = String(val);
+          // 避免存太長/惡意
+          if(s.length > 1400) return;
+          sessionStorage.setItem(NEXT_STORE_KEY, s);
+        }catch(_e){}
+      }
+
+      // 1) 若網址已過長：嘗試快速清掉 query（保留 v）
+      //    （但若已回 414，這段不會執行；需人工用乾淨網址進來一次）
       if(String(url.href).length > MAX_URL){
         const v = url.searchParams.get("v");
         url.search = "";
@@ -47,22 +64,28 @@
           u = toUrl(inner);
         }
 
-        // 若 next 指回自己（或仍然超長）→ 移除
+        // ✅先把最終 next 存起來（之後登入成功會跳轉）
+        safeStoreNext(decoded);
+
+        // 若 next 指回自己（或仍然超長）→ 直接移除
         const finalU = toUrl(decoded);
         const samePage = finalU && (finalU.pathname === location.pathname);
         if(samePage || String(decoded).length > 900){
           url.searchParams.delete("next");
         }else{
-          url.searchParams.set("next", decoded);
+          // ✅仍然不保留在網址上：改用 sessionStorage
+          url.searchParams.delete("next");
         }
 
         // 最終再做一次長度保護
         if(String(url.href).length > MAX_URL){
-          url.searchParams.delete("next");
+          const v = url.searchParams.get("v");
+          url.search = "";
+          if(v) url.searchParams.set("v", v);
         }
 
-        location.replace(url.toString());
-        return;
+        // ✅用 history.replaceState：不再發出第二次請求（避免又觸發導頁鏈）
+        history.replaceState(null, "", url.toString());
       }
     }catch(e){}
   })();
@@ -3178,6 +3201,34 @@ return false; }
 
           // ✅applyUser 會關掉 overlay、更新按鍵、啟動雲端同步
           applyUser(user);
+
+          // ✅若網址原本帶 next（已被存到 sessionStorage），登入後導回目標頁（不再用 ?next=...）
+          try{
+            const NK = "tasun_next_path_v1";
+            const rawNext = sessionStorage.getItem(NK) || "";
+            if(rawNext){
+              sessionStorage.removeItem(NK);
+
+              // 僅允許同站相對路徑或同 origin（防開放式導向）
+              let target = "";
+              try{
+                const u = new URL(rawNext, location.origin + location.pathname);
+                if(u.origin === location.origin){
+                  target = u.pathname + u.search + u.hash;
+                }
+              }catch(_e){
+                // 相對路徑（例如 "xxx.html"）
+                if(!/^https?:\/\//i.test(rawNext) && !rawNext.startsWith("javascript:")){
+                  target = rawNext;
+                }
+              }
+
+              if(target){
+                location.href = withV(target);
+                return;
+              }
+            }
+          }catch(_e){}
 
           // 登入成功：清掉密碼欄位
           if(pwdEl) pwdEl.value = "";
