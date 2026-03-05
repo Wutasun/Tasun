@@ -1,308 +1,194 @@
-/* Tasun Cloud Kit v4-stable (minimal, merge-first)
-   目標：
-   - 多人/多設備資料版本一致（pull + merge-save）
-   - 不改既有 UI：僅提供右下角小工具
-   - 若 resources 未設定/無法連線：不阻斷本地功能
-
-   需要 tasun-resources.json 內對應 resourceKey 的 read/merge/health。
-   資料格式：payload = { db:[{id,k,v,...}], counter:n }
-*/
-(function(){
+/* Tasun Cloud Kit (v4 FINAL)
+ * - Worker(/read,/merge) 同步 + localStorage cache
+ * - 兼容 index.html 目前呼叫：TasunCloudKit.init({...}); TasunCloudKit.mount({...})
+ * - payload 形式：{db:[rows...]}
+ */
+(function(global){
   'use strict';
 
-  const Kit = {};
-
-  let _cfg = {
-    appVer: '',
+  var DEFAULTS = {
     resourcesUrl: 'tasun-resources.json',
-    ui: { enabled:true, position:'bottom-right', hideLockButtons:true },
-    lock: { enabled:false, auto:false }
+    appVer: '',
+    ui: {},
+    lock: {}
   };
+  var _cfg = Object.assign({}, DEFAULTS);
 
-  let _resources = null;
-  let _ui = null;
+  function now(){ return Date.now(); }
+  function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
-  function jsonParse(s, fb){ try{ return JSON.parse(s); }catch(_){ return fb; } }
-
-  async function fetchJson(url, opts){
-    const r = await fetch(url, Object.assign({ cache:'no-store', credentials:'include' }, opts||{}));
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    return await r.json();
+  function uuidv4(){
+    if(global.crypto && crypto.randomUUID) return crypto.randomUUID();
+    var rnd = (global.crypto && crypto.getRandomValues) ? crypto.getRandomValues(new Uint8Array(16)) : Array.from({length:16},()=>Math.floor(Math.random()*256));
+    rnd[6] = (rnd[6] & 0x0f) | 0x40;
+    rnd[8] = (rnd[8] & 0x3f) | 0x80;
+    var b = Array.from(rnd, x=>('0'+x.toString(16)).slice(-2)).join('');
+    return b.slice(0,8)+'-'+b.slice(8,12)+'-'+b.slice(12,16)+'-'+b.slice(16,20)+'-'+b.slice(20);
   }
 
-  function withV(u){
-    try{
-      if(window.TasunCore && typeof window.TasunCore.withV === 'function') return window.TasunCore.withV(u);
-      if(typeof window.__withV === 'function') return window.__withV(u);
-    }catch(_){ }
-    return String(u||'');
+  function normalizeRow(row){
+    var r = Object.assign({}, row||{});
+    if(!r.uid) r.uid = uuidv4();
+    if(typeof r.deleted !== 'number') r.deleted = 0;
+    if(typeof r.rev !== 'number') r.rev = 0;
+    if(typeof r.updatedAt !== 'number') r.updatedAt = now();
+    return r;
   }
 
-  async function loadResources(){
-    if(_resources) return _resources;
-    const url = withV(_cfg.resourcesUrl || 'tasun-resources.json');
-    _resources = await fetchJson(url);
-    return _resources;
+  function pickNewer(a,b){
+    if(!a) return b;
+    if(!b) return a;
+    var au = +a.updatedAt||0, bu = +b.updatedAt||0;
+    if(bu!==au) return bu>au ? b : a;
+    var ar = +a.rev||0, br = +b.rev||0;
+    return br>ar ? b : a;
   }
 
-  function pickEndpoints(resourceKey){
-    const r = _resources || {};
-    const res = (r.resources && r.resources[resourceKey]) ? r.resources[resourceKey] : null;
-    if(!res) return null;
-    return {
-      health: res.health || (r.apiBase ? (r.apiBase.replace(/\/$/,'') + '/health') : ''),
-      read: res.read,
-      merge: res.merge
-    };
+  function mergeRows(localRows, remoteRows){
+    var map = new Map();
+    (localRows||[]).forEach(function(r){ r=normalizeRow(r); map.set(r.uid, r); });
+    (remoteRows||[]).forEach(function(r){ r=normalizeRow(r); map.set(r.uid, pickNewer(map.get(r.uid), r)); });
+    var arr = Array.from(map.values());
+    // 盡量依 id 排序，否則 k
+    arr.sort(function(x,y){
+      var xi = (x.id==null?1e18:+x.id||0), yi = (y.id==null?1e18:+y.id||0);
+      if(xi!==yi) return xi-yi;
+      var xk = String(x.k||''), yk = String(y.k||'');
+      if(xk!==yk) return xk<yk?-1:1;
+      return (+x.updatedAt||0) - (+y.updatedAt||0);
+    });
+    return arr;
   }
 
-  function ensureUI(){
-    if(!_cfg.ui || !_cfg.ui.enabled) return null;
-    if(_ui) return _ui;
-
-    const wrap = document.createElement('div');
-    wrap.id = 'tasunCloudKitUI';
-    wrap.style.position = 'fixed';
-    wrap.style.zIndex = '9999';
-    wrap.style.right = '14px';
-    wrap.style.bottom = '14px';
-    wrap.style.display = 'flex';
-    wrap.style.gap = '8px';
-    wrap.style.alignItems = 'center';
-
-    const pill = document.createElement('button');
-    pill.type = 'button';
-    pill.textContent = '☁ 同步';
-    pill.style.borderRadius = '999px';
-    pill.style.padding = '10px 12px';
-    pill.style.border = '1px solid rgba(246,211,122,0.55)';
-    pill.style.background = 'rgba(0,0,0,0.28)';
-    pill.style.color = 'rgba(255,232,175,0.95)';
-    pill.style.fontWeight = '800';
-    pill.style.letterSpacing = '.08em';
-    pill.style.cursor = 'pointer';
-    pill.style.backdropFilter = 'blur(8px)';
-    pill.style.webkitBackdropFilter = 'blur(8px)';
-
-    const dot = document.createElement('span');
-    dot.textContent = '●';
-    dot.style.fontSize = '10px';
-    dot.style.opacity = '.75';
-
-    const msg = document.createElement('span');
-    msg.textContent = '本地';
-    msg.style.fontSize = '12px';
-    msg.style.opacity = '.82';
-    msg.style.color = 'rgba(255,232,175,0.90)';
-    msg.style.textShadow = '0 6px 14px rgba(0,0,0,0.40)';
-
-    pill.appendChild(document.createTextNode(' '));
-    pill.appendChild(dot);
-
-    wrap.appendChild(pill);
-    wrap.appendChild(msg);
-
-    function setState(state, text){
-      // state: ok | warn | off | work
-      if(state === 'ok') dot.style.color = 'rgba(120,255,160,0.95)';
-      else if(state === 'warn') dot.style.color = 'rgba(255,210,120,0.95)';
-      else if(state === 'work') dot.style.color = 'rgba(160,210,255,0.95)';
-      else dot.style.color = 'rgba(255,120,120,0.90)';
-      msg.textContent = text || '';
+  async function fetchJSON(url, bodyObj){
+    var res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bodyObj||{}),
+      credentials: 'omit'
+    });
+    var txt = await res.text();
+    var data;
+    try{ data = JSON.parse(txt); }catch(e){ data = { ok:false, raw:txt }; }
+    if(!res.ok){
+      var err = new Error('HTTP '+res.status);
+      err.status = res.status;
+      err.data = data;
+      throw err;
     }
-
-    _ui = { wrap, pill, msg, setState };
-
-    try{ document.body.appendChild(wrap); }catch(_){ }
-    return _ui;
+    return data;
   }
 
-  function nowIso(){
-    try{ return new Date().toISOString(); }catch(_){ return ''; }
-  }
-
-  // 合併策略：以 pk(k) 為主，v 以 updatedAt/newer 為準；若 v 是字串，直接以「最後寫入」為新。
-  function mergePayload(localPayload, remotePayload, pkField){
-    const lp = localPayload && typeof localPayload === 'object' ? localPayload : { db:[] };
-    const rp = remotePayload && typeof remotePayload === 'object' ? remotePayload : { db:[] };
-    const pk = String(pkField || 'k');
-
-    const map = new Map();
-
-    function ingest(src){
-      const db = Array.isArray(src.db) ? src.db : [];
-      for(const row of db){
-        if(!row) continue;
-        const key = String(row[pk] || row.k || '').trim();
-        if(!key) continue;
-        const cur = map.get(key);
-        if(!cur){ map.set(key, row); continue; }
-        const a = Number(cur.updatedAt || cur.ts || 0);
-        const b = Number(row.updatedAt || row.ts || 0);
-        if(b && a){
-          if(b >= a) map.set(key, row);
-        }else{
-          // 沒有時間戳：用 remote 覆蓋 local（避免丟失多人修改）
-          map.set(key, row);
-        }
+  async function withRetry(fn, tries){
+    var n = tries || 4;
+    var last;
+    for(var i=0;i<n;i++){
+      try{ return await fn(i); }catch(e){
+        last = e;
+        if(e && e.status && e.status>=400 && e.status<500 && e.status!==429) throw e;
+        var backoff = (200*Math.pow(2,i)) + Math.floor(Math.random()*120);
+        await sleep(backoff);
       }
     }
-
-    ingest(lp);
-    ingest(rp);
-
-    const out = Array.from(map.values());
-    out.sort((x,y)=>String(x[pk]||'').localeCompare(String(y[pk]||''), 'zh-Hant'));
-
-    // id/counter 重建
-    out.forEach((r,i)=>{ if(r) r.id = i+1; });
-
-    return { db: out, counter: out.length, mergedAt: nowIso() };
+    throw last;
   }
 
-  Kit.init = function(cfg){
-    try{ _cfg = Object.assign(_cfg, cfg||{}); }catch(_){ }
-    ensureUI();
-  };
+  async function loadResources(resourcesUrl){
+    var res = await fetch(resourcesUrl, { cache:'no-store' });
+    if(!res.ok) throw new Error('Failed to load resources: '+res.status);
+    return await res.json();
+  }
 
-  Kit.mount = function(opts){
+  function buildApi(cfgJson){
+    var api = (cfgJson && cfgJson.api) || {};
+    var base = api.base || '';
+    return {
+      base: base,
+      read: base + (api.read||''),
+      merge: base + (api.merge||''),
+      health: base + (api.health||'')
+    };
+  }
+
+  function createMountedClient(opts){
     opts = opts || {};
-
-    const state = {
-      resourceKey: String(opts.resourceKey || '').trim(),
-      pk: String(opts.pk || 'k'),
-      getLocal: typeof opts.getLocal === 'function' ? opts.getLocal : (()=>({db:[],counter:0})),
-      apply: typeof opts.apply === 'function' ? opts.apply : (()=>{}),
-      watch: opts.watch || { intervalSec: 10 },
+    var state = {
+      resourceKey: opts.resourceKey || opts.key || '',
+      idField: opts.idField || 'id',
+      getLocal: typeof opts.getLocal==='function' ? opts.getLocal : function(){ return {db:[]}; },
+      apply: typeof opts.apply==='function' ? opts.apply : function(){} ,
       __readOnly__: false,
-      _timer: 0,
-      _busy: false,
-      _lastRemote: null,
-      _lastPullAt: 0
+      __disabled__: false,
+      _api: null,
+      _resources: null
     };
 
-    const ui = ensureUI();
-
-    async function health(ep){
-      if(!ep || !ep.health) return false;
-      try{
-        await fetch(ep.health, { cache:'no-store', credentials:'include' });
-        return true;
-      }catch(_){ return false; }
+    async function ensureLoaded(){
+      if(state._api && state._resources) return;
+      var cfg = await loadResources(_cfg.resourcesUrl);
+      state._resources = cfg.resources || {};
+      state._api = buildApi(cfg);
     }
 
-    async function readRemote(ep){
-      if(!ep || !ep.read) return null;
-      return await fetchJson(ep.read, { method:'GET' });
-    }
-
-    async function mergeSave(ep, mergedPayload){
-      if(!ep || !ep.merge) throw new Error('no merge endpoint');
-      return await fetchJson(ep.merge, {
-        method:'POST',
-        headers: { 'content-type':'application/json' },
-        body: JSON.stringify({ payload: mergedPayload, client: { at: nowIso(), appVer: _cfg.appVer || '' } })
-      });
+    function readLocalPayload(){
+      var p = state.getLocal() || {db:[]};
+      var rows = Array.isArray(p.db) ? p.db : [];
+      return { db: rows.map(normalizeRow) };
     }
 
     async function pullNow(){
-      if(state._busy) return;
-      state._busy = true;
-      if(ui) ui.setState('work', '同步中…');
-
-      try{
-        await loadResources();
-        const ep = pickEndpoints(state.resourceKey);
-        if(!ep){
-          if(ui) ui.setState('off', '未設定雲端');
-          return;
-        }
-
-        const ok = await health(ep);
-        if(!ok){
-          if(ui) ui.setState('warn', '離線 / 未授權');
-          return;
-        }
-
-        const remote = await readRemote(ep);
-        state._lastRemote = remote;
-        state._lastPullAt = Date.now();
-
-        // apply remote → local（由頁面決定如何寫入 localStorage）
-        try{ state.apply(remote); }catch(_){ }
-
-        if(ui) ui.setState('ok', '已同步');
-      }catch(e){
-        if(ui) ui.setState('warn', '同步失敗');
-      }finally{
-        state._busy = false;
+      if(state.__disabled__) return readLocalPayload();
+      await ensureLoaded();
+      var local = readLocalPayload();
+      if(!state.resourceKey){
+        state.apply(local);
+        return local;
       }
+      var payload = { resourceKey: state.resourceKey, appVer: _cfg.appVer };
+      var data = await withRetry(()=>fetchJSON(state._api.read, payload), 4);
+      var remoteRows = data.rows || (data.data && data.data.rows) || data.items || [];
+      var merged = mergeRows(local.db, remoteRows);
+      var out = { db: merged };
+      state.apply(out);
+      return out;
     }
 
-    async function saveMerged(params){
-      params = params || {};
-      if(state.__readOnly__) return;
-      if(state._busy) return;
-      state._busy = true;
-      if(ui) ui.setState('work', '上傳中…');
-
-      try{
-        await loadResources();
-        const ep = pickEndpoints(state.resourceKey);
-        if(!ep){
-          if(ui) ui.setState('off', '未設定雲端');
-          return;
-        }
-        const ok = await health(ep);
-        if(!ok){
-          if(ui) ui.setState('warn', '離線 / 未授權');
-          return;
-        }
-
-        // 先讀 remote，再 merge，再寫 merge
-        const localPayload = state.getLocal();
-        const remote = await readRemote(ep);
-        const merged = mergePayload(localPayload, remote, state.pk);
-
-        await mergeSave(ep, merged);
-
-        // 寫完再 pull 一次確保一致
-        try{ state.apply(merged); }catch(_){ }
-
-        if(ui) ui.setState('ok', '已上傳');
-      }catch(e){
-        if(ui) ui.setState('warn', '上傳失敗');
-      }finally{
-        state._busy = false;
-      }
-    }
-
-    function startWatch(){
-      const sec = Math.max(5, Number(state.watch && state.watch.intervalSec || 10));
-      clearInterval(state._timer);
-      state._timer = setInterval(()=>{ pullNow().catch(()=>{}); }, sec*1000);
-    }
-
-    if(ui){
-      ui.pill.addEventListener('click', ()=>{
-        if(state.__readOnly__) pullNow().catch(()=>{});
-        else saveMerged({ mode:'merge', lock:false }).catch(()=>{});
+    async function saveMerged(_opts){
+      if(state.__disabled__) return readLocalPayload();
+      if(state.__readOnly__) return readLocalPayload();
+      await ensureLoaded();
+      var local = readLocalPayload();
+      // bump rev/updatedAt
+      var maxId = local.db.reduce((m,r)=>Math.max(m, (r.id==null?0:+r.id||0)), 0);
+      local.db.forEach(function(r){
+        if(r.id==null){ maxId++; r.id = maxId; }
+        r.updatedAt = now();
+        r.rev = (+r.rev||0) + 1;
       });
+
+      if(!state.resourceKey){
+        state.apply(local);
+        return local;
+      }
+      var payload = { resourceKey: state.resourceKey, appVer: _cfg.appVer, rows: local.db };
+      var data = await withRetry(()=>fetchJSON(state._api.merge, payload), 5);
+      var remoteRows = data.rows || (data.data && data.data.rows) || data.items || [];
+      var merged = mergeRows(local.db, remoteRows);
+      var out = { db: merged };
+      state.apply(out);
+      return out;
     }
 
-    // public controller
-    const ctrl = {
-      pullNow,
-      saveMerged,
-      startWatch,
-      __readOnly__: false
+    return {
+      pullNow: pullNow,
+      saveMerged: saveMerged,
+      state: state
     };
+  }
 
-    // 自動 watch
-    try{ startWatch(); }catch(_){ }
-
-    return ctrl;
+  global.TasunCloudKit = {
+    init: function(cfg){ _cfg = Object.assign({}, _cfg, cfg||{}); return _cfg; },
+    mount: function(opts){ return createMountedClient(opts); },
+    _getConfig: function(){ return Object.assign({}, _cfg); }
   };
-
-  window.TasunCloudKit = window.TasunCloudKit || Kit;
-})();
+})(window);

@@ -3,12 +3,11 @@
 
 <html lang="zh-Hant">
 <head>
-
-<!-- ✅Tasun v4: 防止 next 參數無限巢狀 / 414 / 轉圈（不動 UI） -->
-<script src="tasun-next-fix.js"></script>
-
-
-  <meta charset="UTF-8" />
+  
+    <!-- Tasun v4 FINAL: next-fix + 全站守門（不動UI） -->
+    <script src="tasun-next-fix.js"></script>
+    <script src="tasun-global-auth-v65.js"></script>
+<meta charset="UTF-8" />
   <!-- ✅ iOS / Android：用 visualViewport + svh/dvh 穩定首屏，降低地址列收合跳動 -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Tasun 資料首頁 · 空無明</title>
@@ -281,7 +280,7 @@
       --zen-fixed-y: 58%;
       --zen-fixed-x: clamp(64px, 18vw, 360px);
 
-      --zw-bottom-lift: clamp(4.10cm, 7.9vh, 5.30cm); /* ✅調整：底部禪字上移至航線位置（最終） */
+      --zw-bottom-lift: clamp(3.10cm, 6.6vh, 4.10cm); /* ✅調整：底部禪字上移至航線位置 */
       --zw-bottom-pad: calc(var(--frame-inset) + var(--zw-bottom-lift) + env(safe-area-inset-bottom) + var(--vv-bottom));
 
       /* ✅黃水晶：更深金、更銳利 */
@@ -1140,7 +1139,7 @@
 
         /* ✅手機：空無明再往上、底部留更多給按鍵 */
         --axis-top: clamp(62px, 8.6vh, 132px);
-        --zw-bottom-lift: clamp(3.05cm, 6.9vh, 4.20cm); /* ✅調整：手機底部禪字上移（最終） */
+        --zw-bottom-lift: clamp(2.35cm, 5.6vh, 3.20cm); /* ✅調整：手機底部禪字上移 */
 
         /* ✅手機：按鍵更透明（重疊仍看得到蓮花） */
         --btn-glass-a: 0.040;
@@ -1642,36 +1641,42 @@ function runIndexApp(){
           watch: { intervalSec: 10 },
           getLocal: () => buildCloudPayloadFromLocal(),
           apply: (payload) => {
-  if(!payload || !Array.isArray(payload.db)) return;
-  cloudApplying = true;
-  try{
-    payload.db.forEach(row=>{
-      const k = String(row?.k || "").trim();
-      if(!k || !CLOUD_KEY_SET.has(k)) return;
+            if(!payload || !Array.isArray(payload.db)) return;
+            cloudApplying = true;
+            try{
+              payload.db.forEach(row=>{
+                const k = String(row?.k || "").trim();
+                if(!k || !CLOUD_KEY_SET.has(k)) return;
 
-      // ✅確保本機 key->uid mapping 存在（避免之後本機生成不同 uid）
-      try{
-        const uid = String(row?.uid || "").trim();
-        if(uid){
-          const map = getUidMap();
-          if(!map[k]){ map[k] = uid; setUidMap(map); }
-        }
-      }catch(e){}
+                // ✅確保本機 key->uid mapping 存在（避免之後本機生成不同 uid）
+                try{
+                  const uid = String(row?.uid || "").trim();
+                  if(uid){
+                    const map = getUidMap();
+                    if(!map[k]){ map[k] = uid; setUidMap(map); }
+                  }
+                }catch(e){}
 
-      const deleted = !!row?.deleted;
-      if(deleted){
-        try{ localStorage.removeItem(k); }catch(e){}
-        return;
-      }
-      const v = (row?.v == null) ? "" : String(row.v);
-      if(localStorage.getItem(k) !== v) localStorage.setItem(k, v);
-    });
-  }finally{
-    cloudApplying = false;
-  }
-  // ✅不 reload：只重建按鍵/登入清單
-  try{ onIndexConfigApplied(); }catch(e){}
-}
+                const deleted = !!row?.deleted;
+                if(deleted){
+                  try{ localStorage.removeItem(k); }catch(e){}
+                  return;
+                }
+                const v = (row?.v == null) ? "" : String(row.v);
+                if(localStorage.getItem(k) !== v) localStorage.setItem(k, v);
+              });
+            }finally{
+              cloudApplying = false;
+            }
+            // ✅不 reload：只重建按鍵/登入清單
+            try{ onIndexConfigApplied(); }catch(e){}
+          }
+            }finally{
+              cloudApplying = false;
+            }
+            // ✅不 reload：只重建按鍵/登入清單
+            try{ onIndexConfigApplied(); }catch(e){}
+          }
         });
 
         cloudCtrl.__readOnly__ = readOnly;
@@ -2156,13 +2161,6 @@ function getSession(){
         navArea.classList.remove("stack","grid2","grid3","sides","phone-compact-stack","phone-compact-right","phone-compact-glass");
         navArea.style.removeProperty("--stackMaxW");
         scheduleAll();
-
-
-
-        // (moved next-redirect logic to applyUser)
-
-
-
       }
 
       let CURRENT_USER = null;
@@ -2182,41 +2180,6 @@ function getSession(){
         });
 
         scheduleAll();
-
-        /* ✅Tasun v4: 登入成功後若有 next 目標，導向並清理避免 URL 爆長 (414) */
-        try{
-          const KEY = "tasun_next_target_v4";
-          const sp = new URLSearchParams(location.search);
-          let target = "";
-          if(sp.get("next")) target = sp.get("next") || "";
-          if(!target){
-            try{ target = sessionStorage.getItem(KEY) || ""; }catch(e){}
-          }
-          if(target){
-            // unwrap nested next=... up to 6 levels
-            let t = String(target);
-            for(let i=0;i<6;i++){
-              try{ t = decodeURIComponent(t); }catch(e){}
-              const m = t.match(/[?&]next=([^&]+)/i);
-              if(m && m[1]){ t = m[1]; continue; }
-              break;
-            }
-            try{ sessionStorage.removeItem(KEY); }catch(e){}
-            // avoid redirecting back to index with next again
-            const isIndex = /\/index\.html?/i.test(t);
-            const hasNext = /[?&]next=/i.test(t);
-            if(!(isIndex && hasNext)){
-              // if it's relative, resolve against current origin/path
-              try{
-                const url = new URL(t, location.origin + location.pathname.replace(/[^/]*$/, ""));
-                location.replace(url.href);
-              }catch(e){
-                location.replace(t);
-              }
-            }
-          }
-        }catch(e){}
-
       }
 
       function onIndexConfigApplied(){

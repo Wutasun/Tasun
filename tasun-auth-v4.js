@@ -1,93 +1,93 @@
-/* Tasun Auth v4 (sessionStorage, browser-session scoped) */
-(() => {
-  const KEY = "tasunAuthSession_v4";
-  const now = () => Date.now();
-  const safeJSON = (s) => { try{ return JSON.parse(s); }catch(e){ return null; } };
-  const get = () => safeJSON(sessionStorage.getItem(KEY) || "null");
-  const set = (obj) => sessionStorage.setItem(KEY, JSON.stringify(obj||{}));
-  const clear = () => sessionStorage.removeItem(KEY);
+/* TasunAuthV4 (v4 FINAL)
+ * - 先嘗試 Worker login（若你的 Worker 有 /api/tasun/login）
+ * - 失敗則使用本地固定帳號（alex-admin / tasun-write / wu-read）
+ * - 與 tasun-global-auth-v65.js 共用 CURRENT_KEY
+ */
+(function(global){
+  'use strict';
 
-  async function api(path, body) {
-    const res = await fetch(path, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body||{})
+  var CURRENT_KEY = 'tasunCurrentUser_v1';
+
+  function setCurrent(user){
+    try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(user||null)); }catch(e){}
+    if(global.TasunAuth && global.TasunAuth.setCurrent) {
+      try{ global.TasunAuth.setCurrent(user||null); }catch(e){}
+    }
+  }
+
+  function getCurrent(){
+    try{ return JSON.parse(localStorage.getItem(CURRENT_KEY)||'null'); }catch(e){ return null; }
+  }
+
+  function normalizeRole(role){
+    role = String(role||'').toLowerCase();
+    if(role==='admin' || role==='write' || role==='read') return role;
+    return 'read';
+  }
+
+  // 本地固定帳號
+  var LOCAL_USERS = [
+    { username:'alex',  password:'alex-admin',  role:'admin' },
+    { username:'tasun', password:'tasun-write', role:'write' },
+    { username:'wu',    password:'wu-read',    role:'read' }
+  ];
+
+  async function tryWorkerLogin(apiBase, username, password){
+    if(!apiBase) throw new Error('no apiBase');
+    var url = apiBase.replace(/\/$/,'') + '/api/tasun/login';
+    var res = await fetch(url, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ username: username, password: password })
     });
-    const j = await res.json().catch(() => ({ ok:false, error:"BAD_JSON" }));
-    if (!res.ok && j && j.ok !== true) throw new Error(j.error || ("HTTP_"+res.status));
-    return j;
+    if(!res.ok) throw new Error('login http '+res.status);
+    var data = await res.json();
+    // 允許多種回傳格式
+    var u = data.user || data.data || data;
+    if(!u || !u.username) throw new Error('bad login response');
+    return {
+      username: String(u.username),
+      role: normalizeRole(u.role || u.permission || u.perm),
+      token: u.token || data.token || null,
+      updatedAt: Date.now()
+    };
   }
 
-  async function login(username, password, apiBase) {
-    const base = apiBase || "";
-    const j = await api(base + "/api/tasun/login", { username, password });
-    if (!j || !j.ok) throw new Error(j?.error || "LOGIN_FAIL");
-    // store in sessionStorage only (closes with browser)
-    set({
-      user: j.user,
-      role: j.role,
-      token: j.token,
-      exp: j.exp || (now()+ 8*60*60*1000),
-      issuedAt: now(),
-      apiBase: base
-    });
-    return j;
+  function localLogin(username, password){
+    var u = LOCAL_USERS.find(x=>x.username===username && x.password===password);
+    if(!u) return null;
+    return { username:u.username, role:u.role, token:null, updatedAt:Date.now() };
   }
 
-  function isValidSession(s) {
-    if (!s || !s.user || !s.token) return false;
-    if (s.exp && now() > Number(s.exp)) return false;
-    return true;
+  async function login(opts){
+    opts = opts||{};
+    var username = String(opts.username||'').trim();
+    var password = String(opts.password||'');
+    var apiBase = String(opts.apiBase||global.TASUN_API_BASE||'');
+
+    if(!username || !password) throw new Error('missing credentials');
+
+    // 1) Worker
+    try{
+      var u1 = await tryWorkerLogin(apiBase, username, password);
+      setCurrent(u1);
+      return u1;
+    }catch(e){
+      // 2) local
+      var u2 = localLogin(username, password);
+      if(!u2) throw e;
+      setCurrent(u2);
+      return u2;
+    }
   }
 
-  async function ensure(apiBase) {
-    const s = get();
-    if (isValidSession(s)) return s;
-    clear();
-    return null;
+  function logout(){
+    setCurrent(null);
   }
 
-  window.TasunAuthV4 = {
-    KEY,
-    get,
-    set,
-    clear,
-    login,
-    ensure,
-    isValidSession
+  global.TasunAuthV4 = {
+    login: login,
+    logout: logout,
+    getCurrent: getCurrent
   };
-})();
-
-  // --- Session cookie (cleared when browser closes) ---
-  const COOKIE_NAME = "tasunSess_v4";
-  function b64uEncode(str){
-    return btoa(unescape(encodeURIComponent(str))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-  }
-  function b64uDecode(b64u){
-    try{
-      const b64 = b64u.replace(/-/g,'+').replace(/_/g,'/');
-      const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
-      return decodeURIComponent(escape(atob(b64 + pad)));
-    }catch(e){ return ""; }
-  }
-  function setSessionCookie(obj){
-    try{
-      const v = b64uEncode(JSON.stringify(obj || {}));
-      // session cookie: no expires/max-age
-      document.cookie = `${COOKIE_NAME}=${v}; path=/; samesite=lax`;
-    }catch(e){}
-  }
-  function getSessionCookie(){
-    try{
-      const m = document.cookie.match(new RegExp('(?:^|; )' + COOKIE_NAME.replace(/[-[\]{}()*+?.,\\^$|#\s]/g,'\\$&') + '=([^;]*)'));
-      if(!m) return null;
-      const txt = b64uDecode(m[1] || "");
-      if(!txt) return null;
-      return JSON.parse(txt);
-    }catch(e){ return null; }
-  }
-  function clearSessionCookie(){
-    try{
-      document.cookie = `${COOKIE_NAME}=; Max-Age=0; path=/; samesite=lax`;
-    }catch(e){}
-  }
+})(window);
