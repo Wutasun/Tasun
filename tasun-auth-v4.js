@@ -57,3 +57,37 @@
     isValidSession
   };
 })();
+
+  // --- Session cookie (cleared when browser closes) ---
+  const COOKIE_NAME = "tasunSess_v4";
+  function b64uEncode(str){
+    return btoa(unescape(encodeURIComponent(str))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  }
+  function b64uDecode(b64u){
+    try{
+      const b64 = b64u.replace(/-/g,'+').replace(/_/g,'/');
+      const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
+      return decodeURIComponent(escape(atob(b64 + pad)));
+    }catch(e){ return ""; }
+  }
+  function setSessionCookie(obj){
+    try{
+      const v = b64uEncode(JSON.stringify(obj || {}));
+      // session cookie: no expires/max-age
+      document.cookie = `${COOKIE_NAME}=${v}; path=/; samesite=lax`;
+    }catch(e){}
+  }
+  function getSessionCookie(){
+    try{
+      const m = document.cookie.match(new RegExp('(?:^|; )' + COOKIE_NAME.replace(/[-[\]{}()*+?.,\\^$|#\s]/g,'\\$&') + '=([^;]*)'));
+      if(!m) return null;
+      const txt = b64uDecode(m[1] || "");
+      if(!txt) return null;
+      return JSON.parse(txt);
+    }catch(e){ return null; }
+  }
+  function clearSessionCookie(){
+    try{
+      document.cookie = `${COOKIE_NAME}=; Max-Age=0; path=/; samesite=lax`;
+    }catch(e){}
+  }

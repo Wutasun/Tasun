@@ -38,6 +38,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet">
+  <script src="tasun-cloudwrap-v4.js?v=20260305_v4_1"></script>
+  <script src="tasun-auth-v4.js?v=20260305_v4_1"></script>
+  <script src="tasun-guard-v4.js?v=20260305_v4_1"></script>
 </head>
 
 <body class="locked booting">
@@ -2964,17 +2967,16 @@ return false; }
       }
 
       function autoEnterIfSessionValid(){
-        // ✅只有本工作階段已成功登入過才允許自動帶入（避免第一次開啟就直接跳過登入）
-        if(sessionStorage.getItem(INDEX_SESSION_KEY) !== "1") return;
-
-        const sess = getSession();
-        if(!sess) return;
-
-        const u = AUTH_TABLE.find(r => r.username === sess.user);
-        if(!u){ clearSession(); return; }
-        if(String(u.level||"").toLowerCase() !== String(sess.role||"").toLowerCase()){
-          clearSession(); return;
-        }
+        // ✅ 使用 Session Cookie + sessionStorage：同一瀏覽器工作階段只要登入一次，其他頁/新分頁可直接通行
+        // 但關閉整個瀏覽器後，Session Cookie 會清掉，重新開啟仍需登入
+        try{
+          if(!window.TasunAuthV4) return;
+          const sess = window.TasunAuthV4.getSession && window.TasunAuthV4.getSession();
+          if(!sess || !sess.user) return;
+          // 若 cookie/session 有效，直接進入
+          enterWithUser(sess.user, sess.r || sess.role || "read");
+        }catch(e){}
+      }
 
         loginSub.textContent = `已登入：${u.username}（${u.level}）… 正在進入`;
         setTimeout(() => {
@@ -2988,9 +2990,8 @@ return false; }
         loginOverlay.style.display = "none";
         loginSub.textContent = "";
 
-        setSession(user);
-              setSSO(user);
-sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: user.level }));
+        // v4.1: 登入狀態由 TasunAuthV4 以 Session Cookie + sessionStorage 維持（同瀏覽器工作階段一次登入即可）
+        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: user.level })); }catch(e){}
 
         CURRENT_USER = user;
 
@@ -3062,105 +3063,55 @@ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: 
 
       loginForm.addEventListener("submit", async (e) => {
         e.preventDefault();
-        const username = usernameSel.value;
-        const password = $("#password").value;
-
-        if(!username){ loginError.textContent = "請先選擇使用者名稱。"; return; }
-        const user = AUTH_TABLE.find(row => row.username === username);
-        if(!user){ loginError.textContent = "帳號不存在，請確認使用者名稱。"; return; }
-
-        // ✅防呆：簡易冷卻（避免暴力嘗試）
-        const now = Date.now();
-        const cooldownUntil = Number(sessionStorage.getItem("tasun_login_cooldown_until_v1") || "0");
-        if(cooldownUntil && now < cooldownUntil){
-          const sec = Math.ceil((cooldownUntil - now)/1000);
-          loginError.textContent = `登入嘗試過多，請 ${sec} 秒後再試。`;
+        const username = (loginUser.value || "").trim();
+        const password = (loginPass.value || "").trim();
+        if(!username || !password){
+          setLoginMsg("請輸入帳號與密碼");
           return;
         }
 
-        const inputPwd = String(password || "");
-        const ok = await (async () => {
-          // 支援：
-          // 1) passHash = sha256(password)
-          // 2) passHash = sha256(salt + password)（若資料有 salt）
-          // 3) legacy 明碼：password / pass
-          const ph = String(user.passHash || "").trim();
-          const salt = String(user.salt || user.passwordSalt || "").trim();
+        setLoginMsg("登入中…");
 
-          // ✅若有 hash，先嘗試比對（無 salt / 有 salt 兩種都試）
-          if(ph){
-            try{
-              const h1 = await sha256Hex(inputPwd);
-              if(h1 === ph) return true;
-              if(salt){
-                const h2 = await sha256Hex(salt + inputPwd);
-                if(h2 === ph) return true;
-              }
-            }catch(_){
-              // ignore
+        // ✅ v4.1：改用 Worker /api/tasun/login（帳密由 D1 tasun_users 驗證）
+        // 成功後 TasunAuthV4 會把 session 存到「Session Cookie」(關瀏覽器會清掉)，並同步放到 sessionStorage
+        try{
+          if(!window.TasunAuthV4){
+            throw new Error("TasunAuthV4 not loaded");
+          }
+          const apiBase = (window.TasunCloudWrapV4 && window.TasunCloudWrapV4.getApiBase && window.TasunCloudWrapV4.getApiBase()) || (window.TASUN_API_BASE || "");
+          const r = await window.TasunAuthV4.login({ apiBase, username, password });
+          if(!r || !r.ok){
+            setLoginMsg((r && (r.message || r.error)) || "登入失敗");
+            return;
+          }
+
+          // 讀取權限表：按鍵 btn1..btn5（沒有就用預設 role 規則）
+          let entryButtons = null;
+          try{
+            const rr = await fetch(`${apiBase}/api/tasun/auth/read`,{
+              method:"POST",
+              headers:{ "content-type":"application/json" },
+              body: JSON.stringify({ username })
+            });
+            const jj = await rr.json().catch(()=>null);
+            if(jj && jj.ok && jj.user){
+              entryButtons = jj.user.entryButtons || null;
             }
-          }
+          }catch(_e){}
 
-          // ✅legacy 明碼（會自動升級）：支援 user.password / user.pass
-          const legacyPwd = String(user.password || user.pass || "");
-          if(legacyPwd && legacyPwd === inputPwd) return true;
+          const role = r.role || r.level || "read";
+          const user = { username, level: role, entryButtons };
 
-          return false;
-        })();
+          applyUser(user);
 
-        if(!ok){
-          const fail = Number(sessionStorage.getItem("tasun_login_fail_v1") || "0") + 1;
-          sessionStorage.setItem("tasun_login_fail_v1", String(fail));
-          if(fail >= 5){
-            sessionStorage.setItem("tasun_login_fail_v1", "0");
-            sessionStorage.setItem("tasun_login_cooldown_until_v1", String(Date.now() + 15000));
-            loginError.textContent = "帳號或密碼錯誤（已暫停 15 秒）。";
-          }else{
-            loginError.textContent = `帳號或密碼錯誤（第 ${fail} 次），請再試一次。`;
-          }
-          return;
+          // 登入成功
+          loginPass.value = "";
+          setLoginMsg("");
+          hideLogin();
+        }catch(err){
+          setLoginMsg("登入失敗：" + (err && err.message ? err.message : String(err)));
         }
-
-        // ✅登入成功：清除失敗計數
-        sessionStorage.setItem("tasun_login_fail_v1", "0");
-        sessionStorage.removeItem("tasun_login_cooldown_until_v1");
-
-        // ✅若是 legacy 明碼 → 立刻轉 SHA-256（不存明碼）
-        if(!String(user.passHash||"").trim()){
-          const legacyPwd = String(user.password || user.pass || "");
-          if(legacyPwd){
-            try{
-              const salt = String(user.salt || user.passwordSalt || "").trim();
-              const newHash = salt ? await sha256Hex(salt + inputPwd) : await sha256Hex(inputPwd);
-
-              // 更新 localStorage AUTH_KEY（同名 user）
-              const raw = localStorage.getItem(AUTH_KEY);
-              const arr = safeJsonParse(raw || "null", null);
-              if(Array.isArray(arr)){
-                const hit = arr.find(x => String(x.user||x.username||x.name||x.account||"").trim() === username);
-                if(hit){
-                  hit.passHash = newHash;
-                  // 保留 salt（若原本就有）
-                  if(salt && !hit.salt) hit.salt = salt;
-                  delete hit.pass;
-                  delete hit.password;
-                  localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
-                }
-              }
-              user.passHash = newHash;
-              user.password = "";
-              user.pass = "";
-            }catch(_){}
-          }
-        }
-
-
-        loginError.textContent = "";
-        applyUser(user);
-        $("#password").value = "";
-      });
-
-      btnForceRelogin.addEventListener("click", () => {
+      });btnForceRelogin.addEventListener("click", () => {
         clearSession();
         loginSub.textContent = "請重新輸入密碼登入";
         loginError.textContent = "";
@@ -3204,5 +3155,8 @@ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: 
     }
   })();
   </script>
+  <script src="tasun-auth-v4.js?v=20260305_v4_1"></script>
+  <script src="tasun-guard-v4.js?v=20260305_v4_1"></script>
+  <script src="tasun-cloudwrap-v4.js?v=20260305_v4_1"></script>
 </body>
 </html>
