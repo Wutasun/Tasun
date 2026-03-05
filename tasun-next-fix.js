@@ -1,113 +1,83 @@
-/* Tasun next-fix v4 (2026-03-05)
-   - 修正 next 參數巢狀/循環造成舊檔或卡住
-   - 不改既有 UI，只做 URL/Session 的穩定化
+/* Tasun next-fix v4 (stable)
+   Prevent infinite ?next= nesting causing "URI Too Long" (HTTP 414).
+   - Sanitizes next parameter on page load and stores safe target in sessionStorage.
+   - Removes unsafe/too-long/recursive next from URL via history.replaceState.
+   - Provides window.__tasun_get_next_target__() for post-login redirect.
 */
 (function(){
-  'use strict';
-
-  const NEXT_KEY = 'tasun_next_target_v1';
+  "use strict";
+  var KEY = "tasun_next_target_v1";
+  var MAX_LEN = 360; // keep URLs short (GitHub Pages / proxies safe)
 
   function safeDecode(s){
-    try{ return decodeURIComponent(String(s||'')); }catch(_){ return String(s||''); }
+    try{ return decodeURIComponent(String(s||"")); }catch(_){ return String(s||""); }
   }
 
-  function normalizeNext(raw){
-    let s = String(raw||'').trim();
-    if(!s) return '';
+  function normalizeTarget(t){
+    t = String(t||"").trim();
+    if(!t) return "";
+    // block javascript: and data:
+    if(/^(javascript|data):/i.test(t)) return "";
+    // decode once if it looks encoded
+    var decoded = safeDecode(t);
+    if(decoded && decoded !== t) t = decoded;
 
-    // 反覆 decode（最多 3 次）
-    for(let i=0;i<3;i++){
-      const d = safeDecode(s);
-      if(d === s) break;
-      s = d;
-    }
-
-    // 只取最後一層 next=（避免 next=...next=... 無限巢狀）
+    // If it contains another next=, drop it to avoid nesting
     try{
-      // 可能是完整 URL 或相對路徑
-      const u = new URL(s, location.href);
-      let n = u.searchParams.get('next') || '';
-      if(n){
-        // 若仍有 next，取最深層
-        const nn = normalizeNext(n);
-        if(nn) return nn;
-      }
-      // 排除回到自己（避免循環）
-      const here = new URL(location.href);
-      if(u.pathname === here.pathname && u.origin === here.origin) return '';
-      return u.pathname + u.search + u.hash;
-    }catch(_){
-      // 相對路徑情況
-      if(/\bnext=/.test(s)){
-        const m = s.match(/(?:\?|&)next=([^&#]+)/g);
-        if(m && m.length){
-          const last = m[m.length-1].replace(/^(?:\?|&)next=/,'');
-          return normalizeNext(last);
-        }
-      }
-      // 排除 javascript: 等
-      if(/^\s*javascript:/i.test(s)) return '';
-      if(s.length > 1800) return '';
-      return s;
+      var u = new URL(t, location.href);
+      if(u.origin !== location.origin) return ""; // disallow cross-origin next
+      u.searchParams.delete("next");
+      // avoid redirecting back to this same page
+      var cur = new URL(location.href);
+      cur.searchParams.delete("next");
+      if(u.pathname === cur.pathname && u.search === cur.search) return "";
+      var out = u.pathname + (u.search||"") + (u.hash||"");
+      if(out.length > MAX_LEN) return "";
+      return out;
+    }catch(_e){
+      // relative path fallback
+      if(t.length > MAX_LEN) return "";
+      if(t.indexOf("next=") >= 0) return "";
+      if(t.startsWith("#")) return "";
+      // do not allow full external URLs here
+      if(/^https?:\/\//i.test(t)) return "";
+      return t;
     }
   }
 
-  function storeNext(n){
-    if(!n) return;
-    try{ sessionStorage.setItem(NEXT_KEY, n); }catch(_){ }
+  function setTarget(t){
+    try{ sessionStorage.setItem(KEY, t); }catch(_e){}
+  }
+  function getTarget(){
+    try{
+      var t = sessionStorage.getItem(KEY);
+      return String(t||"").trim();
+    }catch(_e){ return ""; }
+  }
+  function clearTarget(){
+    try{ sessionStorage.removeItem(KEY); }catch(_e){}
   }
 
-  function pickStoredNext(){
-    try{ return String(sessionStorage.getItem(NEXT_KEY)||'').trim(); }catch(_){ return ''; }
-  }
-
-  function clearStoredNext(){
-    try{ sessionStorage.removeItem(NEXT_KEY); }catch(_){ }
-  }
-
-  // 將 URL 的 next 正規化並存到 session
-  try{
-    const url = new URL(location.href);
-    const rawNext = url.searchParams.get('next') || '';
-    const n = normalizeNext(rawNext);
-    if(n){
-      storeNext(n);
-      // 在「非 index」頁，保留 next 以便回首頁；在 index 頁，移除 next 避免循環 reload
-      const isIndex = /(^|\/)(index(?:_[^\/]*)?\.html?)$/i.test(url.pathname);
-      if(isIndex){
-        url.searchParams.delete('next');
-        // 只在真的有變更時 replace
-        const cur = String(location.href);
-        const nxt = url.toString();
-        if(nxt !== cur) location.replace(nxt);
-      }
-    }
-
-    // 反覆 refresh/back-forward cache 後「舊 next」導致跳轉：如果 next 指向不存在/同頁，清掉
-    const stored = pickStoredNext();
-    if(stored){
-      const here = new URL(location.href);
-      try{
-        const t = new URL(stored, location.href);
-        if(t.origin === here.origin && t.pathname === here.pathname){
-          clearStoredNext();
-        }
-      }catch(_){ }
-    }
-
-    // 若網址過長（某些環境會導致 cache/404），移除 next
-    if(location.href.length > 1900 && url.searchParams.has('next')){
-      url.searchParams.delete('next');
-      location.replace(url.toString());
-    }
-  }catch(_){ }
-
-  // 導出給 index 用（不要求）
-  window.__TASUN_NEXT_FIX__ = {
-    key: NEXT_KEY,
-    get: pickStoredNext,
-    clear: clearStoredNext,
-    set: storeNext,
-    normalize: normalizeNext
+  // Expose getter for index.html applyUser() to call after login
+  window.__tasun_get_next_target__ = function(){
+    var t = getTarget();
+    if(!t) return "";
+    clearTarget();
+    return t;
   };
+
+  // On load: sanitize URL ?next=
+  try{
+    var url = new URL(location.href);
+    var rawNext = url.searchParams.get("next");
+    if(rawNext){
+      var safe = normalizeTarget(rawNext);
+      if(safe){
+        setTarget(safe);
+      }
+      // Always remove next from URL to stop nesting growth
+      url.searchParams.delete("next");
+      history.replaceState(null, "", url.toString());
+    }
+  }catch(_e){}
 })();
