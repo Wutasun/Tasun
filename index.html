@@ -1491,6 +1491,75 @@ function runIndexApp(){
       // =========================
       const TASUN_WORKER_BASE = "https://tasun-worker.wutasun.workers.dev";
 
+      // =========================
+      // ✅ Browser-session Login (跨頁免登入；關閉瀏覽器需再登入)
+      // - Uses localStorage heartbeat to share across tabs/windows, but expires quickly without heartbeat.
+      // - This approximates "close browser => must login again".
+      // =========================
+      const TASUN_SESSION_KEY = "tasunBrowserSession_v1";
+      const TASUN_SESSION_TTL_MS = 15000;     // 15s without heartbeat -> treat as logged out (close browser / all tabs closed)
+      const TASUN_SESSION_PING_MS = 5000;     // heartbeat every 5s while any page is open
+
+      function __now(){ return Date.now(); }
+
+      function getSession(){
+        try{
+          const s = JSON.parse(localStorage.getItem(TASUN_SESSION_KEY) || "null");
+          return (s && typeof s === "object") ? s : null;
+        }catch(e){ return null; }
+      }
+      function setSession(user){
+        const now = __now();
+        const s = { user: String(user||""), ts: now };
+        try{ localStorage.setItem(TASUN_SESSION_KEY, JSON.stringify(s)); }catch(e){}
+        return s;
+      }
+      function clearSession(){
+        try{ localStorage.removeItem(TASUN_SESSION_KEY); }catch(e){}
+      }
+      function isSessionAlive(){
+        const s = getSession();
+        if(!s || !s.user) return false;
+        const age = __now() - Number(s.ts || 0);
+        return age >= 0 && age <= TASUN_SESSION_TTL_MS;
+      }
+      function touchSession(){
+        const s = getSession();
+        if(!s || !s.user) return;
+        s.ts = __now();
+        try{ localStorage.setItem(TASUN_SESSION_KEY, JSON.stringify(s)); }catch(e){}
+      }
+      // Start heartbeat early (any opened page keeps session alive)
+      (function startSessionHeartbeat(){
+        try{
+          if(window.__TASUN_SESSION_HEARTBEAT__) return;
+          window.__TASUN_SESSION_HEARTBEAT__ = setInterval(()=>{
+            if(isSessionAlive()) touchSession();
+          }, TASUN_SESSION_PING_MS);
+        }catch(e){}
+      })();
+
+      // -------------------------
+      // Permission table (from 權限表.html)
+      // localStorage key: tasunAuthTable_v1 (as you fixed earlier)
+      // shape: { users:[{user,role,btn1..btn5}], ... }
+      // -------------------------
+      const AUTH_KEY = "tasunAuthTable_v1";
+      function loadAuthTable(){
+        try{
+          const t = JSON.parse(localStorage.getItem(AUTH_KEY) || "null");
+          return (t && typeof t === "object") ? t : null;
+        }catch(e){ return null; }
+      }
+      function getUserRoleAndPerm(username){
+        const t = loadAuthTable();
+        if(!t) return null;
+        const list = Array.isArray(t.users) ? t.users : (Array.isArray(t) ? t : []);
+        const u = list.find(x => String(x.user||"").toLowerCase() === String(username||"").toLowerCase());
+        return u || null;
+      }
+
+
       // -------------------------
       // Deterministic uid from (resourceKey + key)
       // - Ensures multi-device consistency (same key => same uid)
@@ -2986,6 +3055,7 @@ return false; }
 localStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: user.level }));
 
         CURRENT_USER = user;
+            try{ setSession(user); }catch(e){}
 
         const t = `目前使用者：${user.username} (${user.level})`;
         userInfo.textContent = t;
@@ -3037,13 +3107,24 @@ localStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: us
 
       ensureCloudMounted(null).catch(()=>{});
 
-      // ✅進入首頁：若本分頁 session 已登入則直接進入（回首頁免再登入）；否則強制顯示登入
-      if(!tryEnterBySessionSilently()){
+      // ✅進入首頁：登入一次（瀏覽器 session 有效），跨頁免登入；關閉瀏覽器需再登入
+      try{
+        if(isSessionAlive()){
+          const s = getSession();
+          CURRENT_USER = s && s.user ? s.user : null;
+          // 若有舊版 enterHome() / render 入口，優先呼叫；否則走既有流程
+          if(typeof enterHome === "function"){ enterHome(); }
+          else if(typeof onLoginSuccess === "function"){ onLoginSuccess(CURRENT_USER); }
+          else { /* fallback */ }
+        }else{
+          CURRENT_USER = null;
+          showLogin();
+        }
+      }catch(e){
+        CURRENT_USER = null;
         showLogin();
       }
-
-
-      if(zenImg){
+if(zenImg){
         zenImg.addEventListener("load", () => { scheduleAll(); }, { once:false });
       }
 
