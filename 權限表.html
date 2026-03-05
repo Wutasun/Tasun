@@ -1,6 +1,4 @@
 <!DOCTYPE html>
-<!-- TASUN_REBUILD_STAMP:auth_v3_globalpass 2026-03-04 08:18:06 -->
-
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
@@ -536,8 +534,8 @@
       .navPill{ min-width: 100%; }
     }
   </style>
-  <!-- ✅ next-fix：修正 next 參數循環/舊檔問題（不改 UI） -->
-  <script src="tasun-next-fix.js"></script>
+  <script src="tasun-guard-v4.js?v=20260305_v4_1"></script>
+  <script src="tasun-auth-v4.js?v=20260305_v4_1"></script>
 </head>
 
 <body>
@@ -707,7 +705,7 @@
    */
 
   const AUTH_KEY     = 'tasunAuthTable_v1';
-  const CURRENT_KEY  = 'tasunCurrentUser_v1';
+  const CURRENT_KEY  = 'tasunCurrentUser_v1'; // v3: login state stored in sessionStorage/cookie (not localStorage)
   const TOKEN_KEY    = 'tasunDropboxToken_v1';
 
   const NAV_KEY      = 'tasunNavButtons_v1';
@@ -716,6 +714,44 @@
 
   const ENTRY_SELECTED_KEY = 'tasunEntrySelected_v1';
   const PERM_MATRIX_KEY    = 'tasunPermMatrix_v1';
+
+// ====== ✅ v3：全站登入守門（Session Cookie + sessionStorage）
+// - 未登入：導回 index.html 進行登入，登入後回到本頁
+// - 已登入：把 cookie 內容寫入 sessionStorage(CURRENT_KEY) 供本頁與其他頁使用
+const COOKIE_NAME = "tasun_session_v3";
+function _b64d(s){ try{ return decodeURIComponent(escape(atob(s))); }catch(_e){ return ""; } }
+function getCookieSession(){
+  try{
+    const m = document.cookie.match(new RegExp("(?:^|; )" + COOKIE_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "=([^;]*)"));
+    if(!m) return null;
+    const raw = decodeURIComponent(m[1] || "");
+    const json = _b64d(raw);
+    const o = JSON.parse(json);
+    if(!o || !o.u) return null;
+    if(o.exp && Date.now() > Number(o.exp)) return null;
+    return { user: String(o.u), role: String(o.r || "").toLowerCase() };
+  }catch(_e){ return null; }
+}
+function ensureLoggedIn(){
+  try{
+    const cur = sessionStorage.getItem(CURRENT_KEY);
+    if(cur) return true;
+  }catch(_e){}
+  const ck = getCookieSession();
+  if(ck && ck.user){
+    try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: ck.user, role: ck.role })); }catch(_e){}
+    return true;
+  }
+  // 未登入 → 回首頁登入（保留返回）
+  try{
+    const next = encodeURIComponent(location.pathname.replace(/^\//,'') + location.search + location.hash);
+    location.href = "index.html?next=" + next;
+  }catch(_e){
+    location.href = "index.html";
+  }
+  return false;
+}
+ensureLoggedIn();
 
   // ✅ 新增：入口頁註冊表（未來新頁面可自動加入權限表）
   const ENTRY_REGISTRY_KEY = 'tasunEntryRegistry_v1';
@@ -854,68 +890,192 @@
   let tokenExpired = false;
   let tokenInvalid = false;
 
-  // ====== Auto cloud sync (TasunCloudKit) ======
+  
+
+  // ====== Enterprise D1 權限表同步（UI 不變） ======
+  // 目標：權限表 → 一鍵寫入 D1；任何裝置（含無痕）以雲端為準，保持一致。
+  // 說明：
+  // - 讀取：優先嘗試 admin 版（含密碼），失敗則讀 public 版（不含密碼）
+  // - 寫入：僅 admin 且已建立 Session Cookie 才能寫入（/api/admin/auth/table）
+  const D1_AUTH_TABLE_ENDPOINT_ADMIN = "/api/admin/auth/table";
+  const D1_AUTH_TABLE_ENDPOINT_FULL  = "/api/auth/table";
+  const D1_AUTH_TABLE_ENDPOINT_PUB   = "/api/auth/public";
+
+  function getApiBaseLocked(){
+    // ✅ 不提供任何可修改 apiBase 的 UI；僅程式自動偵測/讀取既有設定
+    const v = (localStorage.getItem("tasunApiBase_v1") || "").trim();
+    const base = v || "https://tasun-worker.wutasun.workers.dev";
+    return String(base).replace(/\/+$/,"");
+  }
+  function withNoCache(u){
+    try{
+      const url = new URL(u, location.href);
+      if(!url.searchParams.has("_")) url.searchParams.set("_", String(Date.now()));
+      return url.toString();
+    }catch(_){
+      const ts = Date.now();
+      return (u.includes("?") ? (u + "&_=" + ts) : (u + "?_=" + ts));
+    }
+  }
+  async function d1GetJson(path){
+    const base = getApiBaseLocked();
+    const url = withNoCache(base + path);
+    const res = await fetch(url, { method:"GET", credentials:"include", cache:"no-store" });
+    const j = await res.json().catch(()=>null);
+    return { ok: res.ok, status: res.status, json: j };
+  }
+  async function d1PostJson(path, body){
+    const base = getApiBaseLocked();
+    const url = withNoCache(base + path);
+    const res = await fetch(url, {
+      method:"POST",
+      credentials:"include",
+      cache:"no-store",
+      headers:{ "content-type":"application/json" },
+      body: JSON.stringify(body || {})
+    });
+    const j = await res.json().catch(()=>null);
+    return { ok: res.ok, status: res.status, json: j };
+  }
+
+  function snapshotAuthTableForCloud(){
+    const navButtons = safeJsonParse(localStorage.getItem(NAV_KEY) || "[]", []);
+    const routes     = safeJsonParse(localStorage.getItem(ROUTE_KEY) || "[]", []);
+    const entrySel   = safeJsonParse(localStorage.getItem(ENTRY_SELECTED_KEY) || JSON.stringify("index.html"), "index.html");
+    const entryReg   = safeJsonParse(localStorage.getItem(ENTRY_REGISTRY_KEY) || "[]", []);
+    const btnMetaLs  = safeJsonParse(localStorage.getItem(BTN_META_KEY) || "[]", []);
+    const permMat    = safeJsonParse(localStorage.getItem(PERM_MATRIX_KEY) || "{}", { users:{} });
+
+    return {
+      auth: Array.isArray(auth) ? auth : [],
+      navButtons: Array.isArray(navButtons) ? navButtons : [],
+      routes: Array.isArray(routes) ? routes : [],
+      btnMeta: Array.isArray(btnMetaLs) ? btnMetaLs : (Array.isArray(btnMeta) ? btnMeta : []),
+      permMatrix: (permMat && typeof permMat==="object") ? permMat : { users:{} },
+      entrySelected: entrySel || "index.html",
+      entryRegistry: Array.isArray(entryReg) ? entryReg : []
+    };
+  }
+
+  function applyAuthTableFromCloud(data, sourceTag){
+    if(!data || typeof data !== "object") return false;
+
+    // data 可能是 { ok:true, data:{...}} 或直接 {...}
+    const d = (data.data && typeof data.data==="object") ? data.data : data;
+
+    // ✅ auth：若是 public（無 pass），則只覆蓋 role/name；密碼保留本機（避免 admin 編輯被清空）
+    if(Array.isArray(d.auth)){
+      const hasPass = d.auth.some(u => u && typeof u==="object" && String(u.pass||"").length>0);
+      if(hasPass){
+        localStorage.setItem(AUTH_KEY, JSON.stringify(d.auth));
+      }else{
+        // public-only merge
+        const local = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
+        const map = new Map(Array.isArray(local)? local.map(x=>[String(x.user||""), x]) : []);
+        for(const u of d.auth){
+          if(!u || typeof u!=="object") continue;
+          const key = String(u.user||"");
+          if(!key) continue;
+          const cur = map.get(key) || { user:key, pass:"", role:"read", name:key };
+          cur.role = String(u.role||cur.role||"read");
+          cur.name = String(u.name||cur.name||key);
+          map.set(key, cur);
+        }
+        localStorage.setItem(AUTH_KEY, JSON.stringify(Array.from(map.values())));
+      }
+    }
+
+    if(Array.isArray(d.navButtons)) localStorage.setItem(NAV_KEY, JSON.stringify(d.navButtons));
+    if(Array.isArray(d.routes))     localStorage.setItem(ROUTE_KEY, JSON.stringify(d.routes));
+    if(Array.isArray(d.btnMeta))    localStorage.setItem(BTN_META_KEY, JSON.stringify(d.btnMeta));
+    if(d.permMatrix && typeof d.permMatrix==="object") localStorage.setItem(PERM_MATRIX_KEY, JSON.stringify(d.permMatrix));
+    if(typeof d.entrySelected === "string") localStorage.setItem(ENTRY_SELECTED_KEY, JSON.stringify(d.entrySelected));
+    if(Array.isArray(d.entryRegistry)) localStorage.setItem(ENTRY_REGISTRY_KEY, JSON.stringify(d.entryRegistry));
+
+    localState.textContent = "本機：已更新";
+    cloudState.textContent = "雲端：已拉取" + (sourceTag ? ("（" + sourceTag + "）") : "");
+    return true;
+  }
+
+  async function d1PullAuthTable(reason){
+    // ✅ 更積極：每次 load 都先拉一次（確保跨裝置一致）
+    try{
+      // 1) admin full
+      let r = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_FULL);
+      if(r.ok && r.json && r.json.ok){
+        applyAuthTableFromCloud(r.json, "admin");
+        return { ok:true, mode:"admin" };
+      }
+
+      // 2) public
+      r = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_PUB);
+      if(r.ok && r.json && r.json.ok){
+        applyAuthTableFromCloud(r.json, "public");
+        return { ok:true, mode:"public" };
+      }
+    }catch(_){}
+    return { ok:false };
+  }
+
+  async function d1PushAuthTable(reason){
+    try{
+      const role = (getEffectiveRole() || "read").toLowerCase();
+      if(role !== "admin"){
+        return { ok:false, skipped:true, reason:"not_admin" };
+      }
+      const payload = snapshotAuthTableForCloud();
+      const r = await d1PostJson(D1_AUTH_TABLE_ENDPOINT_ADMIN, payload);
+      if(r.ok && r.json && r.json.ok){
+        cloudState.textContent = "雲端：已寫入 D1";
+        return { ok:true };
+      }
+      return { ok:false, status:r.status, json:r.json };
+    }catch(e){
+      return { ok:false, error:String(e?.message||e) };
+    }
+  }
+
+// ====== Auto cloud sync (TasunCloudKit) ======
   let _cloudPushTimer = 0;
   let _cloudPullTimer = 0;
   let _cloudLastPushAt = 0;
   let _cloudLastPullAt = 0;
   let _cloudBusy = false;
 
-  function safeJsonParse(s, fallback){
+  
+  async function sha256Hex(str){
+    const s = String(str ?? "");
+    const data = new TextEncoder().encode(s);
+    const buf = await crypto.subtle.digest("SHA-256", data);
+    const arr = Array.from(new Uint8Array(buf));
+    return arr.map(b => b.toString(16).padStart(2,"0")).join("");
+  }
+
+  async function migrateAuthToHashedIfNeeded(){
+    const raw = localStorage.getItem(AUTH_KEY);
+    const arr = safeJsonParse(raw || "null", null);
+    if(!Array.isArray(arr)) return;
+    let changed = false;
+    for(const u of arr){
+      if(!u || typeof u !== "object") continue;
+      const ph = String(u.passHash ?? u.passwordHash ?? "").trim();
+      const p  = String(u.pass ?? u.password ?? "");
+      if(!ph && p){
+        try{
+          u.passHash = await sha256Hex(p);
+          delete u.pass; delete u.password; delete u.passwordHash;
+          changed = true;
+        }catch(_){}
+      }else if(ph){
+        if(!u.passHash){ u.passHash = ph; changed = true; }
+        if(u.pass || u.password){ delete u.pass; delete u.password; changed = true; }
+      }
+    }
+    if(changed) localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
+  }
+function safeJsonParse(s, fallback){
     try{ return JSON.parse(s); }catch(e){ return fallback; }
   }
-
-  // ====== Password hashing (SHA-256, no plain text persisted) ======
-  async function sha256Hex(str){
-    str = String(str == null ? '' : str);
-    if(!window.crypto || !crypto.subtle || !window.TextEncoder){
-      // Fallback: very old browsers (NOT cryptographically strong) - keep deterministic
-      // (GitHub Pages/modern Chrome will use crypto.subtle)
-      var h = 0, i;
-      for(i=0;i<str.length;i++){ h = ((h<<5)-h) + str.charCodeAt(i); h |= 0; }
-      return ('00000000' + (h>>>0).toString(16)).slice(-8);
-    }
-    var data = new TextEncoder().encode(str);
-    var buf = await crypto.subtle.digest('SHA-256', data);
-    var arr = Array.from(new Uint8Array(buf));
-    return arr.map(b => b.toString(16).padStart(2,'0')).join('');
-  }
-
-  function stripPassForStorage(u){
-    // never persist plaintext pass
-    var o = Object.assign({}, u);
-    delete o.pass;
-    if(o.passHash == null) o.passHash = '';
-    return o;
-  }
-
-  async function upgradeAuthToHash(){
-    // Convert legacy {pass} to {passHash}, then purge plaintext.
-    var changed = false;
-    for(var i=0;i<auth.length;i++){
-      var u = auth[i] || {};
-      var ph = String(u.passHash || '').trim();
-      var p  = (u.pass == null) ? '' : String(u.pass);
-
-      if(p){
-        u.passHash = await sha256Hex(p);
-        changed = true;
-      }
-      // Always purge plaintext from in-memory model (UI can keep blank)
-      if(u.pass !== undefined){
-        u.pass = '';
-        changed = true;
-      }
-      if(u.passHash == null) u.passHash = '';
-    }
-    if(changed){
-      try{
-        localStorage.setItem(AUTH_KEY, JSON.stringify(auth.map(stripPassForStorage)));
-      }catch(e){}
-    }
-    return changed;
-  }
-
   function stripInvisibles(s){
     return String(s ?? '')
       .replace(/\uFEFF/g, '')
@@ -1220,8 +1380,8 @@
       const r = String(u.role||'read').toLowerCase();
       u.role = roleOptions.includes(r) ? r : 'read';
       u.user = String(u.user||'').trim();
-      u.passHash = String(u.passHash||'');
-      u.pass = String(u.pass||''); // display only (will not be persisted)
+      u.passHash = String(u.passHash||u.passwordHash||"").trim();
+      u.pass = "";
     });
     auth = auth.filter(u => (u.user||'').trim() !== '');
   }
@@ -1403,7 +1563,7 @@
       return `
       <tr data-idx="${idx}">
         <td><input class="field" data-k="user" value="${escapeHtml(u.user||'')}" ${isAdmin?'':'disabled'}></td>
-        <td><input class="field" data-k="pass" value="${escapeHtml(u.pass||'')}" ${isAdmin?'':'disabled'}></td>
+        <td><input class="field" data-k="pass" value="" placeholder="（已加密）輸入新密碼才會更新" ${isAdmin?'':'disabled'}></td>
         <td>
           <select class="field" data-k="role" ${isAdmin?'':'disabled'}>
             ${roleOptions.map(r => `<option value="${r}" ${r===role?'selected':''}>${r}</option>`).join('')}
@@ -1446,7 +1606,7 @@
             </div>
             <div>
               <div class="rowLabel">密碼</div>
-              <input class="field" data-k="pass" value="${escapeHtml(u.pass||'')}" ${isAdmin?'':'disabled'}>
+              <input class="field" data-k="pass" value="" placeholder="（已加密）輸入新密碼才會更新" ${isAdmin?'':'disabled'}>
             </div>
             <div>
               <div class="rowLabel">權限</div>
@@ -1478,10 +1638,8 @@
     }).join('');
   }
 
-  async function saveLocal(){
-    // ✅ 將密碼(若有輸入)轉成 passHash，並確保本機/雲端不存明碼
-    try{ await upgradeAuthToHash(); }catch(e){}
-    try{ localStorage.setItem(AUTH_KEY, JSON.stringify(auth.map(stripPassForStorage))); }catch(e){}
+  function saveLocal(){
+    localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
     savePermMatrix();
     localState.textContent = '本機：已儲存';
   }
@@ -1565,7 +1723,7 @@
     scheduleCloudPush('remove-row');
   }
 
-  function onTableInput(e){
+  async function onTableInput(e){
     const tr = e.target.closest('tr');
     if(!tr) return;
     const idx = Number(tr.dataset.idx);
@@ -1575,6 +1733,25 @@
     if(!k) return;
 
     const entry = resolveEntryValue();
+
+    // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
+    if(k === "pass"){
+      const plain = String(e.target.value || "");
+      if(plain.trim()){
+        try{
+          auth[idx].passHash = await sha256Hex(plain);
+          auth[idx].pass = "";
+          e.target.value = "";
+          setMsg("✅ 已更新密碼（SHA-256 加密儲存）。");
+        }catch(_){
+          setMsg("密碼更新失敗：瀏覽器不支援加密（crypto.subtle）。", true);
+        }
+        normalizeAuth();
+        saveLocal();
+        scheduleCloudPush("pwd-updated");
+      }
+      return;
+    }
 
     if(e.target.type === 'checkbox'){
       setPerm(auth[idx].user, entry, k, !!e.target.checked);
@@ -1618,7 +1795,7 @@
     if(act === 'del'){ removeRow(idx); return; }
   }
 
-  function onCardInput(e){
+  async function onCardInput(e){
     const card = e.target.closest('.card');
     if(!card) return;
     const idx = Number(card.dataset.idx);
@@ -1628,6 +1805,25 @@
     if(!k) return;
 
     const entry = resolveEntryValue();
+
+    // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
+    if(k === "pass"){
+      const plain = String(e.target.value || "");
+      if(plain.trim()){
+        try{
+          auth[idx].passHash = await sha256Hex(plain);
+          auth[idx].pass = "";
+          e.target.value = "";
+          setMsg("✅ 已更新密碼（SHA-256 加密儲存）。");
+        }catch(_){
+          setMsg("密碼更新失敗：瀏覽器不支援加密（crypto.subtle）。", true);
+        }
+        normalizeAuth();
+        saveLocal();
+        scheduleCloudPush("pwd-updated");
+      }
+      return;
+    }
 
     if(e.target.type === 'checkbox'){
       setPerm(auth[idx].user, entry, k, !!e.target.checked);
@@ -1661,7 +1857,7 @@
   backBtnM.addEventListener('click', () => { closeMoreMenu(); goHome(); });
 
   function switchAccount(){
-    localStorage.removeItem(CURRENT_KEY);
+    sessionStorage.removeItem(CURRENT_KEY);
     goHome();
   }
   switchBtnD.addEventListener('click', switchAccount);
@@ -1742,6 +1938,8 @@
     normalizeAuth();
     saveLocal();
     updateStates('已儲存本機（localStorage）。\n並已排程同步雲端（若 Token OK）。');
+    // ✅ 一鍵寫入 D1（以權限表為主，需 admin + Session Cookie）
+    d1PushAuthTable('save-btn');
     scheduleCloudPush('save-btn');
   });
 
@@ -2091,55 +2289,52 @@
   navSaveBtn.addEventListener('click', saveNavNamesFromInputs);
 
   // 初始化
-  function load(){
+  async function load(){
+    try{ await migrateAuthToHashedIfNeeded(); }catch(_){ }
+
     seedAuthIfMissing();
+
+    // ✅ 先拉雲端權限表（D1）→ 再以本機渲染（確保跨裝置一致）
+    await d1PullAuthTable('page-load');
 
     auth = safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []);
     if(!Array.isArray(auth)) auth = [];
+    normalizeAuth();
 
-    // ✅ 先把舊版明碼轉為 SHA-256(passHash)，並保證本機/雲端只存 passHash
-    upgradeAuthToHash().then(() => {
-      normalizeAuth();
+    current = safeJsonParse(sessionStorage.getItem(CURRENT_KEY) || 'null', null);
+    if(!current || typeof current !== 'object'){
+      current = { user:'—', role:'read' };
+    }else{
+      current.user = String(current.user || '—');
+      current.role = String(current.role || 'read');
+    }
 
-      current = safeJsonParse(localStorage.getItem(CURRENT_KEY) || 'null', null);
-      if(!current || typeof current !== 'object'){
-        current = { user:'—', role:'read' };
-      }else{
-        current.user = String(current.user || '—');
-        current.role = String(current.role || 'read');
-      }
+    loadPermMatrix();
 
-      loadPermMatrix();
+    current.role = getEffectiveRole();
+    isAdmin = (getEffectiveRole() === 'admin');
 
-      current.role = getEffectiveRole();
-      isAdmin = (getEffectiveRole() === 'admin');
+    clearTokenFlags();
 
-      clearTokenFlags();
+    buildEntrySelect();
+    loadSelectedEntry();
 
-      buildEntrySelect();
-      loadSelectedEntry();
+    const inList = dynEntryFiles.includes(currentEntry);
+    if(inList){
+      entrySelect.value = currentEntry;
+      entryCustom.value = '';
+    }else{
+      entrySelect.value = '__custom__';
+      entryCustom.value = currentEntry;
+    }
+    applyEntrySelectionUI();
 
-      const inList = dynEntryFiles.includes(currentEntry);
-      if(inList){
-        entrySelect.value = currentEntry;
-        entryCustom.value = '';
-      }else{
-        entrySelect.value = '__custom__';
-        entryCustom.value = currentEntry;
-      }
-      applyEntrySelectionUI();
+    renderAll();
+    updateStates('已載入本機資料。');
 
-      renderAll();
-      updateStates('已載入本機資料。');
-
-      // 可見時嘗試 pull（確保跨裝置一致）
-      scheduleCloudPull('page-load');
-    });
-
-    return; // async path
-
-    /* (removed legacy sync load body; now handled in upgradeAuthToHash().then(...)) */
-}
+    // 可見時仍保留舊 Dropbox pull（相容）；D1 已在上方優先拉取
+    scheduleCloudPull('page-load');
+  }
 
   window.addEventListener('storage', (e) => {
     if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY){
@@ -2150,7 +2345,7 @@
       return;
     }
     if(e.key === AUTH_KEY || e.key === CURRENT_KEY || e.key === TOKEN_KEY || e.key === PERM_MATRIX_KEY || e.key === ENTRY_SELECTED_KEY){
-      load();
+      await load();
     }
   });
 
@@ -2208,7 +2403,7 @@
     return out;
   }
 
-  function applyRows(rows){
+  function apply(rows){
     if(!Array.isArray(rows)) return;
     var touched=[];
     for(var i=0;i<rows.length;i++){
@@ -2230,12 +2425,6 @@
     }
   }
 
-  // ✅ CloudKit apply adapter (payload -> rows)
-  function apply(payload){
-    try{ applyRows((payload && payload.items) ? payload.items : (Array.isArray(payload)?payload:[])); }
-    catch(e){}
-  }
-
   if(!window.TasunCloudKit || !window.TasunCloudKit.init || !window.TasunCloudKit.mount){
     console.warn('[權限表] TasunCloudKit not found.');
     return;
@@ -2244,26 +2433,19 @@
   window.TasunCloudKit.init({
     appVer: APP_VER,
     resourcesUrl: 'tasun-resources.json',
-    ui: { enabled:false }
-  });
-
-  function __auth_user(){ try{ var u=getCurrentUser&&getCurrentUser(); return (u&&u.username)||''; }catch(e){ return ''; } }
-  function __auth_role(){ try{ var u=getCurrentUser&&getCurrentUser(); return (u&&u.role)||''; }catch(e){ return ''; } }
-
-  // ✅ B 架構：用 resources.json 的 Worker 設定，自動雲端同步（uid 為唯一鍵）
-  var ctrl = window.TasunCloudKit.mount({
-    resourceKey: 'auth-table',
-    watch: { intervalSec: 30 },
-    protectEmptyRemote: true,
+    resourceKey: 'tasun-index-db',
+    pk: 'id',
+    ui: { enabled:false },
+    lock: { enabled:false },
     getLocal: getLocal,
-    apply: apply,
-    user: __auth_user,
-    role: __auth_role
+    apply: apply
   });
 
+  var ctrl = window.TasunCloudKit.mount();
   // 讓主程式可以拿到 ctrl，做到「按鈕儲存也立即同步」
   window.__TASUN_AUTH_CLOUD_CTRL = ctrl;
-// 進站先拉一次
+
+  // 進站先拉一次
   try{
     ctrl && ctrl.pullNow && setTimeout(function(){ try{ ctrl.pullNow(); }catch(_){ } }, 250);
   }catch(_){}
@@ -2300,5 +2482,8 @@
 })();
 </script>
 
+
+<script src="tasun-global-auth-v65.js"></script>
+<script>window.TasunGuardV4 && window.TasunGuardV4.boot({ pageKey: "權限表.html" });</script>
 </body>
 </html>
