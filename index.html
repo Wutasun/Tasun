@@ -1505,27 +1505,99 @@ function runIndexApp(){
         });
       }
 
+      const INDEX_KEY_UID_MAP_KEY = "tasunIndexKeyUidMap_v1";
+      function uuidV4(){
+        try{
+          if(window.crypto && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+        }catch(e){}
+        // fallback (RFC4122-ish)
+        const s = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c=>{
+          const r = (Math.random()*16)|0;
+          const v = (c==="x") ? r : ((r&0x3)|0x8);
+          return v.toString(16);
+        });
+        return s;
+      }
+      function getUidMap(){
+        try{ return JSON.parse(localStorage.getItem(INDEX_KEY_UID_MAP_KEY) || "{}") || {}; }catch(e){ return {}; }
+      }
+      function setUidMap(map){
+        try{ localStorage.setItem(INDEX_KEY_UID_MAP_KEY, JSON.stringify(map || {})); }catch(e){}
+      }
+      function ensureRowUidForKey(k){
+        const key = String(k||"").trim();
+        if(!key) return uuidV4();
+        const map = getUidMap();
+        if(map[key]) return map[key];
+        const uid = uuidV4();
+        map[key] = uid;
+        setUidMap(map);
+        return uid;
+      }
+
       function buildCloudPayloadFromLocal(){
+        // ✅全站雲端同步標準 v1：uid(pk)=uuid、rev/updatedAt/deleted 必備，id 只做顯示
+        const now = Date.now();
         const rows = [];
         const keys = CLOUD_KEYS.slice().sort((a,b)=>a.localeCompare(b,"zh-Hant"));
         keys.forEach((k, idx)=>{
           const raw = localStorage.getItem(k);
-          rows.push({ id: idx + 1, k, v: (raw == null ? "" : String(raw)) });
+          const uid = ensureRowUidForKey(k);
+          const row = {
+            uid,
+            id: idx + 1,
+            k,
+            v: (raw == null ? "" : String(raw)),
+            rev: now,          // ✅簡化：以時間戳作 rev（多人合併由 Worker 以 updatedAt/ rev 決勝）
+            updatedAt: now,
+            deleted: false
+          };
+          rows.push(row);
         });
         return { db: rows, counter: rows.length };
       }
+
+      let cloudFailCount = 0;
+      let cloudBackoffMs = 0;
 
       function scheduleCloudSave(readOnly){
         if(readOnly) return;
         if(!cloudCtrl || typeof cloudCtrl.saveMerged !== "function") return;
         if(cloudApplying) return;
+        if(cloudCtrl.__disabled__) return;
 
         clearTimeout(cloudSaveTimer);
-        cloudSaveTimer = setTimeout(()=>{
-          Promise.resolve(cloudCtrl.saveMerged({ lock:false, mode:"merge" })).catch(()=>{});
+        cloudSaveTimer = setTimeout(async()=>{
+          // ✅輕量退避：避免多人同時寫入造成連續碰撞
+          const jitter = Math.floor(Math.random()*180);
+          const wait = Math.max(0, cloudBackoffMs) + jitter;
+          if(wait) await new Promise(r=>setTimeout(r, wait));
+
+          try{
+            await cloudCtrl.saveMerged({ lock:false, mode:"merge" });
+            cloudFailCount = 0;
+            cloudBackoffMs = 0;
+          }catch(e){
+            cloudFailCount++;
+            // 讀出狀態碼（不同版本 CloudKit 可能放不同欄位）
+            const msg = String(e && (e.message || e) || "");
+            const status = Number(e && (e.status || e.code || (e.cause && e.cause.status)) || 0) || 0;
+
+            // ✅400：多半是 Worker schema / payload 不符，避免一直狂打
+            if(status === 400 || /(400)|MERGE_FAIL/i.test(msg)){
+              cloudBackoffMs = Math.min(30000, (cloudBackoffMs || 1200) * 2);
+            }else{
+              cloudBackoffMs = Math.min(20000, (cloudBackoffMs || 800) * 2);
+            }
+
+            // ✅連續失敗太多次 → 暫停（不影響 UI/功能，仍保留本地）
+            if(cloudFailCount >= 8){
+              cloudCtrl.__disabled__ = true;
+              try{ console.warn("[index] Cloud sync paused after repeated failures.", e); }catch(_e){}
+            }
+          }
         }, 650);
       }
-
       async function ensureCloudMounted(user){
         const role = String(user?.level || "read").toLowerCase();
         const readOnly = (role === "read") || !user;
@@ -1552,8 +1624,9 @@ function runIndexApp(){
 
         cloudCtrl = window.TasunCloudKit.mount({
           resourceKey: CLOUD_RESOURCE_KEY,
-          pk: "k",
           idField: "id",
+          // pk 由 CloudKit/Worker 統一強制為 uid（全站標準 v1）
+          
           counterField: "counter",
           merge: { conflictPolicy: "stash-remote", lock: "none" },
           watch: { intervalSec: 10 },
@@ -1565,9 +1638,30 @@ function runIndexApp(){
               payload.db.forEach(row=>{
                 const k = String(row?.k || "").trim();
                 if(!k || !CLOUD_KEY_SET.has(k)) return;
+
+                // ✅確保本機 key->uid mapping 存在（避免之後本機生成不同 uid）
+                try{
+                  const uid = String(row?.uid || "").trim();
+                  if(uid){
+                    const map = getUidMap();
+                    if(!map[k]){ map[k] = uid; setUidMap(map); }
+                  }
+                }catch(e){}
+
+                const deleted = !!row?.deleted;
+                if(deleted){
+                  try{ localStorage.removeItem(k); }catch(e){}
+                  return;
+                }
                 const v = (row?.v == null) ? "" : String(row.v);
                 if(localStorage.getItem(k) !== v) localStorage.setItem(k, v);
               });
+            }finally{
+              cloudApplying = false;
+            }
+            // ✅不 reload：只重建按鍵/登入清單
+            try{ onIndexConfigApplied(); }catch(e){}
+          }
             }finally{
               cloudApplying = false;
             }
