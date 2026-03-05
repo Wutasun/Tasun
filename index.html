@@ -2158,28 +2158,9 @@ function getSession(){
         scheduleAll();
 
 
-/* ✅Tasun v4: 登入成功後若有 next 目標，安全導向（避免導回自己造成迴圈） */
-(function redirectAfterLogin(){
-  try{
-    const KEY = "tasun_next_target_v1";
-    const t = sessionStorage.getItem(KEY);
-    if(!t) return;
-    sessionStorage.removeItem(KEY);
 
-    const target = String(t || "").trim();
-    if(!target) return;
+        // (moved next-redirect logic to applyUser)
 
-    // 避免導回本頁（index）
-    const curPath = location.pathname.replace(/\/+$/,"");
-    const tarPath = target.split("?")[0].split("#")[0].replace(/\/+$/,"");
-    if(!tarPath || tarPath === curPath) return;
-
-    // 保留你原本的 withV（版本參數）
-    const Core = window.TasunCore || null;
-    const withV = (Core && Core.withV) ? Core.withV : (window.__withV || (u=>u));
-    location.assign(withV(target));
-  }catch(e){}
-})();
 
 
       }
@@ -2201,6 +2182,41 @@ function getSession(){
         });
 
         scheduleAll();
+
+        /* ✅Tasun v4: 登入成功後若有 next 目標，導向並清理避免 URL 爆長 (414) */
+        try{
+          const KEY = "tasun_next_target_v4";
+          const sp = new URLSearchParams(location.search);
+          let target = "";
+          if(sp.get("next")) target = sp.get("next") || "";
+          if(!target){
+            try{ target = sessionStorage.getItem(KEY) || ""; }catch(e){}
+          }
+          if(target){
+            // unwrap nested next=... up to 6 levels
+            let t = String(target);
+            for(let i=0;i<6;i++){
+              try{ t = decodeURIComponent(t); }catch(e){}
+              const m = t.match(/[?&]next=([^&]+)/i);
+              if(m && m[1]){ t = m[1]; continue; }
+              break;
+            }
+            try{ sessionStorage.removeItem(KEY); }catch(e){}
+            // avoid redirecting back to index with next again
+            const isIndex = /\/index\.html?/i.test(t);
+            const hasNext = /[?&]next=/i.test(t);
+            if(!(isIndex && hasNext)){
+              // if it's relative, resolve against current origin/path
+              try{
+                const url = new URL(t, location.origin + location.pathname.replace(/[^/]*$/, ""));
+                location.replace(url.href);
+              }catch(e){
+                location.replace(t);
+              }
+            }
+          }
+        }catch(e){}
+
       }
 
       function onIndexConfigApplied(){
