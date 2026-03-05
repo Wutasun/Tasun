@@ -4,6 +4,70 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
+  <!-- ✅FIX: 防止 next 參數遞迴導致網址爆長（GitHub Pages 會回 414 / URI Too Long） -->
+  <script>
+  (function(){
+    try{
+      const MAX_URL = 1800; // 保守：避免 414
+      const url = new URL(location.href);
+
+      // 1) 若網址已過長，先丟掉 next（保留 v）
+      if(String(url.href).length > MAX_URL){
+        const v = url.searchParams.get("v");
+        url.search = "";
+        if(v) url.searchParams.set("v", v);
+        location.replace(url.toString());
+        return;
+      }
+
+      // 2) 清理 next：解碼最多 3 次，剝掉遞迴 next=index.html?next=...
+      if(url.searchParams.has("next")){
+        let next = String(url.searchParams.get("next") || "");
+        let decoded = next;
+
+        for(let i=0;i<3;i++){
+          try{
+            const d = decodeURIComponent(decoded);
+            if(d === decoded) break;
+            decoded = d;
+          }catch(_e){ break; }
+        }
+
+        // 解析成 URL（相對路徑也可）
+        function toUrl(s){
+          try{ return new URL(s, location.origin + location.pathname); }catch(e){ return null; }
+        }
+
+        // 剝掉遞迴 next（最多 6 層）
+        let u = toUrl(decoded) || toUrl(next);
+        for(let i=0;i<6 && u; i++){
+          const inner = u.searchParams.get("next");
+          if(!inner) break;
+          decoded = inner;
+          u = toUrl(inner);
+        }
+
+        // 若 next 指回自己（或仍然超長）→ 移除
+        const finalU = toUrl(decoded);
+        const samePage = finalU && (finalU.pathname === location.pathname);
+        if(samePage || String(decoded).length > 900){
+          url.searchParams.delete("next");
+        }else{
+          url.searchParams.set("next", decoded);
+        }
+
+        // 最終再做一次長度保護
+        if(String(url.href).length > MAX_URL){
+          url.searchParams.delete("next");
+        }
+
+        location.replace(url.toString());
+        return;
+      }
+    }catch(e){}
+  })();
+  </script>
+
   <!-- ✅ iOS / Android：用 visualViewport + svh/dvh 穩定首屏，降低地址列收合跳動 -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Tasun 資料首頁 · 空無明</title>
@@ -1453,6 +1517,8 @@ function runIndexApp(){
       const loginSub     = $("#loginSub");
       const userInfo     = $("#userInfo");
       const btnSwitch    = $("#btnSwitchUser");
+      const btnLogout    = $("#btnLogout");
+      
       const btnExport    = $("#btnExport");
       const btnTogglePwd = $("#btnTogglePwd");
       const btnForceRelogin = $("#btnForceRelogin");
@@ -1629,7 +1695,6 @@ function runIndexApp(){
           resourceKey: CLOUD_RESOURCE_KEY,
           idField: "id",
           // pk 由 CloudKit/Worker 統一強制為 uid（全站標準 v1）
-          
           counterField: "counter",
           merge: { conflictPolicy: "stash-remote", lock: "none" },
           watch: { intervalSec: 10 },
@@ -1659,12 +1724,6 @@ function runIndexApp(){
                 const v = (row?.v == null) ? "" : String(row.v);
                 if(localStorage.getItem(k) !== v) localStorage.setItem(k, v);
               });
-            }finally{
-              cloudApplying = false;
-            }
-            // ✅不 reload：只重建按鍵/登入清單
-            try{ onIndexConfigApplied(); }catch(e){}
-          }
             }finally{
               cloudApplying = false;
             }
@@ -2947,6 +3006,19 @@ return false; }
         return true;
       }
 
+      function setLoginMsg(msg){
+        try{ loginError.textContent = String(msg || ""); }catch(e){}
+      }
+
+      function hideLogin(){
+        try{
+          document.body.classList.remove("locked");
+          if(loginOverlay) loginOverlay.style.display = "none";
+          setLoginMsg("");
+          try{ loginSub.textContent = ""; }catch(e){}
+        }catch(e){}
+      }
+
       function showLogin(){
         document.body.classList.add("locked");
         loginOverlay.style.display = "flex";
@@ -3063,10 +3135,12 @@ return false; }
 
       loginForm.addEventListener("submit", async (e) => {
         e.preventDefault();
-        const username = (loginUser.value || "").trim();
-        const password = (loginPass.value || "").trim();
+        const username = String(usernameSel && usernameSel.value || "").trim();
+        const pwdEl = document.getElementById("password");
+        const password = String(pwdEl && pwdEl.value || "").trim();
+
         if(!username || !password){
-          setLoginMsg("請輸入帳號與密碼");
+          setLoginMsg("請選擇使用者並輸入密碼");
           return;
         }
 
@@ -3102,16 +3176,18 @@ return false; }
           const role = r.role || r.level || "read";
           const user = { username, level: role, entryButtons };
 
+          // ✅applyUser 會關掉 overlay、更新按鍵、啟動雲端同步
           applyUser(user);
 
-          // 登入成功
-          loginPass.value = "";
+          // 登入成功：清掉密碼欄位
+          if(pwdEl) pwdEl.value = "";
           setLoginMsg("");
-          hideLogin();
         }catch(err){
           setLoginMsg("登入失敗：" + (err && err.message ? err.message : String(err)));
         }
-      });btnForceRelogin.addEventListener("click", () => {
+      });
+
+      btnForceRelogin.addEventListener("click", () => {
         clearSession();
         loginSub.textContent = "請重新輸入密碼登入";
         loginError.textContent = "";
@@ -3129,6 +3205,19 @@ return false; }
         scheduleExport("switchUser");
         scheduleAll();
       });
+
+      // ✅登出：清除 session（Cookie + sessionStorage），回到登入遮罩
+      if(btnLogout){
+        btnLogout.addEventListener("click", () => {
+          clearSession();
+          try{ localStorage.removeItem(CURRENT_KEY); }catch(_e){}
+          CURRENT_USER = null;
+          showLogin();
+          scheduleExport("logout");
+          scheduleAll();
+        });
+      }
+
 
       btnTogglePwd.addEventListener("click", () => {
         const pwd = $("#password");
