@@ -1373,6 +1373,39 @@ function runIndexApp(){
 
       const AUTH_KEY    = "tasunAuthTable_v1";
       const CURRENT_KEY = "tasunCurrentUser_v1";
+    // ====== ✅SSO：全站免重複登入（由 index 建立 token，子頁讀取 token 直接通過） ======
+    const SSO_KEY = "tasunSso_v1";
+    const SSO_TTL_MS = 1000 * 60 * 60 * 12; // 12 小時（可自行調整）
+
+    function setSSO(user){
+      try{
+        const now = Date.now();
+        const payload = {
+          name: user?.name || user?.user || user?.username || "alex",
+          role: user?.role || inferRole(user?.name || user?.user || user?.username || "alex", user?.role),
+          at: now,
+          exp: now + SSO_TTL_MS,
+          v: (window.__CACHE_V || window.TASUN_APP_VER || "")
+        };
+        localStorage.setItem(SSO_KEY, JSON.stringify(payload));
+        // 子頁常用：CURRENT_KEY
+        localStorage.setItem(CURRENT_KEY, JSON.stringify({ name: payload.name, user: payload.name, role: payload.role }));
+        // 同頁簽章（避免某些瀏覽器 sessionStorage 被清）
+        try{ sessionStorage.setItem("tasunSsoTab_v1", "1"); }catch(_e){}
+      }catch(_e){}
+    }
+
+    function getSSO(){
+      try{
+        const raw = localStorage.getItem(SSO_KEY);
+        if(!raw) return null;
+        const o = JSON.parse(raw);
+        if(!o || !o.name) return null;
+        if(o.exp && Date.now() > Number(o.exp)) return null;
+        return o;
+      }catch(_e){ return null; }
+    }
+
       const INDEX_SESSION_KEY = "tasunIndexSessionAuthed_v1";
       const SESSION_KEY = "tasunSessionLogin_v1";
       const NAV_KEY     = "tasunNavButtons_v1";
@@ -1982,7 +2015,16 @@ function setSession(user){
 
           buildMainButtonsDOM();
 
-          if(CURRENT_USER){
+          
+    // ✅若已在其他頁登入過（SSO token 有效），本頁直接套用，不再跳登入表
+    (function(){
+      const sso = getSSO();
+      if(sso && sso.name){
+        try{ localStorage.setItem(CURRENT_KEY, JSON.stringify({ name:sso.name, user:sso.name, role:sso.role })); }catch(_e){}
+        try{ sessionStorage.setItem(INDEX_SESSION_KEY, "1"); }catch(_e){}
+      }
+    })();
+if(CURRENT_USER){
             refreshButtonsForCurrentUser();
           }else{
             resetButtonsForLogout();
@@ -2719,7 +2761,8 @@ function setSession(user){
         if(!sess) return false;
 
         const u = AUTH_TABLE.find(r => r.username === sess.user);
-        if(!u){ clearSession(); return false; }
+        if(!u){ clearSession();       try{ localStorage.removeItem("tasunSso_v1"); }catch(_e){}
+return false; }
         if(String(u.level||"").toLowerCase() !== String(sess.role||"").toLowerCase()){
           clearSession(); return false;
         }
@@ -2772,7 +2815,8 @@ function setSession(user){
         loginSub.textContent = "";
 
         setSession(user);
-        localStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: user.level }));
+              setSSO(user);
+localStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: user.level }));
 
         CURRENT_USER = user;
 
@@ -2830,35 +2874,6 @@ function setSession(user){
       if(!tryEnterBySessionSilently()){
         showLogin();
       }
-
-      // ✅V6.5 SSO Hotfix：若因檔案遺失/快取/雲端資料未載入導致「登入表/按鍵都沒顯示」，用看門狗自動補救
-      setTimeout(function(){
-        try{
-          var nav = document.getElementById('navArea');
-          var hasBtn = !!(nav && nav.querySelector('.nav-btn'));
-          // 若沒有任何主按鍵，就代表初始化沒成功或資料沒載到 → 先強制補 seed 再重繪，仍失敗就顯示登入
-          if(!hasBtn){
-            console.warn('[index] buttons missing -> force seed/render');
-            try{ localStorage.removeItem(NAV_KEY); }catch(_e){}
-            try{ refreshButtonsForCurrentUser(); }catch(_e2){}
-            // 再檢查一次：仍然沒有按鍵就顯示登入（避免全空白）
-            setTimeout(function(){
-              try{
-                var nav2=document.getElementById('navArea');
-                var hasBtn2=!!(nav2 && nav2.querySelector('.nav-btn'));
-                if(!hasBtn2){
-                  console.warn('[index] still empty -> show login');
-                  try{ showLogin(); }catch(_e3){}
-                }
-              }catch(_e4){}
-            }, 350);
-          }
-        }catch(e){
-          console.warn('[index] watchdog failed', e);
-          try{ showLogin(); }catch(_e5){}
-        }
-      }, 650);
-
 
 
       if(zenImg){
