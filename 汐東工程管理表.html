@@ -17,7 +17,7 @@
      * ✅你每次更新本頁，只要改 APP_VER（例如：20260126_01 → 20260126_02）
      * 全部使用者會自動跳到 ?v=APP_VER，保證同步最新版。
      */
-    const APP_VER = "20260129_03";  // ←←← 每次改版請改這裡
+    const APP_VER = "20260306_05";  // ←←← 每次改版請改這裡
     const VER_KEY = "tasun_app_ver_xidong_v1";
     const TAB_GUARD = "tasun_tab_replaced_once_xidong_v1";
 
@@ -55,22 +55,39 @@
     }
   })();
   </script>
-  <script>
-  // ✅SSO（免重複登入）：若 index 已登入，子頁直接沿用（不改 UI）
-  (function(){
-    const SSO_KEY="tasunSso_v1", CURRENT_KEY="tasunCurrentUser_v1";
-    function jparse(s,f){ try{return JSON.parse(s);}catch(_){return f;} }
-    function inferRole(n,r){ if(r) return r; if(n==="alex") return "admin"; if(n==="tasun") return "write"; return "read"; }
-    const sso = jparse(localStorage.getItem(SSO_KEY)||"", null);
-    if(sso && sso.name && (!sso.exp || Date.now() <= Number(sso.exp))){
-      try{
-        localStorage.setItem(CURRENT_KEY, JSON.stringify({ name:sso.name, user:sso.name, role: inferRole(sso.name, sso.role) }));
-      }catch(_e){}
-      try{ sessionStorage.setItem("tasunSsoTab_v1","1"); }catch(_e2){}
-      window.__TASUN_SSO_OK__=true;
-    }
-  })();
-  </script>
+  
+<script>
+// ✅SSO：同設備同瀏覽器只登入一次；關閉瀏覽器後失效；閒置超過 10 分鐘，跨頁才再登入
+(function(){
+  const SSO_KEY="tasunSso_v1", CURRENT_KEY="tasunCurrentUser_v1";
+  const NONCE_KEY="tasunSsoNonce_v1";
+  function jparse(s,f){ try{return JSON.parse(s);}catch(_){return f;} }
+  function inferRole(n,r){ if(r) return String(r).toLowerCase(); const x=String(n||"").toLowerCase(); if(x==="alex"||x==="joyce") return "admin"; if(x==="tasun") return "write"; return "read"; }
+
+  const sso = jparse(localStorage.getItem(SSO_KEY)||"", null);
+  let nonce = "";
+  try{ nonce = sessionStorage.getItem(NONCE_KEY) || ""; }catch(_e){}
+
+  const ok = !!(sso && sso.name && nonce && sso.nonce && sso.nonce === nonce && (!sso.exp || Date.now() <= Number(sso.exp)));
+
+  if(ok){
+    try{
+      const role = inferRole(sso.name, sso.role);
+      localStorage.setItem(CURRENT_KEY, JSON.stringify({ name:sso.name, user:sso.name, role }));
+      sessionStorage.setItem("tasunSsoTab_v1","1");
+      window.__TASUN_SSO_OK__ = true;
+    }catch(_e){}
+    return;
+  }
+
+  try{
+    const base = (typeof window.__withV === "function") ? window.__withV("index.html") : "index.html";
+    const u = new URL(base, location.href);
+    u.searchParams.set("next", location.pathname.split("/").pop() || "汐東工程管理表.html");
+    location.replace(u.toString());
+  }catch(_e){}
+})();
+</script>
 
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -642,16 +659,18 @@
     function safeParse(s, fallback){ try{ return JSON.parse(s); }catch(_){ return fallback; } }
 
     function getCurrent(){
-      const raw = localStorage.getItem(CURRENT_KEY);
+      const raw = sessionStorage.getItem(CURRENT_KEY) || localStorage.getItem(CURRENT_KEY);
       if(!raw) return USERS[0];
       const obj = safeParse(raw, null);
       const name = obj?.name || obj?.user || obj?.username || obj?.account;
       const hit = USERS.find(u => u.name === name);
-      return hit || USERS[0];
+      return hit || { name: (name || "alex"), role: String(obj?.role || "read").toLowerCase() };
     }
 
     function setCurrent(u){
-      localStorage.setItem(CURRENT_KEY, JSON.stringify({ name:u.name, user:u.name, role:u.role }));
+      const payload = JSON.stringify({ name:u.name, user:u.name, role:u.role });
+      sessionStorage.setItem(CURRENT_KEY, payload);
+      localStorage.setItem(CURRENT_KEY, payload);
     }
 
     function renderUser(){
@@ -705,11 +724,12 @@
     }
 
     $("btnSwitch").addEventListener("click", () => {
-      const cur = getCurrent();
-      const idx = USERS.findIndex(u => u.name === cur.name);
-      const next = USERS[(idx + 1) % USERS.length];
-      setCurrent(next);
-      renderUser();
+      try{ sessionStorage.removeItem("tasunSessionLogin_v1"); }catch(_e){}
+      try{ sessionStorage.removeItem("tasunCurrentUser_v1"); }catch(_e){}
+      try{ sessionStorage.removeItem("tasunSsoTab_v1"); }catch(_e){}
+      try{ localStorage.removeItem("tasunCurrentUser_v1"); }catch(_e){}
+      try{ localStorage.removeItem("tasunSso_v1"); }catch(_e){}
+      window.__go("index.html");
     });
 
     $("btnBack").addEventListener("click", () => {
