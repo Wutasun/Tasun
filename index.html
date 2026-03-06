@@ -1382,12 +1382,11 @@ function runIndexApp(){
 
       const AUTH_KEY    = "tasunAuthTable_v1";
       const CURRENT_KEY = "tasunCurrentUser_v1";
-    // ====== ✅SSO：同設備同瀏覽器「只登入一次」＋ 10 分鐘閒置跨頁才再登入（不動 UI） ======
-    const SSO_KEY = "tasunSso_v1";                // localStorage：跨頁共用（但需搭配 session nonce）
-    const SSO_NONCE_KEY = "tasunSsoNonce_v1";     // sessionStorage：關閉瀏覽器/分頁即失效
-    const SSO_TTL_MS = 1000 * 60 * 10;            // 10 分鐘（閒置超過 → 下一次跨頁才要求再登入）
+    // ====== ✅SSO：全站免重複登入（由 index 建立 token，子頁讀取 token 直接通過） ======
+    const SSO_KEY = "tasunSso_v1";
+    const SSO_TTL_MS = 1000 * 60 * 60 * 12; // 12 小時（可自行調整）
 
-    // ✅角色推斷（避免 inferRole 未定義導致 setSSO 失敗）
+    // ✅SSO 角色推斷（避免 inferRole 未定義導致 setSSO 失敗）
     function inferRole(name, role){
       const r = String(role || "").trim().toLowerCase();
       if(r) return r;
@@ -1397,63 +1396,35 @@ function runIndexApp(){
       return "read";
     }
 
-    function getOrCreateNonce(){
-      try{
-        let n = sessionStorage.getItem(SSO_NONCE_KEY) || "";
-        if(!n){
-          n = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ("n_" + Math.random().toString(16).slice(2) + Date.now());
-          sessionStorage.setItem(SSO_NONCE_KEY, n);
-        }
-        return n;
-      }catch(_e){
-        return "";
-      }
-    }
 
     function setSSO(user){
       try{
         const now = Date.now();
-        const name = user?.name || user?.user || user?.username || "alex";
-        const role = user?.role || user?.level || inferRole(name, user?.role || user?.level);
-        const nonce = getOrCreateNonce();
-        const payload = { name, role, at: now, lastActive: now, exp: now + SSO_TTL_MS, nonce, v: (window.__CACHE_V || window.TASUN_APP_VER || "") };
-        localStorage.setItem(SSO_KEY, JSON.stringify(payload));
-        try{ localStorage.setItem(CURRENT_KEY, JSON.stringify({ name, user: name, role })); }catch(_e){}
-        try{ sessionStorage.setItem("tasunSsoTab_v1", "1"); }catch(_e2){}
+        const payload = {
+          name: user?.name || user?.user || user?.username || "alex",
+          role: user?.role || inferRole(user?.name || user?.user || user?.username || "alex", user?.role),
+          at: now,
+          exp: now + SSO_TTL_MS,
+          v: (window.__CACHE_V || window.TASUN_APP_VER || "")
+        };
+        sessionStorage.setItem(SSO_KEY, JSON.stringify(payload));
+        // 子頁常用：CURRENT_KEY
+        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ name: payload.name, user: payload.name, role: payload.role })); }catch(_e){}
+        // 同頁簽章（避免某些瀏覽器 sessionStorage 被清）
+        try{ sessionStorage.setItem("tasunSsoTab_v1", "1"); }catch(_e){}
       }catch(_e){}
     }
 
     function getSSO(){
       try{
-        const raw = localStorage.getItem(SSO_KEY);
+        const raw = sessionStorage.getItem(SSO_KEY);
         if(!raw) return null;
         const o = JSON.parse(raw);
         if(!o || !o.name) return null;
-        const nonce = (sessionStorage.getItem(SSO_NONCE_KEY) || "");
-        if(!nonce || !o.nonce || o.nonce !== nonce) return null;
         if(o.exp && Date.now() > Number(o.exp)) return null;
         return o;
       }catch(_e){ return null; }
     }
-
-    function touchSSO(){
-      try{
-        const o = getSSO();
-        if(!o) return;
-        const now = Date.now();
-        o.lastActive = now;
-        o.exp = now + SSO_TTL_MS;
-        localStorage.setItem(SSO_KEY, JSON.stringify(o));
-      }catch(_e){}
-    }
-
-    // ✅使用者有操作就續命（不跳畫面、不改 UI）
-    (function(){
-      let t=0;
-      const bump = ()=>{ const now=Date.now(); if(now - t < 1500) return; t=now; try{ touchSSO(); }catch(_e){} };
-      ["click","keydown","touchstart"].forEach(ev=>{ try{ window.addEventListener(ev, bump, {passive:true,capture:true}); }catch(_e){} });
-      try{ window.addEventListener("focus", bump, {passive:true}); }catch(_e){}
-    })();
 
       const INDEX_SESSION_KEY = "tasunIndexSessionAuthed_v1";
       const SESSION_KEY = "tasunSessionLogin_v1";
@@ -1694,12 +1665,6 @@ function runIndexApp(){
                 const v = (row?.v == null) ? "" : String(row.v);
                 if(localStorage.getItem(k) !== v) localStorage.setItem(k, v);
               });
-            }finally{
-              cloudApplying = false;
-            }
-            // ✅不 reload：只重建按鍵/登入清單
-            try{ onIndexConfigApplied(); }catch(e){}
-          }
             }finally{
               cloudApplying = false;
             }
@@ -2095,8 +2060,6 @@ function getSession(){
   return null;
 }
 
-;
-      }
 
       const ROLE_MAP = {
         "btn1": ["admin","write","read"],
@@ -2982,20 +2945,6 @@ return false; }
         return true;
       }
 
-      function tryAutoLoginSSO(){
-        try{
-          const sso = getSSO();
-          if(!sso || !sso.name) return false;
-          // AUTH_TABLE 以權限表為準
-          const u = (Array.isArray(AUTH_TABLE) ? AUTH_TABLE : []).find(r => r.username === sso.name);
-          if(!u) return false;
-          // 續命
-          try{ touchSSO(); }catch(_e){}
-          try{ applyUser(u); }catch(e){ return false; }
-          return true;
-        }catch(_e){ return false; }
-      }
-
       function showLogin(){
         document.body.classList.add("locked");
         loginOverlay.style.display = "flex";
@@ -3012,24 +2961,41 @@ scheduleAll();
 
         setTimeout(() => { try{ usernameDisplay && usernameDisplay.focus(); }catch(e){} }, 0);
       }
-
-      function autoEnterIfSessionValid(){
-        // ✅ 使用 Session Cookie + sessionStorage：同一瀏覽器工作階段只要登入一次，其他頁/新分頁可直接通行
-        // 但關閉整個瀏覽器後，Session Cookie 會清掉，重新開啟仍需登入
-        try{
-          if(!window.TasunAuthV4) return;
-          const sess = window.TasunAuthV4.getSession && window.TasunAuthV4.getSession();
-          if(!sess || !sess.user) return;
-          // 若 cookie/session 有效，直接進入
-          enterWithUser(sess.user, sess.r || sess.role || "read");
-        }catch(e){}
+      function setLoginMsg(msg){
+        const s = String(msg || "");
+        if(loginError) loginError.textContent = s;
       }
 
+      function hideLogin(){
+        document.body.classList.remove("locked");
+        if(loginOverlay) loginOverlay.style.display = "none";
+      }
+
+      const loginUser = usernameSel;
+      const loginPass = $("#password");
+
+      function enterWithUser(username, role){
+        const userName = String(username || "").trim();
+        const level = String(role || "").trim().toLowerCase();
+        if(!userName) return false;
+        const u = AUTH_TABLE.find(r => r.username === userName);
+        if(!u) return false;
+        if(level && String(u.level || "").toLowerCase() !== level){
+          u.level = level;
+        }
+        try{ setSession(u); }catch(e){}
         loginSub.textContent = `已登入：${u.username}（${u.level}）… 正在進入`;
         setTimeout(() => {
           if(!getSession()) return;
           applyUser(u);
         }, 220);
+        return true;
+      }
+
+      function autoEnterIfSessionValid(){
+        const sess = getSession();
+        if(!sess || !sess.user) return false;
+        return enterWithUser(sess.user, sess.role || "read");
       }
 
       function applyUser(user){
@@ -3037,10 +3003,8 @@ scheduleAll();
         loginOverlay.style.display = "none";
         loginSub.textContent = "";
 
-        // ✅登入成功：寫入 CURRENT_KEY + SSO（同瀏覽器跨頁免重複登入；10 分鐘閒置跨頁才再登入）
-        try{ localStorage.setItem(CURRENT_KEY, JSON.stringify({ name: user.username, user: user.username, role: user.level })); }catch(e){}
-        try{ setSSO({ username: user.username, level: user.level }); }catch(e){}
-
+        // v4.1: 登入狀態由 TasunAuthV4 以 Session Cookie + sessionStorage 維持（同瀏覽器工作階段一次登入即可）
+        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: user.level })); }catch(e){}
 
         CURRENT_USER = user;
 
@@ -3094,8 +3058,8 @@ scheduleAll();
 
       ensureCloudMounted(null).catch(()=>{});
 
-      // ✅進入首頁：保險版 — 一律先顯示登入（不自動通行）
-      if(!tryAutoLoginSSO()) showLogin();
+      // ✅進入首頁：先嘗試同瀏覽器 SSO / session，失敗才顯示登入
+      if(!(tryAutoLoginSSO() || tryEnterBySessionSilently() || autoEnterIfSessionValid())) showLogin();
 if(zenImg){
         zenImg.addEventListener("load", () => { scheduleAll(); }, { once:false });
       }
@@ -3108,8 +3072,8 @@ if(zenImg){
 
       loginForm.addEventListener("submit", async (e) => {
         e.preventDefault();
-        const username = (loginUser.value || "").trim();
-        const password = (loginPass.value || "").trim();
+        const username = (loginUser && loginUser.value || "").trim();
+        const password = (loginPass && loginPass.value || "").trim();
         if(!username || !password){
           setLoginMsg("請輸入帳號與密碼");
           return;
@@ -3117,46 +3081,38 @@ if(zenImg){
 
         setLoginMsg("登入中…");
 
-        // ✅ v4.1：改用 Worker /api/tasun/login（帳密由 D1 tasun_users 驗證）
-        // 成功後 TasunAuthV4 會把 session 存到「Session Cookie」(關瀏覽器會清掉)，並同步放到 sessionStorage
         try{
-          if(!window.TasunAuthV4){
-            throw new Error("TasunAuthV4 not loaded");
-          }
-          const apiBase = (window.TasunCloudWrapV4 && window.TasunCloudWrapV4.getApiBase && window.TasunCloudWrapV4.getApiBase()) || (window.TASUN_API_BASE || "");
-          const r = await window.TasunAuthV4.login({ apiBase, username, password });
-          if(!r || !r.ok){
-            setLoginMsg((r && (r.message || r.error)) || "登入失敗");
+          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+          const user = AUTH_TABLE.find(r => r.username === username);
+          if(!user){
+            setLoginMsg("查無此使用者");
             return;
           }
 
-          // 讀取權限表：按鍵 btn1..btn5（沒有就用預設 role 規則）
-          let entryButtons = null;
-          try{
-            const rr = await fetch(`${apiBase}/api/tasun/auth/read`,{
-              method:"POST",
-              headers:{ "content-type":"application/json" },
-              body: JSON.stringify({ username })
-            });
-            const jj = await rr.json().catch(()=>null);
-            if(jj && jj.ok && jj.user){
-              entryButtons = jj.user.entryButtons || null;
-            }
-          }catch(_e){}
+          let ok = false;
+          if(user.passHash){
+            const inputHash = await sha256Hex(password);
+            ok = (inputHash === user.passHash);
+          }else if(user.password){
+            ok = (password === user.password);
+          }
+          if(!ok){
+            setLoginMsg("密碼錯誤");
+            return;
+          }
 
-          const role = r.role || r.level || "read";
-          const user = { username, level: role, entryButtons };
-
+          try{ setSession(user); }catch(_e){}
           applyUser(user);
 
-          // 登入成功
-          loginPass.value = "";
+          if(loginPass) loginPass.value = "";
           setLoginMsg("");
           hideLogin();
         }catch(err){
           setLoginMsg("登入失敗：" + (err && err.message ? err.message : String(err)));
         }
-      });btnForceRelogin.addEventListener("click", () => {
+      });
+
+      btnForceRelogin.addEventListener("click", () => {
         clearSession();
         loginSub.textContent = "請重新輸入密碼登入";
         loginError.textContent = "";
@@ -3175,6 +3131,19 @@ if(zenImg){
         scheduleAll();
       });
 
+      const btnLogout = $("#btnLogout");
+      if(btnLogout){
+        btnLogout.addEventListener("click", () => {
+          clearSession();
+          try{ localStorage.removeItem(CURRENT_KEY); }catch(_e){}
+          try{ localStorage.removeItem(SSO_KEY); }catch(_e){}
+          CURRENT_USER = null;
+          showLogin();
+          scheduleExport("logout");
+          scheduleAll();
+        });
+      }
+
       btnTogglePwd.addEventListener("click", () => {
         const pwd = $("#password");
         pwd.type = (pwd.type === "password") ? "text" : "password";
@@ -3189,17 +3158,15 @@ if(zenImg){
       if(window.visualViewport){
         window.visualViewport.addEventListener("resize", () => scheduleAll(), { passive:true });
       }
-    }    // ✅啟動保險：不論 Loader/Core 是否存在，都安排一個 fallback，避免「Loader 存在但 ready 沒呼叫」導致首頁不出登入
+    }
+
     if(window.TasunLoader && typeof window.TasunLoader.ready === "function"){
-      try{ window.TasunLoader.ready(runIndexApp, 8000); }catch(_e){}
+      window.TasunLoader.ready(runIndexApp, 8000);
     }else if(window.TasunCore && typeof window.TasunCore.ready === "function"){
-      try{ window.TasunCore.ready(runIndexApp, 8000); }catch(_e){}
+      window.TasunCore.ready(runIndexApp, 8000);
     }else{
       setTimeout(runIndexApp, 0);
     }
-    // fallback（idempotent：runIndexApp 內有 started guard）
-    setTimeout(()=>{ try{ runIndexApp(); }catch(_e){} }, 1200);
-
   })();
   </script>
 </body>
