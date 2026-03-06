@@ -17,7 +17,7 @@
      * ✅你每次更新本頁，只要改 APP_VER（例如：20260126_01 → 20260126_02）
      * 全部使用者會自動跳到 ?v=APP_VER，保證同步最新版。
      */
-    const APP_VER = "20260126_01";  // ←←← 每次改版請改這裡
+    const APP_VER = "20260306_14";  // ←←← 每次改版請改這裡
     const VER_KEY = "tasun_app_ver_xidong_v1";
     const TAB_GUARD = "tasun_tab_replaced_once_xidong_v1";
 
@@ -60,32 +60,55 @@
   (function(){
     const SSO_KEY="tasunSso_v1", CURRENT_KEY="tasunCurrentUser_v1";
     const NONCE_KEY="tasunSsoNonce_v1";
+    const SESSION_KEY="tasunSessionLogin_v1";
+    const INDEX_SESSION_KEY="tasunIndexSessionAuthed_v1";
     function jparse(s,f){ try{return JSON.parse(s);}catch(_){return f;} }
     function inferRole(n,r){ if(r) return String(r).toLowerCase(); if(n==="alex") return "admin"; if(n==="tasun") return "write"; return "read"; }
 
+    const sess = jparse(sessionStorage.getItem(SESSION_KEY)||"", null);
+    const curLocal = jparse(localStorage.getItem(CURRENT_KEY)||"", null);
+    const curSess = jparse(sessionStorage.getItem(CURRENT_KEY)||"", null);
     const sso = jparse(localStorage.getItem(SSO_KEY)||"", null);
     const nonce = (function(){ try{ return sessionStorage.getItem(NONCE_KEY)||""; }catch(_){ return ""; } })();
 
-    const ok = !!(sso && sso.name && (!sso.exp || Date.now() <= Number(sso.exp)) && nonce && sso.nonce && sso.nonce === nonce);
+    let ok = false;
+    let name = "", role = "";
+
+    if(sess && sess.user && sessionStorage.getItem(INDEX_SESSION_KEY)==="1"){
+      ok = true;
+      name = String(sess.user||"");
+      role = inferRole(name, sess.role);
+    }else if(sso && sso.name && (!sso.exp || Date.now() <= Number(sso.exp)) && (!sso.nonce || !nonce || sso.nonce === nonce)){
+      ok = true;
+      name = String(sso.name||"");
+      role = inferRole(name, sso.role);
+    }else if(curSess && (curSess.name||curSess.user)){
+      ok = true;
+      name = String(curSess.name||curSess.user||"");
+      role = inferRole(name, curSess.role);
+    }else if(curLocal && (curLocal.name||curLocal.user)){
+      ok = true;
+      name = String(curLocal.name||curLocal.user||"");
+      role = inferRole(name, curLocal.role);
+    }
 
     if(ok){
       try{
-        localStorage.setItem(CURRENT_KEY, JSON.stringify({ name:sso.name, user:sso.name, role: inferRole(sso.name, sso.role) }));
+        localStorage.setItem(CURRENT_KEY, JSON.stringify({ name:name, user:name, role: role }));
+        sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ name:name, user:name, role: role }));
+        if(nonce) sessionStorage.setItem("tasunSsoTab_v1","1");
       }catch(_e){}
-      try{ sessionStorage.setItem("tasunSsoTab_v1","1"); }catch(_e2){}
       window.__TASUN_SSO_OK__=true;
       return;
     }
 
-    // ❗未登入/已逾時/瀏覽器重開：導回首頁登入（保留版本參數）
     try{
       const base = (typeof window.__withV === "function") ? window.__withV("index.html") : "index.html";
       const u = new URL(base, location.href);
       u.searchParams.set("next", location.pathname.split("/").pop() || "汐東工程管理表.html");
       location.replace(u.toString());
     }catch(_e3){}
-  })();
-</script>
+  })();</script>
 
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -657,7 +680,7 @@
     function safeParse(s, fallback){ try{ return JSON.parse(s); }catch(_){ return fallback; } }
 
     function getCurrent(){
-      const raw = localStorage.getItem(CURRENT_KEY);
+      const raw = sessionStorage.getItem(CURRENT_KEY) || localStorage.getItem(CURRENT_KEY);
       if(!raw) return USERS[0];
       const obj = safeParse(raw, null);
       const name = obj?.name || obj?.user || obj?.username || obj?.account;
@@ -667,6 +690,20 @@
 
     function setCurrent(u){
       localStorage.setItem(CURRENT_KEY, JSON.stringify({ name:u.name, user:u.name, role:u.role }));
+      try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ name:u.name, user:u.name, role:u.role })); }catch(_e){}
+      try{
+        const raw = localStorage.getItem("tasunSso_v1") || "";
+        const sso = safeParse(raw, null) || {};
+        const nonce = sessionStorage.getItem("tasunSsoNonce_v1") || sso.nonce || "";
+        localStorage.setItem("tasunSso_v1", JSON.stringify({
+          name:u.name,
+          role:u.role,
+          at: Date.now(),
+          exp: Date.now() + 1000*60*60*12,
+          nonce: nonce,
+          v: window.__CACHE_V || ""
+        }));
+      }catch(_e){}
     }
 
     function renderUser(){
@@ -739,7 +776,7 @@
   </script>
 
   <!-- ✅【允許新增段 1/2】：載入雲端套件（固定樣式，不動 UI/CSS/結構） -->
-  <script src="tasun-cloud-kit.js?v=APP_VER"></script>
+  <script src="tasun-cloud-kit.js?v=20260306_14"></script>
 
   <!-- ✅【允許新增段 2/2】：最穩兼容版（10 行接雲端） -->
   <script>
