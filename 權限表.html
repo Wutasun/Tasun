@@ -12,10 +12,10 @@
   <script>
   (function () {
     /**
-     * ✅你每次更新本頁，只要改 APP_VER（例如：20260130_01 → 20260203_01）
+     * ✅你每次更新本頁，只要改 APP_VER（例如：20260130_01 → 20260307_06）
      * 全部使用者會自動跳到 ?v=APP_VER，保證同步最新版。
      */
-    const APP_VER = "20260307_10";  // ←←← 每次改版請改這裡（建議與首頁/管理表一致）
+    const APP_VER = "20260307_06";  // ←←← 每次改版請改這裡（建議與首頁/管理表一致）
     const VER_KEY = "tasun_app_ver_auth_v1";
     const TAB_GUARD = "tasun_tab_replaced_once_auth_v1";
 
@@ -425,6 +425,46 @@
       justify-content:flex-end;
     }
 
+    .navRows{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      width: 100%;
+    }
+    .navRow{
+      display:grid;
+      grid-template-columns: 36px 86px minmax(0,1fr);
+      gap: 10px;
+      align-items:center;
+      padding: 6px 0;
+      border-radius: 14px;
+      transition: background .12s ease, opacity .12s ease, transform .12s ease;
+    }
+    .navRow:hover{
+      background: rgba(255,255,255,.02);
+    }
+    .navRow.dragging{
+      opacity:.55;
+      transform: scale(.995);
+      background: rgba(246,211,122,.06);
+    }
+    .dragHandle{
+      width: 36px;
+      height: 36px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      border-radius: 12px;
+      cursor: grab;
+      user-select:none;
+      border: 1px solid rgba(246,211,122,.14);
+      background: rgba(0,0,0,.22);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.02);
+      font-size: 18px;
+      line-height: 1;
+    }
+    .dragHandle:active{ cursor: grabbing; }
+
     .topbarMobile{
       display:none;
       padding: 12px 14px;
@@ -529,6 +569,8 @@
       .tableWrap{ display:none; }
       .cards{ display:flex; flex-direction:column; }
       .navGrid{ grid-template-columns: 78px 1fr; }
+      .navRow{ grid-template-columns: 34px 64px minmax(0,1fr); }
+      .navRow{ grid-template-columns: 34px 64px minmax(0,1fr); }
       .entryBody{ grid-template-columns: 1fr; }
       .entryLabel{ display:none; }
       .navPill{ min-width: 100%; }
@@ -652,21 +694,22 @@
         <!-- ✅ 按鍵名稱設定 -->
         <div class="navPanel" id="navPanel">
           <div class="navPanelHead">
-            <strong id="navPanelTitle">按鍵名稱設定</strong>
+            <strong id="navPanelTitle">按鍵名稱設定（與上方權限欄位即時連動）</strong>
             <button class="btn" id="navCloseBtn">關閉</button>
           </div>
-          <div class="navGrid">
+          <div class="navGrid" id="navDynamicGrid">
             <div class="navHint">
-              說明：按鍵位置固定不變，左側仍依目前入口頁的原始鍵位（例如 btn1、btn2…）顯示。<br>
-              右側下拉選單項目，來源是「目前入口網頁」現有按鍵名稱；選取後會把<strong>名稱 + 連結網址（href）+ target + roles</strong> 一起移到該位置。<br>
-              儲存後，上方預覽按鍵區、權限欄位標題、實際入口頁按鍵都會同步更新。
+              說明：這裡會直接跟著上方「入口網頁」切換，顯示該入口頁的按鍵名稱與按鍵數量。<br>
+              若目前入口頁是 <b>index.html</b>，會寫入 <b>tasunNavButtons_v1</b>（並更新 <b>tasunRoutes_v1</b>）；若是其他入口頁，會寫入 <b>tasunAuthEntryButtons_v1</b>，讓權限表、預覽區、欄位標題、卡片權限一起同步。<br>
+              提醒：<b>btn2</b> 連結固定為「汐東工程管理表.html」，只有名稱可調整，不會改變連結。
             </div>
 
             <div class="navLabel">目前入口</div>
             <div class="tag"><b id="navPanelEntryTag">index.html</b></div>
 
-            <div class="navHint" style="grid-column:1 / -1;">下方每一列是固定位置，請用右側下拉選單指定這個位置要顯示哪一個按鍵名稱。</div>
-            <div id="navDynamicRows" style="grid-column:1 / -1; display:grid; grid-template-columns: 90px 1fr; gap:10px 12px;"></div>
+            <div class="navHint">下方欄位名稱與順序會依目前入口網頁按鍵數量自動展開，並與上方預覽 / 欄位標題即時同步。</div>
+
+            <div id="navDynamicRows" class="navRows" style="grid-column:1 / -1;"></div>
           </div>
 
           <div class="navActions">
@@ -701,6 +744,7 @@
   const NAV_KEY      = 'tasunNavButtons_v1';
   const ROUTE_KEY    = 'tasunRoutes_v1';
   const BTN_META_KEY = 'tasunButtonMeta_v1';
+  const AUTH_ENTRY_BUTTONS_KEY = 'tasunAuthEntryButtons_v1';
 
   const ENTRY_SELECTED_KEY = 'tasunEntrySelected_v1';
   const PERM_MATRIX_KEY    = 'tasunPermMatrix_v1';
@@ -1179,15 +1223,40 @@ function safeJsonParse(s, fallback){
         const nm = stripInvisibles(it.name || it.key);
         if(!kk) return;
         const hit = idxMap.get(kk);
+        const href = stripInvisibles(it.href || '');
+        const target = stripInvisibles(it.target || '');
+        const roles = Array.isArray(it.roles) ? it.roles : [];
         if(hit === undefined){
-          cur.push({ key: kk, name: nm || kk });
+          cur.push({ key: kk, name: nm || kk, href, target, roles });
           idxMap.set(kk, cur.length-1);
         }else{
-          cur[hit] = { key: kk, name: nm || kk };
+          cur[hit] = {
+            key: kk,
+            name: nm || kk,
+            href: href || stripInvisibles(cur[hit]?.href || ''),
+            target: target || stripInvisibles(cur[hit]?.target || ''),
+            roles: roles.length ? roles : (Array.isArray(cur[hit]?.roles) ? cur[hit].roles : [])
+          };
         }
       });
     }
   }
+
+  function loadAuthEntryButtons(){
+    const raw = safeJsonParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || 'null', null);
+    return (raw && typeof raw === 'object') ? raw : {};
+  }
+
+  function saveAuthEntryButtons(map){
+    const out = (map && typeof map === 'object') ? map : {};
+    localStorage.setItem(AUTH_ENTRY_BUTTONS_KEY, JSON.stringify(out));
+  }
+
+  function mergeFromAuthEntryButtons(){
+    const map = loadAuthEntryButtons();
+    if(map && typeof map === 'object') mergeEntryButtons(map);
+  }
+
 
   function mergeFromRoutes(){
     const routes = safeJsonParse(localStorage.getItem(ROUTE_KEY) || 'null', null);
@@ -1239,9 +1308,10 @@ function safeJsonParse(s, fallback){
     // reset to defaults first
     dynEntryFiles = DEFAULT_ENTRY_FILES.slice();
     dynEntryButtons = safeJsonParse(JSON.stringify(DEFAULT_ENTRY_BUTTONS), {});
-    // merge from routes + registry (resources 已在外部 merge 過，但這裡也可再保險 merge)
+    // merge from routes + registry + local custom entry buttons
     mergeFromRoutes();
     mergeFromRegistry();
+    mergeFromAuthEntryButtons();
     // 去重（保序）
     const seen = new Set();
     dynEntryFiles = dynEntryFiles.filter(f => {
@@ -1429,20 +1499,35 @@ function safeJsonParse(s, fallback){
     const arr = safeJsonParse(localStorage.getItem(NAV_KEY) || '[]', []);
     if(!Array.isArray(arr) || !arr.length) return null;
 
-    const map = new Map(arr.map(x => [String(x.id||'').toLowerCase(), x]));
     const out = [];
-    for(let i=1;i<=5;i++){
-      const id = `btn${i}`;
-      const hit = map.get(id);
-      const name = String(hit?.label || id).trim() || id;
-      out.push({ key:id, name });
-    }
-    return out;
+    arr.forEach((x, i) => {
+      const id = String(x?.id || ('btn' + (i + 1))).trim() || ('btn' + (i + 1));
+      const name = String(x?.label || id).trim() || id;
+      out.push({
+        key: id,
+        name,
+        href: String(x?.href || '').trim(),
+        target: String(x?.target || '').trim(),
+        roles: Array.isArray(x?.roles) ? x.roles : []
+      });
+    });
+    return out.length ? out : null;
   }
 
   function ensureBtnMetaByEntry(){
     const entry = resolveEntryValue();
-    const entryStore = safeJsonParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || '{}', {});
+    const savedMap = loadAuthEntryButtons();
+    const savedList = savedMap && Array.isArray(savedMap[entry]) ? savedMap[entry] : null;
+    if(savedList && savedList.length){
+      btnMeta = savedList.map((x, i) => ({
+        key: String(x?.key || ('btn' + (i + 1))).trim() || ('btn' + (i + 1)),
+        name: String(x?.name || x?.key || ('btn' + (i + 1))).trim() || String(x?.key || ('btn' + (i + 1))).trim(),
+        href: String(x?.href || '').trim(),
+        target: String(x?.target || '').trim(),
+        roles: Array.isArray(x?.roles) ? x.roles : []
+      }));
+      return;
+    }
 
     if(entry === 'index.html'){
       const fromNav = buildBtnMetaFromNavKey();
@@ -1452,33 +1537,33 @@ function safeJsonParse(s, fallback){
         return;
       }
       btnMeta = [
-        { key:'btn1', name:'btn1' },
-        { key:'btn2', name:'btn2' },
-        { key:'btn3', name:'btn3' },
-        { key:'btn4', name:'btn4' },
-        { key:'btn5', name:'btn5' },
+        { key:'btn1', name:'btn1', href:'', target:'', roles:[] },
+        { key:'btn2', name:'btn2', href:METRO_FIXED_HREF, target:'', roles:[] },
+        { key:'btn3', name:'btn3', href:'', target:'', roles:[] },
+        { key:'btn4', name:'btn4', href:'', target:'', roles:[] },
+        { key:'btn5', name:'btn5', href:'', target:'', roles:[] },
       ];
-      return;
-    }
-
-    const stored = entryStore && Array.isArray(entryStore[entry]) ? entryStore[entry] : null;
-    if(stored && stored.length){
-      btnMeta = stored.map(x => ({ key:String(x.key||'').trim(), name:String(x.name||x.label||x.key||'').trim() }));
       return;
     }
 
     const list = dynEntryButtons[entry];
     if(Array.isArray(list) && list.length){
-      btnMeta = list.map(x => ({ key:String(x.key||'').trim(), name:String(x.name||x.label||x.key||'').trim() }));
+      btnMeta = list.map((x, i) => ({
+        key: String(x?.key || ('btn' + (i + 1))).trim() || ('btn' + (i + 1)),
+        name: String(x?.name || x?.key || ('btn' + (i + 1))).trim() || String(x?.key || ('btn' + (i + 1))).trim(),
+        href: String(x?.href || '').trim(),
+        target: String(x?.target || '').trim(),
+        roles: Array.isArray(x?.roles) ? x.roles : []
+      }));
       return;
     }
 
     btnMeta = [
-      { key:'btn1', name:'btn1' },
-      { key:'btn2', name:'btn2' },
-      { key:'btn3', name:'btn3' },
-      { key:'btn4', name:'btn4' },
-      { key:'btn5', name:'btn5' },
+      { key:'btn1', name:'btn1', href:'', target:'', roles:[] },
+      { key:'btn2', name:'btn2', href:'', target:'', roles:[] },
+      { key:'btn3', name:'btn3', href:'', target:'', roles:[] },
+      { key:'btn4', name:'btn4', href:'', target:'', roles:[] },
+      { key:'btn5', name:'btn5', href:'', target:'', roles:[] },
     ];
   }
 
@@ -1496,6 +1581,16 @@ function safeJsonParse(s, fallback){
       const cls = allowed ? '' : 'dim';
       return `<div class="navPill ${cls}"><span>${escapeHtml(b.name || b.key)}</span> <small>(${escapeHtml(b.key)})</small></div>`;
     }).join('');
+  }
+
+  function syncEntryLinkedSections(){
+    const entry = resolveEntryValue();
+    const count = Array.isArray(btnMeta) ? btnMeta.length : 0;
+    if(navPanelEntryTag) navPanelEntryTag.textContent = entry;
+    if(navPanelTitle){
+      navPanelTitle.textContent = `按鍵名稱設定（${entry}｜共 ${count} 顆）`;
+    }
+    buildNavPanelRows();
   }
 
   function renderHeaders(){
@@ -1646,6 +1741,7 @@ function safeJsonParse(s, fallback){
     renderTable();
     renderCards();
     renderEntryPreview();
+    syncEntryLinkedSections();
 
     addBtn.disabled = !isAdmin;
     navNameBtnD.disabled = !isAdmin;
@@ -1915,7 +2011,8 @@ function safeJsonParse(s, fallback){
     const v = resolveEntryValue();
     saveSelectedEntry(v);
     renderAll();
-    updateStates(`已切換入口網頁：${v}\n（下方欄位與預覽已同步切換）`);
+    if(navPanel.classList.contains('show')) loadNavNamesIntoInputs();
+    updateStates(`已切換入口網頁：${v}\n（下方欄位、預覽與按鍵名稱設定已同步切換）`);
     scheduleCloudPush('entry-changed');
   }
   entrySelect.addEventListener('change', onEntryChanged);
@@ -2154,141 +2251,6 @@ function safeJsonParse(s, fallback){
     ];
   }
 
-
-  function getRouteHrefByLabel(label){
-    const routes = safeJsonParse(localStorage.getItem(ROUTE_KEY) || '{}', {});
-    return (routes && typeof routes === 'object') ? String(routes[String(label||'').trim()] || '').trim() : '';
-  }
-
-  function readEntryButtonStore(){
-    const raw = safeJsonParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || '{}', {});
-    return (raw && typeof raw === 'object') ? raw : {};
-  }
-
-  function normalizeButtonItem(x, fallbackKey, fallbackName){
-    const key = String(x?.key || fallbackKey || '').trim();
-    const name = String(x?.name || x?.label || fallbackName || key).trim() || key;
-    const href = String(x?.href || getRouteHrefByLabel(name) || '').trim();
-    return {
-      key,
-      name,
-      href,
-      target: String(x?.target || '').trim(),
-      roles: Array.isArray(x?.roles) ? x.roles.slice() : []
-    };
-  }
-
-  function getCurrentEntryButtonItems(){
-    const entry = resolveEntryValue();
-    if(entry === 'index.html'){
-      return readNavButtons().map((x, i) => normalizeButtonItem(x, 'btn'+(i+1), x?.label || 'btn'+(i+1)));
-    }
-    const store = readEntryButtonStore();
-    if(Array.isArray(store[entry]) && store[entry].length){
-      return store[entry].map((x, i) => normalizeButtonItem(x, x?.key || ('btn'+(i+1)), x?.name || x?.label || x?.key || ('btn'+(i+1))));
-    }
-    const list = Array.isArray(dynEntryButtons[entry]) ? dynEntryButtons[entry] : [];
-    if(list.length){
-      return list.map((x, i) => normalizeButtonItem(x, x?.key || ('btn'+(i+1)), x?.name || x?.label || x?.key || ('btn'+(i+1))));
-    }
-    return btnMeta.map((x, i) => normalizeButtonItem(x, x?.key || ('btn'+(i+1)), x?.name || x?.key || ('btn'+(i+1))));
-  }
-
-  let navPanelSlots = [];
-  let navPanelSourceItems = [];
-
-  function buildNavPanelRows(){
-    if(!navDynamicRows) return;
-    const entry = resolveEntryValue();
-    if(navPanelEntryTag) navPanelEntryTag.textContent = entry;
-    if(navPanelTitle) navPanelTitle.textContent = `按鍵名稱設定（${entry}｜共 ${btnMeta.length} 顆）`;
-
-    const items = getCurrentEntryButtonItems();
-    navPanelSlots = items.map((it, i) => ({ key:String(it.key||('btn'+(i+1))).trim() || ('btn'+(i+1)), value:String(it.key||('btn'+(i+1))).trim() || ('btn'+(i+1)) }));
-    navPanelSourceItems = items.map(it => ({ ...it }));
-
-    if(!items.length){
-      navDynamicRows.innerHTML = `<div class="navHint" style="grid-column:1 / -1;">目前入口網頁尚未提供按鍵定義，請先建立入口頁按鍵資料。</div>`;
-      return;
-    }
-
-    const optionHtml = (selectedKey) => items.map(src => `<option value="${escapeHtml(src.key)}" ${src.key===selectedKey?'selected':''}>${escapeHtml(src.name)}${src.href ? ' ｜ ' + escapeHtml(src.href) : ''}</option>`).join('');
-
-    navDynamicRows.innerHTML = navPanelSlots.map((slot, i) => `
-      <div class="navLabel">${escapeHtml(slot.key)}</div>
-      <select class="field navNameSelect" data-row="${i}" data-key="${escapeHtml(slot.key)}">${optionHtml(slot.value)}</select>
-    `).join('');
-
-    navDynamicRows.querySelectorAll('.navNameSelect').forEach(sel => {
-      sel.addEventListener('change', onNavSelectChange);
-    });
-  }
-
-  function syncNavSelectionPreview(){
-    if(!navPanelSlots.length || !navPanelSourceItems.length) return;
-    btnMeta = navPanelSlots.map(slot => {
-      const src = navPanelSourceItems.find(x => x.key === slot.value) || navPanelSourceItems[0] || { name: slot.key };
-      return { key: slot.key, name: src.name || slot.key };
-    });
-    renderHeaders();
-    renderTable();
-    renderCards();
-    renderEntryPreview();
-  }
-
-  function onNavSelectChange(e){
-    const row = Number(e.target.dataset.row);
-    const nextVal = String(e.target.value || '').trim();
-    const oldVal = navPanelSlots[row] ? navPanelSlots[row].value : '';
-    if(!nextVal || row < 0 || !navPanelSlots[row]) return;
-    const hit = navPanelSlots.findIndex((s, i) => i !== row && s.value === nextVal);
-    if(hit >= 0) navPanelSlots[hit].value = oldVal;
-    navPanelSlots[row].value = nextVal;
-    buildNavPanelRows();
-    syncNavSelectionPreview();
-  }
-
-  function persistNavSelection(){
-    const entry = resolveEntryValue();
-    const selectedItems = navPanelSlots.map(slot => {
-      const src = navPanelSourceItems.find(x => x.key === slot.value) || { name: slot.key, href:'', target:'', roles:[] };
-      return {
-        key: slot.key,
-        name: String(src.name || slot.key).trim() || slot.key,
-        href: String(src.href || '').trim(),
-        target: String(src.target || '').trim(),
-        roles: Array.isArray(src.roles) ? src.roles.slice() : []
-      };
-    });
-
-    if(entry === 'index.html'){
-      const out = selectedItems.map((it, i) => ({
-        id: 'btn'+(i+1),
-        label: it.name,
-        href: it.href,
-        target: it.target,
-        roles: it.roles
-      }));
-      localStorage.setItem(NAV_KEY, JSON.stringify(out));
-      const oldRoutes = safeJsonParse(localStorage.getItem(ROUTE_KEY) || '{}', {});
-      const routes = (oldRoutes && typeof oldRoutes === 'object') ? { ...oldRoutes } : {};
-      out.forEach(it => { if(it.label) routes[it.label] = it.href; });
-      localStorage.setItem(ROUTE_KEY, JSON.stringify(routes));
-    }else{
-      const store = readEntryButtonStore();
-      store[entry] = selectedItems;
-      localStorage.setItem(AUTH_ENTRY_BUTTONS_KEY, JSON.stringify(store));
-      const oldRoutes = safeJsonParse(localStorage.getItem(ROUTE_KEY) || '{}', {});
-      const routes = (oldRoutes && typeof oldRoutes === 'object') ? { ...oldRoutes } : {};
-      selectedItems.forEach(it => { if(it.name && it.href) routes[it.name] = it.href; });
-      localStorage.setItem(ROUTE_KEY, JSON.stringify(routes));
-    }
-
-    ensureBtnMetaByEntry();
-    renderAll();
-    scheduleCloudPush('nav-order-save');
-  }
-
   function maybeUpdateHrefByRename(oldLabel, newLabel, oldHref){
     const oL = String(oldLabel||'').trim();
     const nL = String(newLabel||'').trim();
@@ -2299,41 +2261,66 @@ function safeJsonParse(s, fallback){
     return oH;
   }
 
+  function getExistingEntryItems(entry){
+    const file = stripInvisibles(entry);
+    if(!file) return [];
+    if(file === 'index.html'){
+      return buildBtnMetaFromNavKey() || [];
+    }
+    const savedMap = loadAuthEntryButtons();
+    const savedList = savedMap && Array.isArray(savedMap[file]) ? savedMap[file] : null;
+    if(savedList && savedList.length){
+      return savedList.map((x, i) => ({
+        key: String(x?.key || ('btn' + (i + 1))).trim() || ('btn' + (i + 1)),
+        name: String(x?.name || x?.key || ('btn' + (i + 1))).trim() || String(x?.key || ('btn' + (i + 1))).trim(),
+        href: String(x?.href || '').trim(),
+        target: String(x?.target || '').trim(),
+        roles: Array.isArray(x?.roles) ? x.roles : []
+      }));
+    }
+    const dyn = Array.isArray(dynEntryButtons[file]) ? dynEntryButtons[file] : [];
+    return dyn.map((x, i) => ({
+      key: String(x?.key || ('btn' + (i + 1))).trim() || ('btn' + (i + 1)),
+      name: String(x?.name || x?.key || ('btn' + (i + 1))).trim() || String(x?.key || ('btn' + (i + 1))).trim(),
+      href: String(x?.href || '').trim(),
+      target: String(x?.target || '').trim(),
+      roles: Array.isArray(x?.roles) ? x.roles : []
+    }));
+  }
+
   function writeNavButtons(updated){
     const currentArr = safeJsonParse(localStorage.getItem(NAV_KEY) || '[]', []);
     const curMap = new Map((Array.isArray(currentArr) ? currentArr : []).map(x => [String(x.id||'').toLowerCase(), x]));
 
-    const out = [];
-    for(let i=1;i<=5;i++){
-      const id = `btn${i}`;
-      const prev = curMap.get(id) || {};
+    const out = (Array.isArray(updated) ? updated : []).map((it, i) => {
+      const id = String(it?.id || it?.key || ('btn' + (i + 1))).trim() || ('btn' + (i + 1));
+      const prev = curMap.get(id.toLowerCase()) || {};
       const oldLabel = String(prev.label || id).trim() || id;
-      const newLabel = String(updated[i-1]?.label || oldLabel).trim() || oldLabel;
+      const newLabel = String(it?.label || it?.name || oldLabel).trim() || oldLabel;
 
-      let href = String(prev.href || '').trim();
+      let href = String(it?.href || prev.href || '').trim();
       if(id === 'btn2') href = METRO_FIXED_HREF;
       else href = maybeUpdateHrefByRename(oldLabel, newLabel, href);
 
-      out.push({
+      return {
         id,
         label: newLabel,
         href,
-        target: String(prev.target || '').trim(),
-        roles: Array.isArray(prev.roles) ? prev.roles : []
-      });
-    }
+        target: String(it?.target || prev.target || '').trim(),
+        roles: Array.isArray(it?.roles) ? it.roles : (Array.isArray(prev.roles) ? prev.roles : [])
+      };
+    }).filter(it => it.id);
 
     localStorage.setItem(NAV_KEY, JSON.stringify(out));
 
     const oldRoutes = safeJsonParse(localStorage.getItem(ROUTE_KEY) || '{}', {});
     const routes = (oldRoutes && typeof oldRoutes === 'object') ? { ...oldRoutes } : {};
     out.forEach(it => { if(it.label) routes[it.label] = it.href; });
-    routes[out[1]?.label || 'btn2'] = METRO_FIXED_HREF;
+    const metro = out.find(x => x.id === 'btn2');
+    routes[(metro?.label || 'btn2')] = METRO_FIXED_HREF;
     localStorage.setItem(ROUTE_KEY, JSON.stringify(routes));
 
-    // routes 可能帶來新頁面 → 入口清單更新
     buildEntrySelect();
-
     renderAll();
     scheduleCloudPush('nav-rename');
   }
@@ -2341,20 +2328,120 @@ function safeJsonParse(s, fallback){
   function openNavPanel(){
     if(!isAdmin){ setMsg('你不是 admin，不能修改按鍵名稱。', true); return; }
     navPanel.classList.add('show');
-    buildNavPanelRows();
-    syncNavSelectionPreview();
+    syncEntryLinkedSections();
   }
   function closeNavPanel(){ navPanel.classList.remove('show'); }
 
+  function readNavPanelItems(){
+    const rows = Array.from((navDynamicRows && navDynamicRows.querySelectorAll('.navRow')) || []);
+    return rows.map((row, i) => {
+      const input = row.querySelector('.navNameInput');
+      const key = stripInvisibles(row.dataset.key || input?.dataset?.key || (btnMeta[i] && btnMeta[i].key) || ('btn' + (i+1)));
+      const name = stripInvisibles(input?.value) || key;
+      return { key, name };
+    }).filter(it => it.key);
+  }
+
+  function applyNavPanelItemsLive(items, keepPanel){
+    btnMeta = (Array.isArray(items) ? items : []).map(it => ({
+      key: stripInvisibles(it.key),
+      name: stripInvisibles(it.name || it.key) || stripInvisibles(it.key)
+    })).filter(it => it.key);
+    renderHeaders();
+    renderTable();
+    renderCards();
+    renderEntryPreview();
+    if(keepPanel !== false) syncEntryLinkedSections();
+  }
+
+  let navDragKey = '';
+  function bindNavPanelInteractions(){
+    if(!navDynamicRows) return;
+    navDynamicRows.querySelectorAll('.navNameInput').forEach(ip => {
+      ip.addEventListener('input', () => {
+        applyNavPanelItemsLive(readNavPanelItems(), false);
+      });
+    });
+    navDynamicRows.querySelectorAll('.navRow').forEach(row => {
+      row.addEventListener('dragstart', () => {
+        navDragKey = row.dataset.key || '';
+        row.classList.add('dragging');
+      });
+      row.addEventListener('dragend', () => {
+        row.classList.remove('dragging');
+        navDragKey = '';
+        applyNavPanelItemsLive(readNavPanelItems(), false);
+      });
+      row.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        const dragging = navDynamicRows.querySelector('.navRow.dragging');
+        if(!dragging || dragging === row) return;
+        const rect = row.getBoundingClientRect();
+        const after = (e.clientY - rect.top) > rect.height / 2;
+        if(after) row.after(dragging); else row.before(dragging);
+      });
+    });
+  }
+
+  function buildNavPanelRows(){
+    const entry = resolveEntryValue();
+    if(navPanelEntryTag) navPanelEntryTag.textContent = entry;
+    if(!navDynamicRows) return;
+
+    const items = Array.isArray(btnMeta) ? btnMeta : [];
+    navDynamicRows.innerHTML = items.map((b, i) => `
+      <div class="navRow" draggable="true" data-key="${escapeHtml(b.key || ('btn' + (i+1)))}">
+        <div class="dragHandle" title="拖曳排序">☰</div>
+        <div class="navLabel">${escapeHtml(b.key || ('btn' + (i+1)))}</div>
+        <input class="field navNameInput" data-key="${escapeHtml(b.key || ('btn' + (i+1)))}" value="${escapeHtml(b.name || b.key || ('btn' + (i+1)))}" placeholder="${escapeHtml((b.key || ('btn' + (i+1))) + ' 名稱')}">
+      </div>
+    `).join('');
+
+    if(!items.length){
+      navDynamicRows.innerHTML = `<div class="navHint" style="grid-column:1 / -1;">目前入口網頁尚未提供按鍵定義，請先在入口頁 / resources / registry 建立按鍵資料。</div>`;
+      return;
+    }
+    bindNavPanelInteractions();
+  }
+
   function loadNavNamesIntoInputs(){
-    buildNavPanelRows();
-    syncNavSelectionPreview();
+    ensureBtnMetaByEntry();
+    syncEntryLinkedSections();
+  }
+
+  function writeEntryButtons(entry, items){
+    const file = stripInvisibles(entry);
+    if(!file) return;
+    const map = loadAuthEntryButtons();
+    map[file] = (Array.isArray(items) ? items : []).map(it => ({
+      key: stripInvisibles(it.key),
+      name: stripInvisibles(it.name || it.key) || stripInvisibles(it.key)
+    })).filter(it => it.key);
+    saveAuthEntryButtons(map);
+    mergeEntryButtons({ [file]: map[file] });
   }
 
   function saveNavNamesFromInputs(){
     if(!isAdmin){ setMsg('你不是 admin，不能儲存按鍵名稱。', true); return; }
-    persistNavSelection();
-    setMsg('✅ 已儲存按鍵名稱 / 順序 / 連結網址，並同步到目前入口頁。');
+
+    const entry = resolveEntryValue();
+    const items = readNavPanelItems();
+
+    if(!items.length){
+      setMsg('目前入口網頁沒有可儲存的按鍵名稱。', true);
+      return;
+    }
+
+    if(entry === 'index.html'){
+      writeNavButtons(items.map(it => ({ id: it.key, label: it.name })));
+      setMsg('✅ 已儲存 index.html 按鍵名稱並同步（tasunNavButtons_v1 / tasunRoutes_v1）。\n上方預覽、欄位標題與首頁按鍵會同步更新。');
+    }else{
+      writeEntryButtons(entry, items);
+      setMsg(`✅ 已儲存 ${entry} 的按鍵名稱與數量（tasunAuthEntryButtons_v1）。\n上方預覽、欄位標題與權限勾選欄位已同步更新。`);
+    }
+
+    renderAll();
+    buildNavPanelRows();
   }
 
   navNameBtnD.addEventListener('click', openNavPanel);
@@ -2411,8 +2498,8 @@ function safeJsonParse(s, fallback){
     scheduleCloudPull('page-load');
   }
 
-  window.addEventListener('storage', (e) => {
-    if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY){
+  window.addEventListener('storage', async (e) => {
+    if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY || e.key === AUTH_ENTRY_BUTTONS_KEY){
       // routes/registry 變動 → 入口頁清單可更新
       buildEntrySelect();
       renderAll();
@@ -2449,7 +2536,7 @@ function safeJsonParse(s, fallback){
 </script>
 
 <!-- ✅✅✅ [段落 #1] tasun-cloud-kit.js（版本需與本頁 APP_VER 一致） -->
-<script src="tasun-cloud-kit.js?v=20260307_10"></script>
+<script src="tasun-cloud-kit.js?v=20260307_06"></script>
 
 <!-- ✅✅✅ [段落 #2] 永遠自動上雲端（TasunCloudKit）
      - 同步本頁關鍵 localStorage keys
@@ -2465,7 +2552,8 @@ function safeJsonParse(s, fallback){
     'tasunNavButtons_v1',
     'tasunRoutes_v1',
     'tasunEntrySelected_v1',
-    'tasunEntryRegistry_v1'
+    'tasunEntryRegistry_v1',
+    'tasunAuthEntryButtons_v1'
   ];
 
   function getLocal(){
