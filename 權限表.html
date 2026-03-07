@@ -667,7 +667,7 @@
 
             <div class="navHint">下方欄位數量會依目前入口網頁按鍵數量自動展開，並與上方預覽 / 欄位標題同步。</div>
 
-            <div id="navDynamicRows" style="grid-column:1 / -1; display:grid; grid-template-columns: 90px 1fr; gap:10px 12px;"></div>
+            <div id="navDynamicRows" class="navRows" style="grid-column:1 / -1;"></div>
           </div>
 
           <div class="navActions">
@@ -1461,6 +1461,12 @@ function safeJsonParse(s, fallback){
 
   function ensureBtnMetaByEntry(){
     const entry = resolveEntryValue();
+    const savedMap = loadAuthEntryButtons();
+    const savedList = savedMap && Array.isArray(savedMap[entry]) ? savedMap[entry] : null;
+    if(savedList && savedList.length){
+      btnMeta = savedList.map(x => ({ key:String(x.key||'').trim(), name:String(x.name||x.key||'').trim() }));
+      return;
+    }
 
     if(entry === 'index.html'){
       const fromNav = buildBtnMetaFromNavKey();
@@ -1479,7 +1485,6 @@ function safeJsonParse(s, fallback){
       return;
     }
 
-    // dynEntryButtons（resources/registry 可覆蓋）
     const list = dynEntryButtons[entry];
     if(Array.isArray(list) && list.length){
       btnMeta = list.map(x => ({ key:String(x.key||'').trim(), name:String(x.name||x.key||'').trim() }));
@@ -2235,6 +2240,57 @@ function safeJsonParse(s, fallback){
   }
   function closeNavPanel(){ navPanel.classList.remove('show'); }
 
+  function readNavPanelItems(){
+    const rows = Array.from((navDynamicRows && navDynamicRows.querySelectorAll('.navRow')) || []);
+    return rows.map((row, i) => {
+      const input = row.querySelector('.navNameInput');
+      const key = stripInvisibles(row.dataset.key || input?.dataset?.key || (btnMeta[i] && btnMeta[i].key) || ('btn' + (i+1)));
+      const name = stripInvisibles(input?.value) || key;
+      return { key, name };
+    }).filter(it => it.key);
+  }
+
+  function applyNavPanelItemsLive(items, keepPanel){
+    btnMeta = (Array.isArray(items) ? items : []).map(it => ({
+      key: stripInvisibles(it.key),
+      name: stripInvisibles(it.name || it.key) || stripInvisibles(it.key)
+    })).filter(it => it.key);
+    renderHeaders();
+    renderTable();
+    renderCards();
+    renderEntryPreview();
+    if(keepPanel !== false) syncEntryLinkedSections();
+  }
+
+  let navDragKey = '';
+  function bindNavPanelInteractions(){
+    if(!navDynamicRows) return;
+    navDynamicRows.querySelectorAll('.navNameInput').forEach(ip => {
+      ip.addEventListener('input', () => {
+        applyNavPanelItemsLive(readNavPanelItems(), false);
+      });
+    });
+    navDynamicRows.querySelectorAll('.navRow').forEach(row => {
+      row.addEventListener('dragstart', () => {
+        navDragKey = row.dataset.key || '';
+        row.classList.add('dragging');
+      });
+      row.addEventListener('dragend', () => {
+        row.classList.remove('dragging');
+        navDragKey = '';
+        applyNavPanelItemsLive(readNavPanelItems(), false);
+      });
+      row.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        const dragging = navDynamicRows.querySelector('.navRow.dragging');
+        if(!dragging || dragging === row) return;
+        const rect = row.getBoundingClientRect();
+        const after = (e.clientY - rect.top) > rect.height / 2;
+        if(after) row.after(dragging); else row.before(dragging);
+      });
+    });
+  }
+
   function buildNavPanelRows(){
     const entry = resolveEntryValue();
     if(navPanelEntryTag) navPanelEntryTag.textContent = entry;
@@ -2242,13 +2298,18 @@ function safeJsonParse(s, fallback){
 
     const items = Array.isArray(btnMeta) ? btnMeta : [];
     navDynamicRows.innerHTML = items.map((b, i) => `
-      <div class="navLabel">${escapeHtml(b.key || ('btn' + (i+1)))}</div>
-      <input class="field navNameInput" data-key="${escapeHtml(b.key || ('btn' + (i+1)))}" value="${escapeHtml(b.name || b.key || ('btn' + (i+1)))}" placeholder="${escapeHtml((b.key || ('btn' + (i+1))) + ' 名稱')}">
+      <div class="navRow" draggable="true" data-key="${escapeHtml(b.key || ('btn' + (i+1)))}">
+        <div class="dragHandle" title="拖曳排序">☰</div>
+        <div class="navLabel">${escapeHtml(b.key || ('btn' + (i+1)))}</div>
+        <input class="field navNameInput" data-key="${escapeHtml(b.key || ('btn' + (i+1)))}" value="${escapeHtml(b.name || b.key || ('btn' + (i+1)))}" placeholder="${escapeHtml((b.key || ('btn' + (i+1))) + ' 名稱')}">
+      </div>
     `).join('');
 
     if(!items.length){
       navDynamicRows.innerHTML = `<div class="navHint" style="grid-column:1 / -1;">目前入口網頁尚未提供按鍵定義，請先在入口頁 / resources / registry 建立按鍵資料。</div>`;
+      return;
     }
+    bindNavPanelInteractions();
   }
 
   function loadNavNamesIntoInputs(){
@@ -2272,11 +2333,7 @@ function safeJsonParse(s, fallback){
     if(!isAdmin){ setMsg('你不是 admin，不能儲存按鍵名稱。', true); return; }
 
     const entry = resolveEntryValue();
-    const inputs = Array.from((navDynamicRows && navDynamicRows.querySelectorAll('.navNameInput')) || []);
-    const items = inputs.map((ip, i) => ({
-      key: stripInvisibles(ip.dataset.key) || (btnMeta[i] && btnMeta[i].key) || ('btn' + (i+1)),
-      name: stripInvisibles(ip.value) || stripInvisibles(ip.dataset.key) || ('btn' + (i+1))
-    }));
+    const items = readNavPanelItems();
 
     if(!items.length){
       setMsg('目前入口網頁沒有可儲存的按鍵名稱。', true);
