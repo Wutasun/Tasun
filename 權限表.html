@@ -570,6 +570,7 @@
       .cards{ display:flex; flex-direction:column; }
       .navGrid{ grid-template-columns: 78px 1fr; }
       .navRow{ grid-template-columns: 34px 64px minmax(0,1fr); }
+      .navRow{ grid-template-columns: 34px 64px minmax(0,1fr); }
       .entryBody{ grid-template-columns: 1fr; }
       .entryLabel{ display:none; }
       .navPill{ min-width: 100%; }
@@ -1222,11 +1223,20 @@ function safeJsonParse(s, fallback){
         const nm = stripInvisibles(it.name || it.key);
         if(!kk) return;
         const hit = idxMap.get(kk);
+        const href = stripInvisibles(it.href || '');
+        const target = stripInvisibles(it.target || '');
+        const roles = Array.isArray(it.roles) ? it.roles : [];
         if(hit === undefined){
-          cur.push({ key: kk, name: nm || kk });
+          cur.push({ key: kk, name: nm || kk, href, target, roles });
           idxMap.set(kk, cur.length-1);
         }else{
-          cur[hit] = { key: kk, name: nm || kk };
+          cur[hit] = {
+            key: kk,
+            name: nm || kk,
+            href: href || stripInvisibles(cur[hit]?.href || ''),
+            target: target || stripInvisibles(cur[hit]?.target || ''),
+            roles: roles.length ? roles : (Array.isArray(cur[hit]?.roles) ? cur[hit].roles : [])
+          };
         }
       });
     }
@@ -1489,15 +1499,19 @@ function safeJsonParse(s, fallback){
     const arr = safeJsonParse(localStorage.getItem(NAV_KEY) || '[]', []);
     if(!Array.isArray(arr) || !arr.length) return null;
 
-    const map = new Map(arr.map(x => [String(x.id||'').toLowerCase(), x]));
     const out = [];
-    for(let i=1;i<=5;i++){
-      const id = `btn${i}`;
-      const hit = map.get(id);
-      const name = String(hit?.label || id).trim() || id;
-      out.push({ key:id, name });
-    }
-    return out;
+    arr.forEach((x, i) => {
+      const id = String(x?.id || ('btn' + (i + 1))).trim() || ('btn' + (i + 1));
+      const name = String(x?.label || id).trim() || id;
+      out.push({
+        key: id,
+        name,
+        href: String(x?.href || '').trim(),
+        target: String(x?.target || '').trim(),
+        roles: Array.isArray(x?.roles) ? x.roles : []
+      });
+    });
+    return out.length ? out : null;
   }
 
   function ensureBtnMetaByEntry(){
@@ -1505,7 +1519,13 @@ function safeJsonParse(s, fallback){
     const savedMap = loadAuthEntryButtons();
     const savedList = savedMap && Array.isArray(savedMap[entry]) ? savedMap[entry] : null;
     if(savedList && savedList.length){
-      btnMeta = savedList.map(x => ({ key:String(x.key||'').trim(), name:String(x.name||x.key||'').trim() }));
+      btnMeta = savedList.map((x, i) => ({
+        key: String(x?.key || ('btn' + (i + 1))).trim() || ('btn' + (i + 1)),
+        name: String(x?.name || x?.key || ('btn' + (i + 1))).trim() || String(x?.key || ('btn' + (i + 1))).trim(),
+        href: String(x?.href || '').trim(),
+        target: String(x?.target || '').trim(),
+        roles: Array.isArray(x?.roles) ? x.roles : []
+      }));
       return;
     }
 
@@ -1517,27 +1537,33 @@ function safeJsonParse(s, fallback){
         return;
       }
       btnMeta = [
-        { key:'btn1', name:'btn1' },
-        { key:'btn2', name:'btn2' },
-        { key:'btn3', name:'btn3' },
-        { key:'btn4', name:'btn4' },
-        { key:'btn5', name:'btn5' },
+        { key:'btn1', name:'btn1', href:'', target:'', roles:[] },
+        { key:'btn2', name:'btn2', href:METRO_FIXED_HREF, target:'', roles:[] },
+        { key:'btn3', name:'btn3', href:'', target:'', roles:[] },
+        { key:'btn4', name:'btn4', href:'', target:'', roles:[] },
+        { key:'btn5', name:'btn5', href:'', target:'', roles:[] },
       ];
       return;
     }
 
     const list = dynEntryButtons[entry];
     if(Array.isArray(list) && list.length){
-      btnMeta = list.map(x => ({ key:String(x.key||'').trim(), name:String(x.name||x.key||'').trim() }));
+      btnMeta = list.map((x, i) => ({
+        key: String(x?.key || ('btn' + (i + 1))).trim() || ('btn' + (i + 1)),
+        name: String(x?.name || x?.key || ('btn' + (i + 1))).trim() || String(x?.key || ('btn' + (i + 1))).trim(),
+        href: String(x?.href || '').trim(),
+        target: String(x?.target || '').trim(),
+        roles: Array.isArray(x?.roles) ? x.roles : []
+      }));
       return;
     }
 
     btnMeta = [
-      { key:'btn1', name:'btn1' },
-      { key:'btn2', name:'btn2' },
-      { key:'btn3', name:'btn3' },
-      { key:'btn4', name:'btn4' },
-      { key:'btn5', name:'btn5' },
+      { key:'btn1', name:'btn1', href:'', target:'', roles:[] },
+      { key:'btn2', name:'btn2', href:'', target:'', roles:[] },
+      { key:'btn3', name:'btn3', href:'', target:'', roles:[] },
+      { key:'btn4', name:'btn4', href:'', target:'', roles:[] },
+      { key:'btn5', name:'btn5', href:'', target:'', roles:[] },
     ];
   }
 
@@ -2235,41 +2261,66 @@ function safeJsonParse(s, fallback){
     return oH;
   }
 
+  function getExistingEntryItems(entry){
+    const file = stripInvisibles(entry);
+    if(!file) return [];
+    if(file === 'index.html'){
+      return buildBtnMetaFromNavKey() || [];
+    }
+    const savedMap = loadAuthEntryButtons();
+    const savedList = savedMap && Array.isArray(savedMap[file]) ? savedMap[file] : null;
+    if(savedList && savedList.length){
+      return savedList.map((x, i) => ({
+        key: String(x?.key || ('btn' + (i + 1))).trim() || ('btn' + (i + 1)),
+        name: String(x?.name || x?.key || ('btn' + (i + 1))).trim() || String(x?.key || ('btn' + (i + 1))).trim(),
+        href: String(x?.href || '').trim(),
+        target: String(x?.target || '').trim(),
+        roles: Array.isArray(x?.roles) ? x.roles : []
+      }));
+    }
+    const dyn = Array.isArray(dynEntryButtons[file]) ? dynEntryButtons[file] : [];
+    return dyn.map((x, i) => ({
+      key: String(x?.key || ('btn' + (i + 1))).trim() || ('btn' + (i + 1)),
+      name: String(x?.name || x?.key || ('btn' + (i + 1))).trim() || String(x?.key || ('btn' + (i + 1))).trim(),
+      href: String(x?.href || '').trim(),
+      target: String(x?.target || '').trim(),
+      roles: Array.isArray(x?.roles) ? x.roles : []
+    }));
+  }
+
   function writeNavButtons(updated){
     const currentArr = safeJsonParse(localStorage.getItem(NAV_KEY) || '[]', []);
     const curMap = new Map((Array.isArray(currentArr) ? currentArr : []).map(x => [String(x.id||'').toLowerCase(), x]));
 
-    const out = [];
-    for(let i=1;i<=5;i++){
-      const id = `btn${i}`;
-      const prev = curMap.get(id) || {};
+    const out = (Array.isArray(updated) ? updated : []).map((it, i) => {
+      const id = String(it?.id || it?.key || ('btn' + (i + 1))).trim() || ('btn' + (i + 1));
+      const prev = curMap.get(id.toLowerCase()) || {};
       const oldLabel = String(prev.label || id).trim() || id;
-      const newLabel = String(updated[i-1]?.label || oldLabel).trim() || oldLabel;
+      const newLabel = String(it?.label || it?.name || oldLabel).trim() || oldLabel;
 
-      let href = String(prev.href || '').trim();
+      let href = String(it?.href || prev.href || '').trim();
       if(id === 'btn2') href = METRO_FIXED_HREF;
       else href = maybeUpdateHrefByRename(oldLabel, newLabel, href);
 
-      out.push({
+      return {
         id,
         label: newLabel,
         href,
-        target: String(prev.target || '').trim(),
-        roles: Array.isArray(prev.roles) ? prev.roles : []
-      });
-    }
+        target: String(it?.target || prev.target || '').trim(),
+        roles: Array.isArray(it?.roles) ? it.roles : (Array.isArray(prev.roles) ? prev.roles : [])
+      };
+    }).filter(it => it.id);
 
     localStorage.setItem(NAV_KEY, JSON.stringify(out));
 
     const oldRoutes = safeJsonParse(localStorage.getItem(ROUTE_KEY) || '{}', {});
     const routes = (oldRoutes && typeof oldRoutes === 'object') ? { ...oldRoutes } : {};
     out.forEach(it => { if(it.label) routes[it.label] = it.href; });
-    routes[out[1]?.label || 'btn2'] = METRO_FIXED_HREF;
+    const metro = out.find(x => x.id === 'btn2');
+    routes[(metro?.label || 'btn2')] = METRO_FIXED_HREF;
     localStorage.setItem(ROUTE_KEY, JSON.stringify(routes));
 
-    // routes 可能帶來新頁面 → 入口清單更新
     buildEntrySelect();
-
     renderAll();
     scheduleCloudPush('nav-rename');
   }
