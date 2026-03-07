@@ -652,29 +652,22 @@
         <!-- ✅ 按鍵名稱設定 -->
         <div class="navPanel" id="navPanel">
           <div class="navPanelHead">
-            <strong>按鍵名稱設定（btn1～btn5）</strong>
+            <strong>按鍵名稱設定（依目前入口網頁動態顯示）</strong>
             <button class="btn" id="navCloseBtn">關閉</button>
           </div>
-          <div class="navGrid">
+          <div class="navGrid" id="navDynamicGrid">
             <div class="navHint">
-              說明：這裡修改的是「首頁按鍵名稱」。儲存後會寫入 localStorage：<b>tasunNavButtons_v1</b>（並更新 <b>tasunRoutes_v1</b>），首頁/其他分頁會自動同步。<br>
-              提醒：<b>btn2</b> 連結固定為「汐東工程管理表.html」，不受名稱影響。
+              說明：這裡會直接跟著上方「入口網頁」切換，顯示該入口頁的按鍵名稱與按鍵數量。<br>
+              若目前入口頁是 <b>index.html</b>，會寫入 <b>tasunNavButtons_v1</b>（並更新 <b>tasunRoutes_v1</b>）；若是其他入口頁，會寫入 <b>tasunAuthEntryButtons_v1</b>，讓權限表、預覽區、欄位標題、卡片權限一起同步。<br>
+              提醒：<b>btn2</b> 連結固定為「汐東工程管理表.html」，只有名稱可調整，不會改變連結。
             </div>
 
-            <div class="navLabel">btn1</div>
-            <input class="field" id="navName1" placeholder="btn1 名稱">
+            <div class="navLabel">目前入口</div>
+            <div class="tag"><b id="navPanelEntryTag">index.html</b></div>
 
-            <div class="navLabel">btn2</div>
-            <input class="field" id="navName2" placeholder="btn2 名稱">
+            <div class="navHint">下方欄位數量會依目前入口網頁按鍵數量自動展開，並與上方預覽 / 欄位標題同步。</div>
 
-            <div class="navLabel">btn3</div>
-            <input class="field" id="navName3" placeholder="btn3 名稱">
-
-            <div class="navLabel">btn4</div>
-            <input class="field" id="navName4" placeholder="btn4 名稱">
-
-            <div class="navLabel">btn5</div>
-            <input class="field" id="navName5" placeholder="btn5 名稱">
+            <div id="navDynamicRows" style="grid-column:1 / -1; display:grid; grid-template-columns: 90px 1fr; gap:10px 12px;"></div>
           </div>
 
           <div class="navActions">
@@ -709,6 +702,7 @@
   const NAV_KEY      = 'tasunNavButtons_v1';
   const ROUTE_KEY    = 'tasunRoutes_v1';
   const BTN_META_KEY = 'tasunButtonMeta_v1';
+  const AUTH_ENTRY_BUTTONS_KEY = 'tasunAuthEntryButtons_v1';
 
   const ENTRY_SELECTED_KEY = 'tasunEntrySelected_v1';
   const PERM_MATRIX_KEY    = 'tasunPermMatrix_v1';
@@ -826,11 +820,8 @@
   const navSaveBtn = el('navSaveBtn');
   const navNameBtnD= el('navNameBtnD');
   const navNameBtnM= el('navNameBtnM');
-  const navName1   = el('navName1');
-  const navName2   = el('navName2');
-  const navName3   = el('navName3');
-  const navName4   = el('navName4');
-  const navName5   = el('navName5');
+  const navDynamicRows = el('navDynamicRows');
+  const navPanelEntryTag = el('navPanelEntryTag');
 
   const entrySelect   = el('entrySelect');
   const entryCustom   = el('entryCustom');
@@ -1199,6 +1190,22 @@ function safeJsonParse(s, fallback){
     }
   }
 
+  function loadAuthEntryButtons(){
+    const raw = safeJsonParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || 'null', null);
+    return (raw && typeof raw === 'object') ? raw : {};
+  }
+
+  function saveAuthEntryButtons(map){
+    const out = (map && typeof map === 'object') ? map : {};
+    localStorage.setItem(AUTH_ENTRY_BUTTONS_KEY, JSON.stringify(out));
+  }
+
+  function mergeFromAuthEntryButtons(){
+    const map = loadAuthEntryButtons();
+    if(map && typeof map === 'object') mergeEntryButtons(map);
+  }
+
+
   function mergeFromRoutes(){
     const routes = safeJsonParse(localStorage.getItem(ROUTE_KEY) || 'null', null);
     if(!routes || typeof routes !== 'object') return;
@@ -1249,9 +1256,10 @@ function safeJsonParse(s, fallback){
     // reset to defaults first
     dynEntryFiles = DEFAULT_ENTRY_FILES.slice();
     dynEntryButtons = safeJsonParse(JSON.stringify(DEFAULT_ENTRY_BUTTONS), {});
-    // merge from routes + registry (resources 已在外部 merge 過，但這裡也可再保險 merge)
+    // merge from routes + registry + local custom entry buttons
     mergeFromRoutes();
     mergeFromRegistry();
+    mergeFromAuthEntryButtons();
     // 去重（保序）
     const seen = new Set();
     dynEntryFiles = dynEntryFiles.filter(f => {
@@ -1919,7 +1927,8 @@ function safeJsonParse(s, fallback){
     const v = resolveEntryValue();
     saveSelectedEntry(v);
     renderAll();
-    updateStates(`已切換入口網頁：${v}\n（下方欄位與預覽已同步切換）`);
+    if(navPanel.classList.contains('show')) loadNavNamesIntoInputs();
+    updateStates(`已切換入口網頁：${v}\n（下方欄位、預覽與按鍵名稱設定已同步切換）`);
     scheduleCloudPush('entry-changed');
   }
   entrySelect.addEventListener('change', onEntryChanged);
@@ -2214,32 +2223,64 @@ function safeJsonParse(s, fallback){
   }
   function closeNavPanel(){ navPanel.classList.remove('show'); }
 
+  function buildNavPanelRows(){
+    const entry = resolveEntryValue();
+    if(navPanelEntryTag) navPanelEntryTag.textContent = entry;
+    if(!navDynamicRows) return;
+
+    const items = Array.isArray(btnMeta) ? btnMeta : [];
+    navDynamicRows.innerHTML = items.map((b, i) => `
+      <div class="navLabel">${escapeHtml(b.key || ('btn' + (i+1)))}</div>
+      <input class="field navNameInput" data-key="${escapeHtml(b.key || ('btn' + (i+1)))}" value="${escapeHtml(b.name || b.key || ('btn' + (i+1)))}" placeholder="${escapeHtml((b.key || ('btn' + (i+1))) + ' 名稱')}">
+    `).join('');
+
+    if(!items.length){
+      navDynamicRows.innerHTML = `<div class="navHint" style="grid-column:1 / -1;">目前入口網頁尚未提供按鍵定義，請先在入口頁 / resources / registry 建立按鍵資料。</div>`;
+    }
+  }
+
   function loadNavNamesIntoInputs(){
-    const nav = readNavButtons();
-    navName1.value = nav[0]?.label || '';
-    navName2.value = nav[1]?.label || '';
-    navName3.value = nav[2]?.label || '';
-    navName4.value = nav[3]?.label || '';
-    navName5.value = nav[4]?.label || '';
+    ensureBtnMetaByEntry();
+    buildNavPanelRows();
+  }
+
+  function writeEntryButtons(entry, items){
+    const file = stripInvisibles(entry);
+    if(!file) return;
+    const map = loadAuthEntryButtons();
+    map[file] = (Array.isArray(items) ? items : []).map(it => ({
+      key: stripInvisibles(it.key),
+      name: stripInvisibles(it.name || it.key) || stripInvisibles(it.key)
+    })).filter(it => it.key);
+    saveAuthEntryButtons(map);
+    mergeEntryButtons({ [file]: map[file] });
   }
 
   function saveNavNamesFromInputs(){
     if(!isAdmin){ setMsg('你不是 admin，不能儲存按鍵名稱。', true); return; }
-    const n1 = stripInvisibles(navName1.value) || 'btn1';
-    const n2 = stripInvisibles(navName2.value) || 'btn2';
-    const n3 = stripInvisibles(navName3.value) || 'btn3';
-    const n4 = stripInvisibles(navName4.value) || 'btn4';
-    const n5 = stripInvisibles(navName5.value) || 'btn5';
 
-    writeNavButtons([
-      { id:'btn1', label:n1 },
-      { id:'btn2', label:n2 },
-      { id:'btn3', label:n3 },
-      { id:'btn4', label:n4 },
-      { id:'btn5', label:n5 },
-    ]);
+    const entry = resolveEntryValue();
+    const inputs = Array.from((navDynamicRows && navDynamicRows.querySelectorAll('.navNameInput')) || []);
+    const items = inputs.map((ip, i) => ({
+      key: stripInvisibles(ip.dataset.key) || (btnMeta[i] && btnMeta[i].key) || ('btn' + (i+1)),
+      name: stripInvisibles(ip.value) || stripInvisibles(ip.dataset.key) || ('btn' + (i+1))
+    }));
 
-    setMsg('✅ 已儲存按鍵名稱並同步（tasunNavButtons_v1 / tasunRoutes_v1）。\n其他分頁（例如首頁）會自動更新。');
+    if(!items.length){
+      setMsg('目前入口網頁沒有可儲存的按鍵名稱。', true);
+      return;
+    }
+
+    if(entry === 'index.html'){
+      writeNavButtons(items.map(it => ({ id: it.key, label: it.name })));
+      setMsg('✅ 已儲存 index.html 按鍵名稱並同步（tasunNavButtons_v1 / tasunRoutes_v1）。\n上方預覽、欄位標題與首頁按鍵會同步更新。');
+    }else{
+      writeEntryButtons(entry, items);
+      setMsg(`✅ 已儲存 ${entry} 的按鍵名稱與數量（tasunAuthEntryButtons_v1）。\n上方預覽、欄位標題與權限勾選欄位已同步更新。`);
+    }
+
+    renderAll();
+    buildNavPanelRows();
   }
 
   navNameBtnD.addEventListener('click', openNavPanel);
@@ -2297,7 +2338,7 @@ function safeJsonParse(s, fallback){
   }
 
   window.addEventListener('storage', async (e) => {
-    if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY){
+    if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY || e.key === AUTH_ENTRY_BUTTONS_KEY){
       // routes/registry 變動 → 入口頁清單可更新
       buildEntrySelect();
       renderAll();
@@ -2350,7 +2391,8 @@ function safeJsonParse(s, fallback){
     'tasunNavButtons_v1',
     'tasunRoutes_v1',
     'tasunEntrySelected_v1',
-    'tasunEntryRegistry_v1'
+    'tasunEntryRegistry_v1',
+    'tasunAuthEntryButtons_v1'
   ];
 
   function getLocal(){
