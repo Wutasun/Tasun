@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- TASUN_REBUILD_STAMP:index_v2 2026-03-05 00:00:00 (zw-bottom-up + sso-inferRole) -->
+<!-- TASUN_REBUILD_STAMP:index_v4 2026-03-08 00:00:00 (login-guard-stable + version-fix + route-fix) -->
 
 <html lang="zh-Hant">
 <head>
@@ -37,7 +37,7 @@
 
   <!-- ✅全站版本 -->
   <script>
-    window.APP_VER = window.APP_VER || "20260129_03";
+    window.APP_VER = window.APP_VER || "20260308_01";
     window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
   </script>
 
@@ -1334,1828 +1334,611 @@
   </main>
 
   <script>
-  (function(){
-    "use strict";
+(function(){
+  "use strict";
 
-    
-// ✅ SHA-256 hex（不存明碼用）
-async function sha256Hex(str){
-  str = String(str === undefined || str === null ? "" : str);
-  if(!(window.crypto && crypto.subtle && window.TextEncoder)){
-    // fallback：極舊瀏覽器避免 crash（非密碼學）
-    let h = 0;
-    for(let i=0;i<str.length;i++){ h = ((h<<5)-h) + str.charCodeAt(i); h |= 0; }
-    let x = (h>>>0).toString(16);
-    while(x.length < 64) x = "0" + x;
-    return x.slice(0,64);
-  }
-  const enc = new TextEncoder();
-  const buf = await crypto.subtle.digest("SHA-256", enc.encode(str));
-  const bytes = new Uint8Array(buf);
-  let hex = "";
-  for(let i=0;i<bytes.length;i++){
-    const b = bytes[i].toString(16);
-    hex += (b.length===1 ? "0"+b : b);
-  }
-  return hex;
-}
+  const AUTH_KEY = "tasunAuthTable_v1";
+  const CURRENT_KEY = "tasunCurrentUser_v1";
+  const SESSION_KEY = "tasunSessionLogin_v1";
+  const INDEX_SESSION_KEY = "tasunIndexSessionAuthed_v1";
+  const NAV_KEY = "tasunNavButtons_v1";
+  const ROUTE_KEY = "tasunNavRoutes_v1";
+  const SSO_KEY = "tasunSso_v1";
+  const COOKIE_NAME = "tasun_session_v3";
+  const COOKIE_TTL_MS = 1000 * 60 * 60 * 12;
 
-function runIndexApp(){
-      if(window.__tasun_index_app_started__) return;
-      window.__tasun_index_app_started__ = true;
+  const DEFAULT_VER = String(window.TASUN_APP_VER || window.APP_VER || "20260308_01").trim();
+  const withV = window.__withV || ((u)=>u);
 
-      const Core = window.TasunCore || null;
-      const withV = (Core && Core.withV) ? Core.withV : (window.__withV || ((u)=>u));
-      const safeJsonParse = (Core && Core.jsonParse) ? Core.jsonParse : ((s,f)=>{ try{return JSON.parse(s);}catch(e){return f;} });
-      const clamp = (Core && Core.clamp) ? Core.clamp : ((n,a,b)=>Math.max(a,Math.min(b,n)));
+  const FIXED_ROUTES = {
+    "btn1": "臻鼎管理表.html",
+    "btn2": "汐東工程管理表.html",
+    "btn3": "https://www.dropbox.com/",
+    "btn4": "工程資料庫.html",
+    "btn5": "資料庫.html",
+    "systemBtn": "權限表.html",
+    "臻鼎時代大廈管理表": "臻鼎管理表.html",
+    "臻鼎管理表": "臻鼎管理表.html",
+    "臻鼎管理表.html": "臻鼎管理表.html",
+    "捷運汐止東湖線": "汐東工程管理表.html",
+    "汐東工程管理表": "汐東工程管理表.html",
+    "汐東工程管理表.html": "汐東工程管理表.html",
+    "工程資料庫": "工程資料庫.html",
+    "工程資料庫.html": "工程資料庫.html",
+    "資料庫": "資料庫.html",
+    "資料庫.html": "資料庫.html",
+    "雲端檔案": "https://www.dropbox.com/",
+    "權限表": "權限表.html",
+    "權限表.html": "權限表.html"
+  };
 
-      const rafDebounce = (Core && Core.rafDebounce) ? Core.rafDebounce : (fn=>{
-        let r=0; return function(){ try{ cancelAnimationFrame(r); }catch(e){} r=requestAnimationFrame(()=>{ try{ fn(); }catch(e){} }); };
-      });
+  const ROLE_MAP = {
+    btn1: ["admin","write","read"],
+    btn2: ["admin","write","read"],
+    btn3: ["admin","write","read"],
+    btn4: ["admin","write"],
+    btn5: ["admin","write","read"],
+    systemBtn: ["admin"]
+  };
 
-      const onFontsReady = (cb)=>{
-        if(document.fonts && document.fonts.ready) document.fonts.ready.then(cb);
-        else setTimeout(cb, 180);
-      };
+  const $ = (sel)=>document.querySelector(sel);
+  const loginOverlay = $("#loginOverlay");
+  const loginForm = $("#loginForm");
+  const loginError = $("#loginError");
+  const loginSub = $("#loginSub");
+  const userInfo = $("#userInfo");
+  const btnSwitch = $("#btnSwitchUser");
+  const btnLogout = $("#btnLogout");
+  const btnExport = $("#btnExport");
+  const btnTogglePwd = $("#btnTogglePwd");
+  const btnForceRelogin = $("#btnForceRelogin");
+  const navArea = $("#navArea");
+  const heroInner = $("#heroInner");
+  const titleWrap = $("#titleWrap");
+  const userBar = $("#userBar");
+  const zwTopAxis = $("#zwTopAxis");
+  const zwBottomLine = $("#zwBottomLine");
+  const lotusStage = $("#lotusStage");
+  const zenImg = document.getElementById("zenImg");
+  const usernameWrap = document.getElementById("usernameWrap");
+  const usernameSel = document.getElementById("username");
+  const usernameDisplay = document.getElementById("usernameDisplay");
+  const usernameMenu = document.getElementById("usernameMenu");
+  const loginPass = document.getElementById("password");
 
-      const $ = (sel)=>document.querySelector(sel);
+  let CURRENT_USER = null;
+  let MAIN_BTNS = [];
+  let BTN_CONFIGS = [];
+  let menuOpen = false;
+  let activeIdx = -1;
 
-      const AUTH_KEY    = "tasunAuthTable_v1";
-      const CURRENT_KEY = "tasunCurrentUser_v1";
-    // ====== ✅SSO：全站免重複登入（由 index 建立 token，子頁讀取 token 直接通過） ======
-    const SSO_KEY = "tasunSso_v1";
-    const SSO_TTL_MS = 1000 * 60 * 60 * 12; // 12 小時（可自行調整）
+  function safeJsonParse(s, fallback){ try{ return JSON.parse(s); }catch(_e){ return fallback; } }
+  function clamp(n,a,b){ return Math.max(a, Math.min(b, n)); }
+  function rafDebounce(fn){ let r=0; return ()=>{ cancelAnimationFrame(r); r=requestAnimationFrame(()=>fn()); }; }
 
-    // ✅SSO 角色推斷（避免 inferRole 未定義導致 setSSO 失敗）
-    function inferRole(name, role){
-      const r = String(role || "").trim().toLowerCase();
-      if(r) return r;
-      const u = String(name || "").trim().toLowerCase();
-      if(u === "alex" || u === "joyce") return "admin";
-      if(u === "tasun") return "write";
-      return "read";
+  async function sha256Hex(str){
+    str = String(str == null ? "" : str);
+    if(!(window.crypto && crypto.subtle && window.TextEncoder)){
+      let h = 0; for(let i=0;i<str.length;i++){ h = ((h<<5)-h)+str.charCodeAt(i); h |= 0; }
+      return String(h>>>0).padStart(64, "0").slice(0,64);
     }
-
-
-    function setSSO(user){
-      try{
-        const now = Date.now();
-        const payload = {
-          name: user?.name || user?.user || user?.username || "alex",
-          role: user?.role || inferRole(user?.name || user?.user || user?.username || "alex", user?.role),
-          at: now,
-          exp: now + SSO_TTL_MS,
-          v: (window.__CACHE_V || window.TASUN_APP_VER || "")
-        };
-        sessionStorage.setItem(SSO_KEY, JSON.stringify(payload));
-        // 子頁常用：CURRENT_KEY
-        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ name: payload.name, user: payload.name, role: payload.role })); }catch(_e){}
-        // 同頁簽章（避免某些瀏覽器 sessionStorage 被清）
-        try{ sessionStorage.setItem("tasunSsoTab_v1", "1"); }catch(_e){}
-      }catch(_e){}
-    }
-
-    function getSSO(){
-      try{
-        const raw = sessionStorage.getItem(SSO_KEY);
-        if(!raw) return null;
-        const o = JSON.parse(raw);
-        if(!o || !o.name) return null;
-        if(o.exp && Date.now() > Number(o.exp)) return null;
-        return o;
-      }catch(_e){ return null; }
-    }
-
-      const INDEX_SESSION_KEY = "tasunIndexSessionAuthed_v1";
-      const SESSION_KEY = "tasunSessionLogin_v1";
-      const NAV_KEY     = "tasunNavButtons_v1";
-      const ROUTE_KEY   = "tasunNavRoutes_v1";
-
-      const PERM_MATRIX_KEY = "tasunPermMatrix_v1";
-      const API_BASE_KEY = "tasunApiBase_v1";
-
-      const BACKUP_RING_KEY = "tasunBackupRing_v1";
-      const BACKUP_RING_MAX = 10;
-
-      const METRO_ID    = "btn2";
-      const METRO_HREF  = "汐東工程管理表.html";
-
-      const FIXED_ROUTES = {
-        "捷運汐東線事項紀錄": "sxdh-notes.html",
-        "捷運汐東線事項記錄": "sxdh-notes.html",
-        "捷運汐東線事項紀錄.html": "sxdh-notes.html",
-        "捷運汐東線事項記錄.html": "sxdh-notes.html",
-        "捷運汐東線記事": "sxdh-notes.html",
-        "捷運汐東線記事.html": "sxdh-notes.html",
-        "sxdh-notes": "sxdh-notes.html",
-        "sxdh-notes.html": "sxdh-notes.html",
-      };
-
-      const LEGACY_BUTTON_KEYS = ["btn1","btn2","btn3","btn4","btn5"];
-
-      const loginOverlay = $("#loginOverlay");
-      const loginForm    = $("#loginForm");
-      const loginError   = $("#loginError");
-      const loginSub     = $("#loginSub");
-      const userInfo     = $("#userInfo");
-      const btnSwitch    = $("#btnSwitchUser");
-      const btnExport    = $("#btnExport");
-      const btnTogglePwd = $("#btnTogglePwd");
-      const btnForceRelogin = $("#btnForceRelogin");
-
-      const navArea      = $("#navArea");
-      const titleWrap    = $("#titleWrap");
-      const userBar      = $("#userBar");
-      const zwTopAxis    = $("#zwTopAxis");
-      const zwBottomLine = $("#zwBottomLine");
-      const zenImg       = document.getElementById("zenImg");
-      const heroInner    = $("#heroInner");
-      const lotusStage   = $("#lotusStage");
-
-      const usernameWrap = document.getElementById("usernameWrap");
-      const usernameSel = document.getElementById("username");
-      const usernameDisplay = document.getElementById("usernameDisplay");
-      const usernameMenu = document.getElementById("usernameMenu");
-
-      /* =========================
-         ✅雲端（index.html：多個 localStorage key 同步）Type (B)
-         resourceKey：tasun-index-db
-         本頁本地資料來源（keys 清單）：
-           - tasunAuthTable_v1  (AUTH_KEY)
-           - tasunNavButtons_v1 (NAV_KEY)
-           - tasunNavRoutes_v1  (ROUTE_KEY)
-         雲端 rows 結構（payload.db）：
-           [{ id:1, k:"tasunAuthTable_v1",  v:"..." }, ...]
-         合併策略：saveMerged(mode:"merge") → 多人同時寫入自動合併、不互相覆蓋
-         UI：維持 kit 預設（右下角），不改頁面 UI
-         ========================= */
-      const CLOUD_RES_URL = "tasun-resources.json";
-      const CLOUD_RESOURCE_KEY = String(window.TASUN_INDEX_CLOUD_KEY || "tasun-index-db").trim() || "tasun-index-db";
-      const CLOUD_KEYS = [AUTH_KEY, NAV_KEY, ROUTE_KEY];
-      const CLOUD_KEY_SET = new Set(CLOUD_KEYS);
-
-      let cloudCtrl = null;
-      let cloudApplying = false;
-      let cloudSaveTimer = 0;
-
-      function loadScriptOnce(src){
-        return new Promise((resolve)=>{
-          try{
-            const id = "tasunScript__" + src;
-            if(document.getElementById(id)) return resolve(true);
-            const s = document.createElement("script");
-            s.id = id;
-            s.src = src;
-            s.async = true;
-            s.onload = ()=>resolve(true);
-            s.onerror = ()=>resolve(false);
-            document.head.appendChild(s);
-          }catch(e){ resolve(false); }
-        });
-      }
-
-      const INDEX_KEY_UID_MAP_KEY = "tasunIndexKeyUidMap_v1";
-      function uuidV4(){
-        try{
-          if(window.crypto && typeof crypto.randomUUID === "function") return crypto.randomUUID();
-        }catch(e){}
-        // fallback (RFC4122-ish)
-        const s = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c=>{
-          const r = (Math.random()*16)|0;
-          const v = (c==="x") ? r : ((r&0x3)|0x8);
-          return v.toString(16);
-        });
-        return s;
-      }
-      function getUidMap(){
-        try{ return JSON.parse(localStorage.getItem(INDEX_KEY_UID_MAP_KEY) || "{}") || {}; }catch(e){ return {}; }
-      }
-      function setUidMap(map){
-        try{ localStorage.setItem(INDEX_KEY_UID_MAP_KEY, JSON.stringify(map || {})); }catch(e){}
-      }
-      function ensureRowUidForKey(k){
-        const key = String(k||"").trim();
-        if(!key) return uuidV4();
-        const map = getUidMap();
-        if(map[key]) return map[key];
-        const uid = uuidV4();
-        map[key] = uid;
-        setUidMap(map);
-        return uid;
-      }
-
-      function buildCloudPayloadFromLocal(){
-        // ✅全站雲端同步標準 v1：uid(pk)=uuid、rev/updatedAt/deleted 必備，id 只做顯示
-        const now = Date.now();
-        const rows = [];
-        const keys = CLOUD_KEYS.slice().sort((a,b)=>a.localeCompare(b,"zh-Hant"));
-        keys.forEach((k, idx)=>{
-          const raw = localStorage.getItem(k);
-          const uid = ensureRowUidForKey(k);
-          const row = {
-            uid,
-            id: idx + 1,
-            k,
-            v: (raw == null ? "" : String(raw)),
-            rev: now,          // ✅簡化：以時間戳作 rev（多人合併由 Worker 以 updatedAt/ rev 決勝）
-            updatedAt: now,
-            deleted: false
-          };
-          rows.push(row);
-        });
-        return { db: rows, counter: rows.length };
-      }
-
-      let cloudFailCount = 0;
-      let cloudBackoffMs = 0;
-
-      function scheduleCloudSave(readOnly){
-        if(readOnly) return;
-        if(!cloudCtrl || typeof cloudCtrl.saveMerged !== "function") return;
-        if(cloudApplying) return;
-        if(cloudCtrl.__disabled__) return;
-
-        clearTimeout(cloudSaveTimer);
-        cloudSaveTimer = setTimeout(async()=>{
-          // ✅輕量退避：避免多人同時寫入造成連續碰撞
-          const jitter = Math.floor(Math.random()*180);
-          const wait = Math.max(0, cloudBackoffMs) + jitter;
-          if(wait) await new Promise(r=>setTimeout(r, wait));
-
-          try{
-            await cloudCtrl.saveMerged({ lock:false, mode:"merge" });
-            cloudFailCount = 0;
-            cloudBackoffMs = 0;
-          }catch(e){
-            cloudFailCount++;
-            // 讀出狀態碼（不同版本 CloudKit 可能放不同欄位）
-            const msg = String(e && (e.message || e) || "");
-            const status = Number(e && (e.status || e.code || (e.cause && e.cause.status)) || 0) || 0;
-
-            // ✅400：多半是 Worker schema / payload 不符，避免一直狂打
-            if(status === 400 || /(400)|MERGE_FAIL/i.test(msg)){
-              cloudBackoffMs = Math.min(30000, (cloudBackoffMs || 1200) * 2);
-            }else{
-              cloudBackoffMs = Math.min(20000, (cloudBackoffMs || 800) * 2);
-            }
-
-            // ✅連續失敗太多次 → 暫停（不影響 UI/功能，仍保留本地）
-            if(cloudFailCount >= 8){
-              cloudCtrl.__disabled__ = true;
-              try{ console.warn("[index] Cloud sync paused after repeated failures.", e); }catch(_e){}
-            }
-          }
-        }, 650);
-      }
-      async function ensureCloudMounted(user){
-        const role = String(user?.level || "read").toLowerCase();
-        const readOnly = (role === "read") || !user;
-
-        const ok = await loadScriptOnce(withV("tasun-cloud-kit.js"));
-        if(!ok || !window.TasunCloudKit || typeof window.TasunCloudKit.mount !== "function"){
-          return null;
-        }
-
-        try{
-          window.TasunCloudKit.init({
-            appVer: window.TASUN_APP_VER || "",
-            resourcesUrl: withV(CLOUD_RES_URL),
-            ui: { enabled:true, hideLockButtons:true, position:"bottom-right" },
-            lock: { enabled:false, auto:false }
-          });
-        }catch(e){}
-
-        if(cloudCtrl){
-          cloudCtrl.__readOnly__ = readOnly;
-          try{ cloudCtrl.pullNow && cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
-          return cloudCtrl;
-        }
-
-        cloudCtrl = window.TasunCloudKit.mount({
-          resourceKey: CLOUD_RESOURCE_KEY,
-          idField: "id",
-          // pk 由 CloudKit/Worker 統一強制為 uid（全站標準 v1）
-          
-          counterField: "counter",
-          merge: { conflictPolicy: "stash-remote", lock: "none" },
-          watch: { intervalSec: 10 },
-          getLocal: () => buildCloudPayloadFromLocal(),
-          apply: (payload) => {
-            if(!payload || !Array.isArray(payload.db)) return;
-            cloudApplying = true;
-            try{
-              payload.db.forEach(row=>{
-                const k = String(row?.k || "").trim();
-                if(!k || !CLOUD_KEY_SET.has(k)) return;
-
-                // ✅確保本機 key->uid mapping 存在（避免之後本機生成不同 uid）
-                try{
-                  const uid = String(row?.uid || "").trim();
-                  if(uid){
-                    const map = getUidMap();
-                    if(!map[k]){ map[k] = uid; setUidMap(map); }
-                  }
-                }catch(e){}
-
-                const deleted = !!row?.deleted;
-                if(deleted){
-                  try{ localStorage.removeItem(k); }catch(e){}
-                  return;
-                }
-                const v = (row?.v == null) ? "" : String(row.v);
-                if(localStorage.getItem(k) !== v) localStorage.setItem(k, v);
-              });
-            }finally{
-              cloudApplying = false;
-            }
-            // ✅不 reload：只重建按鍵/登入清單
-            try{ onIndexConfigApplied(); }catch(e){}
-          }
-            }finally{
-              cloudApplying = false;
-            }
-            // ✅不 reload：只重建按鍵/登入清單
-            try{ onIndexConfigApplied(); }catch(e){}
-          }
-        });
-
-        cloudCtrl.__readOnly__ = readOnly;
-
-        try{ cloudCtrl.pullNow && cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
-        return cloudCtrl;
-      }
-
-      function markLatin(span){
-        const t = String(span.textContent || "");
-        const hasLatin = /[A-Za-z0-9_./-]/.test(t);
-        const hasCJK   = /[\u3400-\u9FFF]/.test(t);
-        if(hasLatin) span.classList.add("latin");
-        if(hasLatin && !hasCJK) span.classList.add("latin-only");
-      }
-
-      function hrefToDom(href){
-        const h = String(href || "").trim();
-        if(!h) return "#";
-        if(/^https?:\/\//i.test(h)) return h;
-        if(/^mailto:/i.test(h)) return h;
-        return withV(encodeURI(h));
-      }
-      function labelToFile(label){
-        let s = String(label || "").trim();
-        if(!s) return "#";
-        if(s.endsWith(".html")) return s;
-        s = s.replace(/[\\\/:*?"<>|]/g, "").trim();
-        s = s.replace(/\s+/g, "");
-        return s + ".html";
-      }
-
-      function collectBackupPayload(reason){
-        const now = new Date();
-        const keys = [];
-        for(let i=0;i<localStorage.length;i++){
-          const k = localStorage.key(i);
-          if(!k) continue;
-          if(k.startsWith("tasun") || k.includes("汐東") || k.includes("捷運") || k.includes("水環") || k.includes("審查") || k.includes("文件") || k.includes("資料庫")){
-            keys.push(k);
-          }
-        }
-        keys.sort((a,b)=>a.localeCompare(b, "zh-Hant"));
-        const data = {};
-        keys.forEach(k => {
-          const raw = localStorage.getItem(k);
-          const parsed = safeJsonParse(raw, null);
-          data[k] = (parsed === null && raw !== "null" && raw !== null) ? raw : parsed;
-        });
-
-        const sess = safeJsonParse(sessionStorage.getItem(SESSION_KEY) || "null", null);
-
-        return {
-          meta: {
-            app: "Tasun index.html",
-            reason: String(reason || "manual"),
-            ts: now.toISOString(),
-            href: location.href,
-            cacheV: (window.__CACHE_V || "")
-          },
-          session: sess,
-          data
-        };
-      }
-
-      function storeBackupRing(payload){
-        try{
-          const arr = safeJsonParse(localStorage.getItem(BACKUP_RING_KEY) || "[]", []);
-          const next = Array.isArray(arr) ? arr : [];
-          next.unshift(payload);
-          next.length = Math.min(next.length, BACKUP_RING_MAX);
-          localStorage.setItem(BACKUP_RING_KEY, JSON.stringify(next));
-        }catch(e){}
-      }
-
-      function downloadJson(payload){
-        const ts = new Date().toISOString().replace(/[:.]/g, "-");
-        const filename = `Tasun備份_${ts}.json`;
-        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
-        const u = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = u;
-        a.download = filename;
-        a.style.display = "none";
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => {
-          URL.revokeObjectURL(u);
-          a.remove();
-        }, 0);
-      }
-
-      let _exportTimer = 0;
-      let _pendingReason = "";
-      let _exportOnceExit = false;
-
-      function exportBackupNow(reason, opts){
-        const o = opts || {};
-        const payload = collectBackupPayload(reason);
-        storeBackupRing(payload);
-        if(o.download){
-          try{ downloadJson(payload); }catch(e){}
-        }
-      }
-      function scheduleExport(reason){
-        const r = String(reason || "auto");
-        _pendingReason = _pendingReason ? (_pendingReason + " | " + r) : r;
-        clearTimeout(_exportTimer);
-        _exportTimer = setTimeout(() => {
-          const rr = _pendingReason || "auto";
-          _pendingReason = "";
-          exportBackupNow(rr, { download:false });
-        }, 350);
-      }
-      function tryExportOnExit(){
-        if(_exportOnceExit) return;
-        _exportOnceExit = true;
-        exportBackupNow("exit/pagehide", { download:false });
-      }
-
-      window.addEventListener("pagehide", tryExportOnExit, { passive:true });
-      document.addEventListener("visibilitychange", () => {
-        if(document.visibilityState === "hidden") tryExportOnExit();
-      }, { passive:true });
-
-      function applyFixedRoutes(obj){
-        const out = (obj && typeof obj === "object") ? { ...obj } : {};
-        Object.keys(FIXED_ROUTES).forEach(k => { out[k] = FIXED_ROUTES[k]; });
-        out[METRO_ID] = METRO_HREF;
-        out["systemBtn"] = out["systemBtn"] || "權限表.html";
-        return out;
-      }
-
-      function loadRoutes(){
-        const seed = applyFixedRoutes({
-          "btn3": "https://www.dropbox.com/",
-          "systemBtn": "權限表.html",
-          [METRO_ID]: METRO_HREF
-        });
-
-        const raw = localStorage.getItem(ROUTE_KEY);
-        if(!raw){
-          localStorage.setItem(ROUTE_KEY, JSON.stringify(seed, null, 2));
-          return seed;
-        }
-
-        const parsed = safeJsonParse(raw, null);
-        const base = (parsed && typeof parsed === "object") ? parsed : {};
-        const merged = applyFixedRoutes({ ...base, ...seed });
-
-        if(JSON.stringify(base) !== JSON.stringify(merged)){
-          localStorage.setItem(ROUTE_KEY, JSON.stringify(merged, null, 2));
-        }
-        return merged;
-      }
-
-      function loadNavButtonsSeedIfMissing(){
-        const seed = [
-          { id:"btn1", label:"臻鼎時代大廈管理表" },
-          { id:"btn2", label:"捷運汐止東湖線" },
-          { id:"btn3", label:"雲端檔案" },
-          { id:"btn4", label:"工程資料庫" },
-          { id:"btn5", label:"資料庫" }
-        ];
-        const raw = localStorage.getItem(NAV_KEY);
-        if(!raw){
-          localStorage.setItem(NAV_KEY, JSON.stringify(seed));
-          return seed;
-        }
-        const arr = safeJsonParse(raw, null);
-        if(Array.isArray(arr) && arr.length) return arr;
-        localStorage.setItem(NAV_KEY, JSON.stringify(seed));
-        return seed;
-      }
-
-      function resolveHref(cfg, routes){
-        const id = String(cfg?.id || "").trim();
-        const label = String(cfg?.label || "").trim();
-
-        if(label && FIXED_ROUTES[label]) return FIXED_ROUTES[label];
-        if(id === METRO_ID) return METRO_HREF;
-        if(routes && routes[id]) return routes[id];
-        if(routes && label && routes[label]) return routes[label];
-
-        const guess = labelToFile(label);
-        if(FIXED_ROUTES[guess]) return FIXED_ROUTES[guess];
-        return guess;
-      }
-
-      function getDefaultAuthTableLegacy(btnCount){
-        const keys = Array.from({length: btnCount}, (_, i) => `btn${i+1}`);
-        const mkAll = () => Object.fromEntries(keys.map(k => [k, true]));
-        const mkOnlyLast = () => Object.fromEntries(keys.map((k, i) => [k, i === btnCount - 1]));
-        // ✅不存明碼：預設帳號以 SHA-256(pass) 的 passHash 形式提供（可由權限表再修改）
-        return [
-          { user:"alex",  passHash:"7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07",  role:"admin", ...mkAll() },
-          { user:"JOYCE", passHash:"d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815", role:"admin", ...mkAll() },
-          { user:"tasun", passHash:"cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba", role:"write", ...mkAll() },
-          { user:"wu",    passHash:"8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",    role:"read",  ...mkOnlyLast() }
-        ];
-      }
-
-      /* ✅FIX: 讀取權限表時，若舊資料沒有 btn1~btn5 欄位，不要誤判為全關（會只剩 systemBtn） */
-      function normalizeRowFromStorage(row, btnCount){
-        const username = (row?.username ?? row?.user ?? row?.name ?? row?.account ?? "").toString().trim();
-        const password = (row?.password ?? row?.pass ?? "").toString();
-        const level    = (row?.level ?? row?.role ?? "read").toString().trim().toLowerCase();
-
-        // 支援新格式：buttons: [true,false,...]
-        const arr = Array.isArray(row?.buttons) ? row.buttons : null;
-
-        const buttons = [];
-        for(let i=0;i<btnCount;i++){
-          if(arr && i < arr.length){
-            buttons[i] = !!arr[i];
-            continue;
-          }
-
-          const k = `btn${i+1}`;
-          const has = row && Object.prototype.hasOwnProperty.call(row, k);
-
-          if(has){
-            buttons[i] = !!row[k];
-          }else{
-            // ✅舊表缺欄位時：admin/write 預設全開；read 預設只開最後一顆
-            if(level === "read"){
-              buttons[i] = (i === btnCount - 1);
-            }else{
-              buttons[i] = true;
-            }
-          }
-        }
-        const passHash = (row?.passHash ?? row?.passwordHash ?? row?.hash ?? "").toString().trim();
-        return { username, password, passHash, level, buttons };
-      }
-
-      function loadAuthTable(btnCount){
-        const raw = localStorage.getItem(AUTH_KEY);
-        if(!raw){
-          const legacy = getDefaultAuthTableLegacy(btnCount);
-          localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
-          return legacy.map(r => normalizeRowFromStorage(r, btnCount));
-        }
-        const parsed = safeJsonParse(raw, null);
-        const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
-        if(Array.isArray(arr)){
-          const mapped = arr.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
-          if(mapped.length) return mapped;
-        }
-        const legacy = getDefaultAuthTableLegacy(btnCount);
-        localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
-        return legacy.map(r => normalizeRowFromStorage(r, btnCount));
-      }
-
-      
-      // ✅防呆：若權限表資料為空/舊格式(含 pass 明碼)，自動補齊/升級為 passHash（不存明碼）
-      function migrateAuthToHashedIfNeeded(){
-        try{
-          const raw = localStorage.getItem(AUTH_KEY);
-          const parsed = safeJsonParse(raw, null);
-          const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
-
-          // 空表 → 直接重建預設（避免 index 登入卡死）
-          if(!Array.isArray(arr) || arr.length === 0){
-            const legacy = getDefaultAuthTableLegacy(LEGACY_BUTTON_KEYS.length);
-            localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
-            return;
-          }
-
-          // 若已是 passHash 且無明碼，略過
-          let need = false;
-          for(const r of arr){
-            if(!r) continue;
-            const hasPass = (r.pass || r.password || r.pw);
-            const hasHash = (r.passHash || r.passwordHash || r.hash);
-            if(hasPass && !hasHash){ need = true; break; }
-          }
-          if(!need) return;
-
-          // 非阻塞升級（async）
-          (async ()=>{
-            try{
-              let changed = false;
-              for(const r of arr){
-                if(!r) continue;
-                const hasHash = (r.passHash || r.passwordHash || r.hash);
-                const pass = (r.password ?? r.pass ?? r.pw ?? "").toString();
-                if(!hasHash && pass){
-                  r.passHash = await sha256Hex(pass);
-                  delete r.password; delete r.pass; delete r.pw;
-                  changed = true;
-                }
-              }
-              if(changed){
-                localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
-              }
-            }catch(e){}
-          })();
-        }catch(e){}
-      }
-
-// ====== ✅ v3：瀏覽器工作階段登入（Session Cookie + sessionStorage）
-// 目標：
-// 1) 同一個瀏覽器(同視窗/分頁)登入一次，其它子頁免重複登入
-// 2) 關閉瀏覽器後自動失效（使用「Session Cookie」：不設 Expires/Max-Age）
-// 3) 不使用 localStorage 儲存登入狀態（避免關閉瀏覽器後仍保持登入）
-
-const COOKIE_NAME = "tasun_session_v3";
-const COOKIE_TTL_MS = 1000 * 60 * 60 * 12; // 12 小時（同日工作足夠；關閉瀏覽器仍會失效）
-
-function _b64e(s){ try{ return btoa(unescape(encodeURIComponent(s))); }catch(_e){ return ""; } }
-function _b64d(s){ try{ return decodeURIComponent(escape(atob(s))); }catch(_e){ return ""; } }
-
-function setCookieSession(user){
-  try{
-    const now = Date.now();
-    const payload = {
-      u: String(user?.username || user?.user || user?.name || "").trim(),
-      r: String(user?.level || user?.role || "").trim().toLowerCase(),
-      exp: now + COOKIE_TTL_MS,
-      v: (window.__CACHE_V || window.TASUN_APP_VER || "")
-    };
-    if(!payload.u) return;
-    const val = encodeURIComponent(_b64e(JSON.stringify(payload)));
-    // ✅ Session Cookie：不設定 expires / max-age
-    document.cookie = `${COOKIE_NAME}=${val}; Path=/; SameSite=Lax; Secure`;
-  }catch(_e){}
-}
-
-function clearCookieSession(){
-  try{
-    document.cookie = `${COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax; Secure`;
-  }catch(_e){}
-}
-
-function getCookieSession(){
-  try{
-    const m = document.cookie.match(new RegExp("(?:^|; )" + COOKIE_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "=([^;]*)"));
-    if(!m) return null;
-    const raw = decodeURIComponent(m[1] || "");
-    const json = _b64d(raw);
-    const o = JSON.parse(json);
-    if(!o || !o.u) return null;
-    if(o.exp && Date.now() > Number(o.exp)) return null;
-    return { user: String(o.u), role: String(o.r || "").toLowerCase(), exp: Number(o.exp || 0) };
-  }catch(_e){ return null; }
-}
-
-function setSession(user){
-  try{
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: user.username, role: user.level, t: Date.now() }));
-    // ✅需求：同一瀏覽器工作階段回首頁免再登入；關閉瀏覽器後會清空（cookie）
-    sessionStorage.setItem(INDEX_SESSION_KEY, "1");
-  }catch(e){}
-  // ✅跨分頁/子頁：用 Session Cookie 共享
-  setCookieSession(user);
-  // ✅子頁常用：CURRENT_KEY（改用 sessionStorage）
-  try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: String(user.level||"").toLowerCase() })); }catch(_e){}
-}
-
-function clearSession(){
-  try{
-    sessionStorage.removeItem(SESSION_KEY);
-    sessionStorage.removeItem(INDEX_SESSION_KEY);
-    sessionStorage.removeItem(CURRENT_KEY);
-  }catch(e){}
-  clearCookieSession();
-}
-
-function getSession(){
-  const obj = safeJsonParse(sessionStorage.getItem(SESSION_KEY) || "null", null);
-  if(obj && typeof obj === "object"){
-    const u = String(obj.user || "").trim();
-    const r = String(obj.role || "").trim().toLowerCase();
-    if(u) return { user: u, role: r, t: Number(obj.t || 0) };
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+    return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
   }
-  // ✅若本分頁沒有 sessionStorage（新分頁/剛開頁），用 Cookie 恢復
-  const ck = getCookieSession();
-  if(ck && ck.user){
-    try{
-      sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: ck.user, role: ck.role, t: Date.now() }));
-      sessionStorage.setItem(INDEX_SESSION_KEY, "1");
-      sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: ck.user, role: ck.role }));
-    }catch(_e){}
-    return { user: ck.user, role: ck.role, t: Date.now() };
+
+  function markLatin(span){
+    const t = String(span.textContent || "");
+    const hasLatin = /[A-Za-z0-9_./-]/.test(t);
+    const hasCJK = /[㐀-鿿]/.test(t);
+    if(hasLatin) span.classList.add("latin");
+    if(hasLatin && !hasCJK) span.classList.add("latin-only");
   }
-  return null;
-}
 
-;
+  function labelToFile(label){
+    let s = String(label || "").trim();
+    if(!s) return "#";
+    if(s.endsWith(".html")) return s;
+    s = s.replace(/[\/:*?"<>|]/g, "").replace(/\s+/g, "");
+    return s + ".html";
+  }
+
+  function hrefToDom(href){
+    const h = String(href || "").trim();
+    if(!h) return "#";
+    if(/^https?:\/\//i.test(h) || /^mailto:/i.test(h)) return h;
+    return withV(encodeURI(h));
+  }
+
+  function getDefaultAuthTableLegacy(btnCount){
+    const keys = Array.from({length: btnCount}, (_, i) => `btn${i+1}`);
+    const mkAll = () => Object.fromEntries(keys.map(k => [k, true]));
+    const mkOnlyLast = () => Object.fromEntries(keys.map((k, i) => [k, i === btnCount - 1]));
+    return [
+      { user:"alex",  passHash:"7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07", role:"admin", ...mkAll() },
+      { user:"JOYCE", passHash:"d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815", role:"admin", ...mkAll() },
+      { user:"tasun", passHash:"cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba", role:"write", ...mkAll() },
+      { user:"wu",    passHash:"8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92", role:"read", ...mkOnlyLast() }
+    ];
+  }
+
+  function normalizeRowFromStorage(row, btnCount){
+    const username = (row?.username ?? row?.user ?? row?.name ?? row?.account ?? "").toString().trim();
+    const password = (row?.password ?? row?.pass ?? "").toString();
+    const level = (row?.level ?? row?.role ?? "read").toString().trim().toLowerCase();
+    const arr = Array.isArray(row?.buttons) ? row.buttons : null;
+    const buttons = [];
+    for(let i=0;i<btnCount;i++){
+      if(arr && i < arr.length){ buttons[i] = !!arr[i]; continue; }
+      const k = `btn${i+1}`;
+      if(row && Object.prototype.hasOwnProperty.call(row, k)) buttons[i] = !!row[k];
+      else buttons[i] = (level === "read") ? (i === btnCount - 1) : true;
+    }
+    const passHash = (row?.passHash ?? row?.passwordHash ?? row?.hash ?? "").toString().trim();
+    return { username, password, passHash, level, buttons };
+  }
+
+  function migrateAuthToHashedIfNeeded(){
+    const raw = localStorage.getItem(AUTH_KEY);
+    const parsed = safeJsonParse(raw, null);
+    const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
+    if(!Array.isArray(arr) || !arr.length){
+      localStorage.setItem(AUTH_KEY, JSON.stringify(getDefaultAuthTableLegacy(5)));
+      return;
+    }
+    const needs = arr.some(r => (r && (r.pass || r.password || r.pw) && !(r.passHash || r.passwordHash || r.hash)));
+    if(!needs) return;
+    (async()=>{
+      let changed = false;
+      for(const r of arr){
+        if(!r) continue;
+        const pass = (r.password ?? r.pass ?? r.pw ?? "").toString();
+        if(pass && !(r.passHash || r.passwordHash || r.hash)){
+          r.passHash = await sha256Hex(pass);
+          delete r.password; delete r.pass; delete r.pw;
+          changed = true;
+        }
       }
-
-      const ROLE_MAP = {
-        "btn1": ["admin","write","read"],
-        "btn2": ["admin","write","read"],
-        "btn3": ["admin","write","read"],
-        "btn4": ["admin","write"],
-        "btn5": ["admin","write","read"],
-        "systemBtn": ["admin"]
-      };
-      const SYSTEM_BTN = { id:"systemBtn", label:"系統 / 權限", roles:["admin"] };
-
-      let BTN_CONFIGS = [];
-      let mainNavBtns = [];
-      let AUTH_TABLE = [];
-      let ROUTES = loadRoutes();
-      let NAV_ARR = loadNavButtonsSeedIfMissing();
-
-      function isRoleAllowed(cfg, level){
-        if(!cfg || !Array.isArray(cfg.roles)) return true;
-        return cfg.roles.includes(level);
-      }
-      function isAllowedByAuth(user, cfg){
-        if(cfg && cfg.id === "systemBtn") return true;
-        // ✅若有「入口權限矩陣」(tasunPermMatrix_v1)，優先使用它（支援後續新增頁面/按鍵）
-        try{
-          const pm = loadPermMatrixSafe();
-          const id = String(cfg?.id||"");
-          if(/^btn\d+$/i.test(id)){
-            const entryFile = "index.html";
-            const allowed = getPermFromMatrix(pm, user?.username, entryFile, id);
-            // 若矩陣有設定，直接回傳（避免舊 buttons 陣列失準）
-            if(pm?.users && pm.users[userKey(user?.username)] && pm.users[userKey(user?.username)][entryFile] && Object.prototype.hasOwnProperty.call(pm.users[userKey(user?.username)][entryFile], id)){
-              return allowed;
-            }
-          }
-        }catch(_){ }
-
-        const flags = Array.isArray(user.buttons) ? user.buttons : [];
-        const m = String(cfg?.id || "").match(/^btn(\d+)$/i);
-        if(!m) return true;
-        const idx = parseInt(m[1], 10) - 1;
-        const v = flags[idx];
-        return (v === undefined) ? true : !!v;
-      }
-
-      function buildMainButtonsDOM(){
-        ROUTES = loadRoutes();
-        NAV_ARR = loadNavButtonsSeedIfMissing();
-
-        BTN_CONFIGS = NAV_ARR.map(x => {
-          const id = String(x?.id || "").trim();
-          const label = String(x?.label || "").trim();
-          const roles = ROLE_MAP[id] || ["admin","write","read"];
-          const target = (id === "btn3") ? "_blank" : "";
-          return { id, label, roles, target };
-        }).concat([SYSTEM_BTN]);
-
-        mainNavBtns = [];
-        navArea.innerHTML = "";
-
-        BTN_CONFIGS.forEach((cfg) => {
-          const a = document.createElement("a");
-          a.className = "nav-btn";
-          a.id = cfg.id || "";
-
-          if(cfg.id === "systemBtn") a.classList.add("is-system");
-
-          const span = document.createElement("span");
-          span.textContent = cfg.label;
-          markLatin(span);
-
-          a.appendChild(span);
-
-          const finalHref = resolveHref(cfg, ROUTES);
-          a.setAttribute("href", hrefToDom(finalHref));
-
-          const t = cfg.target || "";
-          if(t){
-            a.target = t;
-            if(t === "_blank") a.rel = "noopener noreferrer";
-          }
-
-          a.style.display = "none";
-          navArea.appendChild(a);
-          mainNavBtns.push(a);
-        });
-      }
-
-      function resetButtonsForLogout(){
-        mainNavBtns.forEach(btn => btn.style.display = "none");
-        navArea.classList.remove("stack","grid2","grid3","sides","phone-compact-stack","phone-compact-right","phone-compact-glass");
-        navArea.style.removeProperty("--stackMaxW");
-        scheduleAll();
-      }
-
-      let CURRENT_USER = null;
-
-      function refreshButtonsForCurrentUser(){
-        if(!CURRENT_USER) return;
-
-        mainNavBtns.forEach((btn, index) => {
-          const cfg = BTN_CONFIGS[index];
-          const okRole = isRoleAllowed(cfg, CURRENT_USER.level);
-          const okAuth = isAllowedByAuth(CURRENT_USER, cfg);
-
-          btn.style.display = (okRole && okAuth) ? "flex" : "none";
-
-          const finalHref = resolveHref(cfg, ROUTES);
-          btn.setAttribute("href", hrefToDom(finalHref));
-        });
-
-        scheduleAll();
-      }
-
-      function onIndexConfigApplied(){
-        try{
-          try{ migrateAuthToHashedIfNeeded(); }catch(_){ }
-
-          ROUTES = loadRoutes();
-          NAV_ARR = loadNavButtonsSeedIfMissing();
-          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-
-          try{
-            if(loginOverlay && loginOverlay.style.display === "flex"){
-              populateUserSelect();
-            }
-          }catch(e){}
-
-          buildMainButtonsDOM();
-
-          
-    // ✅若已在其他頁登入過（SSO token 有效），本頁直接套用，不再跳登入表
-    (function(){
-      const sso = getSSO();
-      if(sso && sso.name){
-        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ name:sso.name, user:sso.name, role:sso.role })); }catch(_e){}
-        try{ sessionStorage.setItem(INDEX_SESSION_KEY, "1"); }catch(_e){}
-      }
+      if(changed) localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
     })();
-if(CURRENT_USER){
-            refreshButtonsForCurrentUser();
-          }else{
-            resetButtonsForLogout();
-          }
-        }catch(e){}
-      }
-
-      function getVVBottomInset(){
-        try{
-          const vv = window.visualViewport;
-          if(!vv) return 0;
-          return Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
-        }catch(e){ return 0; }
-      }
-
-      function getVisibleButtons(){
-        return mainNavBtns.filter(b => b.style.display !== "none");
-      }
-
-      /* ✅（手機文字）依按鍵高度自動微調：保持清晰、舒服閱讀 */
-      function fitButtonTextPhone(btns){
-        try{
-          for(const btn of btns){
-            const span = btn ? btn.querySelector("span") : null;
-            if(!span) continue;
-
-            // reset
-            span.style.fontSize = "";
-
-            const br = btn.getBoundingClientRect();
-            const h = Math.max(1, br.height);
-
-            // 目標：大約 1~2 行可讀，並避免擠爆
-            const maxPx = clamp(Math.round(h * 0.56), 16, 34);
-            const minPx = clamp(Math.round(h * 0.34), 12, 18);
-
-            // binary search
-            let lo = minPx, hi = maxPx, best = minPx;
-            const limitH = Math.max(1, h - 10);
-            for(let i=0;i<9;i++){
-              const mid = Math.round((lo + hi) / 2);
-              span.style.fontSize = mid + "px";
-              // 用 scrollHeight 判斷是否溢出
-              const need = span.scrollHeight;
-              if(need <= limitH){
-                best = mid;
-                lo = mid + 1;
-              }else{
-                hi = mid - 1;
-              }
-            }
-            span.style.fontSize = best + "px";
-          }
-        }catch(e){}
-      }
-
-      /* ==========================================================
-         ✅真正的「蓮花禁區 keep-out」(ellipse)：
-         - 用 lotusStage 作為基準（更貼近底圖）
-         - 檢測按鍵是否壓到禁區：rect vs ellipse 最近點判定
-         ========================================================== */
-      function computeLotusKeepout(heroRect, stageRect, topBound, bottomBound, isPhone){
-        try{
-          const W = Math.max(1, heroRect.width);
-          const H = Math.max(1, heroRect.height);
-
-          const s = stageRect || heroRect;
-          const sLeft = (s.left - heroRect.left);
-          const sTop  = (s.top  - heroRect.top);
-          const sW = Math.max(1, s.width);
-          const sH = Math.max(1, s.height);
-
-          // center（跟隨手機時 zen-posY=60%）
-          const cxRel = sLeft + sW * 0.50;
-          const cyBase = sTop + sH * (isPhone ? 0.60 : 0.56);
-
-          const avail = Math.max(1, bottomBound - topBound);
-          const yMargin = clamp(Math.round(avail * 0.20), 84, 150);
-          const cyRel = clamp(cyBase, topBound + yMargin, bottomBound - yMargin);
-
-          // ellipse 半徑：手機較小（留左右空間），但仍保護蓮花本體
-          const rx = clamp(sW * (isPhone ? 0.19 : 0.20), 56, 170);
-          const ry = clamp(sH * (isPhone ? 0.29 : 0.32), 140, 360);
-
-          const pad = isPhone ? 12 : 14;
-
-          const abs = {
-            cx: heroRect.left + cxRel,
-            cy: heroRect.top  + cyRel,
-            rx: rx + pad,
-            ry: ry + pad
-          };
-
-          const rel = {
-            cx: cxRel,
-            cy: cyRel,
-            rx: rx + pad,
-            ry: ry + pad
-          };
-
-          // grid3 中間留空至少覆蓋禁區寬度（再加一點緩衝）
-          const midGapMin = Math.round(rel.rx * 2 + 18);
-
-          return {
-            abs, rel,
-            top: rel.cy - rel.ry,
-            bottom: rel.cy + rel.ry,
-            left: rel.cx - rel.rx,
-            right: rel.cx + rel.rx,
-            midGapMin
-          };
-        }catch(e){
-          return null;
-        }
-      }
-
-      function rectIntersectsEllipseAbs(rect, ellAbs){
-        // 最近點法：若矩形到橢圓中心的最近點落在橢圓內 → 相交（視為壓到禁區）
-        const nx = clamp(ellAbs.cx, rect.left, rect.right);
-        const ny = clamp(ellAbs.cy, rect.top, rect.bottom);
-        const dx = (nx - ellAbs.cx) / Math.max(1, ellAbs.rx);
-        const dy = (ny - ellAbs.cy) / Math.max(1, ellAbs.ry);
-        return (dx*dx + dy*dy) <= 1;
-      }
-
-      function anyKeepoutHit(btns, keepout){
-        if(!keepout || !keepout.abs) return false;
-        for(const btn of btns){
-          const r = btn.getBoundingClientRect();
-          if(rectIntersectsEllipseAbs(r, keepout.abs)) return true;
-        }
-        return false;
-      }
-
-      /* ✅FIX: 手機 6 顆（含 system）必定「縮小塞進螢幕內、不滾動」+ ✅真正 keep-out */
-      function layoutButtons(){
-        if(!navArea || !heroInner) return;
-        const visible = getVisibleButtons();
-        if(!visible.length) return;
-
-        const rect = heroInner.getBoundingClientRect();
-        const H = Math.max(1, rect.height);
-        const W = Math.max(1, rect.width);
-
-        const ub = userBar ? userBar.getBoundingClientRect() : null;
-        const tw = titleWrap ? titleWrap.getBoundingClientRect() : null;
-        const ax = zwTopAxis ? zwTopAxis.getBoundingClientRect() : null;
-        const bl = zwBottomLine ? zwBottomLine.getBoundingClientRect() : null;
-
-        const vvBottom = getVVBottomInset();
-
-        const topBound = Math.max(
-          78,
-          ub ? (ub.bottom - rect.top) + 10 : 0,
-          tw ? (tw.bottom - rect.top) + 10 : 0,
-          ax ? (ax.bottom - rect.top) + 10 : 0
-        );
-
-        let bottomBound = H - (10 + vvBottom);
-        if(bl){
-          bottomBound = Math.min(bottomBound, (bl.top - rect.top) - 10);
-        }
-        bottomBound = Math.max(bottomBound, topBound + 120);
-
-        const avail = Math.max(1, bottomBound - topBound);
-
-        const isNarrow = window.matchMedia("(max-width: 900px)").matches || W < 980;
-        const portrait = (window.matchMedia && window.matchMedia("(orientation: portrait)").matches && H >= W * 0.90);
-
-        // ✅只把「手機」視為較窄的手機寬度（桌機/平板不動）
-        const isPhone = window.matchMedia("(max-width: 520px)").matches || Math.min(W, H) <= 520;
-
-        // 先清掉桌機定位
-        visible.forEach(btn=>{
-          btn.style.left = "";
-          btn.style.right = "";
-          btn.style.top = "";
-          btn.style.width = "";
-          btn.style.height = "";
-          btn.style.gridColumn = "";
-        });
-
-        // 清掉手機 keepout/compact 狀態
-        navArea.classList.remove("phone-compact-stack","phone-compact-right","phone-compact-glass");
-        navArea.style.removeProperty("--stackMaxW");
-
-        const stageRect = lotusStage ? lotusStage.getBoundingClientRect() : null;
-        const keepout = (isNarrow && isPhone) ? computeLotusKeepout(rect, stageRect, topBound, bottomBound, true) : null;
-
-        // 小工具：套用 stack（可指定區域 top/bottom），並控制透明度
-        const applyStackInZone = (zoneTop, zoneBottom, opts)=>{
-          const o = opts || {};
-          const zoneAvail = Math.max(1, zoneBottom - zoneTop);
-          const btns = getVisibleButtons();
-          const n = btns.length;
-          if(!n) return false;
-
-          // 最低可用（非常小的機型）
-          const minH = 22;
-          const minGap = 4;
-          if(zoneAvail < (n*minH + (n-1)*minGap)) return false;
-
-          navArea.classList.remove("grid2","grid3","sides");
-          navArea.classList.add("stack");
-          if(o.glass) navArea.classList.add("phone-compact-glass");
-
-          navArea.style.setProperty("--navTop", Math.round(zoneTop) + "px");
-          navArea.style.setProperty("--navBottom", Math.round(H - zoneBottom) + "px");
-
-          // systemBtn 置底
-          const sys = btns.find(b => b.id === "systemBtn") || null;
-          if(sys){
-            const others = btns.filter(b => b !== sys);
-            others.forEach(b=>navArea.appendChild(b));
-            navArea.appendChild(sys);
-          }
-
-          let gapS = clamp(Math.round(zoneAvail * 0.042), 4, 10);
-          let hS = Math.floor((zoneAvail - gapS * (n - 1)) / n);
-          hS = clamp(hS, 22, 62);
-
-          let needS = n * hS + gapS * (n - 1);
-          if (needS > zoneAvail) {
-            const s = clamp(zoneAvail / needS, 0.72, 1.0);
-            gapS = Math.max(4, Math.round(gapS * s));
-            hS = Math.max(22, Math.round(hS * s));
-          }
-
-          navArea.style.setProperty("--btnGap", gapS + "px");
-          navArea.style.setProperty("--btnH", hS + "px");
-          navArea.style.setProperty("--btnScale", String(clamp((hS / 74) * 0.96, 0.34, 0.92)));
-
-          fitButtonTextPhone(getVisibleButtons());
-          return true;
-        };
-
-        // 小工具：套用側邊窄版 stack（左右擇優），並確保不壓 keepout
-        const applySideCompactStack = ()=>{
-          if(!keepout) return false;
-
-          const padX = 10;
-          const leftMax = Math.floor(keepout.left - padX);
-          const rightMax = Math.floor(W - keepout.right - padX);
-
-          // 避免太窄：太窄反而字更難看
-          const MIN_SIDE_W = 150;
-
-          let side = (rightMax > leftMax) ? "right" : "left";
-          let maxW = (side === "right") ? rightMax : leftMax;
-
-          // 如果選到的那邊太窄，嘗試另一邊
-          if(maxW < MIN_SIDE_W){
-            const altSide = (side === "right") ? "left" : "right";
-            const altW = (altSide === "right") ? rightMax : leftMax;
-            if(altW > maxW){
-              side = altSide;
-              maxW = altW;
-            }
-          }
-
-          if(maxW < MIN_SIDE_W) return false;
-
-          navArea.classList.add("phone-compact-stack");
-          navArea.classList.toggle("phone-compact-right", side === "right");
-          navArea.style.setProperty("--stackMaxW", maxW + "px");
-
-          // 全區 stack（高度仍用原本 topBound/bottomBound）
-          const ok = applyStackInZone(topBound, bottomBound, { glass:false });
-          if(!ok) return false;
-
-          // 再驗證一次：真的沒壓到 keepout
-          const btns = getVisibleButtons();
-          if(anyKeepoutHit(btns, keepout)){
-            // 回復
-            navArea.classList.remove("phone-compact-stack","phone-compact-right");
-            navArea.style.removeProperty("--stackMaxW");
-            return false;
-          }
-          return true;
-        };
-
-        // 小工具：若壓到 keepout，優先嘗試「上區 / 下區」stack，其次側邊窄版 stack
-        const resolveKeepoutForStack = ()=>{
-          if(!keepout) return false;
-
-          const gapY = 10;
-          const topZoneBottom = Math.min(bottomBound, keepout.top - gapY);
-          const bottomZoneTop = Math.max(topBound, keepout.bottom + gapY);
-
-          // ✅優先：把 stack 放到「禁區上方」(通常最不影響蓮花)
-          if(applyStackInZone(topBound, topZoneBottom, { glass:true })) return true;
-
-          // ✅其次：放到「禁區下方」
-          if(applyStackInZone(bottomZoneTop, bottomBound, { glass:true })) return true;
-
-          // ✅最後：側邊窄版（左右擇優）
-          if(applySideCompactStack()) return true;
-
-          return false;
-        };
-
-        if(isNarrow){
-          navArea.classList.remove("sides");
-          navArea.style.setProperty("--navTop", Math.round(topBound) + "px");
-          navArea.style.setProperty("--navBottom", Math.round(H - bottomBound) + "px");
-
-          const n = visible.length;
-
-          // ✅手機：優先 grid3（左右兩列，中間留空，降低壓到蓮花）
-          const preferGrid3 = isPhone && n >= 4;
-
-          if(preferGrid3){
-            navArea.classList.remove("stack","grid2");
-            navArea.classList.add("grid3");
-
-            // systemBtn 置底且吃滿一列
-            const sys = visible.find(b => b.id === "systemBtn") || null;
-            if(sys){
-              const others = visible.filter(b => b !== sys);
-              others.forEach(b=>navArea.appendChild(b));
-              navArea.appendChild(sys);
-            }
-
-            const v3 = getVisibleButtons();
-            const hasSys = !!(v3.find(b => b.id === "systemBtn"));
-            const otherCount = hasSys ? (v3.length - 1) : v3.length;
-            const rows = (hasSys ? Math.ceil(otherCount / 2) + 1 : Math.ceil(v3.length / 2));
-
-            // 中間留空寬度（依螢幕自動 + ✅keepout 最小值）
-            const baseMid = clamp(Math.round(W * 0.18), 44, 110);
-            const midNeed = keepout ? Math.max(baseMid, keepout.midGapMin) : baseMid;
-
-            const minCol = 118; // 讓左右欄不至於太窄
-            const midMax = Math.max(44, Math.round(W - 32 - 2 * minCol)); // 32 = navArea padding L/R
-            const midGap = clamp(midNeed, 44, midMax);
-
-            const colGap = clamp(Math.round(W * 0.02), 8, 14);
-            navArea.style.setProperty("--midGap", midGap + "px");
-            navArea.style.setProperty("--btnColGap", colGap + "px");
-
-            // 先估 gap，再算 h，最後若不足就一起縮
-            let gap = clamp(Math.round(avail * 0.055), 5, 12);
-            let h = Math.floor((avail - gap*(rows-1)) / rows);
-            h = clamp(h, 30, 86);
-
-            let need = rows*h + gap*(rows-1);
-            if(need > avail){
-              const s = clamp(avail / need, 0.70, 1.0);
-              gap = Math.max(4, Math.round(gap * s));
-              h = Math.max(28, Math.round(h * s));
-            }
-
-            navArea.style.setProperty("--btnGap", gap + "px");
-            navArea.style.setProperty("--btnH", h + "px");
-            navArea.style.setProperty("--btnScale", String(clamp((h / 78) * 0.98, 0.45, 1.06)));
-
-            // 指派左右欄位（中間留空）
-            let idx = 0;
-            for(const btn of v3){
-              if(btn.id === "systemBtn"){
-                btn.style.gridColumn = "1 / -1";
-              }else{
-                btn.style.gridColumn = (idx % 2 === 0) ? "1" : "3";
-                idx++;
-              }
-            }
-
-            // ✅手機：文字再依按鍵高度做一次自動微調（更清晰舒服）
-            fitButtonTextPhone(v3);
-
-            // ✅(1) 高度不足 → 改 stack + 更透明（且不壓蓮花禁區）
-            const MIN_H_GRID = 44;
-            const tooShortForGrid =
-              isPhone && (
-                h < MIN_H_GRID ||
-                avail < (rows * MIN_H_GRID + (rows - 1) * 6) ||
-                H < 560 || W < 360
-              );
-
-            if(tooShortForGrid){
-              // 先嘗試：真正不壓禁區的 stack（上區/下區/側邊）
-              if(resolveKeepoutForStack()) return;
-
-              // 真的無法 stack 時：保留 grid3，但再降透明度，確保蓮花可見
-              navArea.classList.add("phone-compact-glass");
-              fitButtonTextPhone(getVisibleButtons());
-              return;
-            }
-
-            // ✅(2) 若仍偵測到壓到禁區（極端字換行/某些字型），先再降透明度 + 再嘗試 stack 解決
-            if(keepout && anyKeepoutHit(v3, keepout)){
-              // 優先增加透明度避免視覺壓到
-              navArea.classList.add("phone-compact-glass");
-
-              // 再嘗試 stack（確保「完全不壓到蓮花本體」）
-              if(resolveKeepoutForStack()) return;
-            }
-
-            return;
-          }
-
-          // ✅手機/窄螢幕：原本 grid2（維持）
-          const preferGrid2 = (portrait && n >= 4) || (!portrait && n >= 6);
-
-          if(preferGrid2){
-            navArea.classList.remove("stack","grid3");
-            navArea.classList.add("grid2");
-
-            const sys = visible.find(b => b.id === "systemBtn") || null;
-            if(sys){
-              const others = visible.filter(b => b !== sys);
-              others.forEach(b=>navArea.appendChild(b));
-              navArea.appendChild(sys);
-            }
-
-            const v2 = getVisibleButtons();
-            const hasSys = !!(v2.find(b => b.id === "systemBtn"));
-            const otherCount = hasSys ? (v2.length - 1) : v2.length;
-            const rows = (hasSys ? Math.ceil(otherCount / 2) + 1 : Math.ceil(v2.length / 2));
-
-            let gap = clamp(Math.round(avail * 0.06), 5, 12);
-            let h = Math.floor((avail - gap*(rows-1)) / rows);
-            h = clamp(h, 30, 86);
-
-            let need = rows*h + gap*(rows-1);
-            if(need > avail){
-              const s = clamp(avail / need, 0.72, 1.0);
-              gap = Math.max(4, Math.round(gap * s));
-              h = Math.max(28, Math.round(h * s));
-            }
-
-            navArea.style.setProperty("--btnGap", gap + "px");
-            navArea.style.setProperty("--btnH", h + "px");
-            navArea.style.setProperty("--btnScale", String(clamp((h / 78) * 0.98, 0.45, 1.04)));
-
-            if(isPhone) fitButtonTextPhone(v2);
-
-            // ✅grid2 若壓到蓮花禁區：改 stack（不壓禁區）或至少降透明度
-            if(keepout && anyKeepoutHit(v2, keepout)){
-              if(resolveKeepoutForStack()) return;
-              navArea.classList.add("phone-compact-glass");
-            }
-
-            return;
-          }
-
-          // 否則 stack（少量按鍵）
-          navArea.classList.remove("grid2","grid3");
-          navArea.classList.add("stack");
-
-          const gap = clamp(Math.round(avail * 0.05), 6, 14);
-          const h = clamp(Math.floor((avail - gap*(n-1)) / n), 34, 88);
-          navArea.style.setProperty("--btnGap", gap + "px");
-          navArea.style.setProperty("--btnH", h + "px");
-          navArea.style.setProperty("--btnScale", String(clamp((h / 82) * 0.98, 0.52, 1.02)));
-
-          if(isPhone) fitButtonTextPhone(visible);
-
-          // ✅stack 仍壓到禁區 → 移到上區/下區/側邊，確保「完全不壓蓮花本體」
-          if(keepout && anyKeepoutHit(visible, keepout)){
-            if(resolveKeepoutForStack()) return;
-            navArea.classList.add("phone-compact-glass");
-          }
-
-          return;
-        }
-
-        // ✅桌機：左右側邊（維持）
-        navArea.classList.remove("stack","grid2","grid3","phone-compact-stack","phone-compact-right","phone-compact-glass");
-        navArea.style.removeProperty("--stackMaxW");
-        navArea.classList.add("sides");
-
-        const left = [];
-        const right = [];
-        visible.forEach((btn, i) => (i % 2 === 0 ? left : right).push(btn));
-
-        const topSafe = topBound;
-        const bottomSafe = bottomBound;
-        const availY = Math.max(1, bottomSafe - topSafe);
-
-        const centerGap = clamp(W * 0.16, 180, 260);
-        const sideMaxW = Math.max(280, Math.floor((W - centerGap) / 2) - 40);
-        const btnW = clamp(Math.floor(W * 0.26), 340, Math.min(560, sideMaxW));
-        navArea.style.setProperty("--btnW", btnW + "px");
-
-        const maxRows = Math.max(left.length, right.length);
-        const gapBase = clamp(Math.round(H * 0.045), 16, 26);
-        const hBase = clamp(Math.round(H * 0.118), 74, 112);
-
-        const need = maxRows*hBase + Math.max(0, (maxRows-1)*gapBase);
-        const s = clamp(availY / need, 0.66, 1.0);
-
-        const gapY = Math.max(14, Math.round(gapBase * s));
-        const btnH = Math.max(64, Math.round(hBase * s));
-
-        navArea.style.setProperty("--btnGap", gapY + "px");
-        navArea.style.setProperty("--btnH", btnH + "px");
-        navArea.style.setProperty("--btnScale", String(clamp((btnH / 92) * 0.98, 0.62, 1.00)));
-
-        const xPad = 28;
-        const leftX = xPad;
-        const rightX = Math.max(leftX + btnW + 12, W - xPad - btnW);
-
-        function placeColumn(btns, isLeft){
-          const rows = btns.length;
-          if(!rows) return;
-
-          const total = rows*btnH + Math.max(0, (rows-1)*gapY);
-          const slack = Math.max(0, availY - total);
-          const y0 = topSafe + Math.min(52, Math.round(slack * 0.22));
-
-          let y = y0;
-          for(const btn of btns){
-            btn.style.top = Math.round(y) + "px";
-            if(isLeft){
-              btn.style.left = Math.round(leftX) + "px";
-              btn.style.right = "";
-            }else{
-              btn.style.right = Math.round(W - (rightX + btnW)) + "px";
-              btn.style.left = "";
-            }
-            y += btnH + gapY;
-          }
-        }
-
-        placeColumn(left, true);
-        placeColumn(right, false);
-      }
-
-      /* ===== Username picker（保留） ===== */
-      let _userActiveIndex = -1;
-      let _typeBuf = "";
-      let _typeTimer = 0;
-
-      function menuItems(){ return Array.from(usernameMenu ? usernameMenu.querySelectorAll(".select-option") : []); }
-      function isMenuOpen(){ return !!(usernameMenu && usernameMenu.classList.contains("open")); }
-      function closeUsernameMenu(){
-        if(!usernameMenu) return;
-        usernameMenu.classList.remove("open");
-        if(usernameDisplay) usernameDisplay.setAttribute("aria-expanded", "false");
-        _userActiveIndex = -1;
-        _typeBuf = "";
-      }
-      function openUsernameMenu(){
-        if(!usernameMenu || !usernameDisplay) return;
-        if(usernameDisplay.disabled) return;
-
-        usernameMenu.classList.add("open");
-        usernameDisplay.setAttribute("aria-expanded", "true");
-
-        const items = menuItems();
-        if(!items.length) return;
-
-        const idx = items.findIndex(it => (it.dataset.value || "") === (usernameSel.value || ""));
-        setActiveIndex(idx >= 0 ? idx : 0, true);
-      }
-      function toggleUsernameMenu(){ if(isMenuOpen()) closeUsernameMenu(); else openUsernameMenu(); }
-
-      function syncUsernameDisplay(){
-        if(!usernameSel || !usernameDisplay) return;
-        const opt = usernameSel.options[usernameSel.selectedIndex];
-        const txt = opt ? String(opt.textContent || "").trim() : "";
-        if(!txt || (opt && opt.disabled)) usernameDisplay.textContent = "請選擇使用者";
-        else usernameDisplay.textContent = txt;
-      }
-
-      function selectByValue(val){
-        if(!val) return;
-        usernameSel.value = val;
-        syncUsernameDisplay();
-        const items = menuItems();
-        items.forEach(it => it.setAttribute("aria-selected", (it.dataset.value === val) ? "true" : "false"));
-      }
-
-      function setActiveIndex(nextIndex, scrollIntoView){
-        const items = menuItems();
-        if(!items.length) { _userActiveIndex = -1; return; }
-
-        const n = items.length;
-        let idx = nextIndex;
-        if(idx < 0) idx = 0;
-        if(idx >= n) idx = n - 1;
-
-        _userActiveIndex = idx;
-        items.forEach((it, i) => it.classList.toggle("active", i === idx));
-
-        if(scrollIntoView){
-          try{ items[idx].scrollIntoView({ block:"nearest" }); }catch(e){}
-        }
-      }
-
-      function buildUsernameMenu(){
-        if(!usernameMenu || !usernameSel || !usernameDisplay) return;
-        usernameMenu.innerHTML = "";
-
-        const opts = Array.from(usernameSel.options || []);
-        const usable = opts.filter(o => !o.disabled && String(o.value||"").trim());
-
-        if(!usable.length){
-          usernameDisplay.textContent = "（尚無使用者，請先到「系統 / 權限」新增）";
-          usernameDisplay.disabled = true;
-          closeUsernameMenu();
-          return;
-        }
-
-        usernameDisplay.disabled = false;
-
-        usable.forEach((o, i) => {
-          const item = document.createElement("div");
-          item.className = "select-option";
-          item.setAttribute("role", "option");
-          item.dataset.value = o.value;
-          item.textContent = o.textContent;
-
-          const selected = (o.value === usernameSel.value);
-          item.setAttribute("aria-selected", selected ? "true" : "false");
-
-          item.addEventListener("mouseenter", () => { if(isMenuOpen()) setActiveIndex(i, false); });
-          item.addEventListener("click", () => {
-            selectByValue(o.value);
-            closeUsernameMenu();
-            usernameDisplay.focus();
-          });
-
-          usernameMenu.appendChild(item);
-        });
-      }
-
-      function refreshUsernamePicker(){
-        if(!usernameSel) return;
-
-        const opt = usernameSel.options[usernameSel.selectedIndex];
-        if(opt && opt.disabled){
-          const first = Array.from(usernameSel.options).find(o => !o.disabled && String(o.value||"").trim());
-          if(first) usernameSel.value = first.value;
-        }
-
-        syncUsernameDisplay();
-        buildUsernameMenu();
-      }
-
-      if(usernameDisplay){
-        usernameDisplay.addEventListener("click", toggleUsernameMenu);
-
-        usernameDisplay.addEventListener("keydown", (e) => {
-          if(usernameDisplay.disabled) return;
-
-          const key = e.key;
-
-          if(key === "ArrowDown" || key === "ArrowUp"){
-            e.preventDefault();
-            if(!isMenuOpen()) openUsernameMenu();
-            const items = menuItems();
-            if(!items.length) return;
-
-            const dir = (key === "ArrowDown") ? 1 : -1;
-            const next = (_userActiveIndex < 0) ? 0 : (_userActiveIndex + dir);
-            setActiveIndex(next, true);
-            return;
-          }
-
-          if(key === "Enter"){
-            e.preventDefault();
-            if(!isMenuOpen()){ openUsernameMenu(); return; }
-            const items = menuItems();
-            if(!items.length) return;
-
-            const idx = (_userActiveIndex >= 0) ? _userActiveIndex : 0;
-            const val = items[idx]?.dataset?.value || "";
-            if(val) selectByValue(val);
-            closeUsernameMenu();
-            return;
-          }
-
-          if(key === "Escape"){ e.preventDefault(); closeUsernameMenu(); return; }
-
-          if(key && key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey){
-            if(!isMenuOpen()) openUsernameMenu();
-            _typeBuf += key.toLowerCase();
-            clearTimeout(_typeTimer);
-            _typeTimer = setTimeout(()=>{ _typeBuf=""; }, 650);
-
-            const items = menuItems();
-            const idx = items.findIndex(it => String(it.textContent||"").trim().toLowerCase().startsWith(_typeBuf));
-            if(idx >= 0) setActiveIndex(idx, true);
-          }
-        });
-      }
-
-      document.addEventListener("click", (e) => {
-        if(!usernameWrap || !usernameMenu) return;
-        if(isMenuOpen() && !usernameWrap.contains(e.target)) closeUsernameMenu();
-      });
-      document.addEventListener("keydown", (e) => { if(e.key === "Escape") closeUsernameMenu(); });
-
-      function populateUserSelect(){
-        AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-        usernameSel.innerHTML = "";
-
-        if(!AUTH_TABLE.length){
-          const opt = document.createElement("option");
-          opt.value = "";
-          opt.textContent = "（尚無使用者，請先到「系統 / 權限」新增）";
-          opt.disabled = true;
-          opt.selected = true;
-          usernameSel.appendChild(opt);
-          refreshUsernamePicker();
-          return;
-        }
-
-        const ph = document.createElement("option");
-        ph.value = "";
-        ph.textContent = "請選擇使用者";
-        ph.disabled = true;
-        ph.selected = true;
-        usernameSel.appendChild(ph);
-
-        const names = Array.from(new Set(AUTH_TABLE.map(r => r.username).filter(Boolean)));
-        names.sort((a,b)=>a.localeCompare(b, "zh-Hant"));
-        names.forEach(name => {
-          const opt = document.createElement("option");
-          opt.value = name;
-          opt.textContent = name;
-          usernameSel.appendChild(opt);
-        });
-
-        refreshUsernamePicker();
-      }
-
-      function tryEnterBySessionSilently(){
-        if(sessionStorage.getItem(INDEX_SESSION_KEY) !== "1") return false;
-
-        const sess = getSession();
-        if(!sess) return false;
-
-        const u = AUTH_TABLE.find(r => r.username === sess.user);
-        if(!u){ clearSession();       try{ localStorage.removeItem("tasunSso_v1"); }catch(_e){}
-return false; }
-        if(String(u.level||"").toLowerCase() !== String(sess.role||"").toLowerCase()){
-          clearSession(); return false;
-        }
-        try{ applyUser(u); }catch(e){ return false; }
-        return true;
-      }
-
-      function showLogin(){
-        document.body.classList.add("locked");
-        loginOverlay.style.display = "flex";
-        loginError.textContent = "";
-        loginSub.textContent = "";
-        $("#password").value = "";
-
-        populateUserSelect();
-        resetButtonsForLogout();
-
-        userInfo.textContent = "目前使用者：未登入";
-        userInfo.setAttribute("data-text", "目前使用者：未登入");
-scheduleAll();
-
-        setTimeout(() => { try{ usernameDisplay && usernameDisplay.focus(); }catch(e){} }, 0);
-      }
-
-      function autoEnterIfSessionValid(){
-        // ✅ 使用 Session Cookie + sessionStorage：同一瀏覽器工作階段只要登入一次，其他頁/新分頁可直接通行
-        // 但關閉整個瀏覽器後，Session Cookie 會清掉，重新開啟仍需登入
-        try{
-          if(!window.TasunAuthV4) return;
-          const sess = window.TasunAuthV4.getSession && window.TasunAuthV4.getSession();
-          if(!sess || !sess.user) return;
-          // 若 cookie/session 有效，直接進入
-          enterWithUser(sess.user, sess.r || sess.role || "read");
-        }catch(e){}
-      }
-
-        loginSub.textContent = `已登入：${u.username}（${u.level}）… 正在進入`;
-        setTimeout(() => {
-          if(!getSession()) return;
-          applyUser(u);
-        }, 220);
-      }
-
-      function applyUser(user){
-        document.body.classList.remove("locked");
-        loginOverlay.style.display = "none";
-        loginSub.textContent = "";
-
-        // v4.1: 登入狀態由 TasunAuthV4 以 Session Cookie + sessionStorage 維持（同瀏覽器工作階段一次登入即可）
-        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: user.level })); }catch(e){}
-
-        CURRENT_USER = user;
-
-        const t = `目前使用者：${user.username} (${user.level})`;
-        userInfo.textContent = t;
-        userInfo.setAttribute("data-text", t);
-
-        refreshButtonsForCurrentUser();
-        scheduleExport("login:applyUser");
-
-        ensureCloudMounted(user).catch(()=>{});
-
-        scheduleAll();
-      }
-
-      /* ✅攔截 localStorage 寫入：自動備份 + 自動雲端合併寫入 */
-      (function patchLocalStorageOnce(){
-        try{
-          if(localStorage.__tasun_patched__) return;
-          Object.defineProperty(localStorage, "__tasun_patched__", { value: true, enumerable:false });
-
-          const _set = localStorage.setItem.bind(localStorage);
-          const _remove = localStorage.removeItem.bind(localStorage);
-
-          localStorage.setItem = function(k, v){
-            _set(k, v);
-            scheduleExport("save:setItem:" + k);
-
-            if(CLOUD_KEY_SET.has(String(k))){
-              const ro = !!(cloudCtrl && cloudCtrl.__readOnly__);
-              scheduleCloudSave(ro);
-            }
-          };
-          localStorage.removeItem = function(k){
-            _remove(k);
-            scheduleExport("save:removeItem:" + k);
-
-            if(CLOUD_KEY_SET.has(String(k))){
-              const ro = !!(cloudCtrl && cloudCtrl.__readOnly__);
-              scheduleCloudSave(ro);
-            }
-          };
-        }catch(e){}
-      })();
-
-      const scheduleLayout = rafDebounce(layoutButtons);
-      function scheduleAll(){ scheduleLayout(); }
-
-      AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-      buildMainButtonsDOM();
-
-      ensureCloudMounted(null).catch(()=>{});
-
-      // ✅進入首頁：保險版 — 一律先顯示登入（不自動通行）
-      showLogin();
-if(zenImg){
-        zenImg.addEventListener("load", () => { scheduleAll(); }, { once:false });
-      }
-
-      requestAnimationFrame(() => {
-        document.body.classList.remove("booting");
-        scheduleAll();
-        onFontsReady(() => scheduleAll());
-      });
-
-      loginForm.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const username = (loginUser.value || "").trim();
-        const password = (loginPass.value || "").trim();
-        if(!username || !password){
-          setLoginMsg("請輸入帳號與密碼");
-          return;
-        }
-
-        setLoginMsg("登入中…");
-
-        // ✅ v4.1：改用 Worker /api/tasun/login（帳密由 D1 tasun_users 驗證）
-        // 成功後 TasunAuthV4 會把 session 存到「Session Cookie」(關瀏覽器會清掉)，並同步放到 sessionStorage
-        try{
-          if(!window.TasunAuthV4){
-            throw new Error("TasunAuthV4 not loaded");
-          }
-          const apiBase = (window.TasunCloudWrapV4 && window.TasunCloudWrapV4.getApiBase && window.TasunCloudWrapV4.getApiBase()) || (window.TASUN_API_BASE || "");
-          const r = await window.TasunAuthV4.login({ apiBase, username, password });
-          if(!r || !r.ok){
-            setLoginMsg((r && (r.message || r.error)) || "登入失敗");
-            return;
-          }
-
-          // 讀取權限表：按鍵 btn1..btn5（沒有就用預設 role 規則）
-          let entryButtons = null;
-          try{
-            const rr = await fetch(`${apiBase}/api/tasun/auth/read`,{
-              method:"POST",
-              headers:{ "content-type":"application/json" },
-              body: JSON.stringify({ username })
-            });
-            const jj = await rr.json().catch(()=>null);
-            if(jj && jj.ok && jj.user){
-              entryButtons = jj.user.entryButtons || null;
-            }
-          }catch(_e){}
-
-          const role = r.role || r.level || "read";
-          const user = { username, level: role, entryButtons };
-
-          applyUser(user);
-
-          // 登入成功
-          loginPass.value = "";
-          setLoginMsg("");
-          hideLogin();
-        }catch(err){
-          setLoginMsg("登入失敗：" + (err && err.message ? err.message : String(err)));
-        }
-      });btnForceRelogin.addEventListener("click", () => {
-        clearSession();
-        loginSub.textContent = "請重新輸入密碼登入";
-        loginError.textContent = "";
-        const pwd = $("#password");
-        pwd.value = "";
-        pwd.focus();
-        scheduleAll();
-      });
-
-      btnSwitch.addEventListener("click", () => {
-        clearSession();
-        localStorage.removeItem(CURRENT_KEY);
-        CURRENT_USER = null;
-        showLogin();
-        scheduleExport("switchUser");
-        scheduleAll();
-      });
-
-      btnTogglePwd.addEventListener("click", () => {
-        const pwd = $("#password");
-        pwd.type = (pwd.type === "password") ? "text" : "password";
-      });
-
-      btnExport.addEventListener("click", () => {
-        exportBackupNow("manual:button", { download:true });
-      });
-
-      // ✅避免 resize 連續重排卡頓：只排程 rAF；vv scroll 不再觸發 layout（由上方 stabilizer 處理）
-      window.addEventListener("resize", () => scheduleAll(), { passive:true });
-      if(window.visualViewport){
-        window.visualViewport.addEventListener("resize", () => scheduleAll(), { passive:true });
-      }
-    }    // ✅啟動保險：不論 Loader/Core 是否存在，都安排一個 fallback，避免「Loader 存在但 ready 沒呼叫」導致首頁不出登入
-    if(window.TasunLoader && typeof window.TasunLoader.ready === "function"){
-      try{ window.TasunLoader.ready(runIndexApp, 8000); }catch(_e){}
-    }else if(window.TasunCore && typeof window.TasunCore.ready === "function"){
-      try{ window.TasunCore.ready(runIndexApp, 8000); }catch(_e){}
-    }else{
-      setTimeout(runIndexApp, 0);
+  }
+
+  function loadAuthTable(btnCount){
+    migrateAuthToHashedIfNeeded();
+    const raw = localStorage.getItem(AUTH_KEY);
+    if(!raw){
+      const legacy = getDefaultAuthTableLegacy(btnCount);
+      localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
+      return legacy.map(r => normalizeRowFromStorage(r, btnCount));
     }
-    // fallback（idempotent：runIndexApp 內有 started guard）
-    setTimeout(()=>{ try{ runIndexApp(); }catch(_e){} }, 1200);
+    const parsed = safeJsonParse(raw, null);
+    const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
+    if(Array.isArray(arr)){
+      const mapped = arr.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
+      if(mapped.length) return mapped;
+    }
+    const legacy = getDefaultAuthTableLegacy(btnCount);
+    localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
+    return legacy.map(r => normalizeRowFromStorage(r, btnCount));
+  }
 
-  })();
-  </script>
+  function loadNavButtonsSeedIfMissing(){
+    const seed = [
+      { id:"btn1", label:"臻鼎時代大廈管理表" },
+      { id:"btn2", label:"捷運汐止東湖線" },
+      { id:"btn3", label:"雲端檔案" },
+      { id:"btn4", label:"工程資料庫" },
+      { id:"btn5", label:"資料庫" }
+    ];
+    const raw = localStorage.getItem(NAV_KEY);
+    if(!raw){ localStorage.setItem(NAV_KEY, JSON.stringify(seed)); return seed; }
+    const arr = safeJsonParse(raw, null);
+    if(Array.isArray(arr) && arr.length) return arr;
+    localStorage.setItem(NAV_KEY, JSON.stringify(seed));
+    return seed;
+  }
+
+  function loadRoutes(){
+    const seed = {
+      btn1: "臻鼎管理表.html",
+      btn2: "汐東工程管理表.html",
+      btn3: "https://www.dropbox.com/",
+      btn4: "工程資料庫.html",
+      btn5: "資料庫.html",
+      systemBtn: "權限表.html"
+    };
+    const raw = localStorage.getItem(ROUTE_KEY);
+    const base = raw ? (safeJsonParse(raw, {}) || {}) : {};
+    const merged = { ...seed, ...base, ...FIXED_ROUTES };
+    localStorage.setItem(ROUTE_KEY, JSON.stringify(merged, null, 2));
+    return merged;
+  }
+
+  function resolveHref(cfg, routes){
+    const id = String(cfg?.id || "").trim();
+    const label = String(cfg?.label || "").trim();
+    if(FIXED_ROUTES[id]) return FIXED_ROUTES[id];
+    if(FIXED_ROUTES[label]) return FIXED_ROUTES[label];
+    if(routes && routes[id]) return routes[id];
+    if(routes && label && routes[label]) return routes[label];
+    const guess = labelToFile(label);
+    return FIXED_ROUTES[guess] || guess;
+  }
+
+  function _b64e(s){ try{ return btoa(unescape(encodeURIComponent(s))); }catch(_e){ return ""; } }
+  function _b64d(s){ try{ return decodeURIComponent(escape(atob(s))); }catch(_e){ return ""; } }
+
+  function setCookieSession(user){
+    try{
+      const now = Date.now();
+      const payload = { u:String(user?.username || user?.user || user?.name || "").trim(), r:String(user?.level || user?.role || "read").trim().toLowerCase(), exp: now + COOKIE_TTL_MS, v: DEFAULT_VER };
+      if(!payload.u) return;
+      document.cookie = `${COOKIE_NAME}=${encodeURIComponent(_b64e(JSON.stringify(payload)))}; Path=/; SameSite=Lax; Secure`;
+    }catch(_e){}
+  }
+  function clearCookieSession(){ try{ document.cookie = `${COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax; Secure`; }catch(_e){} }
+  function getCookieSession(){
+    try{
+      const parts = String(document.cookie || '').split(/;\s*/);
+      const pair = parts.find(x => x.startsWith(COOKIE_NAME + '='));
+      if(!pair) return null;
+      const raw = pair.slice(COOKIE_NAME.length + 1);
+      const o = JSON.parse(_b64d(decodeURIComponent(raw || "")));
+      if(!o || !o.u) return null;
+      if(o.exp && Date.now() > Number(o.exp)) return null;
+      return { user:String(o.u), role:String(o.r || "read").toLowerCase(), exp:Number(o.exp || 0) };
+    }catch(_e){ return null; }
+  }
+  function setSession(user){
+    try{
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user:user.username, role:user.level, t:Date.now() }));
+      sessionStorage.setItem(INDEX_SESSION_KEY, "1");
+      sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user:user.username, role:String(user.level||"read").toLowerCase() }));
+    }catch(_e){}
+    setCookieSession(user);
+  }
+  function clearSession(){
+    try{
+      sessionStorage.removeItem(SESSION_KEY);
+      sessionStorage.removeItem(INDEX_SESSION_KEY);
+      sessionStorage.removeItem(CURRENT_KEY);
+      sessionStorage.removeItem(SSO_KEY);
+    }catch(_e){}
+    clearCookieSession();
+  }
+  function getSession(){
+    const obj = safeJsonParse(sessionStorage.getItem(SESSION_KEY) || "null", null);
+    if(obj && obj.user) return { user:String(obj.user), role:String(obj.role || "read").toLowerCase(), t:Number(obj.t || 0) };
+    const ck = getCookieSession();
+    if(ck && ck.user){
+      try{
+        sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user:ck.user, role:ck.role, t:Date.now() }));
+        sessionStorage.setItem(INDEX_SESSION_KEY, "1");
+        sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user:ck.user, role:ck.role }));
+      }catch(_e){}
+      return { user:ck.user, role:ck.role, t:Date.now() };
+    }
+    return null;
+  }
+
+  function inferRole(name, role){
+    const r = String(role || "").trim().toLowerCase();
+    if(r) return r;
+    const u = String(name || "").trim().toLowerCase();
+    if(u === "alex" || u === "joyce") return "admin";
+    if(u === "tasun") return "write";
+    return "read";
+  }
+  function setSSO(user){
+    try{
+      const now = Date.now();
+      const payload = { name: user?.name || user?.user || user?.username || "", role: user?.role || inferRole(user?.name || user?.user || user?.username || "", user?.role), at: now, exp: now + COOKIE_TTL_MS, v: DEFAULT_VER };
+      sessionStorage.setItem(SSO_KEY, JSON.stringify(payload));
+    }catch(_e){}
+  }
+  function getSSO(){
+    try{
+      const o = JSON.parse(sessionStorage.getItem(SSO_KEY) || "null");
+      if(!o || !o.name) return null;
+      if(o.exp && Date.now() > Number(o.exp)) return null;
+      return o;
+    }catch(_e){ return null; }
+  }
+
+  function populateUserSelect(){
+    const authTable = loadAuthTable(5);
+    usernameSel.innerHTML = "";
+    if(!authTable.length){
+      const opt = new Option("（尚無使用者，請先到「系統 / 權限」新增）", "", true, true);
+      opt.disabled = true;
+      usernameSel.appendChild(opt);
+      syncUsernameDisplay();
+      buildUsernameMenu();
+      return;
+    }
+    const ph = new Option("請選擇使用者", "", true, true);
+    ph.disabled = true;
+    usernameSel.appendChild(ph);
+    Array.from(new Set(authTable.map(r=>r.username).filter(Boolean))).sort((a,b)=>a.localeCompare(b,"zh-Hant")).forEach(name => usernameSel.appendChild(new Option(name, name)));
+    syncUsernameDisplay();
+    buildUsernameMenu();
+  }
+
+  function menuItems(){ return Array.from(usernameMenu.querySelectorAll('.select-option')); }
+  function syncUsernameDisplay(){
+    const opt = usernameSel.options[usernameSel.selectedIndex];
+    const txt = opt ? String(opt.textContent || '').trim() : '';
+    usernameDisplay.textContent = (!txt || opt.disabled) ? '請選擇使用者' : txt;
+  }
+  function closeUsernameMenu(){ menuOpen = false; usernameMenu.classList.remove('open'); usernameDisplay.setAttribute('aria-expanded','false'); activeIdx = -1; }
+  function setActiveIndex(idx, doScroll){
+    const items = menuItems(); if(!items.length) return;
+    idx = clamp(idx, 0, items.length-1); activeIdx = idx;
+    items.forEach((it,i)=>it.classList.toggle('active', i===idx));
+    if(doScroll) items[idx].scrollIntoView({ block:'nearest' });
+  }
+  function openUsernameMenu(){
+    if(usernameDisplay.disabled) return;
+    menuOpen = true; usernameMenu.classList.add('open'); usernameDisplay.setAttribute('aria-expanded','true');
+    const items = menuItems();
+    if(items.length){ const idx = items.findIndex(it => it.dataset.value === usernameSel.value); setActiveIndex(idx >= 0 ? idx : 0, true); }
+  }
+  function buildUsernameMenu(){
+    usernameMenu.innerHTML = '';
+    const opts = Array.from(usernameSel.options).filter(o=>!o.disabled && String(o.value||'').trim());
+    if(!opts.length){ usernameDisplay.textContent = '（尚無使用者，請先到「系統 / 權限」新增）'; usernameDisplay.disabled = true; closeUsernameMenu(); return; }
+    usernameDisplay.disabled = false;
+    opts.forEach((o,i)=>{
+      const item = document.createElement('div');
+      item.className = 'select-option';
+      item.setAttribute('role','option');
+      item.dataset.value = o.value;
+      item.textContent = o.textContent;
+      item.setAttribute('aria-selected', o.value === usernameSel.value ? 'true' : 'false');
+      item.addEventListener('mouseenter', ()=>{ if(menuOpen) setActiveIndex(i, false); });
+      item.addEventListener('click', ()=>{ usernameSel.value = o.value; syncUsernameDisplay(); buildUsernameMenu(); closeUsernameMenu(); usernameDisplay.focus(); });
+      usernameMenu.appendChild(item);
+    });
+  }
+
+  usernameDisplay.addEventListener('click', ()=> menuOpen ? closeUsernameMenu() : openUsernameMenu());
+  document.addEventListener('click', (e)=>{ if(menuOpen && !usernameWrap.contains(e.target)) closeUsernameMenu(); });
+  document.addEventListener('keydown', (e)=>{ if(e.key === 'Escape') closeUsernameMenu(); });
+
+  function setLoginMsg(msg, isError){
+    const s = String(msg || '');
+    const err = !!isError;
+    loginError.textContent = err ? s : '';
+    loginSub.textContent = err ? '' : s;
+  }
+  function hideLogin(){ document.body.classList.remove('locked'); loginOverlay.style.display = 'none'; }
+  function showLogin(){
+    document.body.classList.add('locked');
+    loginOverlay.style.display = 'flex';
+    loginError.textContent = '';
+    loginSub.textContent = '';
+    if(loginPass) loginPass.value = '';
+    populateUserSelect();
+    resetButtonsForLogout();
+    userInfo.textContent = '目前使用者：未登入';
+    userInfo.setAttribute('data-text', '目前使用者：未登入');
+    scheduleAll();
+    setTimeout(()=>{ try{ usernameDisplay.focus(); }catch(_e){} }, 0);
+  }
+
+  async function validateLocalLogin(username, password){
+    const authTable = loadAuthTable(5);
+    const u = authTable.find(r => r.username === String(username || '').trim());
+    if(!u) return null;
+    const storedHash = String(u.passHash || '').trim().toLowerCase();
+    if(storedHash){
+      const inputHash = String(await sha256Hex(password)).trim().toLowerCase();
+      return inputHash === storedHash ? u : null;
+    }
+    return String(u.password || '').trim() === String(password || '').trim() ? u : null;
+  }
+
+  function isRoleAllowed(cfg, level){ return !cfg.roles || cfg.roles.includes(level); }
+  function isAllowedByAuth(user, cfg){
+    if(cfg.id === 'systemBtn') return user.level === 'admin';
+    const m = String(cfg.id || '').match(/^btn(\d+)$/i);
+    if(!m) return true;
+    const idx = parseInt(m[1], 10) - 1;
+    const v = Array.isArray(user.buttons) ? user.buttons[idx] : undefined;
+    return v === undefined ? true : !!v;
+  }
+
+  function buildMainButtonsDOM(){
+    const navArr = loadNavButtonsSeedIfMissing();
+    const routes = loadRoutes();
+    BTN_CONFIGS = navArr.map(x => ({ id:String(x?.id||'').trim(), label:String(x?.label||'').trim(), roles: ROLE_MAP[String(x?.id||'').trim()] || ['admin','write','read'], target: String(x?.id||'').trim()==='btn3' ? '_blank' : '' }));
+    BTN_CONFIGS.push({ id:'systemBtn', label:'系統 / 權限', roles:['admin'], target:'' });
+    navArea.innerHTML = '';
+    MAIN_BTNS = BTN_CONFIGS.map(cfg => {
+      const a = document.createElement('a');
+      a.className = 'nav-btn';
+      a.id = cfg.id;
+      if(cfg.id === 'systemBtn') a.classList.add('is-system');
+      const span = document.createElement('span');
+      span.textContent = cfg.label;
+      markLatin(span);
+      a.appendChild(span);
+      a.setAttribute('href', hrefToDom(resolveHref(cfg, routes)));
+      if(cfg.target){ a.target = cfg.target; if(cfg.target === '_blank') a.rel = 'noopener noreferrer'; }
+      a.style.display = 'none';
+      navArea.appendChild(a);
+      return a;
+    });
+  }
+
+  function refreshButtonsForCurrentUser(){
+    const routes = loadRoutes();
+    MAIN_BTNS.forEach((btn, idx)=>{
+      const cfg = BTN_CONFIGS[idx];
+      btn.style.display = (CURRENT_USER && isRoleAllowed(cfg, CURRENT_USER.level) && isAllowedByAuth(CURRENT_USER, cfg)) ? 'flex' : 'none';
+      btn.setAttribute('href', hrefToDom(resolveHref(cfg, routes)));
+    });
+    scheduleAll();
+  }
+
+  function resetButtonsForLogout(){
+    MAIN_BTNS.forEach(btn => btn.style.display = 'none');
+    navArea.classList.remove('stack','grid2','grid3','sides','phone-compact-stack','phone-compact-right','phone-compact-glass');
+    navArea.style.removeProperty('--stackMaxW');
+  }
+
+  function applyUser(user){
+    CURRENT_USER = user;
+    try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user:user.username, role:user.level })); }catch(_e){}
+    const t = `目前使用者：${user.username} (${user.level})`;
+    userInfo.textContent = t;
+    userInfo.setAttribute('data-text', t);
+    refreshButtonsForCurrentUser();
+    hideLogin();
+    scheduleAll();
+  }
+
+  function tryEnterBySessionSilently(){
+    const sess = getSession();
+    if(!sess || !sess.user) return false;
+    const authTable = loadAuthTable(5);
+    const u = authTable.find(r => r.username === sess.user);
+    if(!u){ clearSession(); return false; }
+    if(sess.role) u.level = String(sess.role || u.level || 'read').toLowerCase();
+    applyUser(u);
+    return true;
+  }
+
+  function layoutButtons(){
+    const visible = MAIN_BTNS.filter(b => b.style.display !== 'none');
+    if(!visible.length) return;
+    const rect = heroInner.getBoundingClientRect();
+    const H = Math.max(1, rect.height), W = Math.max(1, rect.width);
+    const ub = userBar.getBoundingClientRect();
+    const tw = titleWrap.getBoundingClientRect();
+    const ax = zwTopAxis.getBoundingClientRect();
+    const bl = zwBottomLine.getBoundingClientRect();
+    const topBound = Math.max(90, ub.bottom - rect.top + 10, tw.bottom - rect.top + 10, ax.bottom - rect.top + 10);
+    let bottomBound = H - 16;
+    if(bl) bottomBound = Math.min(bottomBound, bl.top - rect.top - 12);
+    bottomBound = Math.max(bottomBound, topBound + 120);
+    const avail = Math.max(1, bottomBound - topBound);
+    visible.forEach(btn => { btn.style.left=''; btn.style.right=''; btn.style.top=''; btn.style.width=''; btn.style.height=''; btn.style.gridColumn=''; });
+    const isNarrow = window.matchMedia('(max-width: 900px)').matches || W < 980;
+    navArea.classList.remove('stack','grid2','grid3','sides');
+    if(isNarrow){
+      navArea.classList.add('stack');
+      const gap = clamp(Math.round(avail * 0.05), 6, 14);
+      const h = clamp(Math.floor((avail - gap * (visible.length - 1)) / visible.length), 36, 88);
+      navArea.style.setProperty('--navTop', Math.round(topBound) + 'px');
+      navArea.style.setProperty('--navBottom', Math.round(H - bottomBound) + 'px');
+      navArea.style.setProperty('--btnGap', gap + 'px');
+      navArea.style.setProperty('--btnH', h + 'px');
+      navArea.style.setProperty('--btnScale', String(clamp((h / 82) * 0.98, 0.52, 1.02)));
+      return;
+    }
+    navArea.classList.add('sides');
+    const left = [], right = [];
+    visible.forEach((btn, i) => (i % 2 === 0 ? left : right).push(btn));
+    const centerGap = clamp(W * 0.16, 180, 260);
+    const sideMaxW = Math.max(280, Math.floor((W - centerGap) / 2) - 40);
+    const btnW = clamp(Math.floor(W * 0.26), 340, Math.min(560, sideMaxW));
+    navArea.style.setProperty('--btnW', btnW + 'px');
+    const maxRows = Math.max(left.length, right.length);
+    const gapBase = clamp(Math.round(H * 0.045), 16, 26);
+    const hBase = clamp(Math.round(H * 0.118), 74, 112);
+    const need = maxRows * hBase + Math.max(0, (maxRows - 1) * gapBase);
+    const s = clamp(avail / need, 0.66, 1.0);
+    const gapY = Math.max(14, Math.round(gapBase * s));
+    const btnH = Math.max(64, Math.round(hBase * s));
+    navArea.style.setProperty('--btnGap', gapY + 'px');
+    navArea.style.setProperty('--btnH', btnH + 'px');
+    navArea.style.setProperty('--btnScale', String(clamp((btnH / 92) * 0.98, 0.62, 1.00)));
+    const xPad = 28, leftX = xPad, rightX = Math.max(leftX + btnW + 12, W - xPad - btnW);
+    function placeColumn(btns, isLeft){
+      const rows = btns.length; if(!rows) return;
+      const total = rows * btnH + Math.max(0, (rows - 1) * gapY);
+      const slack = Math.max(0, avail - total);
+      let y = topBound + Math.min(52, Math.round(slack * 0.22));
+      for(const btn of btns){
+        btn.style.top = Math.round(y) + 'px';
+        if(isLeft){ btn.style.left = Math.round(leftX) + 'px'; btn.style.right=''; }
+        else { btn.style.right = Math.round(W - (rightX + btnW)) + 'px'; btn.style.left=''; }
+        y += btnH + gapY;
+      }
+    }
+    placeColumn(left, true); placeColumn(right, false);
+  }
+
+  const scheduleAll = rafDebounce(layoutButtons);
+
+  async function handleLogin(e){
+    e.preventDefault();
+    const username = String((usernameSel && usernameSel.value) || '').trim();
+    const password = String((loginPass && loginPass.value) || '').trim();
+    if(!username || !password){ setLoginMsg('請選擇使用者並輸入密碼', true); return; }
+    setLoginMsg('登入中…', false);
+    try{
+      let user = null;
+      if(window.TasunAuthV4 && typeof window.TasunAuthV4.login === 'function'){
+        const apiBase = (window.TasunCloudWrapV4 && window.TasunCloudWrapV4.getApiBase && window.TasunCloudWrapV4.getApiBase()) || (window.TASUN_API_BASE || '');
+        try{
+          const r = await window.TasunAuthV4.login({ apiBase, username, password });
+          if(r && (r.ok || r.user || r.username)) user = { username, level: String(r.role || r.level || 'read').toLowerCase() };
+        }catch(_e){}
+      }
+      if(!user){
+        const localUser = await validateLocalLogin(username, password);
+        if(!localUser){ setLoginMsg('帳號或密碼錯誤', true); return; }
+        user = { username: localUser.username, level: localUser.level, buttons: localUser.buttons };
+      }
+      const authTable = loadAuthTable(5);
+      const fullUser = authTable.find(r => r.username === user.username) || user;
+      if(user.level) fullUser.level = user.level;
+      setSession(fullUser);
+      setSSO(fullUser);
+      applyUser(fullUser);
+      if(loginPass) loginPass.value = '';
+      setLoginMsg('', false);
+    }catch(err){
+      setLoginMsg('登入失敗：' + (err && err.message ? err.message : String(err)), true);
+    }
+  }
+
+  function exportBackupNow(){
+    const payload = {
+      meta: { app:'Tasun index.html', ts:new Date().toISOString(), href:location.href, cacheV:DEFAULT_VER },
+      data: Object.fromEntries(Object.keys(localStorage).filter(k => /^tasun/i.test(k)).map(k => [k, safeJsonParse(localStorage.getItem(k), localStorage.getItem(k))]))
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type:'application/json;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `Tasun備份_${new Date().toISOString().replace(/[:.]/g,'-')}.json`;
+    document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 0);
+  }
+
+  function init(){
+    buildMainButtonsDOM();
+    populateUserSelect();
+    loginForm.addEventListener('submit', handleLogin);
+    btnForceRelogin.addEventListener('click', ()=>{ clearSession(); setLoginMsg('', false); if(loginPass){ loginPass.value=''; loginPass.focus(); } showLogin(); });
+    btnSwitch.addEventListener('click', ()=>{ clearSession(); CURRENT_USER = null; showLogin(); });
+    if(btnLogout) btnLogout.addEventListener('click', ()=>{ clearSession(); CURRENT_USER = null; showLogin(); });
+    btnTogglePwd.addEventListener('click', ()=>{ if(loginPass) loginPass.type = loginPass.type === 'password' ? 'text' : 'password'; });
+    btnExport.addEventListener('click', exportBackupNow);
+    window.addEventListener('resize', scheduleAll, { passive:true });
+    if(window.visualViewport) window.visualViewport.addEventListener('resize', scheduleAll, { passive:true });
+    if(zenImg) zenImg.addEventListener('load', scheduleAll, { once:false });
+
+    const sso = getSSO();
+    if(sso && sso.name && !getSession()) setSession({ username:sso.name, level:sso.role || 'read' });
+
+    if(!tryEnterBySessionSilently()) showLogin();
+    requestAnimationFrame(()=>{ document.body.classList.remove('booting'); scheduleAll(); });
+  }
+
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once:true });
+  else init();
+})();
+</script>
 </body>
 </html>
