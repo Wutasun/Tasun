@@ -37,7 +37,7 @@
 
   <!-- ✅全站版本 -->
   <script>
-    window.APP_VER = window.APP_VER || "20260309_17";
+    window.APP_VER = window.APP_VER || "20260309_01";
     window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
   </script>
 
@@ -1076,22 +1076,7 @@
 
     /* ===== 自製下拉（保留） ===== */
     .select-wrap{ position:relative; width:100%; }
-    /* ✅改用原生 select 實際接收點擊：桌機/手機都直接打開系統下拉 */
-    .select-wrap select{
-      position:absolute;
-      inset:0;
-      width:100%;
-      height:100%;
-      z-index:3;
-      opacity:0.01;
-      pointer-events:auto;
-      cursor:pointer;
-      appearance:none;
-      -webkit-appearance:none;
-      background:transparent;
-      border:0;
-      color:transparent;
-    }
+    .select-wrap select{ position:absolute; inset:0; opacity:0; pointer-events:none; }
     .select-display{
       width:100%; display:flex; align-items:center; justify-content:flex-start; text-align:left;
       padding: .78rem 2.90rem .78rem .96rem;
@@ -1104,7 +1089,6 @@
       text-shadow: 0 1px 0 rgba(10,6,2,0.28), 0 6px 12px rgba(0,0,0,0.46);
       box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 12px 20px rgba(0,0,0,0.24);
       cursor:pointer; user-select:none; position:relative; appearance:none;
-      pointer-events:none;
       backdrop-filter:none; -webkit-backdrop-filter:none;
       font-size: 15px;
       font-weight: 900;
@@ -1449,6 +1433,8 @@ function runIndexApp(){
 
       const PERM_MATRIX_KEY = "tasunPermMatrix_v1";
       const API_BASE_KEY = "tasunApiBase_v1";
+      const D1_AUTH_TABLE_ENDPOINT_FULL = "/api/auth/table";
+      const D1_AUTH_TABLE_ENDPOINT_PUB  = "/api/auth/public";
 
       const BACKUP_RING_KEY = "tasunBackupRing_v1";
       const BACKUP_RING_MAX = 10;
@@ -1475,7 +1461,6 @@ function runIndexApp(){
       const loginSub     = $("#loginSub");
       const userInfo     = $("#userInfo");
       const btnSwitch    = $("#btnSwitchUser");
-      const btnLogout    = $("#btnLogout");
       const btnExport    = $("#btnExport");
       const btnTogglePwd = $("#btnTogglePwd");
       const btnForceRelogin = $("#btnForceRelogin");
@@ -2087,6 +2072,70 @@ function getSession(){
       };
       const SYSTEM_BTN = { id:"systemBtn", label:"系統 / 權限", roles:["admin"] };
 
+      function getApiBaseLocked(){
+        const v = (localStorage.getItem(API_BASE_KEY) || "").trim();
+        const base = v || "https://tasun-worker.wutasun.workers.dev";
+        return String(base).replace(/\/+$/,"");
+      }
+      function withNoCache(u){
+        try{
+          const url = new URL(u, location.href);
+          url.searchParams.set("_", String(Date.now()));
+          return url.toString();
+        }catch(e){
+          const ts = Date.now();
+          return (String(u).includes("?") ? (u + "&_=" + ts) : (u + "?_=" + ts));
+        }
+      }
+      async function d1GetJson(path){
+        const base = getApiBaseLocked();
+        const url = withNoCache(base + path);
+        const res = await fetch(url, { method:"GET", credentials:"include", cache:"no-store" });
+        const j = await res.json().catch(()=>null);
+        return { ok:res.ok, status:res.status, json:j };
+      }
+      function mergeAuthRowsKeepOrder(primary, fallback){
+        const out = [];
+        const seen = new Set();
+        const push = (row)=>{
+          if(!row || typeof row !== "object") return;
+          const name = String(row.username ?? row.user ?? row.name ?? row.account ?? "").trim();
+          if(!name) return;
+          const key = name.toLowerCase();
+          if(seen.has(key)) return;
+          seen.add(key);
+          out.push(row);
+        };
+        (Array.isArray(primary)?primary:[]).forEach(push);
+        (Array.isArray(fallback)?fallback:[]).forEach(push);
+        return out;
+      }
+      async function syncAuthUsersBeforeLogin(){
+        try{
+          let r = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_FULL);
+          if(r.ok && r.json && r.json.ok){
+            const remote = Array.isArray(r.json?.data?.auth) ? r.json.data.auth : (Array.isArray(r.json?.auth) ? r.json.auth : []);
+            if(remote.length){
+              const localRaw = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
+              const merged = mergeAuthRowsKeepOrder(remote, localRaw);
+              localStorage.setItem(AUTH_KEY, JSON.stringify(merged));
+              return true;
+            }
+          }
+          r = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_PUB);
+          if(r.ok && r.json && r.json.ok){
+            const remote = Array.isArray(r.json?.data?.auth) ? r.json.data.auth : (Array.isArray(r.json?.auth) ? r.json.auth : []);
+            if(remote.length){
+              const localRaw = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
+              const merged = mergeAuthRowsKeepOrder(remote, localRaw);
+              localStorage.setItem(AUTH_KEY, JSON.stringify(merged));
+              return true;
+            }
+          }
+        }catch(e){}
+        return false;
+      }
+
       let BTN_CONFIGS = [];
       let mainNavBtns = [];
       let AUTH_TABLE = [];
@@ -2200,7 +2249,7 @@ function getSession(){
 
           try{
             if(loginOverlay && loginOverlay.style.display === "flex"){
-              populateUserSelect();
+              Promise.resolve(populateUserSelect()).catch(()=>{});
             }
           }catch(e){}
 
@@ -2857,17 +2906,6 @@ if(CURRENT_USER){
         buildUsernameMenu();
       }
 
-      if(usernameSel){
-        usernameSel.addEventListener("change", () => {
-          syncUsernameDisplay();
-          buildUsernameMenu();
-          try{ closeUsernameMenu(); }catch(e){}
-        });
-        usernameSel.addEventListener("input", () => {
-          syncUsernameDisplay();
-        });
-      }
-
       if(usernameDisplay){
         usernameDisplay.addEventListener("click", toggleUsernameMenu);
 
@@ -2922,7 +2960,8 @@ if(CURRENT_USER){
       });
       document.addEventListener("keydown", (e) => { if(e.key === "Escape") closeUsernameMenu(); });
 
-      function populateUserSelect(){
+      async function populateUserSelect(){
+        try{ await syncAuthUsersBeforeLogin(); }catch(e){}
         AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
         usernameSel.innerHTML = "";
 
@@ -2944,8 +2983,15 @@ if(CURRENT_USER){
         ph.selected = true;
         usernameSel.appendChild(ph);
 
-        const names = Array.from(new Set(AUTH_TABLE.map(r => r.username).filter(Boolean)));
-        names.sort((a,b)=>a.localeCompare(b, "zh-Hant"));
+        const names = [];
+        const seen = new Set();
+        AUTH_TABLE.forEach(r => {
+          const name = String(r && r.username ? r.username : "").trim();
+          const key = name.toLowerCase();
+          if(!name || seen.has(key)) return;
+          seen.add(key);
+          names.push(name);
+        });
         names.forEach(name => {
           const opt = document.createElement("option");
           opt.value = name;
@@ -2954,6 +3000,7 @@ if(CURRENT_USER){
         });
 
         refreshUsernamePicker();
+        try{ if(loginSub) loginSub.textContent = `使用者清單：本機/雲端共 ${names.length} 位`; }catch(e){}
       }
 
       function tryEnterBySessionSilently(){
@@ -3177,17 +3224,6 @@ if(zenImg){
         const pwd = $("#password");
         pwd.type = (pwd.type === "password") ? "text" : "password";
       });
-
-      if(btnLogout){
-        btnLogout.addEventListener("click", () => {
-          clearSession();
-          try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
-          CURRENT_USER = null;
-          showLogin();
-          scheduleExport("logout");
-          scheduleAll();
-        });
-      }
 
       btnExport.addEventListener("click", () => {
         exportBackupNow("manual:button", { download:true });
