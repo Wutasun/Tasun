@@ -15,7 +15,7 @@
      * ✅你每次更新本頁，只要改 APP_VER（例如：20260130_01 → 20260203_01）
      * 全部使用者會自動跳到 ?v=APP_VER，保證同步最新版。
      */
-    const APP_VER = "20260309_03";  // ←←← 每次改版請改這裡（建議與首頁/管理表一致）
+    const APP_VER = "20260309_04";  // ←←← 每次改版請改這裡（建議與首頁/管理表一致）
     const VER_KEY = "tasun_app_ver_auth_v1";
     const TAB_GUARD = "tasun_tab_replaced_once_auth_v1";
 
@@ -729,6 +729,13 @@
 
   const TOKEN_DOWNLOAD_URL = 'https://www.dropbox.com/developers/apps';
   const METRO_FIXED_HREF = '汐東工程管理表.html';
+  const HOME_BUTTON_LIBRARY = [
+    { sourceId:'metro',    label:'捷運汐止東湖線',     href:'汐東工程管理表.html', target:'',       roles:[] },
+    { sourceId:'zhending', label:'臻鼎時代大廈管理表', href:'臻鼎管理表.html',     target:'',       roles:[] },
+    { sourceId:'engdb',    label:'工程資料庫',         href:'工程資料庫.html',     target:'',       roles:[] },
+    { sourceId:'auth',     label:'系統/權限',         href:'權限表.html',         target:'',       roles:[] },
+    { sourceId:'cloud',    label:'雲端檔案',           href:'https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88', target:'_blank', roles:[] }
+  ];
   const roleOptions = ['admin','write','read'];
 
   // ====== 入口頁清單（保留你提供順序，未來建議改 resources.json） ======
@@ -2132,44 +2139,94 @@ function safeJsonParse(s, fallback){
   }
 
   // 按鍵名稱設定（保留）
+  function normNavText(s){
+    return String(s || '').trim().replace(/[／]/g, '/').replace(/\s+/g, '');
+  }
+
+  function getHomeButtonLibrary(){
+    return HOME_BUTTON_LIBRARY.map(it => ({
+      sourceId: String(it.sourceId || '').trim(),
+      label: String(it.label || '').trim(),
+      href: String(it.href || '').trim(),
+      target: String(it.target || '').trim(),
+      roles: Array.isArray(it.roles) ? it.roles.slice() : []
+    }));
+  }
+
+  function inferNavSourceId(hit, fallbackId){
+    const rawSourceId = String(hit?.sourceId || '').trim();
+    const library = getHomeButtonLibrary();
+
+    if(rawSourceId && library.some(x => x.sourceId === rawSourceId)) return rawSourceId;
+
+    const href = String(hit?.href || '').trim();
+    if(href){
+      const byHref = library.find(x => String(x.href || '').trim() === href);
+      if(byHref) return byHref.sourceId;
+    }
+
+    const label = normNavText(hit?.label || '');
+    if(label){
+      const byLabel = library.find(x => normNavText(x.label) === label);
+      if(byLabel) return byLabel.sourceId;
+    }
+
+    const num = String(fallbackId || '').replace(/^btn/i,'').trim();
+    if(num && /^\d+$/.test(num)){
+      const idx = Number(num) - 1;
+      if(library[idx]) return library[idx].sourceId;
+    }
+
+    return rawSourceId || String(fallbackId || '').trim() || 'metro';
+  }
+
+  function getLibraryItemBySourceId(sourceId){
+    const sid = String(sourceId || '').trim();
+    return getHomeButtonLibrary().find(x => x.sourceId === sid) || null;
+  }
+
+  function buildRoutesObject(raw){
+    if(raw && typeof raw === 'object' && !Array.isArray(raw)) return { ...raw };
+    return {};
+  }
+
   function readNavButtons(){
     const arr = safeJsonParse(localStorage.getItem(NAV_KEY) || '[]', []);
+    const library = getHomeButtonLibrary();
+
     if(Array.isArray(arr) && arr.length){
       const map = new Map(arr.map(x => [String(x.id||'').toLowerCase(), x]));
       const out = [];
       for(let i=1;i<=5;i++){
         const id = `btn${i}`;
-        const hit = map.get(id);
+        const hit = map.get(id) || {};
+        const sourceId = inferNavSourceId(hit, id);
+        const lib = getLibraryItemBySourceId(sourceId);
+
         out.push({
           id,
-          sourceId: String(hit?.sourceId || id).trim() || id,
-          label: String(hit?.label || id).trim() || id,
-          href: String(hit?.href || '').trim(),
-          target: String(hit?.target || '').trim(),
-          roles: Array.isArray(hit?.roles) ? hit.roles : []
+          sourceId,
+          label: String(lib?.label || hit?.label || id).trim() || id,
+          href: String(lib?.href || hit?.href || '').trim(),
+          target: String(lib?.target || hit?.target || '').trim(),
+          roles: Array.isArray(lib?.roles) ? lib.roles.slice() : (Array.isArray(hit?.roles) ? hit.roles.slice() : [])
         });
       }
       return out;
     }
-    return [
-      { id:'btn1', label:'btn1', href:'', target:'', roles:[] },
-      { id:'btn2', label:'btn2', href:'', target:'', roles:[] },
-      { id:'btn3', label:'btn3', href:'', target:'', roles:[] },
-      { id:'btn4', label:'btn4', href:'', target:'', roles:[] },
-      { id:'btn5', label:'btn5', href:'', target:'', roles:[] },
-    ];
+
+    return library.slice(0,5).map((it, idx) => ({
+      id: `btn${idx+1}`,
+      sourceId: it.sourceId,
+      label: it.label,
+      href: it.href,
+      target: it.target,
+      roles: it.roles.slice()
+    }));
   }
 
   function getNavSourceList(){
-    const nav = readNavButtons();
-    return nav.map((it, idx) => ({
-      id: `btn${idx+1}`,
-      sourceId: String(it.sourceId || it.id || `btn${idx+1}`).trim() || `btn${idx+1}`,
-      label: String(it.label || `btn${idx+1}`).trim() || `btn${idx+1}`,
-      href: String(it.href || '').trim(),
-      target: String(it.target || '').trim(),
-      roles: Array.isArray(it.roles) ? it.roles.slice() : []
-    }));
+    return getHomeButtonLibrary();
   }
 
   function navOptionText(it){
@@ -2185,15 +2242,19 @@ function safeJsonParse(s, fallback){
   function refreshNavSelectOptions(){
     const list = getNavSourceList();
     const selects = getNavSelectControls();
+
     selects.forEach((sel, idx) => {
       if(!sel) return;
-      const currentVal = String(sel.value || sel.dataset.prevValue || `btn${idx+1}`).trim() || `btn${idx+1}`;
+      const fallback = list[idx]?.sourceId || '';
+      const currentVal = String(sel.value || sel.dataset.prevValue || fallback).trim() || fallback;
+
       sel.innerHTML = list.map(item => {
         const selected = item.sourceId === currentVal ? 'selected' : '';
         return `<option value="${escapeHtml(item.sourceId)}" ${selected}>${escapeHtml(navOptionText(item))}</option>`;
       }).join('');
-      if(!list.some(item => item.sourceId === sel.value) && list[idx]){
-        sel.value = list[idx].sourceId;
+
+      if(!list.some(item => item.sourceId === sel.value) && fallback){
+        sel.value = fallback;
       }
       sel.dataset.prevValue = sel.value;
     });
@@ -2209,11 +2270,13 @@ function safeJsonParse(s, fallback){
       const prev = String(sel.dataset.prevValue || '').trim();
       const now  = String(sel.value || '').trim();
       if(!now) return;
+
       const hit = selects.find(other => other !== sel && String(other.value || '').trim() === now);
       if(hit){
         hit.value = prev || hit.dataset.prevValue || '';
         hit.dataset.prevValue = hit.value;
       }
+
       sel.dataset.prevValue = sel.value;
       refreshNavSelectOptions();
     });
@@ -2222,28 +2285,41 @@ function safeJsonParse(s, fallback){
   function writeNavButtons(updated){
     const oldNav = readNavButtons();
     const out = [];
+
     for(let i=1;i<=5;i++){
       const id = `btn${i}`;
       const src = updated[i-1] || {};
+      const sourceId = String(src.sourceId || '').trim() || (getHomeButtonLibrary()[i-1]?.sourceId || id);
+      const lib = getLibraryItemBySourceId(sourceId);
+
       out.push({
         id,
-        sourceId: String(src.sourceId || src.id || id).trim() || id,
-        label: String(src.label || id).trim() || id,
-        href: String(src.href || '').trim(),
-        target: String(src.target || '').trim(),
-        roles: Array.isArray(src.roles) ? src.roles.slice() : []
+        sourceId,
+        label: String(lib?.label || src.label || id).trim() || id,
+        href: String(lib?.href || src.href || '').trim(),
+        target: String(lib?.target || src.target || '').trim(),
+        roles: Array.isArray(lib?.roles) ? lib.roles.slice() : (Array.isArray(src.roles) ? src.roles.slice() : [])
       });
     }
 
     localStorage.setItem(NAV_KEY, JSON.stringify(out));
 
-    const oldRoutes = safeJsonParse(localStorage.getItem(ROUTE_KEY) || '{}', {});
-    const routes = (oldRoutes && typeof oldRoutes === 'object') ? { ...oldRoutes } : {};
+    const oldRoutesRaw = safeJsonParse(localStorage.getItem(ROUTE_KEY) || '{}', {});
+    const routes = buildRoutesObject(oldRoutesRaw);
+
     oldNav.forEach(it => {
-      const name = String(it?.label || '').trim();
-      if(name && Object.prototype.hasOwnProperty.call(routes, name)) delete routes[name];
+      const oldLabel = String(it?.label || '').trim();
+      if(oldLabel && Object.prototype.hasOwnProperty.call(routes, oldLabel)) delete routes[oldLabel];
     });
-    out.forEach(it => { if(it.label) routes[it.label] = it.href; });
+    getHomeButtonLibrary().forEach(it => {
+      const label = String(it?.label || '').trim();
+      if(label && Object.prototype.hasOwnProperty.call(routes, label)) delete routes[label];
+    });
+
+    out.forEach(it => {
+      if(it.label) routes[it.label] = it.href;
+    });
+
     localStorage.setItem(ROUTE_KEY, JSON.stringify(routes));
 
     buildEntrySelect();
@@ -2261,18 +2337,20 @@ function safeJsonParse(s, fallback){
   function loadNavNamesIntoInputs(){
     const nav = readNavButtons();
     refreshNavSelectOptions();
+
     const selects = getNavSelectControls();
     selects.forEach((sel, idx) => {
       if(!sel) return;
       const item = nav[idx] || {};
-      const sourceId = String(item.sourceId || item.id || `btn${idx+1}`).trim() || `btn${idx+1}`;
+      const sourceId = String(item.sourceId || getHomeButtonLibrary()[idx]?.sourceId || `btn${idx+1}`).trim();
       sel.value = sourceId;
       if(String(sel.value || '').trim() !== sourceId){
-        const fallback = getNavSourceList()[idx];
+        const fallback = getHomeButtonLibrary()[idx];
         sel.value = fallback ? fallback.sourceId : sourceId;
       }
       sel.dataset.prevValue = sel.value;
     });
+
     refreshNavSelectOptions();
   }
 
@@ -2282,33 +2360,26 @@ function safeJsonParse(s, fallback){
     const sourceList = getNavSourceList();
     const sourceMap = new Map(sourceList.map(it => [String(it.sourceId || '').trim(), it]));
     const selects = getNavSelectControls();
+
     const updated = selects.map((sel, idx) => {
-      const key = String(sel?.value || '').trim() || `btn${idx+1}`;
-      const src = sourceMap.get(key);
-      if(src){
-        return {
-          id: `btn${idx+1}`,
-          sourceId: String(src.sourceId || src.id || `btn${idx+1}`).trim() || `btn${idx+1}`,
-          label: String(src.label || `btn${idx+1}`).trim() || `btn${idx+1}`,
-          href: String(src.href || '').trim(),
-          target: String(src.target || '').trim(),
-          roles: Array.isArray(src.roles) ? src.roles.slice() : []
-        };
-      }
+      const sourceId = String(sel?.value || '').trim() || (sourceList[idx]?.sourceId || `btn${idx+1}`);
+      const src = sourceMap.get(sourceId) || sourceList[idx] || null;
       return {
         id: `btn${idx+1}`,
-        sourceId: `btn${idx+1}`,
-        label: `btn${idx+1}`,
-        href: '',
-        target: '',
-        roles: []
+        sourceId: String(src?.sourceId || sourceId).trim(),
+        label: String(src?.label || `btn${idx+1}`).trim(),
+        href: String(src?.href || '').trim(),
+        target: String(src?.target || '').trim(),
+        roles: Array.isArray(src?.roles) ? src.roles.slice() : []
       };
     });
 
     writeNavButtons(updated);
 
-    setMsg('✅ 已儲存按鍵排序並同步（名稱與連結會一起移動）。\n其他分頁（例如首頁）會自動更新。');
+    setMsg('✅ 已儲存按鍵排序並同步（名稱、連結網址、target 會一起移動）。\n其他分頁（例如首頁）會自動更新。');
   }
+
+  getNavSelectControls().forEach(bindNavSelectSwap);
 
   navNameBtnD.addEventListener('click', openNavPanel);
   navNameBtnM.addEventListener('click', () => { closeMoreMenu(); openNavPanel(); });
