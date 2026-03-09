@@ -37,13 +37,13 @@
 
   <!-- ✅全站版本（單一版次源：tasun-version.json） -->
   <script>
-    window.TASUN_VERSION_FALLBACK = "20260309_22";
+    window.TASUN_VERSION_FALLBACK = "20260309_23";
     window.APP_VER = window.APP_VER || window.TASUN_VERSION_FALLBACK;
     window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
   </script>
   <script>
   (function(){
-    const FALLBACK = String(window.TASUN_VERSION_FALLBACK || window.APP_VER || "20260309_22").trim();
+    const FALLBACK = String(window.TASUN_VERSION_FALLBACK || window.APP_VER || "20260309_23").trim();
     const url = new URL(location.href);
     const curV = (url.searchParams.get('v') || '').trim();
     function setResolved(ver){
@@ -1305,7 +1305,7 @@
         <div class="login-field">
           <label for="password">密碼</label>
           <div class="login-pwd-wrapper">
-            <input id="password" name="password" type="password" autocomplete="current-password" class="login-pwd-input" />
+            <input id="password" name="password" type="password" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" class="login-pwd-input" />
             <button type="button" class="btn-eye-login" id="btnTogglePwd">👁</button>
           </div>
         </div>
@@ -1415,6 +1415,7 @@ function runIndexApp(){
       const CURRENT_KEY = "tasunCurrentUser_v1";
     // ====== ✅SSO：全站免重複登入（由 index 建立 token，子頁讀取 token 直接通過） ======
     const SSO_KEY = "tasunSso_v1";
+    const SSO_NONCE_KEY = "tasunSsoNonce_v1";
     const SSO_TTL_MS = 1000 * 60 * 60 * 12; // 12 小時（可自行調整）
 
     // ✅SSO 角色推斷（避免 inferRole 未定義導致 setSSO 失敗）
@@ -2131,6 +2132,26 @@ function getSession(){
         { username:"tasun", passHash:"cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba", level:"write" },
         { username:"wu",    passHash:"8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92", level:"read" }
       ];
+      const LOGIN_BASELINE_PLAIN = {
+        alex: "Tasun08040224",
+        joyce: "09220224",
+        tasun: "tasun08040224",
+        wu: "123456"
+      };
+      function normalizeLoginPassword(v){
+        return String(v ?? "").normalize("NFKC").replace(/[​-‍﻿ 
+	]/g, "").trim();
+      }
+      function ensureBaselineUsersInLocalAuth(){
+        try{
+          const localRaw = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
+          const merged = mergeAuthRowsKeepOrder(Array.isArray(localRaw) ? localRaw : [], []);
+          localStorage.setItem(AUTH_KEY, JSON.stringify(merged));
+          return merged;
+        }catch(e){
+          return mergeAuthRowsKeepOrder([], []);
+        }
+      }
       function canonUserName(v){ return String(v || "").trim(); }
       function canonUserKey(v){ return canonUserName(v).toLowerCase(); }
       function normalizeAuthLikeRow(row){
@@ -2194,11 +2215,7 @@ function getSession(){
             return true;
           }
         }catch(e){}
-        try{
-          const localRaw = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
-          const merged = mergeAuthRowsKeepOrder(localRaw, []);
-          localStorage.setItem(AUTH_KEY, JSON.stringify(merged));
-        }catch(e){}
+        ensureBaselineUsersInLocalAuth();
         return false;
       }
 
@@ -3028,7 +3045,7 @@ if(CURRENT_USER){
 
       async function populateUserSelect(){
         try{ await syncAuthUsersBeforeLogin(); }catch(e){}
-        AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+        AUTH_TABLE = ensureBaselineUsersInLocalAuth();
         usernameSel.innerHTML = "";
 
         if(!AUTH_TABLE.length){
@@ -3235,7 +3252,7 @@ if(zenImg){
         try{
           // ✅登入前先同步雲端權限表，再合併本機與基準帳號，避免桌機/手機不一致
           try{ await syncAuthUsersBeforeLogin(); }catch(_e){}
-          AUTH_TABLE = mergeAuthRowsKeepOrder(loadAuthTable(LEGACY_BUTTON_KEYS.length), []);
+          AUTH_TABLE = ensureBaselineUsersInLocalAuth();
           try{ localStorage.setItem(AUTH_KEY, JSON.stringify(AUTH_TABLE)); }catch(_e){}
           const u = AUTH_TABLE.find(r => canonUserKey(r.username) === canonUserKey(username));
 
@@ -3248,11 +3265,12 @@ if(zenImg){
           const storedHash = String(u.passHash || "").trim().toLowerCase();
           const seed = LOGIN_BASELINE_USERS.find(x => canonUserKey(x.username) === canonUserKey(username));
           const seedHash = String(seed && seed.passHash || "").trim().toLowerCase();
+          const baselinePlain = normalizeLoginPassword(LOGIN_BASELINE_PLAIN[canonUserKey(username)] || "");
 
           // 兼容極舊資料：若仍有明碼 password 欄位，仍允許驗證，但成功後會由 migrateAuthToHashedIfNeeded 升級
-          const storedPlain = String(u.password || u.pass || "").trim();
+          const storedPlain = normalizeLoginPassword(String(u.password || u.pass || ""));
 
-          const ok = (storedHash && pwHash === storedHash) || (seedHash && pwHash === seedHash) || (!!storedPlain && password === storedPlain);
+          const ok = (storedHash && pwHash === storedHash) || (seedHash && pwHash === seedHash) || (!!storedPlain && password === storedPlain) || (!!baselinePlain && password === baselinePlain);
 
           if(!ok){
             loginError.textContent = "密碼錯誤";
