@@ -35,10 +35,41 @@
   })();
   </script>
 
-  <!-- ✅全站版本 -->
+  <!-- ✅全站版本（單一版次源：tasun-version.json） -->
   <script>
-    window.APP_VER = window.APP_VER || "20260309_01";
+    window.TASUN_VERSION_FALLBACK = "20260309_22";
+    window.APP_VER = window.APP_VER || window.TASUN_VERSION_FALLBACK;
     window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
+  </script>
+  <script>
+  (function(){
+    const FALLBACK = String(window.TASUN_VERSION_FALLBACK || window.APP_VER || "20260309_22").trim();
+    const url = new URL(location.href);
+    const curV = (url.searchParams.get('v') || '').trim();
+    function setResolved(ver){
+      const v = String(ver || FALLBACK).trim() || FALLBACK;
+      window.APP_VER = v;
+      window.TASUN_APP_VER = v;
+      window.__CACHE_V = v;
+    }
+    setResolved(FALLBACK);
+    fetch('tasun-version.json?_=' + Date.now(), { cache:'no-store' })
+      .then(r => r.ok ? r.json() : null)
+      .then(j => {
+        const remote = String((j && (j.version || j.ver || j.appVer)) || FALLBACK).trim() || FALLBACK;
+        setResolved(remote);
+        if (curV !== remote) {
+          url.searchParams.set('v', remote);
+          location.replace(url.toString());
+        }
+      })
+      .catch(() => {
+        if (curV !== FALLBACK) {
+          url.searchParams.set('v', FALLBACK);
+          location.replace(url.toString());
+        }
+      });
+  })();
   </script>
 
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
@@ -55,9 +86,9 @@
   (function () {
     "use strict";
 
-    const VER = String(window.TASUN_APP_VER || window.APP_VER || "").trim();
+    const VER = String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || window.TASUN_VERSION_FALLBACK || "").trim();
     const url = new URL(location.href);
-    const curV = url.searchParams.get("v") || "";
+    const curV = (url.searchParams.get("v") || "").trim();
 
     if (VER && curV !== VER) {
       url.searchParams.set("v", VER);
@@ -65,7 +96,7 @@
       return;
     }
 
-    window.__CACHE_V = VER || curV || "";
+    window.__CACHE_V = VER || curV || window.TASUN_VERSION_FALLBACK || "";
 
     window.__withV = window.__withV || function (u) {
       const vv = String(window.__CACHE_V || "").trim();
@@ -2094,20 +2125,54 @@ function getSession(){
         const j = await res.json().catch(()=>null);
         return { ok:res.ok, status:res.status, json:j };
       }
+      const LOGIN_BASELINE_USERS = [
+        { username:"alex",  passHash:"7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07", level:"admin" },
+        { username:"JOYCE", passHash:"d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815", level:"admin" },
+        { username:"tasun", passHash:"cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba", level:"write" },
+        { username:"wu",    passHash:"8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92", level:"read" }
+      ];
+      function canonUserName(v){ return String(v || "").trim(); }
+      function canonUserKey(v){ return canonUserName(v).toLowerCase(); }
+      function normalizeAuthLikeRow(row){
+        if(!row || typeof row !== "object") return null;
+        const username = canonUserName(row.username ?? row.user ?? row.name ?? row.account ?? "");
+        if(!username) return null;
+        const level = String(row.level ?? row.role ?? "read").trim().toLowerCase() || "read";
+        const passHash = String(row.passHash ?? row.passwordHash ?? row.hash ?? "").trim();
+        const password = String(row.password ?? row.pass ?? row.pw ?? "");
+        const buttons = Array.isArray(row.buttons) ? row.buttons.slice() : undefined;
+        return { ...row, username, level, passHash, password, buttons };
+      }
       function mergeAuthRowsKeepOrder(primary, fallback){
         const out = [];
-        const seen = new Set();
+        const seen = new Map();
+        const mergeInto = (base, extra) => {
+          if(!extra) return base;
+          if(!base) return { ...extra };
+          const next = { ...base };
+          const fields = ["username","user","name","account","level","role","passHash","password","pass","pw","buttons"];
+          for(const f of fields){
+            const val = extra[f];
+            if(Array.isArray(val)) next[f] = val.slice();
+            else if(val !== undefined && val !== null && String(val) !== "") next[f] = val;
+          }
+          return next;
+        };
         const push = (row)=>{
-          if(!row || typeof row !== "object") return;
-          const name = String(row.username ?? row.user ?? row.name ?? row.account ?? "").trim();
-          if(!name) return;
-          const key = name.toLowerCase();
-          if(seen.has(key)) return;
-          seen.add(key);
-          out.push(row);
+          const n = normalizeAuthLikeRow(row);
+          if(!n) return;
+          const key = canonUserKey(n.username);
+          if(seen.has(key)){
+            const idx = seen.get(key);
+            out[idx] = mergeInto(out[idx], n);
+            return;
+          }
+          seen.set(key, out.length);
+          out.push({ ...n });
         };
         (Array.isArray(primary)?primary:[]).forEach(push);
         (Array.isArray(fallback)?fallback:[]).forEach(push);
+        LOGIN_BASELINE_USERS.forEach(push);
         return out;
       }
       async function syncAuthUsersBeforeLogin(){
@@ -2115,23 +2180,24 @@ function getSession(){
           let r = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_FULL);
           if(r.ok && r.json && r.json.ok){
             const remote = Array.isArray(r.json?.data?.auth) ? r.json.data.auth : (Array.isArray(r.json?.auth) ? r.json.auth : []);
-            if(remote.length){
-              const localRaw = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
-              const merged = mergeAuthRowsKeepOrder(remote, localRaw);
-              localStorage.setItem(AUTH_KEY, JSON.stringify(merged));
-              return true;
-            }
+            const localRaw = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
+            const merged = mergeAuthRowsKeepOrder(remote, localRaw);
+            localStorage.setItem(AUTH_KEY, JSON.stringify(merged));
+            return true;
           }
           r = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_PUB);
           if(r.ok && r.json && r.json.ok){
             const remote = Array.isArray(r.json?.data?.auth) ? r.json.data.auth : (Array.isArray(r.json?.auth) ? r.json.auth : []);
-            if(remote.length){
-              const localRaw = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
-              const merged = mergeAuthRowsKeepOrder(remote, localRaw);
-              localStorage.setItem(AUTH_KEY, JSON.stringify(merged));
-              return true;
-            }
+            const localRaw = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
+            const merged = mergeAuthRowsKeepOrder(remote, localRaw);
+            localStorage.setItem(AUTH_KEY, JSON.stringify(merged));
+            return true;
           }
+        }catch(e){}
+        try{
+          const localRaw = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
+          const merged = mergeAuthRowsKeepOrder(localRaw, []);
+          localStorage.setItem(AUTH_KEY, JSON.stringify(merged));
         }catch(e){}
         return false;
       }
@@ -2985,9 +3051,10 @@ if(CURRENT_USER){
 
         const names = [];
         const seen = new Set();
-        AUTH_TABLE.forEach(r => {
-          const name = String(r && r.username ? r.username : "").trim();
-          const key = name.toLowerCase();
+        mergeAuthRowsKeepOrder(AUTH_TABLE, []).forEach(r => {
+          const row = normalizeAuthLikeRow(r);
+          const name = canonUserName(row && row.username);
+          const key = canonUserKey(name);
           if(!name || seen.has(key)) return;
           seen.add(key);
           names.push(name);
@@ -3149,8 +3216,10 @@ if(zenImg){
       loginForm.addEventListener("submit", async (e) => {
         e.preventDefault();
 
-        const username = (usernameSel && usernameSel.value ? String(usernameSel.value) : "").trim();
-        const password = String($("#password") ? $("#password").value : "").trim();
+        const username = canonUserName(usernameSel && usernameSel.value ? String(usernameSel.value) : "");
+        const passwordRaw = String($("#password") ? $("#password").value : "");
+        const password = passwordRaw.normalize("NFKC").replace(/[​-‍﻿ 	
+]/g, "").trim();
 
         if(!username){
           loginError.textContent = "請選擇使用者";
@@ -3164,9 +3233,11 @@ if(zenImg){
         loginError.textContent = "登入中…";
 
         try{
-          // ✅本機權限表驗證（不依賴外部 Worker，避免登入畫面消失/按鍵不顯示）
-          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-          const u = AUTH_TABLE.find(r => String(r.username||"").trim() === username);
+          // ✅登入前先同步雲端權限表，再合併本機與基準帳號，避免桌機/手機不一致
+          try{ await syncAuthUsersBeforeLogin(); }catch(_e){}
+          AUTH_TABLE = mergeAuthRowsKeepOrder(loadAuthTable(LEGACY_BUTTON_KEYS.length), []);
+          try{ localStorage.setItem(AUTH_KEY, JSON.stringify(AUTH_TABLE)); }catch(_e){}
+          const u = AUTH_TABLE.find(r => canonUserKey(r.username) === canonUserKey(username));
 
           if(!u){
             loginError.textContent = "查無此使用者（請到「系統 / 權限」新增）";
@@ -3175,11 +3246,13 @@ if(zenImg){
 
           const pwHash = await sha256Hex(password);
           const storedHash = String(u.passHash || "").trim().toLowerCase();
+          const seed = LOGIN_BASELINE_USERS.find(x => canonUserKey(x.username) === canonUserKey(username));
+          const seedHash = String(seed && seed.passHash || "").trim().toLowerCase();
 
           // 兼容極舊資料：若仍有明碼 password 欄位，仍允許驗證，但成功後會由 migrateAuthToHashedIfNeeded 升級
-          const storedPlain = String(u.password || "").trim();
+          const storedPlain = String(u.password || u.pass || "").trim();
 
-          const ok = (storedHash && pwHash === storedHash) || (!!storedPlain && password === storedPlain);
+          const ok = (storedHash && pwHash === storedHash) || (seedHash && pwHash === seedHash) || (!!storedPlain && password === storedPlain);
 
           if(!ok){
             loginError.textContent = "密碼錯誤";
