@@ -37,7 +37,7 @@
 
   <!-- ✅全站版本 -->
   <script>
-    window.APP_VER = window.APP_VER || "20260309_01";
+    window.APP_VER = window.APP_VER || "20260309_24";
     window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
   </script>
 
@@ -1429,7 +1429,8 @@ function runIndexApp(){
       const INDEX_SESSION_KEY = "tasunIndexSessionAuthed_v1";
       const SESSION_KEY = "tasunSessionLogin_v1";
       const NAV_KEY     = "tasunNavButtons_v1";
-      const ROUTE_KEY   = "tasunNavRoutes_v1";
+      const ROUTE_KEY   = "tasunRoutes_v1";
+      const LEGACY_ROUTE_KEY = "tasunNavRoutes_v1";
 
       const PERM_MATRIX_KEY = "tasunPermMatrix_v1";
       const API_BASE_KEY = "tasunApiBase_v1";
@@ -1452,6 +1453,14 @@ function runIndexApp(){
         "sxdh-notes": "sxdh-notes.html",
         "sxdh-notes.html": "sxdh-notes.html",
       };
+
+      const HOME_BUTTON_LIBRARY = [
+        { id:"btn1", sourceId:"metro",    label:"捷運汐止東湖線",     href:"汐東工程管理表.html", target:"",       roles:["admin","write","read"] },
+        { id:"btn2", sourceId:"zhending", label:"臻鼎時代大廈管理表", href:"臻鼎管理表.html",     target:"",       roles:["admin","write","read"] },
+        { id:"btn3", sourceId:"engdb",    label:"工程資料庫",         href:"工程資料庫.html",     target:"",       roles:["admin","write","read"] },
+        { id:"btn4", sourceId:"auth",     label:"系統/權限",         href:"權限表.html",         target:"",       roles:["admin","write"] },
+        { id:"btn5", sourceId:"cloud",    label:"雲端檔案",           href:"https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav", target:"_blank", roles:["admin","write","read"] }
+      ];
 
       const LEGACY_BUTTON_KEYS = ["btn1","btn2","btn3","btn4","btn5"];
 
@@ -1808,53 +1817,73 @@ function runIndexApp(){
 
       function loadRoutes(){
         const seed = applyFixedRoutes({
-          "btn3": "https://www.dropbox.com/",
+          "btn1": "汐東工程管理表.html",
+          "btn2": "臻鼎管理表.html",
+          "btn3": "工程資料庫.html",
+          "btn4": "權限表.html",
+          "btn5": "https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav",
           "systemBtn": "權限表.html",
           [METRO_ID]: METRO_HREF
         });
 
-        const raw = localStorage.getItem(ROUTE_KEY);
-        if(!raw){
-          localStorage.setItem(ROUTE_KEY, JSON.stringify(seed, null, 2));
-          return seed;
-        }
-
-        const parsed = safeJsonParse(raw, null);
-        const base = (parsed && typeof parsed === "object") ? parsed : {};
-        const merged = applyFixedRoutes({ ...base, ...seed });
-
-        if(JSON.stringify(base) !== JSON.stringify(merged)){
-          localStorage.setItem(ROUTE_KEY, JSON.stringify(merged, null, 2));
-        }
+        const primary = safeJsonParse(localStorage.getItem(ROUTE_KEY) || '{}', {});
+        const legacy  = safeJsonParse(localStorage.getItem(LEGACY_ROUTE_KEY) || '{}', {});
+        const base = (primary && typeof primary === "object") ? primary : {};
+        const oldv = (legacy && typeof legacy === "object") ? legacy : {};
+        const merged = applyFixedRoutes({ ...oldv, ...base, ...seed });
+        const mergedJson = JSON.stringify(merged, null, 2);
+        try{
+          if(JSON.stringify(base) !== JSON.stringify(merged)) localStorage.setItem(ROUTE_KEY, mergedJson);
+          if(JSON.stringify(oldv) !== JSON.stringify(merged)) localStorage.setItem(LEGACY_ROUTE_KEY, mergedJson);
+        }catch(e){}
         return merged;
       }
 
       function loadNavButtonsSeedIfMissing(){
-        const seed = [
-          { id:"btn1", label:"臻鼎時代大廈管理表" },
-          { id:"btn2", label:"捷運汐止東湖線" },
-          { id:"btn3", label:"雲端檔案" },
-          { id:"btn4", label:"工程資料庫" },
-          { id:"btn5", label:"資料庫" }
-        ];
+        const seed = HOME_BUTTON_LIBRARY.map(x => ({ ...x }));
         const raw = localStorage.getItem(NAV_KEY);
+        const enrich = (arr) => {
+          const libById = new Map(HOME_BUTTON_LIBRARY.map(x => [String(x.id), x]));
+          const libBySource = new Map(HOME_BUTTON_LIBRARY.map(x => [String(x.sourceId), x]));
+          const libByLabel = new Map(HOME_BUTTON_LIBRARY.map(x => [String(x.label), x]));
+          return (Array.isArray(arr) ? arr : []).map((it, idx) => {
+            const id = String(it?.id || `btn${idx+1}`).trim();
+            const src = libById.get(id) || libBySource.get(String(it?.sourceId || '').trim()) || libByLabel.get(String(it?.label || '').trim()) || HOME_BUTTON_LIBRARY[idx] || {};
+            return {
+              id,
+              sourceId: String(it?.sourceId || src.sourceId || '').trim(),
+              label: String(it?.label || src.label || '').trim(),
+              href: String(it?.href || src.href || '').trim(),
+              target: String(it?.target || src.target || '').trim(),
+              roles: Array.isArray(it?.roles) ? it.roles.slice() : (Array.isArray(src.roles) ? src.roles.slice() : ["admin","write","read"])
+            };
+          });
+        };
         if(!raw){
-          localStorage.setItem(NAV_KEY, JSON.stringify(seed));
+          localStorage.setItem(NAV_KEY, JSON.stringify(seed, null, 2));
           return seed;
         }
         const arr = safeJsonParse(raw, null);
-        if(Array.isArray(arr) && arr.length) return arr;
-        localStorage.setItem(NAV_KEY, JSON.stringify(seed));
+        if(Array.isArray(arr) && arr.length){
+          const enriched = enrich(arr);
+          try{ localStorage.setItem(NAV_KEY, JSON.stringify(enriched, null, 2)); }catch(e){}
+          return enriched;
+        }
+        localStorage.setItem(NAV_KEY, JSON.stringify(seed, null, 2));
         return seed;
       }
 
       function resolveHref(cfg, routes){
         const id = String(cfg?.id || "").trim();
         const label = String(cfg?.label || "").trim();
+        const sourceId = String(cfg?.sourceId || "").trim();
+        const directHref = String(cfg?.href || "").trim();
 
+        if(directHref) return directHref;
         if(label && FIXED_ROUTES[label]) return FIXED_ROUTES[label];
         if(id === METRO_ID) return METRO_HREF;
         if(routes && routes[id]) return routes[id];
+        if(routes && sourceId && routes[sourceId]) return routes[sourceId];
         if(routes && label && routes[label]) return routes[label];
 
         const guess = labelToFile(label);
@@ -2070,7 +2099,7 @@ function getSession(){
         "btn5": ["admin","write","read"],
         "systemBtn": ["admin"]
       };
-      const SYSTEM_BTN = { id:"systemBtn", label:"系統 / 權限", roles:["admin"] };
+      const SYSTEM_BTN = { id:"systemBtn", label:"系統/權限", href:"權限表.html", roles:["admin"] };
 
       function getApiBaseLocked(){
         const v = (localStorage.getItem(API_BASE_KEY) || "").trim();
@@ -2174,12 +2203,15 @@ function getSession(){
         ROUTES = loadRoutes();
         NAV_ARR = loadNavButtonsSeedIfMissing();
 
-        BTN_CONFIGS = NAV_ARR.map(x => {
-          const id = String(x?.id || "").trim();
-          const label = String(x?.label || "").trim();
-          const roles = ROLE_MAP[id] || ["admin","write","read"];
-          const target = (id === "btn3") ? "_blank" : "";
-          return { id, label, roles, target };
+        BTN_CONFIGS = NAV_ARR.map((x, idx) => {
+          const base = HOME_BUTTON_LIBRARY[idx] || {};
+          const id = String(x?.id || base.id || "").trim();
+          const label = String(x?.label || base.label || "").trim();
+          const sourceId = String(x?.sourceId || base.sourceId || "").trim();
+          const href = String(x?.href || base.href || "").trim();
+          const roles = Array.isArray(x?.roles) && x.roles.length ? x.roles.slice() : (ROLE_MAP[id] || base.roles || ["admin","write","read"]);
+          const target = String(x?.target || base.target || ((href && /^https?:\/\//i.test(href)) ? "_blank" : "")).trim();
+          return { id, label, sourceId, href, roles, target };
         }).concat([SYSTEM_BTN]);
 
         mainNavBtns = [];
