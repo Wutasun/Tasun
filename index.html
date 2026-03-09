@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- TASUN_REBUILD_STAMP:index_v2 2026-03-05 00:00:00 (zw-bottom-up + sso-inferRole) -->
+<!-- TASUN_REBUILD_STAMP:index_v2 2026-03-09 00:00:00 (mobile-login-cloud-auth-fix) -->
 
 <html lang="zh-Hant">
 <head>
@@ -37,7 +37,7 @@
 
   <!-- ✅全站版本 -->
   <script>
-    window.APP_VER = window.APP_VER || "20260309_07";
+    window.APP_VER = window.APP_VER || "20260309_05";
     window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
   </script>
 
@@ -1274,7 +1274,7 @@
         <div class="login-field">
           <label for="password">密碼</label>
           <div class="login-pwd-wrapper">
-            <input id="password" name="password" type="password" autocomplete="current-password" class="login-pwd-input" />
+            <input id="password" name="password" type="password" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" enterkeyhint="go" class="login-pwd-input" />
             <button type="button" class="btn-eye-login" id="btnTogglePwd">👁</button>
           </div>
         </div>
@@ -1440,6 +1440,13 @@ function runIndexApp(){
 
       const METRO_ID    = "btn2";
       const METRO_HREF  = "汐東工程管理表.html";
+      const HOME_BUTTON_LIBRARY = [
+        { sourceId:"metro",    label:"捷運汐止東湖線",     href:"汐東工程管理表.html", target:"" },
+        { sourceId:"zhending", label:"臻鼎時代大廈管理表", href:"臻鼎管理表.html",     target:"" },
+        { sourceId:"engdb",    label:"工程資料庫",         href:"工程資料庫.html",     target:"" },
+        { sourceId:"auth",     label:"系統/權限",         href:"權限表.html",         target:"" },
+        { sourceId:"cloud",    label:"雲端檔案",           href:"https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88", target:"_blank" }
+      ];
 
       const FIXED_ROUTES = {
         "捷運汐東線事項紀錄": "sxdh-notes.html",
@@ -1451,14 +1458,6 @@ function runIndexApp(){
         "sxdh-notes": "sxdh-notes.html",
         "sxdh-notes.html": "sxdh-notes.html",
       };
-
-      const HOME_BUTTON_LIBRARY = [
-        { sourceId:"metro",    label:"捷運汐止東湖線",     href:"汐東工程管理表.html", target:"",       roles:[] },
-        { sourceId:"zhending", label:"臻鼎時代大廈管理表", href:"臻鼎管理表.html",     target:"",       roles:[] },
-        { sourceId:"engdb",    label:"工程資料庫",         href:"工程資料庫.html",     target:"",       roles:[] },
-        { sourceId:"auth",     label:"系統/權限",         href:"權限表.html",         target:"",       roles:[] },
-        { sourceId:"cloud",    label:"雲端檔案",           href:"https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav", target:"_blank", roles:[] }
-      ];
 
       const LEGACY_BUTTON_KEYS = ["btn1","btn2","btn3","btn4","btn5"];
 
@@ -1500,12 +1499,34 @@ function runIndexApp(){
          ========================= */
       const CLOUD_RES_URL = "tasun-resources.json";
       const CLOUD_RESOURCE_KEY = String(window.TASUN_INDEX_CLOUD_KEY || "tasun-index-db").trim() || "tasun-index-db";
-      const CLOUD_KEYS = [AUTH_KEY, NAV_KEY, ROUTE_KEY, LEGACY_ROUTE_KEY];
+      const CLOUD_KEYS = [AUTH_KEY, NAV_KEY, ROUTE_KEY];
       const CLOUD_KEY_SET = new Set(CLOUD_KEYS);
 
       let cloudCtrl = null;
       let cloudApplying = false;
       let cloudSaveTimer = 0;
+
+      async function ensureCloudAuthReady(){
+        try{
+          const ctrl = await ensureCloudMounted(null);
+          if(ctrl && typeof ctrl.pullNow === "function"){
+            try{ await ctrl.pullNow(); }catch(e){}
+          }
+        }catch(e){}
+        try{
+          migrateAuthToHashedIfNeeded();
+          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+        }catch(e){}
+        return AUTH_TABLE;
+      }
+
+      function normalizeLoginPassword(raw){
+        return String(raw == null ? "" : raw)
+          .replace(/[\u200B-\u200D\uFEFF]/g, "")
+          .replace(/[\u00A0\u2007\u202F]/g, " ")
+          .trim();
+      }
+
 
       function loadScriptOnce(src){
         return new Promise((resolve)=>{
@@ -1712,6 +1733,81 @@ function runIndexApp(){
         return s + ".html";
       }
 
+
+      function getHomeButtonLibrary(){
+        return HOME_BUTTON_LIBRARY.map(it => ({
+          sourceId: String(it.sourceId || "").trim(),
+          label: String(it.label || "").trim(),
+          href: String(it.href || "").trim(),
+          target: String(it.target || "").trim()
+        }));
+      }
+
+      function getLibraryItemBySourceId(sourceId){
+        const sid = String(sourceId || "").trim();
+        return getHomeButtonLibrary().find(x => x.sourceId === sid) || null;
+      }
+
+      function normNavText(s){
+        return String(s || "").trim().replace(/[／]/g, "/").replace(/\s+/g, "");
+      }
+
+      function inferNavSourceId(hit, fallbackId){
+        const rawSourceId = String(hit?.sourceId || "").trim();
+        const library = getHomeButtonLibrary();
+
+        if(rawSourceId && library.some(x => x.sourceId === rawSourceId)) return rawSourceId;
+
+        const href = String(hit?.href || "").trim();
+        if(href){
+          const byHref = library.find(x => String(x.href || "").trim() === href);
+          if(byHref) return byHref.sourceId;
+        }
+
+        const label = normNavText(hit?.label || "");
+        if(label){
+          const byLabel = library.find(x => normNavText(x.label) === label);
+          if(byLabel) return byLabel.sourceId;
+        }
+
+        const num = String(fallbackId || "").replace(/^btn/i, "").trim();
+        if(num && /^\d+$/.test(num)){
+          const idx = Number(num) - 1;
+          if(library[idx]) return library[idx].sourceId;
+        }
+
+        return rawSourceId || String(fallbackId || "").trim() || "metro";
+      }
+
+      function buildRoutesObject(raw){
+        if(raw && typeof raw === "object" && !Array.isArray(raw)) return { ...raw };
+        return {};
+      }
+
+      function setRouteStorageObject(obj){
+        const routes = buildRoutesObject(obj);
+        const json = JSON.stringify(routes, null, 2);
+        try{ localStorage.setItem(ROUTE_KEY, json); }catch(e){}
+        try{ localStorage.setItem(LEGACY_ROUTE_KEY, json); }catch(e){}
+        return routes;
+      }
+
+      function getRouteStorageObject(){
+        const primary = buildRoutesObject(safeJsonParse(localStorage.getItem(ROUTE_KEY) || "null", null));
+        if(Object.keys(primary).length){
+          try{ localStorage.setItem(LEGACY_ROUTE_KEY, JSON.stringify(primary, null, 2)); }catch(e){}
+          return primary;
+        }
+
+        const legacy = buildRoutesObject(safeJsonParse(localStorage.getItem(LEGACY_ROUTE_KEY) || "null", null));
+        if(Object.keys(legacy).length){
+          setRouteStorageObject(legacy);
+          return legacy;
+        }
+
+        return {};
+      }
+
       function collectBackupPayload(reason){
         const now = new Date();
         const keys = [];
@@ -1805,72 +1901,6 @@ function runIndexApp(){
         if(document.visibilityState === "hidden") tryExportOnExit();
       }, { passive:true });
 
-      function getHomeButtonLibrary(){
-        return HOME_BUTTON_LIBRARY.map(it => ({
-          sourceId: String(it.sourceId || "").trim(),
-          label: String(it.label || "").trim(),
-          href: String(it.href || "").trim(),
-          target: String(it.target || "").trim(),
-          roles: Array.isArray(it.roles) ? it.roles.slice() : []
-        }));
-      }
-
-      function buildRoutesObject(raw){
-        return (raw && typeof raw === "object" && !Array.isArray(raw)) ? { ...raw } : {};
-      }
-
-      function setRouteStorageObject(obj){
-        const routes = buildRoutesObject(obj);
-        const json = JSON.stringify(routes, null, 2);
-        localStorage.setItem(ROUTE_KEY, json);
-        localStorage.setItem(LEGACY_ROUTE_KEY, json);
-        return routes;
-      }
-
-      function getRouteStorageObject(){
-        const primary = buildRoutesObject(safeJsonParse(localStorage.getItem(ROUTE_KEY) || "{}", {}));
-        if(Object.keys(primary).length){
-          localStorage.setItem(LEGACY_ROUTE_KEY, JSON.stringify(primary, null, 2));
-          return primary;
-        }
-        const legacy = buildRoutesObject(safeJsonParse(localStorage.getItem(LEGACY_ROUTE_KEY) || "{}", {}));
-        if(Object.keys(legacy).length){
-          setRouteStorageObject(legacy);
-          return legacy;
-        }
-        return {};
-      }
-
-      function inferNavSourceId(hit, fallbackId){
-        const rawSourceId = String(hit?.sourceId || "").trim();
-        const library = getHomeButtonLibrary();
-        if(rawSourceId && library.some(x => x.sourceId === rawSourceId)) return rawSourceId;
-
-        const href = String(hit?.href || "").trim();
-        if(href){
-          const byHref = library.find(x => String(x.href || "").trim() === href);
-          if(byHref) return byHref.sourceId;
-        }
-
-        const label = String(hit?.label || "").trim();
-        if(label){
-          const byLabel = library.find(x => String(x.label || "").trim() === label);
-          if(byLabel) return byLabel.sourceId;
-        }
-
-        const num = String(fallbackId || "").replace(/^btn/i, "").trim();
-        if(num && /^\d+$/.test(num)){
-          const idx = Number(num) - 1;
-          if(library[idx]) return library[idx].sourceId;
-        }
-        return rawSourceId || String(fallbackId || "").trim() || "metro";
-      }
-
-      function getLibraryItemBySourceId(sourceId){
-        const sid = String(sourceId || "").trim();
-        return getHomeButtonLibrary().find(x => x.sourceId === sid) || null;
-      }
-
       function applyFixedRoutes(obj){
         const out = (obj && typeof obj === "object") ? { ...obj } : {};
         Object.keys(FIXED_ROUTES).forEach(k => { out[k] = FIXED_ROUTES[k]; });
@@ -1880,21 +1910,14 @@ function runIndexApp(){
       }
 
       function loadRoutes(){
-        const library = getHomeButtonLibrary();
-        const seed = applyFixedRoutes({
-          "btn1": "臻鼎管理表.html",
-          "btn2": "汐東工程管理表.html",
-          "btn3": "https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav",
-          "btn4": "工程資料庫.html",
-          "btn5": "權限表.html",
-          "systemBtn": "權限表.html",
-          [METRO_ID]: METRO_HREF
-        });
-        library.forEach((it, idx) => {
+        const seed = {};
+        getHomeButtonLibrary().forEach((it, idx) => {
           const id = `btn${idx+1}`;
           if(it.label) seed[it.label] = it.href;
-          seed[id] = seed[id] || it.href;
+          seed[id] = it.href;
+          if(it.sourceId) seed[it.sourceId] = it.href;
         });
+        seed.systemBtn = "權限表.html";
 
         const base = getRouteStorageObject();
         const merged = applyFixedRoutes({ ...seed, ...base });
@@ -1903,40 +1926,38 @@ function runIndexApp(){
       }
 
       function loadNavButtonsSeedIfMissing(){
-        const seed = getHomeButtonLibrary().slice(0,5).map((it, idx) => ({
-          id:`btn${idx+1}`,
-          sourceId: it.sourceId,
-          label: it.label,
-          href: it.href,
-          target: it.target,
-          roles: it.roles.slice()
-        }));
-        const raw = localStorage.getItem(NAV_KEY);
-        if(!raw){
-          localStorage.setItem(NAV_KEY, JSON.stringify(seed));
-          return seed;
-        }
-        const arr = safeJsonParse(raw, null);
-        if(Array.isArray(arr) && arr.length){
-          const map = new Map(arr.map(x => [String(x.id||"").toLowerCase(), x]));
+        const seed = ["zhending","metro","cloud","engdb","auth"].map((sourceId, idx) => {
+          const lib = getLibraryItemBySourceId(sourceId) || getHomeButtonLibrary()[idx] || {};
+          return {
+            id:`btn${idx+1}`,
+            sourceId: String(lib.sourceId || sourceId).trim(),
+            label: String(lib.label || `btn${idx+1}`).trim(),
+            href: String(lib.href || "").trim(),
+            target: String(lib.target || "").trim()
+          };
+        });
+
+        const raw = safeJsonParse(localStorage.getItem(NAV_KEY) || "null", null);
+        if(Array.isArray(raw) && raw.length){
+          const map = new Map(raw.map(x => [String(x?.id || "").toLowerCase(), x]));
           const out = [];
           for(let i=1;i<=5;i++){
             const id = `btn${i}`;
             const hit = map.get(id) || {};
             const sourceId = inferNavSourceId(hit, id);
-            const lib = getLibraryItemBySourceId(sourceId);
+            const lib = getLibraryItemBySourceId(sourceId) || seed[i-1] || {};
             out.push({
               id,
-              sourceId,
-              label: String(hit?.label || lib?.label || id).trim() || id,
-              href: String(hit?.href || lib?.href || "").trim(),
-              target: String(hit?.target || lib?.target || "").trim(),
-              roles: Array.isArray(hit?.roles) ? hit.roles.slice() : (Array.isArray(lib?.roles) ? lib.roles.slice() : [])
+              sourceId: String(sourceId || lib.sourceId || id).trim(),
+              label: String(lib.label || hit.label || id).trim() || id,
+              href: String(lib.href || hit.href || "").trim(),
+              target: String(lib.target || hit.target || "").trim()
             });
           }
           localStorage.setItem(NAV_KEY, JSON.stringify(out));
           return out;
         }
+
         localStorage.setItem(NAV_KEY, JSON.stringify(seed));
         return seed;
       }
@@ -1944,11 +1965,13 @@ function runIndexApp(){
       function resolveHref(cfg, routes){
         const id = String(cfg?.id || "").trim();
         const label = String(cfg?.label || "").trim();
-        const href = String(cfg?.href || "").trim();
+        const sourceId = String(cfg?.sourceId || "").trim();
+        const directHref = String(cfg?.href || "").trim();
 
-        if(href) return href;
         if(label && FIXED_ROUTES[label]) return FIXED_ROUTES[label];
         if(id === METRO_ID) return METRO_HREF;
+        if(directHref) return directHref;
+        if(routes && sourceId && routes[sourceId]) return routes[sourceId];
         if(routes && routes[id]) return routes[id];
         if(routes && label && routes[label]) return routes[label];
 
@@ -2208,10 +2231,11 @@ function getSession(){
         BTN_CONFIGS = NAV_ARR.map(x => {
           const id = String(x?.id || "").trim();
           const label = String(x?.label || "").trim();
-          const roles = ROLE_MAP[id] || ["admin","write","read"];
+          const sourceId = String(x?.sourceId || "").trim();
           const href = String(x?.href || "").trim();
-          const target = String(x?.target || "").trim() || ((/^https?:\/\//i.test(href) && id === "btn3") ? "_blank" : "");
-          return { id, label, roles, target, href, sourceId: String(x?.sourceId || "").trim() };
+          const roles = ROLE_MAP[id] || ["admin","write","read"];
+          const target = String(x?.target || ((href && /^https?:\/\//i.test(href)) ? "_blank" : "")).trim();
+          return { id, sourceId, label, href, roles, target };
         }).concat([SYSTEM_BTN]);
 
         mainNavBtns = [];
@@ -3173,7 +3197,7 @@ if(zenImg){
         e.preventDefault();
 
         const username = (usernameSel && usernameSel.value ? String(usernameSel.value) : "").trim();
-        const password = String($("#password") ? $("#password").value : "").trim();
+        const password = normalizeLoginPassword($("#password") ? $("#password").value : "");
 
         if(!username){
           loginError.textContent = "請選擇使用者";
@@ -3187,8 +3211,10 @@ if(zenImg){
         loginError.textContent = "登入中…";
 
         try{
-          // ✅本機權限表驗證（不依賴外部 Worker，避免登入畫面消失/按鍵不顯示）
-          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+          // ✅先拉雲端最新權限表，避免手機沿用舊 localStorage 導致桌機可登入、手機卻密碼錯誤
+          await ensureCloudAuthReady();
+
+          // ✅本機/雲端合併後的權限表驗證（不依賴登入前額外頁面跳轉）
           const u = AUTH_TABLE.find(r => String(r.username||"").trim() === username);
 
           if(!u){
