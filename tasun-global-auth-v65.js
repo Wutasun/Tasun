@@ -5,7 +5,7 @@
   var CURRENT_KEY = "tasunCurrentUser_v1";
   var SESSION_KEY = "tasunSessionLogin_v1";
   var SSO_KEY = "tasunSso_v1";
-  var SESSION_BRIDGE_KEY = "tasunCurrentBridge_v1";
+  var SESSION_BRIDGE_KEY = "tasunSessionBridge_v1";
   var INDEX_SESSION_KEY = "tasunIndexSessionAuthed_v1";
 
   function safeParse(s){ try{ return JSON.parse(s); }catch(_e){ return null; } }
@@ -16,8 +16,8 @@
     return (v === "admin" || v === "write" || v === "read") ? v : "read";
   }
   function inferRole(name, role){
-    var r = normRole(role);
-    if(r) return r;
+    var raw = trim(role).toLowerCase();
+    if(raw === "admin" || raw === "write" || raw === "read") return raw;
     var u = trim(name).toLowerCase();
     if(u === "alex" || u === "joyce") return "admin";
     if(u === "tasun") return "write";
