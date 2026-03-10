@@ -37,22 +37,8 @@
 
   <!-- ✅全站版本 -->
   <script>
-    window.APP_VER = window.APP_VER || "20260310_07";
+    window.APP_VER = window.APP_VER || "20260309_24";
     window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
-    (function(){
-      try{
-        fetch('tasun-version.json?_=' + Date.now(), { cache:'no-store' })
-          .then(r => r.ok ? r.json() : null)
-          .then(j => {
-            const v = String((j && (j.version || j.ver || j.appVer)) || window.TASUN_APP_VER || window.APP_VER || '').trim();
-            if(v){
-              window.APP_VER = v;
-              window.TASUN_APP_VER = v;
-            }
-          })
-          .catch(()=>{});
-      }catch(_e){}
-    })();
   </script>
 
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
@@ -1090,7 +1076,8 @@
 
     /* ===== 自製下拉（保留） ===== */
     .select-wrap{ position:relative; width:100%; }
-    .select-wrap select{ position:absolute; inset:0; opacity:0; pointer-events:none; }
+    .select-wrap select{ position:absolute; inset:0; opacity:0.001; pointer-events:auto; z-index:3; cursor:pointer; appearance:none; -webkit-appearance:none; }
+    .select-wrap .select-display{ pointer-events:none; z-index:1; }
     .select-display{
       width:100%; display:flex; align-items:center; justify-content:flex-start; text-align:left;
       padding: .78rem 2.90rem .78rem .96rem;
@@ -1443,10 +1430,13 @@ function runIndexApp(){
       const INDEX_SESSION_KEY = "tasunIndexSessionAuthed_v1";
       const SESSION_KEY = "tasunSessionLogin_v1";
       const NAV_KEY     = "tasunNavButtons_v1";
-      const ROUTE_KEY   = "tasunNavRoutes_v1";
+      const ROUTE_KEY   = "tasunRoutes_v1";
+      const LEGACY_ROUTE_KEY = "tasunNavRoutes_v1";
 
       const PERM_MATRIX_KEY = "tasunPermMatrix_v1";
       const API_BASE_KEY = "tasunApiBase_v1";
+      const D1_AUTH_TABLE_ENDPOINT_FULL = "/api/auth/table";
+      const D1_AUTH_TABLE_ENDPOINT_PUB  = "/api/auth/public";
 
       const BACKUP_RING_KEY = "tasunBackupRing_v1";
       const BACKUP_RING_MAX = 10;
@@ -1464,6 +1454,14 @@ function runIndexApp(){
         "sxdh-notes": "sxdh-notes.html",
         "sxdh-notes.html": "sxdh-notes.html",
       };
+
+      const HOME_BUTTON_LIBRARY = [
+        { id:"btn1", sourceId:"metro",    label:"捷運汐止東湖線",     href:"汐東工程管理表.html", target:"",       roles:["admin","write","read"] },
+        { id:"btn2", sourceId:"zhending", label:"臻鼎時代大廈管理表", href:"臻鼎管理表.html",     target:"",       roles:["admin","write","read"] },
+        { id:"btn3", sourceId:"engdb",    label:"工程資料庫",         href:"工程資料庫.html",     target:"",       roles:["admin","write","read"] },
+        { id:"btn4", sourceId:"auth",     label:"系統/權限",         href:"權限表.html",         target:"",       roles:["admin","write"] },
+        { id:"btn5", sourceId:"cloud",    label:"雲端檔案",           href:"https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav", target:"_blank", roles:["admin","write","read"] }
+      ];
 
       const LEGACY_BUTTON_KEYS = ["btn1","btn2","btn3","btn4","btn5"];
 
@@ -1820,53 +1818,73 @@ function runIndexApp(){
 
       function loadRoutes(){
         const seed = applyFixedRoutes({
-          "btn3": "https://www.dropbox.com/",
+          "btn1": "汐東工程管理表.html",
+          "btn2": "臻鼎管理表.html",
+          "btn3": "工程資料庫.html",
+          "btn4": "權限表.html",
+          "btn5": "https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav",
           "systemBtn": "權限表.html",
           [METRO_ID]: METRO_HREF
         });
 
-        const raw = localStorage.getItem(ROUTE_KEY);
-        if(!raw){
-          localStorage.setItem(ROUTE_KEY, JSON.stringify(seed, null, 2));
-          return seed;
-        }
-
-        const parsed = safeJsonParse(raw, null);
-        const base = (parsed && typeof parsed === "object") ? parsed : {};
-        const merged = applyFixedRoutes({ ...base, ...seed });
-
-        if(JSON.stringify(base) !== JSON.stringify(merged)){
-          localStorage.setItem(ROUTE_KEY, JSON.stringify(merged, null, 2));
-        }
+        const primary = safeJsonParse(localStorage.getItem(ROUTE_KEY) || '{}', {});
+        const legacy  = safeJsonParse(localStorage.getItem(LEGACY_ROUTE_KEY) || '{}', {});
+        const base = (primary && typeof primary === "object") ? primary : {};
+        const oldv = (legacy && typeof legacy === "object") ? legacy : {};
+        const merged = applyFixedRoutes({ ...oldv, ...base, ...seed });
+        const mergedJson = JSON.stringify(merged, null, 2);
+        try{
+          if(JSON.stringify(base) !== JSON.stringify(merged)) localStorage.setItem(ROUTE_KEY, mergedJson);
+          if(JSON.stringify(oldv) !== JSON.stringify(merged)) localStorage.setItem(LEGACY_ROUTE_KEY, mergedJson);
+        }catch(e){}
         return merged;
       }
 
       function loadNavButtonsSeedIfMissing(){
-        const seed = [
-          { id:"btn1", label:"臻鼎時代大廈管理表" },
-          { id:"btn2", label:"捷運汐止東湖線" },
-          { id:"btn3", label:"雲端檔案" },
-          { id:"btn4", label:"工程資料庫" },
-          { id:"btn5", label:"資料庫" }
-        ];
+        const seed = HOME_BUTTON_LIBRARY.map(x => ({ ...x }));
         const raw = localStorage.getItem(NAV_KEY);
+        const enrich = (arr) => {
+          const libById = new Map(HOME_BUTTON_LIBRARY.map(x => [String(x.id), x]));
+          const libBySource = new Map(HOME_BUTTON_LIBRARY.map(x => [String(x.sourceId), x]));
+          const libByLabel = new Map(HOME_BUTTON_LIBRARY.map(x => [String(x.label), x]));
+          return (Array.isArray(arr) ? arr : []).map((it, idx) => {
+            const id = String(it?.id || `btn${idx+1}`).trim();
+            const src = libById.get(id) || libBySource.get(String(it?.sourceId || '').trim()) || libByLabel.get(String(it?.label || '').trim()) || HOME_BUTTON_LIBRARY[idx] || {};
+            return {
+              id,
+              sourceId: String(it?.sourceId || src.sourceId || '').trim(),
+              label: String(it?.label || src.label || '').trim(),
+              href: String(it?.href || src.href || '').trim(),
+              target: String(it?.target || src.target || '').trim(),
+              roles: Array.isArray(it?.roles) ? it.roles.slice() : (Array.isArray(src.roles) ? src.roles.slice() : ["admin","write","read"])
+            };
+          });
+        };
         if(!raw){
-          localStorage.setItem(NAV_KEY, JSON.stringify(seed));
+          localStorage.setItem(NAV_KEY, JSON.stringify(seed, null, 2));
           return seed;
         }
         const arr = safeJsonParse(raw, null);
-        if(Array.isArray(arr) && arr.length) return arr;
-        localStorage.setItem(NAV_KEY, JSON.stringify(seed));
+        if(Array.isArray(arr) && arr.length){
+          const enriched = enrich(arr);
+          try{ localStorage.setItem(NAV_KEY, JSON.stringify(enriched, null, 2)); }catch(e){}
+          return enriched;
+        }
+        localStorage.setItem(NAV_KEY, JSON.stringify(seed, null, 2));
         return seed;
       }
 
       function resolveHref(cfg, routes){
         const id = String(cfg?.id || "").trim();
         const label = String(cfg?.label || "").trim();
+        const sourceId = String(cfg?.sourceId || "").trim();
+        const directHref = String(cfg?.href || "").trim();
 
+        if(directHref) return directHref;
         if(label && FIXED_ROUTES[label]) return FIXED_ROUTES[label];
         if(id === METRO_ID) return METRO_HREF;
         if(routes && routes[id]) return routes[id];
+        if(routes && sourceId && routes[sourceId]) return routes[sourceId];
         if(routes && label && routes[label]) return routes[label];
 
         const guess = labelToFile(label);
@@ -1878,108 +1896,110 @@ function runIndexApp(){
         const keys = Array.from({length: btnCount}, (_, i) => `btn${i+1}`);
         const mkAll = () => Object.fromEntries(keys.map(k => [k, true]));
         const mkOnlyLast = () => Object.fromEntries(keys.map((k, i) => [k, i === btnCount - 1]));
+        // ✅不存明碼：預設帳號以 SHA-256(pass) 的 passHash 形式提供（可由權限表再修改）
         return [
-          { user:"alex",  passHash:"7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07", role:"admin", ...mkAll() },
+          { user:"alex",  passHash:"7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07",  role:"admin", ...mkAll() },
           { user:"JOYCE", passHash:"d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815", role:"admin", ...mkAll() },
           { user:"tasun", passHash:"cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba", role:"write", ...mkAll() },
-          { user:"wu",    passHash:"8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92", role:"read",  ...mkOnlyLast() }
+          { user:"wu",    passHash:"8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",    role:"read",  ...mkOnlyLast() }
         ];
       }
 
-      function canonUserKey(v){
-        return String(v || "").trim().toLowerCase();
-      }
+      /* ✅FIX: 讀取權限表時，若舊資料沒有 btn1~btn5 欄位，不要誤判為全關（會只剩 systemBtn） */
+      function normalizeRowFromStorage(row, btnCount){
+        const username = (row?.username ?? row?.user ?? row?.name ?? row?.account ?? "").toString().trim();
+        const password = (row?.password ?? row?.pass ?? "").toString();
+        const level    = (row?.level ?? row?.role ?? "read").toString().trim().toLowerCase();
 
-      function normalizeAuthLikeRow(row, btnCount){
-        if(!row || typeof row !== "object") return null;
-        const username = String(row.username ?? row.user ?? row.name ?? row.account ?? "").trim();
-        if(!username) return null;
-        const level = String(row.level ?? row.role ?? "read").trim().toLowerCase() || "read";
-        const passHash = String(row.passHash ?? row.passwordHash ?? row.hash ?? "").trim().toLowerCase();
-        const password = String(row.password ?? row.pass ?? row.pw ?? "").trim();
-        let buttons = Array.isArray(row.buttons) ? row.buttons.slice() : null;
-        if(!buttons){
-          buttons = [];
-          for(let i=0;i<btnCount;i++){
-            const k = `btn${i+1}`;
-            if(Object.prototype.hasOwnProperty.call(row, k)) buttons[i] = !!row[k];
+        // 支援新格式：buttons: [true,false,...]
+        const arr = Array.isArray(row?.buttons) ? row.buttons : null;
+
+        const buttons = [];
+        for(let i=0;i<btnCount;i++){
+          if(arr && i < arr.length){
+            buttons[i] = !!arr[i];
+            continue;
           }
-          if(!buttons.length) buttons = null;
+
+          const k = `btn${i+1}`;
+          const has = row && Object.prototype.hasOwnProperty.call(row, k);
+
+          if(has){
+            buttons[i] = !!row[k];
+          }else{
+            // ✅舊表缺欄位時：admin/write 預設全開；read 預設只開最後一顆
+            if(level === "read"){
+              buttons[i] = (i === btnCount - 1);
+            }else{
+              buttons[i] = true;
+            }
+          }
         }
-        return { username, level, passHash, password, buttons };
+        const passHash = (row?.passHash ?? row?.passwordHash ?? row?.hash ?? "").toString().trim();
+        return { username, password, passHash, level, buttons };
       }
 
-      function mergeAuthRowsKeepOrder(primary, fallback, btnCount){
+      function mergeAuthRowsPreserve(primary, fallback, btnCount){
         const out = [];
         const seen = new Map();
-        const push = (row) => {
-          const n = normalizeAuthLikeRow(row, btnCount);
-          if(!n) return;
-          const key = canonUserKey(n.username);
-          if(seen.has(key)){
-            const idx = seen.get(key);
+        const push = (row)=>{
+          const n = normalizeRowFromStorage(row, btnCount);
+          if(!n || !n.username) return;
+          const k = canonUserKey(n.username);
+          if(seen.has(k)){
+            const idx = seen.get(k);
             const cur = out[idx];
-            cur.level = n.level || cur.level;
-            if(n.passHash) cur.passHash = n.passHash;
-            if(!cur.passHash && n.password) cur.password = n.password;
-            if(Array.isArray(n.buttons) && n.buttons.length) cur.buttons = n.buttons.slice();
+            cur.level = cur.level || n.level || "read";
+            if(!cur.passHash && n.passHash) cur.passHash = n.passHash;
+            if(!cur.password && n.password) cur.password = n.password;
+            if((!Array.isArray(cur.buttons) || !cur.buttons.length) && Array.isArray(n.buttons)) cur.buttons = n.buttons.slice();
             return;
           }
-          seen.set(key, out.length);
-          out.push({ ...n });
+          seen.set(k, out.length);
+          out.push({ ...n, buttons:Array.isArray(n.buttons)?n.buttons.slice():[] });
         };
-        (Array.isArray(primary) ? primary : []).forEach(push);
-        (Array.isArray(fallback) ? fallback : []).forEach(push);
+        (Array.isArray(primary)?primary:[]).forEach(push);
+        (Array.isArray(fallback)?fallback:[]).forEach(push);
         return out;
       }
 
-      function authRowToStorageShape(row){
-        const n = normalizeAuthLikeRow(row, LEGACY_BUTTON_KEYS.length);
-        if(!n) return null;
+      function authRowToStorageShape(row, btnCount){
+        const n = normalizeRowFromStorage(row, btnCount);
+        if(!n || !n.username) return null;
         const out = {
           user: n.username,
           username: n.username,
-          role: n.level,
-          level: n.level,
-          passHash: n.passHash || ""
+          role: n.level || 'read',
+          level: n.level || 'read',
+          passHash: n.passHash || ''
         };
-        if(n.password && !n.passHash) out.password = n.password;
+        if(!out.passHash && n.password) out.password = n.password;
         if(Array.isArray(n.buttons) && n.buttons.length) out.buttons = n.buttons.slice();
         return out;
       }
 
       function repairAuthTableStorage(btnCount){
-        const raw = safeJsonParse(localStorage.getItem(AUTH_KEY) || "null", null);
-        const arr = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.users) ? raw.users : []);
+        const raw = localStorage.getItem(AUTH_KEY);
+        const parsed = safeJsonParse(raw, null);
+        const localArr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : []);
         const baseline = getDefaultAuthTableLegacy(btnCount);
-        const merged = mergeAuthRowsKeepOrder(arr, baseline, btnCount);
-        const storageRows = merged.map(authRowToStorageShape).filter(Boolean);
+        const merged = mergeAuthRowsPreserve(localArr, baseline, btnCount);
+        const storageRows = merged.map(r => authRowToStorageShape(r, btnCount)).filter(Boolean);
         if(storageRows.length){
           try{ localStorage.setItem(AUTH_KEY, JSON.stringify(storageRows)); }catch(_e){}
+          return storageRows;
         }
-        return storageRows;
+        const fallback = baseline.map(r => authRowToStorageShape(r, btnCount)).filter(Boolean);
+        try{ localStorage.setItem(AUTH_KEY, JSON.stringify(fallback)); }catch(_e){}
+        return fallback;
       }
 
       function loadAuthTable(btnCount){
         const rows = repairAuthTableStorage(btnCount);
-        if(Array.isArray(rows) && rows.length){
-          return rows.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
-        }
-        const legacy = getDefaultAuthTableLegacy(btnCount);
-        localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
-        return legacy.map(r => normalizeRowFromStorage(r, btnCount));
+        return (Array.isArray(rows) ? rows : []).map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
       }
 
-      function syncAuthUsersBeforeLogin(){
-        try{
-          repairAuthTableStorage(LEGACY_BUTTON_KEYS.length);
-          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-          return true;
-        }catch(_e){
-          return false;
-        }
-      }
-
+      
       // ✅防呆：若權限表資料為空/舊格式(含 pass 明碼)，自動補齊/升級為 passHash（不存明碼）
       function migrateAuthToHashedIfNeeded(){
         try{
@@ -2122,7 +2142,73 @@ function getSession(){
         "btn5": ["admin","write","read"],
         "systemBtn": ["admin"]
       };
-      const SYSTEM_BTN = { id:"systemBtn", label:"系統 / 權限", roles:["admin"] };
+      const SYSTEM_BTN = { id:"systemBtn", label:"系統/權限", href:"權限表.html", roles:["admin"] };
+
+      function getApiBaseLocked(){
+        const v = (localStorage.getItem(API_BASE_KEY) || "").trim();
+        const base = v || "https://tasun-worker.wutasun.workers.dev";
+        return String(base).replace(/\/+$/,"");
+      }
+      function withNoCache(u){
+        try{
+          const url = new URL(u, location.href);
+          url.searchParams.set("_", String(Date.now()));
+          return url.toString();
+        }catch(e){
+          const ts = Date.now();
+          return (String(u).includes("?") ? (u + "&_=" + ts) : (u + "?_=" + ts));
+        }
+      }
+      async function d1GetJson(path){
+        const base = getApiBaseLocked();
+        const url = withNoCache(base + path);
+        const res = await fetch(url, { method:"GET", credentials:"include", cache:"no-store" });
+        const j = await res.json().catch(()=>null);
+        return { ok:res.ok, status:res.status, json:j };
+      }
+      function mergeAuthRowsKeepOrder(primary, fallback){
+        const out = [];
+        const seen = new Set();
+        const push = (row)=>{
+          if(!row || typeof row !== "object") return;
+          const name = String(row.username ?? row.user ?? row.name ?? row.account ?? "").trim();
+          if(!name) return;
+          const key = name.toLowerCase();
+          if(seen.has(key)) return;
+          seen.add(key);
+          out.push(row);
+        };
+        (Array.isArray(primary)?primary:[]).forEach(push);
+        (Array.isArray(fallback)?fallback:[]).forEach(push);
+        return out;
+      }
+      async function syncAuthUsersBeforeLogin(){
+        try{
+          const baseline = getDefaultAuthTableLegacy(LEGACY_BUTTON_KEYS.length);
+          const localRows = repairAuthTableStorage(LEGACY_BUTTON_KEYS.length);
+          let remote = [];
+
+          let r = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_FULL);
+          if(r.ok && r.json && r.json.ok){
+            remote = Array.isArray(r.json?.data?.auth) ? r.json.data.auth : (Array.isArray(r.json?.auth) ? r.json.auth : []);
+          }
+          if(!remote.length){
+            r = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_PUB);
+            if(r.ok && r.json && r.json.ok){
+              remote = Array.isArray(r.json?.data?.auth) ? r.json.data.auth : (Array.isArray(r.json?.auth) ? r.json.auth : []);
+            }
+          }
+
+          const merged = mergeAuthRowsPreserve(localRows, mergeAuthRowsPreserve(remote, baseline, LEGACY_BUTTON_KEYS.length), LEGACY_BUTTON_KEYS.length);
+          const storageRows = merged.map(r => authRowToStorageShape(r, LEGACY_BUTTON_KEYS.length)).filter(Boolean);
+          if(storageRows.length){
+            localStorage.setItem(AUTH_KEY, JSON.stringify(storageRows));
+            return true;
+          }
+        }catch(e){}
+        try{ repairAuthTableStorage(LEGACY_BUTTON_KEYS.length); }catch(_e){}
+        return false;
+      }
 
       let BTN_CONFIGS = [];
       let mainNavBtns = [];
@@ -2162,12 +2248,15 @@ function getSession(){
         ROUTES = loadRoutes();
         NAV_ARR = loadNavButtonsSeedIfMissing();
 
-        BTN_CONFIGS = NAV_ARR.map(x => {
-          const id = String(x?.id || "").trim();
-          const label = String(x?.label || "").trim();
-          const roles = ROLE_MAP[id] || ["admin","write","read"];
-          const target = (id === "btn3") ? "_blank" : "";
-          return { id, label, roles, target };
+        BTN_CONFIGS = NAV_ARR.map((x, idx) => {
+          const base = HOME_BUTTON_LIBRARY[idx] || {};
+          const id = String(x?.id || base.id || "").trim();
+          const label = String(x?.label || base.label || "").trim();
+          const sourceId = String(x?.sourceId || base.sourceId || "").trim();
+          const href = String(x?.href || base.href || "").trim();
+          const roles = Array.isArray(x?.roles) && x.roles.length ? x.roles.slice() : (ROLE_MAP[id] || base.roles || ["admin","write","read"]);
+          const target = String(x?.target || base.target || ((href && /^https?:\/\//i.test(href)) ? "_blank" : "")).trim();
+          return { id, label, sourceId, href, roles, target };
         }).concat([SYSTEM_BTN]);
 
         mainNavBtns = [];
@@ -2237,7 +2326,7 @@ function getSession(){
 
           try{
             if(loginOverlay && loginOverlay.style.display === "flex"){
-              populateUserSelect();
+              Promise.resolve(populateUserSelect()).catch(()=>{});
             }
           }catch(e){}
 
@@ -2948,32 +3037,32 @@ if(CURRENT_USER){
       });
       document.addEventListener("keydown", (e) => { if(e.key === "Escape") closeUsernameMenu(); });
 
-      function populateUserSelect(){
-        syncAuthUsersBeforeLogin();
+      async function populateUserSelect(){
+        try{ await syncAuthUsersBeforeLogin(); }catch(e){}
         AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
         usernameSel.innerHTML = "";
 
-        if(!AUTH_TABLE.length){
-          const opt = document.createElement("option");
-          opt.value = "";
-          opt.textContent = "（尚無使用者，請先到「系統 / 權限」新增）";
-          opt.disabled = true;
-          opt.selected = true;
-          usernameSel.appendChild(opt);
-          refreshUsernamePicker();
-          return;
+        const names = [];
+        const seen = new Set();
+        (Array.isArray(AUTH_TABLE)?AUTH_TABLE:[]).forEach(r => {
+          const name = String(r && (r.username || r.user || r.name) ? (r.username || r.user || r.name) : "").trim();
+          const key = name.toLowerCase();
+          if(!name || seen.has(key)) return;
+          seen.add(key);
+          names.push(name);
+        });
+
+        if(!names.length){
+          ['alex','JOYCE','tasun','wu'].forEach(name=>{ if(!seen.has(name.toLowerCase())) names.push(name); });
         }
 
         const ph = document.createElement("option");
         ph.value = "";
-        ph.textContent = "請選擇使用者";
+        ph.textContent = names.length ? "請選擇使用者" : "（尚無使用者，請先到「系統 / 權限」新增）";
         ph.disabled = true;
         ph.selected = true;
         usernameSel.appendChild(ph);
 
-        const names = Array.from(new Set(AUTH_TABLE.map(r => String(r.username || '').trim()).filter(Boolean)));
-        names.sort((a,b)=>a.localeCompare(b, "zh-Hant"));
-        if(loginSub) loginSub.textContent = `使用者清單：本機/雲端共 ${names.length} 位　｜　版次：${String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '')}`;
         names.forEach(name => {
           const opt = document.createElement("option");
           opt.value = name;
@@ -2981,7 +3070,11 @@ if(CURRENT_USER){
           usernameSel.appendChild(opt);
         });
 
+        if(names.length){
+          usernameSel.value = names[0];
+        }
         refreshUsernamePicker();
+        try{ if(loginSub) loginSub.textContent = `使用者清單：本機/雲端共 ${names.length} 位`; }catch(e){}
       }
 
       function tryEnterBySessionSilently(){
@@ -3145,10 +3238,9 @@ if(zenImg){
         loginError.textContent = "登入中…";
 
         try{
-          // ✅登入前先修復權限表資料，確保四個基準帳號都存在，避免桌機/手機顯示不一致
-          syncAuthUsersBeforeLogin();
+          // ✅本機權限表驗證（不依賴外部 Worker，避免登入畫面消失/按鍵不顯示）
           AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-          const u = AUTH_TABLE.find(r => canonUserKey(r.username) === canonUserKey(username));
+          const u = AUTH_TABLE.find(r => String(r.username||"").trim() === username);
 
           if(!u){
             loginError.textContent = "查無此使用者（請到「系統 / 權限」新增）";
@@ -3157,11 +3249,11 @@ if(zenImg){
 
           const pwHash = await sha256Hex(password);
           const storedHash = String(u.passHash || "").trim().toLowerCase();
-          const storedPlain = String(u.password || u.pass || "").trim();
-          const baseline = getDefaultAuthTableLegacy(LEGACY_BUTTON_KEYS.length).find(r => canonUserKey(r.user) === canonUserKey(username));
-          const baselineHash = String((baseline && baseline.passHash) || "").trim().toLowerCase();
 
-          const ok = (storedHash && pwHash === storedHash) || (baselineHash && pwHash === baselineHash) || (!!storedPlain && password === storedPlain);
+          // 兼容極舊資料：若仍有明碼 password 欄位，仍允許驗證，但成功後會由 migrateAuthToHashedIfNeeded 升級
+          const storedPlain = String(u.password || "").trim();
+
+          const ok = (storedHash && pwHash === storedHash) || (!!storedPlain && password === storedPlain);
 
           if(!ok){
             loginError.textContent = "密碼錯誤";
@@ -3170,7 +3262,6 @@ if(zenImg){
 
           // ✅建立同分頁/同瀏覽器工作階段登入（sessionStorage + session cookie）
           setSession({ username: u.username, level: u.level });
-          try{ localStorage.setItem(CURRENT_KEY, JSON.stringify({ user: u.username, role: u.level })); }catch(_e){}
 
           // ✅建立 SSO token（子頁免重複登入）
           try{ setSSO({ name: u.username, role: u.level }); }catch(_e){}

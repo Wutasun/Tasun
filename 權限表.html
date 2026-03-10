@@ -11,7 +11,7 @@
   <meta http-equiv="Expires" content="0">
   <script>
   (function () {
-    const FALLBACK = "20260310_07";
+    const FALLBACK = "20260309_22";
     const VER_KEY = "tasun_app_ver_auth_v1";
     const TAB_GUARD = "tasun_tab_replaced_once_auth_v1";
     const u = new URL(location.href);
@@ -932,12 +932,30 @@
 
   function applyAuthTableFromCloud(data, sourceTag){
     if(!data || typeof data !== "object") return false;
-    const d = (data.data && typeof data.data === "object") ? data.data : data;
 
+    // data 可能是 { ok:true, data:{...}} 或直接 {...}
+    const d = (data.data && typeof data.data==="object") ? data.data : data;
+
+    // ✅ auth：若是 public（無 pass），則只覆蓋 role/name；密碼保留本機（避免 admin 編輯被清空）
     if(Array.isArray(d.auth)){
-      const local = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
-      const merged = mergeAuthRowsKeepOrder(d.auth, local);
-      localStorage.setItem(AUTH_KEY, JSON.stringify(mergeAuthRowsKeepOrder(merged, AUTH_BASELINE)));
+      const hasPass = d.auth.some(u => u && typeof u==="object" && String(u.pass||"").length>0);
+      if(hasPass){
+        localStorage.setItem(AUTH_KEY, JSON.stringify(d.auth));
+      }else{
+        // public-only merge
+        const local = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
+        const map = new Map(Array.isArray(local)? local.map(x=>[String(x.user||""), x]) : []);
+        for(const u of d.auth){
+          if(!u || typeof u!=="object") continue;
+          const key = String(u.user||"");
+          if(!key) continue;
+          const cur = map.get(key) || { user:key, pass:"", role:"read", name:key };
+          cur.role = String(u.role||cur.role||"read");
+          cur.name = String(u.name||cur.name||key);
+          map.set(key, cur);
+        }
+        localStorage.setItem(AUTH_KEY, JSON.stringify(Array.from(map.values())));
+      }
     }
 
     if(Array.isArray(d.navButtons)) localStorage.setItem(NAV_KEY, JSON.stringify(d.navButtons));
@@ -947,7 +965,7 @@
       localStorage.setItem(LEGACY_ROUTE_KEY, routesJson);
     }
     if(Array.isArray(d.btnMeta))    localStorage.setItem(BTN_META_KEY, JSON.stringify(d.btnMeta));
-    if(d.permMatrix && typeof d.permMatrix === 'object') localStorage.setItem(PERM_MATRIX_KEY, JSON.stringify(d.permMatrix));
+    if(d.permMatrix && typeof d.permMatrix==="object") localStorage.setItem(PERM_MATRIX_KEY, JSON.stringify(d.permMatrix));
     if(typeof d.entrySelected === "string") localStorage.setItem(ENTRY_SELECTED_KEY, JSON.stringify(d.entrySelected));
     if(Array.isArray(d.entryRegistry)) localStorage.setItem(ENTRY_REGISTRY_KEY, JSON.stringify(d.entryRegistry));
 
@@ -1321,68 +1339,26 @@ function safeJsonParse(s, fallback){
     return cleaned;
   }
 
-  const AUTH_BASELINE = [
-    { user:'alex',  passHash:'7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07', role:'admin' },
-    { user:'JOYCE', passHash:'d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815', role:'admin' },
-    { user:'tasun', passHash:'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba', role:'write' },
-    { user:'wu',    passHash:'8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92', role:'read'  },
-  ];
-
-  function normalizeAuthRow(row){
-    if(!row || typeof row !== 'object') return null;
-    const user = String(row.user ?? row.username ?? row.name ?? row.account ?? '').trim();
-    if(!user) return null;
-    const role = String(row.role ?? row.level ?? 'read').toLowerCase().trim() || 'read';
-    const passHash = String(row.passHash ?? row.passwordHash ?? row.hash ?? '').trim();
-    const pass = String(row.pass ?? row.password ?? row.pw ?? '').trim();
-    const out = { user, role: roleOptions.includes(role) ? role : 'read', passHash };
-    if(pass && !passHash) out.pass = pass;
-    return out;
-  }
-
-  function mergeAuthRowsKeepOrder(primary, fallback){
-    const out = [];
-    const seen = new Map();
-    const push = (row) => {
-      const n = normalizeAuthRow(row);
-      if(!n) return;
-      const k = userKey(n.user);
-      if(seen.has(k)){
-        const idx = seen.get(k);
-        const cur = out[idx];
-        cur.role = n.role || cur.role;
-        if(n.passHash) cur.passHash = n.passHash;
-        if(!cur.passHash && n.pass) cur.pass = n.pass;
-        return;
-      }
-      seen.set(k, out.length);
-      out.push({ ...n });
-    };
-    (Array.isArray(primary) ? primary : []).forEach(push);
-    (Array.isArray(fallback) ? fallback : []).forEach(push);
-    return out;
-  }
-
   function seedAuthIfMissing(){
     const a = safeJsonParse(localStorage.getItem(AUTH_KEY) || 'null', null);
-    if(Array.isArray(a) && a.length){
-      localStorage.setItem(AUTH_KEY, JSON.stringify(mergeAuthRowsKeepOrder(a, AUTH_BASELINE)));
-      return;
-    }
-    localStorage.setItem(AUTH_KEY, JSON.stringify(AUTH_BASELINE));
+    if(Array.isArray(a) && a.length) return;
+
+    const seed = [
+      { user:'alex',  pass:'Tasun08040224', role:'admin' },
+      { user:'JOYCE', pass:'09220224',      role:'admin' },
+      { user:'tasun', pass:'tasun08040224', role:'write' },
+      { user:'wu',    pass:'123456',        role:'read'  },
+    ];
+    localStorage.setItem(AUTH_KEY, JSON.stringify(seed));
   }
 
   function normalizeAuth(){
-    auth = mergeAuthRowsKeepOrder(auth, AUTH_BASELINE);
     auth.forEach(u => {
-      u.user = String(u.user ?? u.username ?? u.name ?? u.account ?? '').trim();
-      const r = String(u.role ?? u.level ?? 'read').toLowerCase();
+      const r = String(u.role||'read').toLowerCase();
       u.role = roleOptions.includes(r) ? r : 'read';
-      u.passHash = String(u.passHash ?? u.passwordHash ?? u.hash ?? '').trim();
-      if(!u.passHash && (u.pass || u.password || u.pw)) u.pass = String(u.pass ?? u.password ?? u.pw ?? '').trim();
-      else u.pass = '';
-      delete u.username; delete u.name; delete u.account;
-      delete u.level; delete u.passwordHash; delete u.hash; delete u.password; delete u.pw;
+      u.user = String(u.user||'').trim();
+      u.passHash = String(u.passHash||u.passwordHash||"").trim();
+      u.pass = "";
     });
     auth = auth.filter(u => (u.user||'').trim() !== '');
   }
@@ -1525,47 +1501,6 @@ function safeJsonParse(s, fallback){
       { key:'btn4', name:'btn4' },
       { key:'btn5', name:'btn5' },
     ];
-  }
-
-  async function extractEntryButtonsFromPage(entry){
-    const file = String(entry || '').trim();
-    if(!file || /^https?:\/\//i.test(file)) return null;
-    try{
-      const url = (window.__withV ? window.__withV(file) : file);
-      const res = await fetch(url, { cache:'no-store' });
-      if(!res.ok) return null;
-      const html = await res.text();
-      const doc = new DOMParser().parseFromString(html, 'text/html');
-      const candidates = [...doc.querySelectorAll('a.nav-btn, .nav-btn, a.tile, .tile, a.btn, .btn')];
-      const out = [];
-      candidates.forEach(node => {
-        const raw = String(node.textContent || '').replace(/\s+/g,' ').trim();
-        if(!raw) return;
-        if(raw === '← 返回首頁' || raw === '返回首頁') return;
-        if(out.some(x => x.name === raw)) return;
-        out.push({ key:'btn' + String(out.length + 1), name: raw });
-      });
-      return out.length ? out : null;
-    }catch(_e){ return null; }
-  }
-
-  async function refreshEntryButtonsBySelection(){
-    const entry = resolveEntryValue();
-    if(entry === 'index.html'){
-      ensureBtnMetaByEntry();
-      renderHeaders();
-      renderTable();
-      renderCards();
-      renderEntryPreview();
-      return;
-    }
-    const extracted = await extractEntryButtonsFromPage(entry);
-    if(Array.isArray(extracted) && extracted.length) btnMeta = extracted;
-    else ensureBtnMetaByEntry();
-    renderHeaders();
-    renderTable();
-    renderCards();
-    renderEntryPreview();
   }
 
   function renderEntryPreview(){
@@ -1739,7 +1674,6 @@ function safeJsonParse(s, fallback){
 
     setCloudButtonsEnabled();
     if(!isAdmin) setMsg('（僅可查看）你目前不是 admin，無法編輯。', false);
-    Promise.resolve(refreshEntryButtonsBySelection()).catch(()=>{});
   }
 
   function addRow(){
@@ -2502,9 +2436,7 @@ function safeJsonParse(s, fallback){
 
     auth = safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []);
     if(!Array.isArray(auth)) auth = [];
-    auth = mergeAuthRowsKeepOrder(auth, AUTH_BASELINE);
     normalizeAuth();
-    localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
 
     current = safeJsonParse(localStorage.getItem(CURRENT_KEY) || 'null', null);
     if(!current || typeof current !== 'object'){
