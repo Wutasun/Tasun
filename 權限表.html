@@ -15,7 +15,7 @@
      * ✅你每次更新本頁，只要改 APP_VER（例如：20260130_01 → 20260203_01）
      * 全部使用者會自動跳到 ?v=APP_VER，保證同步最新版。
      */
-    const APP_VER = "20260309_08";  // ←←← 每次改版請改這裡（建議與首頁/管理表一致）
+    const APP_VER = "20260309_05";  // ←←← 每次改版請改這裡（建議與首頁/管理表一致）
     const VER_KEY = "tasun_app_ver_auth_v1";
     const TAB_GUARD = "tasun_tab_replaced_once_auth_v1";
 
@@ -735,7 +735,7 @@
     { sourceId:'zhending', label:'臻鼎時代大廈管理表', href:'臻鼎管理表.html',     target:'',       roles:[] },
     { sourceId:'engdb',    label:'工程資料庫',         href:'工程資料庫.html',     target:'',       roles:[] },
     { sourceId:'auth',     label:'系統/權限',         href:'權限表.html',         target:'',       roles:[] },
-    { sourceId:'cloud',    label:'雲端檔案',           href:'https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav', target:'_blank', roles:[] }
+    { sourceId:'cloud',    label:'雲端檔案',           href:'https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88', target:'_blank', roles:[] }
   ];
   const roleOptions = ['admin','write','read'];
 
@@ -783,25 +783,14 @@
       { key:'auth_token',   name:'設定 Token' },
       { key:'auth_down',    name:'雲端下載' },
       { key:'auth_up',      name:'儲存並上傳' }
-    ],
-    '臻鼎管理表.html': [
-      { key:'zhd_meeting',  name:'會議記管理表' },
-      { key:'zhd_note',     name:'記事管理' },
-      { key:'zhd_material', name:'材料' },
-      { key:'zhd_worklog',  name:'工務記事本' },
-      { key:'zhd_pmis',     name:'PMIS' },
-      { key:'zhd_data',     name:'資料' },
-      { key:'zhd_control',  name:'管控表' },
-      { key:'zhd_draw',     name:'圖資管理表' },
-      { key:'zhd_review',   name:'審查意見表' },
-      { key:'zhd_reply',    name:'意見回覆單' },
-      { key:'zhd_quality',  name:'品質管理表' }
     ]
   };
 
   // ✅ resources.json / registry / routes 合併後的動態結果
   let dynEntryFiles = DEFAULT_ENTRY_FILES.slice();
   let dynEntryButtons = safeJsonParse(JSON.stringify(DEFAULT_ENTRY_BUTTONS), {});
+  let currentEntryButtons = [];
+  let currentEntryButtonOptions = [];
 
   const el = (id) => document.getElementById(id);
 
@@ -945,22 +934,31 @@
     // data 可能是 { ok:true, data:{...}} 或直接 {...}
     const d = (data.data && typeof data.data==="object") ? data.data : data;
 
-    // ✅ auth：若是 public（無 pass），則只覆蓋 role/name；密碼保留本機（避免 admin 編輯被清空）
+    // ✅ auth：若雲端有 pass / passHash，直接覆蓋；若只有 public 欄位，則只更新使用者/權限並保留本機密碼雜湊
     if(Array.isArray(d.auth)){
-      const hasPass = d.auth.some(u => u && typeof u==="object" && String(u.pass||"").length>0);
-      if(hasPass){
+      const hasSecret = d.auth.some(u => u && typeof u==="object" && (
+        String(u.pass||"").length>0 ||
+        String(u.password||"").length>0 ||
+        String(u.passHash||u.passwordHash||u.hash||"").length>0
+      ));
+      if(hasSecret){
         localStorage.setItem(AUTH_KEY, JSON.stringify(d.auth));
       }else{
-        // public-only merge
         const local = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
-        const map = new Map(Array.isArray(local)? local.map(x=>[String(x.user||""), x]) : []);
+        const map = new Map(Array.isArray(local) ? local.map(x => {
+          const key = String(x.user || x.username || x.name || "").trim();
+          return [key, x];
+        }).filter(x => x[0]) : []);
         for(const u of d.auth){
           if(!u || typeof u!=="object") continue;
-          const key = String(u.user||"");
+          const key = String(u.user || u.username || u.name || "").trim();
           if(!key) continue;
-          const cur = map.get(key) || { user:key, pass:"", role:"read", name:key };
-          cur.role = String(u.role||cur.role||"read");
-          cur.name = String(u.name||cur.name||key);
+          const cur = map.get(key) || { user:key, pass:"", passHash:"", role:"read", name:key };
+          cur.user = key;
+          cur.role = String(u.role || u.level || cur.role || "read");
+          cur.name = String(u.name || cur.name || key);
+          if(String(u.passHash || u.passwordHash || u.hash || '').trim()) cur.passHash = String(u.passHash || u.passwordHash || u.hash || '').trim();
+          if(String(u.pass || u.password || '').trim()) cur.pass = String(u.pass || u.password || '').trim();
           map.set(key, cur);
         }
         localStorage.setItem(AUTH_KEY, JSON.stringify(Array.from(map.values())));
@@ -1362,14 +1360,19 @@ function safeJsonParse(s, fallback){
   }
 
   function normalizeAuth(){
-    auth.forEach(u => {
-      const r = String(u.role||'read').toLowerCase();
-      u.role = roleOptions.includes(r) ? r : 'read';
-      u.user = String(u.user||'').trim();
-      u.passHash = String(u.passHash||u.passwordHash||"").trim();
-      u.pass = "";
-    });
-    auth = auth.filter(u => (u.user||'').trim() !== '');
+    auth = (Array.isArray(auth) ? auth : []).map(raw => {
+      const user = String(raw?.user ?? raw?.username ?? raw?.name ?? raw?.account ?? '').trim();
+      const role = String(raw?.role ?? raw?.level ?? 'read').toLowerCase().trim();
+      const passHash = String(raw?.passHash ?? raw?.passwordHash ?? raw?.hash ?? '').trim();
+      const pass = String(raw?.pass ?? raw?.password ?? raw?.pw ?? '').trim();
+      return {
+        user,
+        role: roleOptions.includes(role) ? role : 'read',
+        passHash,
+        pass,
+        name: String(raw?.name ?? user).trim()
+      };
+    }).filter(u => u.user);
   }
 
   function getEffectiveRole(){
@@ -1531,59 +1534,84 @@ function safeJsonParse(s, fallback){
   async function extractEntryButtonsFromPage(entry){
     const file = String(entry || '').trim();
     if(!file || /^https?:\/\//i.test(file)) return null;
-
     try{
       const url = (window.__withV ? window.__withV(file) : file);
       const res = await fetch(url, { cache:'no-store' });
       if(!res.ok) return null;
-
       const html = await res.text();
       const doc = new DOMParser().parseFromString(html, 'text/html');
-
-      const candidates = [...doc.querySelectorAll('a.tile, .tile, a.nav-btn, .nav-btn, a.btn, .btn')];
+      const nodes = [...doc.querySelectorAll('a.tile, a.nav-btn, a.btn, .tile[href], .nav-btn[href], .btn[href]')];
       const out = [];
-
-      for(const node of candidates){
-        const raw = String((node.textContent || '')).replace(/\s+/g,' ').trim();
+      for(const node of nodes){
+        const raw = String(node.textContent || '').replace(/\s+/g,' ').trim();
         if(!raw) continue;
         if(raw === '← 返回首頁' || raw === '返回首頁') continue;
         if(out.some(x => x.name === raw)) continue;
-
         out.push({
           key: 'btn' + String(out.length + 1),
-          name: raw
+          name: raw,
+          href: String(node.getAttribute('href') || '').trim(),
+          target: String(node.getAttribute('target') || '').trim()
         });
       }
-
       return out.length ? out : null;
-    }catch(_){
-      return null;
+    }catch(_){ return null; }
+  }
+
+  function getEntryButtonsFromDefaults(entry){
+    const list = dynEntryButtons[entry];
+    if(Array.isArray(list) && list.length){
+      return list.map(x => ({ key:String(x.key||'').trim(), name:String(x.name||x.key||'').trim(), href:String(x.href||'').trim(), target:String(x.target||'').trim() }));
+    }
+    return null;
+  }
+
+  function buildFallbackButtons(){
+    return [1,2,3,4,5].map(i => ({ key:'btn'+i, name:'btn'+i, href:'', target:'' }));
+  }
+
+  function rebuildCurrentEntryOptions(){
+    const entry = resolveEntryValue();
+    const items = Array.isArray(currentEntryButtons) && currentEntryButtons.length ? currentEntryButtons : buildFallbackButtons();
+    currentEntryButtonOptions = items.map((it, idx) => ({
+      sourceId: String(it.key || ('btn'+(idx+1))).trim() || ('btn'+(idx+1)),
+      label: String(it.name || it.key || ('btn'+(idx+1))).trim() || ('btn'+(idx+1)),
+      href: String(it.href || '').trim(),
+      target: String(it.target || '').trim(),
+      roles: []
+    }));
+    if(entry === 'index.html' && currentEntryButtonOptions.length >= 5){
+      currentEntryButtonOptions = currentEntryButtonOptions.slice(0,5);
     }
   }
 
   async function refreshEntryButtonsBySelection(){
     const entry = resolveEntryValue();
-
     if(entry === 'index.html'){
       ensureBtnMetaByEntry();
+      currentEntryButtons = (Array.isArray(btnMeta) ? btnMeta : []).map(x => ({ ...x }));
+      rebuildCurrentEntryOptions();
       renderHeaders();
       renderTable();
       renderCards();
       renderEntryPreview();
+      refreshNavSelectOptions();
       return;
     }
-
     const extracted = await extractEntryButtonsFromPage(entry);
     if(Array.isArray(extracted) && extracted.length){
-      btnMeta = extracted;
+      btnMeta = extracted.map(x => ({ ...x }));
     }else{
-      ensureBtnMetaByEntry();
+      const fallback = getEntryButtonsFromDefaults(entry);
+      btnMeta = Array.isArray(fallback) && fallback.length ? fallback : buildFallbackButtons();
     }
-
+    currentEntryButtons = (Array.isArray(btnMeta) ? btnMeta : []).map(x => ({ ...x }));
+    rebuildCurrentEntryOptions();
     renderHeaders();
     renderTable();
     renderCards();
     renderEntryPreview();
+    refreshNavSelectOptions();
   }
 
   function renderHeaders(){
@@ -1607,7 +1635,7 @@ function safeJsonParse(s, fallback){
       return `
       <tr data-idx="${idx}">
         <td><input class="field" data-k="user" value="${escapeHtml(u.user||'')}" ${isAdmin?'':'disabled'}></td>
-        <td><input type="password" class="field" data-k="pass" value="" placeholder="（已加密）輸入新密碼才會更新" autocomplete="new-password" ${isAdmin?'':'disabled'}></td>
+        <td><input class="field" data-k="pass" value="" placeholder="（已加密）輸入新密碼才會更新" ${isAdmin?'':'disabled'}></td>
         <td>
           <select class="field" data-k="role" ${isAdmin?'':'disabled'}>
             ${roleOptions.map(r => `<option value="${r}" ${r===role?'selected':''}>${r}</option>`).join('')}
@@ -1650,7 +1678,7 @@ function safeJsonParse(s, fallback){
             </div>
             <div>
               <div class="rowLabel">密碼</div>
-              <input type="password" class="field" data-k="pass" value="" placeholder="（已加密）輸入新密碼才會更新" autocomplete="new-password" ${isAdmin?'':'disabled'}>
+              <input class="field" data-k="pass" value="" placeholder="（已加密）輸入新密碼才會更新" ${isAdmin?'':'disabled'}>
             </div>
             <div>
               <div class="rowLabel">權限</div>
@@ -1730,6 +1758,8 @@ function safeJsonParse(s, fallback){
   function renderAll(){
     updateWho();
     ensureBtnMetaByEntry();
+    currentEntryButtons = (Array.isArray(btnMeta) ? btnMeta : []).map(x => ({ ...x }));
+    rebuildCurrentEntryOptions();
     renderHeaders();
     renderTable();
     renderCards();
@@ -1741,7 +1771,6 @@ function safeJsonParse(s, fallback){
 
     setCloudButtonsEnabled();
     if(!isAdmin) setMsg('（僅可查看）你目前不是 admin，無法編輯。', false);
-
     refreshEntryButtonsBySelection();
   }
 
@@ -1780,9 +1809,8 @@ function safeJsonParse(s, fallback){
 
     const entry = resolveEntryValue();
 
-    // ✅密碼欄：允許先正常輸入，僅在 change / blur 時才加密寫入，避免一打字就被清空
+    // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
     if(k === "pass"){
-      if(e.type === 'input') return;
       const plain = String(e.target.value || "");
       if(plain.trim()){
         try{
@@ -1853,9 +1881,8 @@ function safeJsonParse(s, fallback){
 
     const entry = resolveEntryValue();
 
-    // ✅密碼欄：允許先正常輸入，僅在 change / blur 時才加密寫入，避免一打字就被清空
+    // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
     if(k === "pass"){
-      if(e.type === 'input') return;
       const plain = String(e.target.value || "");
       if(plain.trim()){
         try{
@@ -1995,17 +2022,11 @@ function safeJsonParse(s, fallback){
 
   tbody.addEventListener('input', onTableInput);
   tbody.addEventListener('change', onTableInput);
-  tbody.addEventListener('focusout', (e) => {
-    if(e.target && e.target.dataset && e.target.dataset.k === 'pass') onTableInput(e);
-  });
   tbody.addEventListener('click', onTableClick);
 
   cards.addEventListener('click', onCardClick);
   cards.addEventListener('input', onCardInput);
   cards.addEventListener('change', onCardInput);
-  cards.addEventListener('focusout', (e) => {
-    if(e.target && e.target.dataset && e.target.dataset.k === 'pass') onCardInput(e);
-  });
 
   // 入口頁切換
   function onEntryChanged(){
@@ -2038,10 +2059,11 @@ function safeJsonParse(s, fallback){
       const row = map.get(k);
       if(row){
         row.user = u;
-        row.pass = String(x.pass||'');
+        row.pass = String(x.pass ?? row.pass ?? '');
+        row.passHash = String(x.passHash ?? x.passwordHash ?? row.passHash ?? '').trim();
         row.role = roleOptions.includes(r) ? r : 'read';
       }else{
-        auth.push({ user:u, pass:String(x.pass||''), role: roleOptions.includes(r)?r:'read' });
+        auth.push({ user:u, pass:String(x.pass||''), passHash:String(x.passHash ?? x.passwordHash ?? '').trim(), role: roleOptions.includes(r)?r:'read' });
       }
     });
     normalizeAuth();
@@ -2334,7 +2356,9 @@ function safeJsonParse(s, fallback){
   }
 
   function getNavSourceList(){
-    return getHomeButtonLibrary();
+    const entry = resolveEntryValue();
+    if(entry === 'index.html') return getHomeButtonLibrary();
+    return Array.isArray(currentEntryButtonOptions) && currentEntryButtonOptions.length ? currentEntryButtonOptions.slice() : getHomeButtonLibrary();
   }
 
   function navOptionText(it){
@@ -2353,9 +2377,19 @@ function safeJsonParse(s, fallback){
 
     selects.forEach((sel, idx) => {
       if(!sel) return;
-      const fallback = list[idx]?.sourceId || '';
-      const currentVal = String(sel.value || sel.dataset.prevValue || fallback).trim() || fallback;
+      const labelNode = sel.previousElementSibling;
+      const rowItem = list[idx];
+      const visible = !!rowItem;
+      if(labelNode && labelNode.classList.contains('navLabel')) labelNode.style.display = visible ? '' : 'none';
+      sel.style.display = visible ? '' : 'none';
+      if(!visible){
+        sel.innerHTML = '';
+        sel.dataset.prevValue = '';
+        return;
+      }
 
+      const fallback = rowItem.sourceId || '';
+      const currentVal = String(sel.value || sel.dataset.prevValue || fallback).trim() || fallback;
       sel.innerHTML = list.map(item => {
         const selected = item.sourceId === currentVal ? 'selected' : '';
         return `<option value="${escapeHtml(item.sourceId)}" ${selected}>${escapeHtml(navOptionText(item))}</option>`;
@@ -2366,6 +2400,8 @@ function safeJsonParse(s, fallback){
       }
       sel.dataset.prevValue = sel.value;
     });
+
+    if(navSaveBtn) navSaveBtn.disabled = (resolveEntryValue() !== 'index.html');
   }
 
   function bindNavSelectSwap(sel){
@@ -2437,23 +2473,35 @@ function safeJsonParse(s, fallback){
   function openNavPanel(){
     if(!isAdmin){ setMsg('你不是 admin，不能修改按鍵名稱。', true); return; }
     navPanel.classList.add('show');
-    loadNavNamesIntoInputs();
+    Promise.resolve(refreshEntryButtonsBySelection()).then(() => {
+      loadNavNamesIntoInputs();
+      if(resolveEntryValue() !== 'index.html'){
+        setMsg('目前入口不是 index.html；下方顯示的是該入口頁實際按鍵名稱與連結，僅供檢視，不會改動首頁排序。');
+      }
+    });
   }
   function closeNavPanel(){ navPanel.classList.remove('show'); }
 
   function loadNavNamesIntoInputs(){
+    const entry = resolveEntryValue();
     const nav = readNavButtons();
+    const list = getNavSourceList();
     refreshNavSelectOptions();
 
     const selects = getNavSelectControls();
     selects.forEach((sel, idx) => {
       if(!sel) return;
-      const item = nav[idx] || {};
-      const sourceId = String(item.sourceId || getHomeButtonLibrary()[idx]?.sourceId || `btn${idx+1}`).trim();
-      sel.value = sourceId;
-      if(String(sel.value || '').trim() !== sourceId){
-        const fallback = getHomeButtonLibrary()[idx];
-        sel.value = fallback ? fallback.sourceId : sourceId;
+      if(entry === 'index.html'){
+        const item = nav[idx] || {};
+        const sourceId = String(item.sourceId || getHomeButtonLibrary()[idx]?.sourceId || `btn${idx+1}`).trim();
+        sel.value = sourceId;
+        if(String(sel.value || '').trim() !== sourceId){
+          const fallback = getHomeButtonLibrary()[idx];
+          sel.value = fallback ? fallback.sourceId : sourceId;
+        }
+      }else{
+        const item = list[idx] || {};
+        sel.value = String(item.sourceId || '').trim();
       }
       sel.dataset.prevValue = sel.value;
     });
@@ -2463,6 +2511,10 @@ function safeJsonParse(s, fallback){
 
   function saveNavNamesFromInputs(){
     if(!isAdmin){ setMsg('你不是 admin，不能儲存按鍵名稱。', true); return; }
+    if(resolveEntryValue() !== 'index.html'){
+      setMsg('目前入口不是 index.html；這裡僅顯示該入口頁按鍵名稱與連結，不寫回首頁排序。');
+      return;
+    }
 
     const sourceList = getNavSourceList();
     const sourceMap = new Map(sourceList.map(it => [String(it.sourceId || '').trim(), it]));
