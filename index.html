@@ -1433,6 +1433,8 @@ function runIndexApp(){
 
       const PERM_MATRIX_KEY = "tasunPermMatrix_v1";
       const API_BASE_KEY = "tasunApiBase_v1";
+      const D1_AUTH_TABLE_ENDPOINT_FULL = "/api/auth/table";
+      const D1_AUTH_TABLE_ENDPOINT_PUB  = "/api/auth/public";
 
       const BACKUP_RING_KEY = "tasunBackupRing_v1";
       const BACKUP_RING_MAX = 10;
@@ -2070,6 +2072,98 @@ function getSession(){
       };
       const SYSTEM_BTN = { id:"systemBtn", label:"系統 / 權限", roles:["admin"] };
 
+      function getApiBaseLocked(){
+        const v = (localStorage.getItem(API_BASE_KEY) || "").trim();
+        const base = v || "https://tasun-worker.wutasun.workers.dev";
+        return String(base).replace(/\/+$/,"");
+      }
+      function withNoCache(u){
+        try{
+          const url = new URL(u, location.href);
+          url.searchParams.set("_", String(Date.now()));
+          return url.toString();
+        }catch(e){
+          const ts = Date.now();
+          return (String(u).includes("?") ? (u + "&_=" + ts) : (u + "?_=" + ts));
+        }
+      }
+      async function d1GetJson(path){
+        const base = getApiBaseLocked();
+        const url = withNoCache(base + path);
+        const res = await fetch(url, { method:"GET", credentials:"include", cache:"no-store" });
+        const j = await res.json().catch(()=>null);
+        return { ok:res.ok, status:res.status, json:j };
+      }
+      function mergeAuthRowsKeepOrder(primary, fallback){
+        const fMap = new Map();
+        (Array.isArray(fallback)?fallback:[]).forEach(row => {
+          if(!row || typeof row !== "object") return;
+          const name = String(row.username ?? row.user ?? row.name ?? row.account ?? "").trim();
+          if(!name) return;
+          fMap.set(name.toLowerCase(), row);
+        });
+
+        const out = [];
+        const seen = new Set();
+        const push = (row)=>{
+          if(!row || typeof row !== "object") return;
+          const name = String(row.username ?? row.user ?? row.name ?? row.account ?? "").trim();
+          if(!name) return;
+          const key = name.toLowerCase();
+          if(seen.has(key)) return;
+          seen.add(key);
+
+          const fb = fMap.get(key) || {};
+          const merged = { ...fb, ...row };
+
+          const secretHash = String(row.passHash ?? row.passwordHash ?? row.hash ?? "").trim() || String(fb.passHash ?? fb.passwordHash ?? fb.hash ?? "").trim();
+          const secretPlain = String(row.password ?? row.pass ?? row.pw ?? "").trim() || String(fb.password ?? fb.pass ?? fb.pw ?? "").trim();
+
+          if(secretHash){
+            merged.passHash = secretHash;
+            delete merged.passwordHash;
+            delete merged.hash;
+          }
+          if(secretPlain){
+            merged.password = secretPlain;
+            delete merged.pass;
+            delete merged.pw;
+          }
+
+          merged.username = String(merged.username ?? merged.user ?? merged.name ?? name).trim() || name;
+          merged.level = String(merged.level ?? merged.role ?? fb.level ?? fb.role ?? "read").trim().toLowerCase() || "read";
+          out.push(merged);
+        };
+        (Array.isArray(primary)?primary:[]).forEach(push);
+        (Array.isArray(fallback)?fallback:[]).forEach(push);
+        return out;
+      }
+      async function syncAuthUsersBeforeLogin(){
+        try{
+          let r = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_FULL);
+          if(r.ok && r.json && r.json.ok){
+            const remote = Array.isArray(r.json?.data?.auth) ? r.json.data.auth : (Array.isArray(r.json?.auth) ? r.json.auth : []);
+            if(remote.length){
+              const localRaw = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
+              const merged = mergeAuthRowsKeepOrder(remote, localRaw);
+              localStorage.setItem(AUTH_KEY, JSON.stringify(merged));
+              return true;
+            }
+          }
+          r = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_PUB);
+          if(r.ok && r.json && r.json.ok){
+            const remote = Array.isArray(r.json?.data?.auth) ? r.json.data.auth : (Array.isArray(r.json?.auth) ? r.json.auth : []);
+            if(remote.length){
+              const localRaw = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
+              const merged = mergeAuthRowsKeepOrder(remote, localRaw);
+              localStorage.setItem(AUTH_KEY, JSON.stringify(merged));
+              return true;
+            }
+          }
+        }catch(e){}
+        return false;
+      }
+
       let BTN_CONFIGS = [];
       let mainNavBtns = [];
       let AUTH_TABLE = [];
@@ -2183,7 +2277,7 @@ function getSession(){
 
           try{
             if(loginOverlay && loginOverlay.style.display === "flex"){
-              populateUserSelect();
+              Promise.resolve(populateUserSelect()).catch(()=>{});
             }
           }catch(e){}
 
@@ -2894,7 +2988,8 @@ if(CURRENT_USER){
       });
       document.addEventListener("keydown", (e) => { if(e.key === "Escape") closeUsernameMenu(); });
 
-      function populateUserSelect(){
+      async function populateUserSelect(){
+        try{ await syncAuthUsersBeforeLogin(); }catch(e){}
         AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
         usernameSel.innerHTML = "";
 
@@ -2916,8 +3011,15 @@ if(CURRENT_USER){
         ph.selected = true;
         usernameSel.appendChild(ph);
 
-        const names = Array.from(new Set(AUTH_TABLE.map(r => r.username).filter(Boolean)));
-        names.sort((a,b)=>a.localeCompare(b, "zh-Hant"));
+        const names = [];
+        const seen = new Set();
+        AUTH_TABLE.forEach(r => {
+          const name = String(r && r.username ? r.username : "").trim();
+          const key = name.toLowerCase();
+          if(!name || seen.has(key)) return;
+          seen.add(key);
+          names.push(name);
+        });
         names.forEach(name => {
           const opt = document.createElement("option");
           opt.value = name;
@@ -2926,6 +3028,7 @@ if(CURRENT_USER){
         });
 
         refreshUsernamePicker();
+        try{ if(loginSub) loginSub.textContent = `使用者清單：本機/雲端共 ${names.length} 位`; }catch(e){}
       }
 
       function tryEnterBySessionSilently(){
@@ -3089,15 +3192,9 @@ if(zenImg){
         loginError.textContent = "登入中…";
 
         try{
-          // ✅先同步一次最新雲端權限表，再做本機驗證（避免多設備/快取造成登入不一致）
-          try{ await syncAuthUsersBeforeLogin(); }catch(_e){}
-
           // ✅本機權限表驗證（不依賴外部 Worker，避免登入畫面消失/按鍵不顯示）
           AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-          const u = AUTH_TABLE.find(r => {
-            const name = String(r.username || r.user || r.name || "").trim();
-            return name === username;
-          });
+          const u = AUTH_TABLE.find(r => String(r.username||"").trim() === username);
 
           if(!u){
             loginError.textContent = "查無此使用者（請到「系統 / 權限」新增）";
@@ -3107,7 +3204,7 @@ if(zenImg){
           const pwHash = await sha256Hex(password);
           const storedHash = String(u.passHash || u.passwordHash || u.hash || "").trim().toLowerCase();
 
-          // 兼容舊資料：若仍有明碼 password/pass/pw 欄位，仍允許驗證
+          // 兼容舊資料：若仍有明碼欄位，仍允許驗證
           const storedPlain = String(u.password || u.pass || u.pw || "").trim();
 
           const ok = (!!storedHash && pwHash === storedHash) || (!!storedPlain && password === storedPlain);
