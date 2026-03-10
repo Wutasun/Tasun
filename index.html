@@ -20,7 +20,7 @@
   <!-- ✅（效能降載）低記憶體/省流量/減少動作 → 自動關閉高成本特效 -->
   <script>
   (function(){
-    console.log('[TASUN BUILD] index_v5_login_session_fix_v10 2026-03-10');
+    console.log('[TASUN BUILD] index_v5_nav_bridge_fix_v11 2026-03-10');
 
     try{
       const dm = navigator.deviceMemory || 0;
@@ -37,7 +37,7 @@
 
   <!-- ✅全站版本 -->
   <script>
-    window.APP_VER = window.APP_VER || "20260310_10";
+    window.APP_VER = window.APP_VER || "20260310_11";
     window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
     (function(){
       try{
@@ -1399,6 +1399,7 @@ function runIndexApp(){
     // ====== ✅SSO：全站免重複登入（由 index 建立 token，子頁讀取 token 直接通過） ======
     const SSO_KEY = "tasunSso_v1";
     const SSO_TTL_MS = 1000 * 60 * 60 * 12; // 12 小時（可自行調整）
+    const SESSION_BRIDGE_KEY = "tasunSessionBridge_v1";
 
     // ✅SSO 角色推斷（避免 inferRole 未定義導致 setSSO 失敗）
     function inferRole(name, role){
@@ -1437,6 +1438,24 @@ function runIndexApp(){
         if(o.exp && Date.now() > Number(o.exp)) return null;
         return o;
       }catch(_e){ return null; }
+    }
+
+    function writeSessionBridge(userLike){
+      try{
+        const name = String(userLike?.username || userLike?.user || userLike?.name || "").trim();
+        const role = String(userLike?.level || userLike?.role || inferRole(name, userLike?.role)).trim().toLowerCase();
+        if(!name) return;
+        const payload = { user:name, username:name, name:name, role:role || "read", at:Date.now(), v:(window.__CACHE_V || window.TASUN_APP_VER || "") };
+        sessionStorage.setItem(CURRENT_KEY, JSON.stringify(payload));
+        localStorage.setItem(CURRENT_KEY, JSON.stringify(payload));
+        localStorage.setItem(SESSION_BRIDGE_KEY, JSON.stringify(payload));
+      }catch(_e){}
+    }
+
+    function clearSessionBridge(){
+      try{ sessionStorage.removeItem(CURRENT_KEY); }catch(_e){}
+      try{ localStorage.removeItem(CURRENT_KEY); }catch(_e){}
+      try{ localStorage.removeItem(SESSION_BRIDGE_KEY); }catch(_e){}
     }
 
       const INDEX_SESSION_KEY = "tasunIndexSessionAuthed_v1";
@@ -1911,22 +1930,41 @@ function runIndexApp(){
         const out = [];
         const used = new Set();
         const byId = new Map((Array.isArray(arr) ? arr : []).map(x => [String(x?.id || "").trim().toLowerCase(), x]));
+        const libBySource = new Map(seed.map(x => [String(x.sourceId || "").trim().toLowerCase(), x]));
+        const normLabel = (s) => String(s || "").trim().replace(/[／]/g, "/").replace(/\s+/g, "").toLowerCase();
+
+        function findCanonical(raw, fallback){
+          const sourceId = String(raw?.sourceId || "").trim().toLowerCase();
+          const href = String(raw?.href || raw?.route || "").trim();
+          const label = String(raw?.label || "").trim();
+          if(sourceId && libBySource.has(sourceId)) return libBySource.get(sourceId);
+          const byLabel = seed.find(x => normLabel(x.label) === normLabel(label));
+          if(byLabel) return byLabel;
+          const byHref = seed.find(x => String(x.href || "").trim() === href);
+          if(byHref) return byHref;
+          return fallback;
+        }
 
         seed.forEach((fallback, idx) => {
           const id = `btn${idx+1}`;
           const raw = byId.get(id.toLowerCase()) || {};
-          const href = String(raw?.href || "").trim() || String(raw?.route || "").trim() || fallback.href;
-          const label = String(raw?.label || "").trim() || fallback.label;
-          const sourceId = String(raw?.sourceId || "").trim() || fallback.sourceId;
-          const target = String(raw?.target || "").trim() || fallback.target || (/^https?:\/\//i.test(href) ? "_blank" : "");
-          const key = `${sourceId}__${href}`;
+          const canonical = findCanonical(raw, fallback) || fallback;
+          const row = {
+            id,
+            sourceId: String(canonical.sourceId || fallback.sourceId || id).trim(),
+            label: String(canonical.label || fallback.label || id).trim(),
+            href: String(canonical.href || fallback.href || "").trim(),
+            target: String(canonical.target || fallback.target || (/^https?:\/\//i.test(String(canonical.href || fallback.href || "")) ? "_blank" : "")).trim()
+          };
+          const key = `${row.sourceId}__${row.href}`;
 
           if(used.has(key)){
-            out.push({ ...fallback });
-            used.add(`${fallback.sourceId}__${fallback.href}`);
+            const safe = { ...fallback, id };
+            out.push(safe);
+            used.add(`${safe.sourceId}__${safe.href}`);
             return;
           }
-          out.push({ id, sourceId, label, href, target });
+          out.push(row);
           used.add(key);
         });
 
@@ -2171,16 +2209,16 @@ function setSession(user){
   }catch(e){}
   // ✅跨分頁/子頁：用 Session Cookie 共享
   setCookieSession(user);
-  // ✅子頁常用：CURRENT_KEY（改用 sessionStorage）
-  try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: String(user.level||"").toLowerCase() })); }catch(_e){}
+  // ✅子頁兼容橋接：同時寫 sessionStorage / localStorage，並在無 session 時由首頁主動清掉
+  writeSessionBridge({ user: user.username, username: user.username, role: String(user.level||"").toLowerCase(), level: String(user.level||"").toLowerCase() });
 }
 
 function clearSession(){
   try{
     sessionStorage.removeItem(SESSION_KEY);
     sessionStorage.removeItem(INDEX_SESSION_KEY);
-    sessionStorage.removeItem(CURRENT_KEY);
   }catch(e){}
+  clearSessionBridge();
   clearCookieSession();
 }
 
@@ -2197,7 +2235,7 @@ function getSession(){
     try{
       sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: ck.user, role: ck.role, t: Date.now() }));
       sessionStorage.setItem(INDEX_SESSION_KEY, "1");
-      sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: ck.user, role: ck.role }));
+      writeSessionBridge({ user: ck.user, username: ck.user, role: ck.role, level: ck.role });
     }catch(_e){}
     return { user: ck.user, role: ck.role, t: Date.now() };
   }
@@ -2289,6 +2327,7 @@ function getSession(){
           a.appendChild(span);
 
           const finalHref = resolveHref(cfg, ROUTES);
+          a.setAttribute("data-href-base", finalHref);
           a.setAttribute("href", hrefToDom(finalHref));
 
           const t = cfg.target || "";
@@ -2300,6 +2339,31 @@ function getSession(){
           a.style.display = "none";
           navArea.appendChild(a);
           mainNavBtns.push(a);
+        });
+
+        bindNavClickBridge();
+      }
+
+      function bindNavClickBridge(){
+        mainNavBtns.forEach((btn, index) => {
+          if(!btn || btn.__tasunBridgeBound__) return;
+          btn.__tasunBridgeBound__ = true;
+          btn.addEventListener("click", (ev) => {
+            try{
+              const cfg = BTN_CONFIGS[index] || null;
+              const href = String((cfg && resolveHref(cfg, ROUTES)) || btn.getAttribute("data-href-base") || btn.getAttribute("href") || "").trim();
+              if(!href || href === "#") return;
+              if(CURRENT_USER) writeSessionBridge({ user: CURRENT_USER.username, username: CURRENT_USER.username, role: CURRENT_USER.level, level: CURRENT_USER.level });
+              const finalDomHref = hrefToDom(href);
+              btn.setAttribute("href", finalDomHref);
+              if(/^https?:\/\//i.test(href)) return;
+              if(btn.target === "_blank") return;
+              if(finalDomHref && finalDomHref !== location.href){
+                ev.preventDefault();
+                location.href = finalDomHref;
+              }
+            }catch(_e){}
+          }, { capture:true });
         });
       }
 
@@ -3172,9 +3236,8 @@ if(CURRENT_USER){
         loginOverlay.style.display = "none";
         loginSub.textContent = "";
 
-        // v4.1: 登入狀態由 TasunAuthV4 以 Session Cookie + sessionStorage 維持（同瀏覽器工作階段一次登入即可）
-        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: user.level })); }catch(e){}
-        try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
+        // v5.11：維持同瀏覽器工作階段登入，並補一份跨舊頁面相容橋接資料
+        writeSessionBridge({ user: user.username, username: user.username, role: user.level, level: user.level });
 
         CURRENT_USER = user;
 
@@ -3237,8 +3300,8 @@ if(CURRENT_USER){
 
       try{
         if(!getSession()){
-          sessionStorage.removeItem(SSO_KEY);
-          localStorage.removeItem(CURRENT_KEY);
+          try{ sessionStorage.removeItem(SSO_KEY); }catch(_e){}
+          clearSessionBridge();
           try{ localStorage.removeItem(SSO_KEY); }catch(_e){}
         }
       }catch(_e){}
