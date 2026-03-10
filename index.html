@@ -37,8 +37,22 @@
 
   <!-- ✅全站版本 -->
   <script>
-    window.APP_VER = window.APP_VER || "20260309_01";
+    window.APP_VER = window.APP_VER || "20260310_07";
     window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
+    (function(){
+      try{
+        fetch('tasun-version.json?_=' + Date.now(), { cache:'no-store' })
+          .then(r => r.ok ? r.json() : null)
+          .then(j => {
+            const v = String((j && (j.version || j.ver || j.appVer)) || window.TASUN_APP_VER || window.APP_VER || '').trim();
+            if(v){
+              window.APP_VER = v;
+              window.TASUN_APP_VER = v;
+            }
+          })
+          .catch(()=>{});
+      }catch(_e){}
+    })();
   </script>
 
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
@@ -1433,8 +1447,6 @@ function runIndexApp(){
 
       const PERM_MATRIX_KEY = "tasunPermMatrix_v1";
       const API_BASE_KEY = "tasunApiBase_v1";
-      const D1_AUTH_TABLE_ENDPOINT_FULL = "/api/auth/table";
-      const D1_AUTH_TABLE_ENDPOINT_PUB  = "/api/auth/public";
 
       const BACKUP_RING_KEY = "tasunBackupRing_v1";
       const BACKUP_RING_MAX = 10;
@@ -1866,68 +1878,108 @@ function runIndexApp(){
         const keys = Array.from({length: btnCount}, (_, i) => `btn${i+1}`);
         const mkAll = () => Object.fromEntries(keys.map(k => [k, true]));
         const mkOnlyLast = () => Object.fromEntries(keys.map((k, i) => [k, i === btnCount - 1]));
-        // ✅不存明碼：預設帳號以 SHA-256(pass) 的 passHash 形式提供（可由權限表再修改）
         return [
-          { user:"alex",  passHash:"7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07",  role:"admin", ...mkAll() },
+          { user:"alex",  passHash:"7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07", role:"admin", ...mkAll() },
           { user:"JOYCE", passHash:"d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815", role:"admin", ...mkAll() },
           { user:"tasun", passHash:"cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba", role:"write", ...mkAll() },
-          { user:"wu",    passHash:"8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",    role:"read",  ...mkOnlyLast() }
+          { user:"wu",    passHash:"8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92", role:"read",  ...mkOnlyLast() }
         ];
       }
 
-      /* ✅FIX: 讀取權限表時，若舊資料沒有 btn1~btn5 欄位，不要誤判為全關（會只剩 systemBtn） */
-      function normalizeRowFromStorage(row, btnCount){
-        const username = (row?.username ?? row?.user ?? row?.name ?? row?.account ?? "").toString().trim();
-        const password = (row?.password ?? row?.pass ?? "").toString();
-        const level    = (row?.level ?? row?.role ?? "read").toString().trim().toLowerCase();
+      function canonUserKey(v){
+        return String(v || "").trim().toLowerCase();
+      }
 
-        // 支援新格式：buttons: [true,false,...]
-        const arr = Array.isArray(row?.buttons) ? row.buttons : null;
-
-        const buttons = [];
-        for(let i=0;i<btnCount;i++){
-          if(arr && i < arr.length){
-            buttons[i] = !!arr[i];
-            continue;
+      function normalizeAuthLikeRow(row, btnCount){
+        if(!row || typeof row !== "object") return null;
+        const username = String(row.username ?? row.user ?? row.name ?? row.account ?? "").trim();
+        if(!username) return null;
+        const level = String(row.level ?? row.role ?? "read").trim().toLowerCase() || "read";
+        const passHash = String(row.passHash ?? row.passwordHash ?? row.hash ?? "").trim().toLowerCase();
+        const password = String(row.password ?? row.pass ?? row.pw ?? "").trim();
+        let buttons = Array.isArray(row.buttons) ? row.buttons.slice() : null;
+        if(!buttons){
+          buttons = [];
+          for(let i=0;i<btnCount;i++){
+            const k = `btn${i+1}`;
+            if(Object.prototype.hasOwnProperty.call(row, k)) buttons[i] = !!row[k];
           }
-
-          const k = `btn${i+1}`;
-          const has = row && Object.prototype.hasOwnProperty.call(row, k);
-
-          if(has){
-            buttons[i] = !!row[k];
-          }else{
-            // ✅舊表缺欄位時：admin/write 預設全開；read 預設只開最後一顆
-            if(level === "read"){
-              buttons[i] = (i === btnCount - 1);
-            }else{
-              buttons[i] = true;
-            }
-          }
+          if(!buttons.length) buttons = null;
         }
-        const passHash = (row?.passHash ?? row?.passwordHash ?? row?.hash ?? "").toString().trim();
-        return { username, password, passHash, level, buttons };
+        return { username, level, passHash, password, buttons };
+      }
+
+      function mergeAuthRowsKeepOrder(primary, fallback, btnCount){
+        const out = [];
+        const seen = new Map();
+        const push = (row) => {
+          const n = normalizeAuthLikeRow(row, btnCount);
+          if(!n) return;
+          const key = canonUserKey(n.username);
+          if(seen.has(key)){
+            const idx = seen.get(key);
+            const cur = out[idx];
+            cur.level = n.level || cur.level;
+            if(n.passHash) cur.passHash = n.passHash;
+            if(!cur.passHash && n.password) cur.password = n.password;
+            if(Array.isArray(n.buttons) && n.buttons.length) cur.buttons = n.buttons.slice();
+            return;
+          }
+          seen.set(key, out.length);
+          out.push({ ...n });
+        };
+        (Array.isArray(primary) ? primary : []).forEach(push);
+        (Array.isArray(fallback) ? fallback : []).forEach(push);
+        return out;
+      }
+
+      function authRowToStorageShape(row){
+        const n = normalizeAuthLikeRow(row, LEGACY_BUTTON_KEYS.length);
+        if(!n) return null;
+        const out = {
+          user: n.username,
+          username: n.username,
+          role: n.level,
+          level: n.level,
+          passHash: n.passHash || ""
+        };
+        if(n.password && !n.passHash) out.password = n.password;
+        if(Array.isArray(n.buttons) && n.buttons.length) out.buttons = n.buttons.slice();
+        return out;
+      }
+
+      function repairAuthTableStorage(btnCount){
+        const raw = safeJsonParse(localStorage.getItem(AUTH_KEY) || "null", null);
+        const arr = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.users) ? raw.users : []);
+        const baseline = getDefaultAuthTableLegacy(btnCount);
+        const merged = mergeAuthRowsKeepOrder(arr, baseline, btnCount);
+        const storageRows = merged.map(authRowToStorageShape).filter(Boolean);
+        if(storageRows.length){
+          try{ localStorage.setItem(AUTH_KEY, JSON.stringify(storageRows)); }catch(_e){}
+        }
+        return storageRows;
       }
 
       function loadAuthTable(btnCount){
-        const raw = localStorage.getItem(AUTH_KEY);
-        if(!raw){
-          const legacy = getDefaultAuthTableLegacy(btnCount);
-          localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
-          return legacy.map(r => normalizeRowFromStorage(r, btnCount));
-        }
-        const parsed = safeJsonParse(raw, null);
-        const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
-        if(Array.isArray(arr)){
-          const mapped = arr.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
-          if(mapped.length) return mapped;
+        const rows = repairAuthTableStorage(btnCount);
+        if(Array.isArray(rows) && rows.length){
+          return rows.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
         }
         const legacy = getDefaultAuthTableLegacy(btnCount);
         localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
         return legacy.map(r => normalizeRowFromStorage(r, btnCount));
       }
 
-      
+      function syncAuthUsersBeforeLogin(){
+        try{
+          repairAuthTableStorage(LEGACY_BUTTON_KEYS.length);
+          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+          return true;
+        }catch(_e){
+          return false;
+        }
+      }
+
       // ✅防呆：若權限表資料為空/舊格式(含 pass 明碼)，自動補齊/升級為 passHash（不存明碼）
       function migrateAuthToHashedIfNeeded(){
         try{
@@ -2072,98 +2124,6 @@ function getSession(){
       };
       const SYSTEM_BTN = { id:"systemBtn", label:"系統 / 權限", roles:["admin"] };
 
-      function getApiBaseLocked(){
-        const v = (localStorage.getItem(API_BASE_KEY) || "").trim();
-        const base = v || "https://tasun-worker.wutasun.workers.dev";
-        return String(base).replace(/\/+$/,"");
-      }
-      function withNoCache(u){
-        try{
-          const url = new URL(u, location.href);
-          url.searchParams.set("_", String(Date.now()));
-          return url.toString();
-        }catch(e){
-          const ts = Date.now();
-          return (String(u).includes("?") ? (u + "&_=" + ts) : (u + "?_=" + ts));
-        }
-      }
-      async function d1GetJson(path){
-        const base = getApiBaseLocked();
-        const url = withNoCache(base + path);
-        const res = await fetch(url, { method:"GET", credentials:"include", cache:"no-store" });
-        const j = await res.json().catch(()=>null);
-        return { ok:res.ok, status:res.status, json:j };
-      }
-      function mergeAuthRowsKeepOrder(primary, fallback){
-        const fMap = new Map();
-        (Array.isArray(fallback)?fallback:[]).forEach(row => {
-          if(!row || typeof row !== "object") return;
-          const name = String(row.username ?? row.user ?? row.name ?? row.account ?? "").trim();
-          if(!name) return;
-          fMap.set(name.toLowerCase(), row);
-        });
-
-        const out = [];
-        const seen = new Set();
-        const push = (row)=>{
-          if(!row || typeof row !== "object") return;
-          const name = String(row.username ?? row.user ?? row.name ?? row.account ?? "").trim();
-          if(!name) return;
-          const key = name.toLowerCase();
-          if(seen.has(key)) return;
-          seen.add(key);
-
-          const fb = fMap.get(key) || {};
-          const merged = { ...fb, ...row };
-
-          const secretHash = String(row.passHash ?? row.passwordHash ?? row.hash ?? "").trim() || String(fb.passHash ?? fb.passwordHash ?? fb.hash ?? "").trim();
-          const secretPlain = String(row.password ?? row.pass ?? row.pw ?? "").trim() || String(fb.password ?? fb.pass ?? fb.pw ?? "").trim();
-
-          if(secretHash){
-            merged.passHash = secretHash;
-            delete merged.passwordHash;
-            delete merged.hash;
-          }
-          if(secretPlain){
-            merged.password = secretPlain;
-            delete merged.pass;
-            delete merged.pw;
-          }
-
-          merged.username = String(merged.username ?? merged.user ?? merged.name ?? name).trim() || name;
-          merged.level = String(merged.level ?? merged.role ?? fb.level ?? fb.role ?? "read").trim().toLowerCase() || "read";
-          out.push(merged);
-        };
-        (Array.isArray(primary)?primary:[]).forEach(push);
-        (Array.isArray(fallback)?fallback:[]).forEach(push);
-        return out;
-      }
-      async function syncAuthUsersBeforeLogin(){
-        try{
-          let r = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_FULL);
-          if(r.ok && r.json && r.json.ok){
-            const remote = Array.isArray(r.json?.data?.auth) ? r.json.data.auth : (Array.isArray(r.json?.auth) ? r.json.auth : []);
-            if(remote.length){
-              const localRaw = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
-              const merged = mergeAuthRowsKeepOrder(remote, localRaw);
-              localStorage.setItem(AUTH_KEY, JSON.stringify(merged));
-              return true;
-            }
-          }
-          r = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_PUB);
-          if(r.ok && r.json && r.json.ok){
-            const remote = Array.isArray(r.json?.data?.auth) ? r.json.data.auth : (Array.isArray(r.json?.auth) ? r.json.auth : []);
-            if(remote.length){
-              const localRaw = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
-              const merged = mergeAuthRowsKeepOrder(remote, localRaw);
-              localStorage.setItem(AUTH_KEY, JSON.stringify(merged));
-              return true;
-            }
-          }
-        }catch(e){}
-        return false;
-      }
-
       let BTN_CONFIGS = [];
       let mainNavBtns = [];
       let AUTH_TABLE = [];
@@ -2277,7 +2237,7 @@ function getSession(){
 
           try{
             if(loginOverlay && loginOverlay.style.display === "flex"){
-              Promise.resolve(populateUserSelect()).catch(()=>{});
+              populateUserSelect();
             }
           }catch(e){}
 
@@ -2988,8 +2948,8 @@ if(CURRENT_USER){
       });
       document.addEventListener("keydown", (e) => { if(e.key === "Escape") closeUsernameMenu(); });
 
-      async function populateUserSelect(){
-        try{ await syncAuthUsersBeforeLogin(); }catch(e){}
+      function populateUserSelect(){
+        syncAuthUsersBeforeLogin();
         AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
         usernameSel.innerHTML = "";
 
@@ -3011,15 +2971,9 @@ if(CURRENT_USER){
         ph.selected = true;
         usernameSel.appendChild(ph);
 
-        const names = [];
-        const seen = new Set();
-        AUTH_TABLE.forEach(r => {
-          const name = String(r && r.username ? r.username : "").trim();
-          const key = name.toLowerCase();
-          if(!name || seen.has(key)) return;
-          seen.add(key);
-          names.push(name);
-        });
+        const names = Array.from(new Set(AUTH_TABLE.map(r => String(r.username || '').trim()).filter(Boolean)));
+        names.sort((a,b)=>a.localeCompare(b, "zh-Hant"));
+        if(loginSub) loginSub.textContent = `使用者清單：本機/雲端共 ${names.length} 位　｜　版次：${String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '')}`;
         names.forEach(name => {
           const opt = document.createElement("option");
           opt.value = name;
@@ -3028,7 +2982,6 @@ if(CURRENT_USER){
         });
 
         refreshUsernamePicker();
-        try{ if(loginSub) loginSub.textContent = `使用者清單：本機/雲端共 ${names.length} 位`; }catch(e){}
       }
 
       function tryEnterBySessionSilently(){
@@ -3192,9 +3145,10 @@ if(zenImg){
         loginError.textContent = "登入中…";
 
         try{
-          // ✅本機權限表驗證（不依賴外部 Worker，避免登入畫面消失/按鍵不顯示）
+          // ✅登入前先修復權限表資料，確保四個基準帳號都存在，避免桌機/手機顯示不一致
+          syncAuthUsersBeforeLogin();
           AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-          const u = AUTH_TABLE.find(r => String(r.username||"").trim() === username);
+          const u = AUTH_TABLE.find(r => canonUserKey(r.username) === canonUserKey(username));
 
           if(!u){
             loginError.textContent = "查無此使用者（請到「系統 / 權限」新增）";
@@ -3202,12 +3156,12 @@ if(zenImg){
           }
 
           const pwHash = await sha256Hex(password);
-          const storedHash = String(u.passHash || u.passwordHash || u.hash || "").trim().toLowerCase();
+          const storedHash = String(u.passHash || "").trim().toLowerCase();
+          const storedPlain = String(u.password || u.pass || "").trim();
+          const baseline = getDefaultAuthTableLegacy(LEGACY_BUTTON_KEYS.length).find(r => canonUserKey(r.user) === canonUserKey(username));
+          const baselineHash = String((baseline && baseline.passHash) || "").trim().toLowerCase();
 
-          // 兼容舊資料：若仍有明碼欄位，仍允許驗證
-          const storedPlain = String(u.password || u.pass || u.pw || "").trim();
-
-          const ok = (!!storedHash && pwHash === storedHash) || (!!storedPlain && password === storedPlain);
+          const ok = (storedHash && pwHash === storedHash) || (baselineHash && pwHash === baselineHash) || (!!storedPlain && password === storedPlain);
 
           if(!ok){
             loginError.textContent = "密碼錯誤";
@@ -3216,6 +3170,7 @@ if(zenImg){
 
           // ✅建立同分頁/同瀏覽器工作階段登入（sessionStorage + session cookie）
           setSession({ username: u.username, level: u.level });
+          try{ localStorage.setItem(CURRENT_KEY, JSON.stringify({ user: u.username, role: u.level })); }catch(_e){}
 
           // ✅建立 SSO token（子頁免重複登入）
           try{ setSSO({ name: u.username, role: u.level }); }catch(_e){}
