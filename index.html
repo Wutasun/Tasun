@@ -20,7 +20,7 @@
   <!-- ✅（效能降載）低記憶體/省流量/減少動作 → 自動關閉高成本特效 -->
   <script>
   (function(){
-    console.log('[TASUN BUILD] index_v3_login_first_v7 2026-03-05');
+    console.log('[TASUN BUILD] index_v5_login_session_fix_v10 2026-03-10');
 
     try{
       const dm = navigator.deviceMemory || 0;
@@ -37,7 +37,7 @@
 
   <!-- ✅全站版本 -->
   <script>
-    window.APP_VER = window.APP_VER || "20260310_09";
+    window.APP_VER = window.APP_VER || "20260310_10";
     window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
     (function(){
       try{
@@ -1415,30 +1415,22 @@ function runIndexApp(){
       try{
         const now = Date.now();
         const payload = {
-          name: user?.name || user?.user || user?.username || "alex",
-          role: user?.role || inferRole(user?.name || user?.user || user?.username || "alex", user?.role),
+          name: user?.name || user?.user || user?.username || "",
+          role: user?.role || inferRole(user?.name || user?.user || user?.username || "", user?.role),
           at: now,
           exp: now + SSO_TTL_MS,
           v: (window.__CACHE_V || window.TASUN_APP_VER || "")
         };
+        if(!payload.name) return;
         sessionStorage.setItem(SSO_KEY, JSON.stringify(payload));
-        // 子頁常用：CURRENT_KEY
         try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ name: payload.name, user: payload.name, role: payload.role })); }catch(_e){}
-        // 同頁簽章（避免某些瀏覽器 sessionStorage 被清）
         try{ sessionStorage.setItem("tasunSsoTab_v1", "1"); }catch(_e){}
-        try{
-          const nonce = String(now) + "_" + Math.random().toString(36).slice(2);
-          payload.nonce = nonce;
-          sessionStorage.setItem(SSO_NONCE_KEY, nonce);
-          localStorage.setItem(SSO_KEY, JSON.stringify(payload));
-          sessionStorage.setItem(SSO_KEY, JSON.stringify(payload));
-        }catch(_e){}
       }catch(_e){}
     }
 
     function getSSO(){
       try{
-        const raw = sessionStorage.getItem(SSO_KEY) || localStorage.getItem(SSO_KEY);
+        const raw = sessionStorage.getItem(SSO_KEY);
         if(!raw) return null;
         const o = JSON.parse(raw);
         if(!o || !o.name) return null;
@@ -1452,7 +1444,6 @@ function runIndexApp(){
       const NAV_KEY     = "tasunNavButtons_v1";
       const ROUTE_KEY   = "tasunNavRoutes_v1";
       const ROUTE_KEY_ALT = "tasunRoutes_v1";
-      const SSO_NONCE_KEY = "tasunSsoNonce_v1";
 
       const PERM_MATRIX_KEY = "tasunPermMatrix_v1";
       const API_BASE_KEY = "tasunApiBase_v1";
@@ -1514,7 +1505,7 @@ function runIndexApp(){
          ========================= */
       const CLOUD_RES_URL = "tasun-resources.json";
       const CLOUD_RESOURCE_KEY = String(window.TASUN_INDEX_CLOUD_KEY || "tasun-index-db").trim() || "tasun-index-db";
-      const CLOUD_KEYS = [AUTH_KEY, NAV_KEY, ROUTE_KEY];
+      const CLOUD_KEYS = [AUTH_KEY, NAV_KEY, ROUTE_KEY, ROUTE_KEY_ALT];
       const CLOUD_KEY_SET = new Set(CLOUD_KEYS);
 
       let cloudCtrl = null;
@@ -1822,8 +1813,6 @@ function runIndexApp(){
       function applyFixedRoutes(obj){
         const out = (obj && typeof obj === "object") ? { ...obj } : {};
         Object.keys(FIXED_ROUTES).forEach(k => { out[k] = FIXED_ROUTES[k]; });
-        out[METRO_ID] = METRO_HREF;
-        out["systemBtn"] = out["systemBtn"] || "權限表.html";
         return out;
       }
 
@@ -1907,29 +1896,64 @@ function runIndexApp(){
         return merged;
       }
 
-      function loadNavButtonsSeedIfMissing(){
-        const seed = [
-          { id:"btn1", label:"臻鼎時代大廈管理表" },
-          { id:"btn2", label:"捷運汐止東湖線" },
-          { id:"btn3", label:"雲端檔案" },
-          { id:"btn4", label:"工程資料庫" },
-          { id:"btn5", label:"資料庫" }
+      function getHomeButtonSeed(){
+        return [
+          { id:"btn1", sourceId:"metro",    label:"捷運汐止東湖線",     href:"汐東工程管理表.html", target:"" },
+          { id:"btn2", sourceId:"zhending", label:"臻鼎時代大廈管理表", href:"臻鼎管理表.html",     target:"" },
+          { id:"btn3", sourceId:"engdb",    label:"工程資料庫",         href:"工程資料庫.html",     target:"" },
+          { id:"btn4", sourceId:"auth",     label:"系統/權限",          href:"權限表.html",         target:"" },
+          { id:"btn5", sourceId:"cloud",    label:"雲端檔案",           href:"https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav", target:"_blank" }
         ];
+      }
+
+      function normalizeNavButtons(arr){
+        const seed = getHomeButtonSeed();
+        const out = [];
+        const used = new Set();
+        const byId = new Map((Array.isArray(arr) ? arr : []).map(x => [String(x?.id || "").trim().toLowerCase(), x]));
+
+        seed.forEach((fallback, idx) => {
+          const id = `btn${idx+1}`;
+          const raw = byId.get(id.toLowerCase()) || {};
+          const href = String(raw?.href || "").trim() || String(raw?.route || "").trim() || fallback.href;
+          const label = String(raw?.label || "").trim() || fallback.label;
+          const sourceId = String(raw?.sourceId || "").trim() || fallback.sourceId;
+          const target = String(raw?.target || "").trim() || fallback.target || (/^https?:\/\//i.test(href) ? "_blank" : "");
+          const key = `${sourceId}__${href}`;
+
+          if(used.has(key)){
+            out.push({ ...fallback });
+            used.add(`${fallback.sourceId}__${fallback.href}`);
+            return;
+          }
+          out.push({ id, sourceId, label, href, target });
+          used.add(key);
+        });
+
+        return { rows: out, changed: JSON.stringify(out) !== JSON.stringify(Array.isArray(arr) ? arr : []) };
+      }
+
+      function loadNavButtonsSeedIfMissing(){
+        const seed = getHomeButtonSeed();
         const raw = localStorage.getItem(NAV_KEY);
         if(!raw){
           localStorage.setItem(NAV_KEY, JSON.stringify(seed));
           return seed;
         }
         const arr = safeJsonParse(raw, null);
-        if(Array.isArray(arr) && arr.length) return arr;
-        localStorage.setItem(NAV_KEY, JSON.stringify(seed));
-        return seed;
+        const normalized = normalizeNavButtons(arr);
+        if(normalized.changed){
+          localStorage.setItem(NAV_KEY, JSON.stringify(normalized.rows));
+        }
+        return normalized.rows;
       }
 
       function resolveHref(cfg, routes){
         const id = String(cfg?.id || "").trim();
         const label = String(cfg?.label || "").trim();
+        const directHref = String(cfg?.href || "").trim();
 
+        if(directHref) return directHref;
         if(label && FIXED_ROUTES[label]) return FIXED_ROUTES[label];
         if(id === METRO_ID) return METRO_HREF;
         if(routes && routes[id]) return routes[id];
@@ -2116,13 +2140,13 @@ function setCookieSession(user){
     if(!payload.u) return;
     const val = encodeURIComponent(_b64e(JSON.stringify(payload)));
     // ✅ Session Cookie：不設定 expires / max-age
-    document.cookie = `${COOKIE_NAME}=${val}; Path=/; SameSite=Lax; Secure`;
+    document.cookie = `${COOKIE_NAME}=${val}; Path=/; SameSite=Lax${location.protocol === "https:" ? "; Secure" : ""}`;
   }catch(_e){}
 }
 
 function clearCookieSession(){
   try{
-    document.cookie = `${COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax; Secure`;
+    document.cookie = `${COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax${location.protocol === "https:" ? "; Secure" : ""}`;
   }catch(_e){}
 }
 
@@ -2184,11 +2208,21 @@ function getSession(){
         "btn1": ["admin","write","read"],
         "btn2": ["admin","write","read"],
         "btn3": ["admin","write","read"],
-        "btn4": ["admin","write"],
-        "btn5": ["admin","write","read"],
-        "systemBtn": ["admin"]
+        "btn4": ["admin","write","read"],
+        "btn5": ["admin","write","read"]
       };
-      const SYSTEM_BTN = { id:"systemBtn", label:"系統 / 權限", roles:["admin"] };
+
+      function isAuthButton(cfg){
+        const sourceId = String(cfg?.sourceId || "").trim().toLowerCase();
+        const label = String(cfg?.label || "").trim().replace(/\s+/g, "");
+        const href = String(cfg?.href || "").trim();
+        return sourceId === "auth" || /權限表\.html(?:[?#].*)?$/i.test(href) || label === "系統/權限" || label === "系統／權限";
+      }
+
+      function rolesForButton(cfg){
+        if(isAuthButton(cfg)) return ["admin"];
+        return ROLE_MAP[String(cfg?.id || "").trim()] || ["admin","write","read"];
+      }
 
       let BTN_CONFIGS = [];
       let mainNavBtns = [];
@@ -2201,7 +2235,7 @@ function getSession(){
         return cfg.roles.includes(level);
       }
       function isAllowedByAuth(user, cfg){
-        if(cfg && cfg.id === "systemBtn") return true;
+        if(isAuthButton(cfg)) return true;
         // ✅若有「入口權限矩陣」(tasunPermMatrix_v1)，優先使用它（支援後續新增頁面/按鍵）
         try{
           const pm = loadPermMatrixSafe();
@@ -2231,10 +2265,12 @@ function getSession(){
         BTN_CONFIGS = NAV_ARR.map(x => {
           const id = String(x?.id || "").trim();
           const label = String(x?.label || "").trim();
-          const roles = ROLE_MAP[id] || ["admin","write","read"];
-          const target = (id === "btn3") ? "_blank" : "";
-          return { id, label, roles, target };
-        }).concat([SYSTEM_BTN]);
+          const href = String(x?.href || "").trim();
+          const target = String(x?.target || "").trim() || (/^https?:\/\//i.test(href) ? "_blank" : "");
+          const sourceId = String(x?.sourceId || "").trim();
+          const roles = rolesForButton({ id, label, href, sourceId });
+          return { id, label, href, target, sourceId, roles };
+        });
 
         mainNavBtns = [];
         navArea.innerHTML = "";
@@ -2244,7 +2280,7 @@ function getSession(){
           a.className = "nav-btn";
           a.id = cfg.id || "";
 
-          if(cfg.id === "systemBtn") a.classList.add("is-system");
+          if(isAuthButton(cfg)) a.classList.add("is-system");
 
           const span = document.createElement("span");
           span.textContent = cfg.label;
@@ -2314,16 +2350,6 @@ function getSession(){
           }catch(e){}
 
           buildMainButtonsDOM();
-
-          
-    // ✅若已在其他頁登入過（SSO token 有效），本頁直接套用，不再跳登入表
-    (function(){
-      const sso = getSSO();
-      if(sso && sso.name){
-        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ name:sso.name, user:sso.name, role:sso.role })); }catch(_e){}
-        try{ sessionStorage.setItem(INDEX_SESSION_KEY, "1"); }catch(_e){}
-      }
-    })();
 if(CURRENT_USER){
             refreshButtonsForCurrentUser();
           }else{
@@ -3076,13 +3102,13 @@ if(CURRENT_USER){
 
       function tryEnterBySessionSilently(){
         try{
-          if(sessionStorage.getItem(INDEX_SESSION_KEY) !== "1") return false;
           const sess = getSession();
           if(!sess || !sess.user) return false;
-          const u = AUTH_TABLE.find(r => r.username === sess.user);
+          const u = AUTH_TABLE.find(r => canonUserKey(r.username) === canonUserKey(sess.user));
           if(!u){
             clearSession();
-            try{ localStorage.removeItem("tasunSso_v1"); }catch(_e){}
+            try{ sessionStorage.removeItem(SSO_KEY); }catch(_e){}
+            try{ localStorage.removeItem(CURRENT_KEY); }catch(_e){}
             return false;
           }
           if(String(u.level||"").toLowerCase() !== String(sess.role||"").toLowerCase()){
@@ -3098,12 +3124,10 @@ if(CURRENT_USER){
 
       function tryAutoLoginSSO(){
         try{
-          const raw = sessionStorage.getItem(SSO_KEY) || localStorage.getItem(SSO_KEY);
+          const raw = sessionStorage.getItem(SSO_KEY);
           if(!raw) return false;
           const sso = safeJsonParse(raw, null);
           if(!sso || !sso.name) return false;
-          const nonce = sessionStorage.getItem(SSO_NONCE_KEY) || "";
-          if(sso.nonce && nonce && nonce !== String(sso.nonce || "")) return false;
           if(sso.exp && Date.now() > Number(sso.exp)) return false;
           const u = AUTH_TABLE.find(r => canonUserKey(r.username) === canonUserKey(String(sso.name).trim()));
           if(!u) return false;
@@ -3150,6 +3174,7 @@ if(CURRENT_USER){
 
         // v4.1: 登入狀態由 TasunAuthV4 以 Session Cookie + sessionStorage 維持（同瀏覽器工作階段一次登入即可）
         try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: user.level })); }catch(e){}
+        try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
 
         CURRENT_USER = user;
 
@@ -3210,6 +3235,14 @@ if(CURRENT_USER){
 
       ensureCloudMounted(null).catch(()=>{});
 
+      try{
+        if(!getSession()){
+          sessionStorage.removeItem(SSO_KEY);
+          localStorage.removeItem(CURRENT_KEY);
+          try{ localStorage.removeItem(SSO_KEY); }catch(_e){}
+        }
+      }catch(_e){}
+
       // ✅進入首頁：先嘗試同瀏覽器有效 session / SSO，失敗時一定顯示登入
       if(!(tryAutoLoginSSO() || tryEnterBySessionSilently() || autoEnterIfSessionValid())){
         showLogin();
@@ -3267,7 +3300,7 @@ if(zenImg){
 
           // ✅建立同分頁/同瀏覽器工作階段登入（sessionStorage + session cookie）
           setSession({ username: u.username, level: u.level });
-          try{ localStorage.setItem(CURRENT_KEY, JSON.stringify({ user: u.username, role: u.level })); }catch(_e){}
+          try{ localStorage.removeItem(CURRENT_KEY); }catch(_e){}
 
           // ✅建立 SSO token（子頁免重複登入）
           try{ setSSO({ name: u.username, role: u.level }); }catch(_e){}
@@ -3293,7 +3326,8 @@ if(zenImg){
 
       btnSwitch.addEventListener("click", () => {
         clearSession();
-        localStorage.removeItem(CURRENT_KEY);
+        try{ localStorage.removeItem(CURRENT_KEY); }catch(_e){}
+        try{ sessionStorage.removeItem(SSO_KEY); }catch(_e){}
         CURRENT_USER = null;
         showLogin();
         scheduleExport("switchUser");
@@ -3304,10 +3338,8 @@ if(zenImg){
       if(btnLogout){
         btnLogout.addEventListener("click", () => {
           clearSession();
-          try{ localStorage.removeItem(SSO_KEY); }catch(_e){}
           try{ sessionStorage.removeItem(SSO_KEY); }catch(_e){}
-          try{ sessionStorage.removeItem(SSO_NONCE_KEY); }catch(_e){}
-          localStorage.removeItem(CURRENT_KEY);
+          try{ localStorage.removeItem(CURRENT_KEY); }catch(_e){}
           CURRENT_USER = null;
           showLogin();
           scheduleExport("logout");
@@ -3351,8 +3383,8 @@ if(zenImg){
       if(!overlay) return;
       var hidden = getComputedStyle(overlay).display === 'none';
       var bodyLocked = document.body && document.body.classList.contains('locked');
-      var noButtons = !document.querySelector('.nav-area .nav-btn:not([style*="display: none"])');
-      if((bodyLocked || noButtons) && hidden){
+      var hasSession = /(?:^|; )tasun_session_v3=/.test(document.cookie || '');
+      if((bodyLocked || !hasSession) && hidden){
         overlay.style.display = 'flex';
         document.body.classList.add('locked');
       }
