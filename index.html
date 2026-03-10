@@ -37,7 +37,7 @@
 
   <!-- ✅全站版本 -->
   <script>
-    window.APP_VER = window.APP_VER || "20260310_08";
+    window.APP_VER = window.APP_VER || "20260310_09";
     window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
     (function(){
       try{
@@ -1426,12 +1426,19 @@ function runIndexApp(){
         try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ name: payload.name, user: payload.name, role: payload.role })); }catch(_e){}
         // 同頁簽章（避免某些瀏覽器 sessionStorage 被清）
         try{ sessionStorage.setItem("tasunSsoTab_v1", "1"); }catch(_e){}
+        try{
+          const nonce = String(now) + "_" + Math.random().toString(36).slice(2);
+          payload.nonce = nonce;
+          sessionStorage.setItem(SSO_NONCE_KEY, nonce);
+          localStorage.setItem(SSO_KEY, JSON.stringify(payload));
+          sessionStorage.setItem(SSO_KEY, JSON.stringify(payload));
+        }catch(_e){}
       }catch(_e){}
     }
 
     function getSSO(){
       try{
-        const raw = sessionStorage.getItem(SSO_KEY);
+        const raw = sessionStorage.getItem(SSO_KEY) || localStorage.getItem(SSO_KEY);
         if(!raw) return null;
         const o = JSON.parse(raw);
         if(!o || !o.name) return null;
@@ -1444,6 +1451,8 @@ function runIndexApp(){
       const SESSION_KEY = "tasunSessionLogin_v1";
       const NAV_KEY     = "tasunNavButtons_v1";
       const ROUTE_KEY   = "tasunNavRoutes_v1";
+      const ROUTE_KEY_ALT = "tasunRoutes_v1";
+      const SSO_NONCE_KEY = "tasunSsoNonce_v1";
 
       const PERM_MATRIX_KEY = "tasunPermMatrix_v1";
       const API_BASE_KEY = "tasunApiBase_v1";
@@ -1818,6 +1827,60 @@ function runIndexApp(){
         return out;
       }
 
+
+      function normalizeRowFromStorage(row, btnCount){
+        const n = normalizeAuthLikeRow(row, btnCount);
+        if(!n) return { username:"", level:"read", passHash:"", password:"", buttons:[] };
+        const keys = Array.from({length: btnCount}, (_, i) => `btn${i+1}`);
+        let buttons = Array.isArray(n.buttons) ? n.buttons.slice(0, btnCount) : [];
+        if(!buttons.length){
+          buttons = keys.map((_, i) => {
+            const k = `btn${i+1}`;
+            if(row && Object.prototype.hasOwnProperty.call(row, k)) return !!row[k];
+            return undefined;
+          });
+        }
+        while(buttons.length < btnCount) buttons.push(undefined);
+        return {
+          username: n.username,
+          level: n.level,
+          passHash: String(n.passHash || "").trim().toLowerCase(),
+          password: String(n.password || "").trim(),
+          buttons
+        };
+      }
+
+      function userKey(name){
+        return String(name || "").trim().toLowerCase();
+      }
+
+      function loadPermMatrixSafe(){
+        const raw = safeJsonParse(localStorage.getItem(PERM_MATRIX_KEY) || "null", null);
+        if(raw && typeof raw === "object"){
+          if(!raw.users || typeof raw.users !== "object") raw.users = {};
+          return raw;
+        }
+        return { users:{} };
+      }
+
+      function getPermFromMatrix(pm, username, entryFile, btnId){
+        try{
+          const uKey = userKey(username);
+          const entry = String(entryFile || "index.html").trim() || "index.html";
+          return !!(pm && pm.users && pm.users[uKey] && pm.users[uKey][entry] && pm.users[uKey][entry][btnId]);
+        }catch(e){
+          return false;
+        }
+      }
+
+      function setRouteStorageBoth(obj){
+        try{
+          const json = JSON.stringify(obj, null, 2);
+          localStorage.setItem(ROUTE_KEY, json);
+          localStorage.setItem(ROUTE_KEY_ALT, json);
+        }catch(e){}
+      }
+
       function loadRoutes(){
         const seed = applyFixedRoutes({
           "btn3": "https://www.dropbox.com/",
@@ -1825,9 +1888,12 @@ function runIndexApp(){
           [METRO_ID]: METRO_HREF
         });
 
-        const raw = localStorage.getItem(ROUTE_KEY);
+        const rawPrimary = localStorage.getItem(ROUTE_KEY);
+        const rawAlt = localStorage.getItem(ROUTE_KEY_ALT);
+        const raw = rawPrimary || rawAlt;
+
         if(!raw){
-          localStorage.setItem(ROUTE_KEY, JSON.stringify(seed, null, 2));
+          setRouteStorageBoth(seed);
           return seed;
         }
 
@@ -1835,8 +1901,8 @@ function runIndexApp(){
         const base = (parsed && typeof parsed === "object") ? parsed : {};
         const merged = applyFixedRoutes({ ...base, ...seed });
 
-        if(JSON.stringify(base) !== JSON.stringify(merged)){
-          localStorage.setItem(ROUTE_KEY, JSON.stringify(merged, null, 2));
+        if(JSON.stringify(base) !== JSON.stringify(merged) || rawPrimary !== rawAlt){
+          setRouteStorageBoth(merged);
         }
         return merged;
       }
@@ -2233,7 +2299,13 @@ function getSession(){
 
           ROUTES = loadRoutes();
           NAV_ARR = loadNavButtonsSeedIfMissing();
-          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+          try{
+            AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+          }catch(_e){
+            const fallback = getDefaultAuthTableLegacy(LEGACY_BUTTON_KEYS.length);
+            localStorage.setItem(AUTH_KEY, JSON.stringify(fallback));
+            AUTH_TABLE = fallback.map(r => normalizeRowFromStorage(r, LEGACY_BUTTON_KEYS.length)).filter(x => x.username);
+          }
 
           try{
             if(loginOverlay && loginOverlay.style.display === "flex"){
@@ -2949,8 +3021,25 @@ if(CURRENT_USER){
       document.addEventListener("keydown", (e) => { if(e.key === "Escape") closeUsernameMenu(); });
 
       function populateUserSelect(){
-        syncAuthUsersBeforeLogin();
-        AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+        let table = [];
+        try{
+          syncAuthUsersBeforeLogin();
+          table = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+        }catch(_e){
+          table = [];
+        }
+
+        if(!Array.isArray(table) || !table.length){
+          try{
+            const fallback = getDefaultAuthTableLegacy(LEGACY_BUTTON_KEYS.length);
+            localStorage.setItem(AUTH_KEY, JSON.stringify(fallback));
+            table = fallback.map(r => normalizeRowFromStorage(r, LEGACY_BUTTON_KEYS.length)).filter(x => x.username);
+          }catch(_e){
+            table = [];
+          }
+        }
+
+        AUTH_TABLE = Array.isArray(table) ? table : [];
         usernameSel.innerHTML = "";
 
         if(!AUTH_TABLE.length){
@@ -2960,6 +3049,7 @@ if(CURRENT_USER){
           opt.disabled = true;
           opt.selected = true;
           usernameSel.appendChild(opt);
+          if(loginSub) loginSub.textContent = "尚未載入使用者資料，請先確認權限表與雲端同步。";
           refreshUsernamePicker();
           return;
         }
@@ -3008,15 +3098,16 @@ if(CURRENT_USER){
 
       function tryAutoLoginSSO(){
         try{
-          const raw = localStorage.getItem(SSO_KEY);
+          const raw = sessionStorage.getItem(SSO_KEY) || localStorage.getItem(SSO_KEY);
           if(!raw) return false;
           const sso = safeJsonParse(raw, null);
           if(!sso || !sso.name) return false;
           const nonce = sessionStorage.getItem(SSO_NONCE_KEY) || "";
-          if(!nonce || nonce !== String(sso.nonce || "")) return false;
+          if(sso.nonce && nonce && nonce !== String(sso.nonce || "")) return false;
           if(sso.exp && Date.now() > Number(sso.exp)) return false;
-          const u = AUTH_TABLE.find(r => r.username === String(sso.name).trim());
+          const u = AUTH_TABLE.find(r => canonUserKey(r.username) === canonUserKey(String(sso.name).trim()));
           if(!u) return false;
+          setSession({ username: u.username, level: u.level });
           applyUser(u);
           return true;
         }catch(e){
@@ -3029,7 +3120,7 @@ if(CURRENT_USER){
         if(loginOverlay) loginOverlay.style.display = "flex";
         if(loginError) loginError.textContent = "";
         if(loginSub) loginSub.textContent = "";
-        try{ if(loginPass) loginPass.value = ""; else $("#password").value = ""; }catch(e){}
+        try{ const pwdEl = $("#password"); if(pwdEl) pwdEl.value = ""; }catch(e){}
         populateUserSelect();
         resetButtonsForLogout();
         if(userInfo){
@@ -3108,7 +3199,13 @@ if(CURRENT_USER){
       function scheduleAll(){ try{ scheduleLayout(); }catch(e){} }
       scheduleLayout = rafDebounce(layoutButtons);
 
-      AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+      try{
+        AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+      }catch(_e){
+        const fallback = getDefaultAuthTableLegacy(LEGACY_BUTTON_KEYS.length);
+        localStorage.setItem(AUTH_KEY, JSON.stringify(fallback));
+        AUTH_TABLE = fallback.map(r => normalizeRowFromStorage(r, LEGACY_BUTTON_KEYS.length)).filter(x => x.username);
+      }
       buildMainButtonsDOM();
 
       ensureCloudMounted(null).catch(()=>{});
@@ -3202,6 +3299,21 @@ if(zenImg){
         scheduleExport("switchUser");
         scheduleAll();
       });
+
+      const btnLogout = $("#btnLogout");
+      if(btnLogout){
+        btnLogout.addEventListener("click", () => {
+          clearSession();
+          try{ localStorage.removeItem(SSO_KEY); }catch(_e){}
+          try{ sessionStorage.removeItem(SSO_KEY); }catch(_e){}
+          try{ sessionStorage.removeItem(SSO_NONCE_KEY); }catch(_e){}
+          localStorage.removeItem(CURRENT_KEY);
+          CURRENT_USER = null;
+          showLogin();
+          scheduleExport("logout");
+          scheduleAll();
+        });
+      }
 
       btnTogglePwd.addEventListener("click", () => {
         const pwd = $("#password");
