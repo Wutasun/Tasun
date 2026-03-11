@@ -11,7 +11,7 @@
   <meta http-equiv="Expires" content="0">
   <script>
   (function () {
-    const FALLBACK = "20260310_14";
+    const FALLBACK = "20260310_15";
     const VER_KEY = "tasun_app_ver_auth_v1";
     const SESSION_BRIDGE_KEY = "tasunSessionBridge_v1";
     const TAB_GUARD = "tasun_tab_replaced_once_auth_v1";
@@ -2161,6 +2161,51 @@ function safeJsonParse(s, fallback){
     return String(s || '').trim().replace(/[／]/g, '/').replace(/\s+/g, '');
   }
 
+  function readEntryRegistryObject(){
+    const raw = safeJsonParse(localStorage.getItem(ENTRY_REGISTRY_KEY) || 'null', null);
+    if(raw && typeof raw === 'object') return raw;
+    return {};
+  }
+
+  function writeEntryRegistryObject(obj){
+    localStorage.setItem(ENTRY_REGISTRY_KEY, JSON.stringify(obj && typeof obj === 'object' ? obj : {}));
+  }
+
+  function getCurrentEntryButtonSourceList(){
+    const entry = resolveEntryValue();
+    if(entry === 'index.html') return getHomeButtonLibrary();
+
+    const base = Array.isArray(dynEntryButtons[entry]) && dynEntryButtons[entry].length
+      ? dynEntryButtons[entry]
+      : (Array.isArray(btnMeta) ? btnMeta : []);
+
+    return base.map((it, idx) => ({
+      sourceId: String(it?.key || `btn${idx+1}`).trim() || `btn${idx+1}`,
+      label: String(it?.name || it?.label || it?.key || `btn${idx+1}`).trim() || `btn${idx+1}`,
+      href: String(it?.href || '').trim(),
+      target: String(it?.target || '').trim(),
+      roles: Array.isArray(it?.roles) ? it.roles.slice() : []
+    }));
+  }
+
+  function saveEntryButtonOrder(entry, updated){
+    const file = String(entry || '').trim();
+    if(!file || file === 'index.html') return;
+
+    const nextButtons = (Array.isArray(updated) ? updated : []).map((src, idx) => ({
+      key: String(src?.sourceId || src?.key || `btn${idx+1}`).trim() || `btn${idx+1}`,
+      name: String(src?.label || src?.name || src?.sourceId || `btn${idx+1}`).trim() || `btn${idx+1}`
+    }));
+
+    dynEntryButtons[file] = nextButtons.slice();
+
+    const reg = readEntryRegistryObject();
+    const node = reg[file] && typeof reg[file] === 'object' ? reg[file] : {};
+    node.buttons = nextButtons.slice();
+    reg[file] = node;
+    writeEntryRegistryObject(reg);
+  }
+
   function getHomeButtonLibrary(){
     return HOME_BUTTON_LIBRARY.map(it => ({
       sourceId: String(it.sourceId || '').trim(),
@@ -2266,7 +2311,7 @@ function safeJsonParse(s, fallback){
   }
 
   function getNavSourceList(){
-    return getHomeButtonLibrary();
+    return getCurrentEntryButtonSourceList();
   }
 
   function navOptionText(it){
@@ -2374,17 +2419,29 @@ function safeJsonParse(s, fallback){
   function closeNavPanel(){ navPanel.classList.remove('show'); }
 
   function loadNavNamesIntoInputs(){
-    const nav = readNavButtons();
+    const entry = resolveEntryValue();
+    const sourceList = getNavSourceList();
+    const currentRows = (entry === 'index.html')
+      ? readNavButtons()
+      : sourceList.map((it, idx) => ({
+          id: `btn${idx+1}`,
+          sourceId: String(it?.sourceId || `btn${idx+1}`).trim() || `btn${idx+1}`,
+          label: String(it?.label || it?.name || it?.sourceId || `btn${idx+1}`).trim() || `btn${idx+1}`,
+          href: String(it?.href || '').trim(),
+          target: String(it?.target || '').trim(),
+          roles: Array.isArray(it?.roles) ? it.roles.slice() : []
+        }));
+
     refreshNavSelectOptions();
 
     const selects = getNavSelectControls();
     selects.forEach((sel, idx) => {
       if(!sel) return;
-      const item = nav[idx] || {};
-      const sourceId = String(item.sourceId || getHomeButtonLibrary()[idx]?.sourceId || `btn${idx+1}`).trim();
+      const item = currentRows[idx] || {};
+      const fallback = sourceList[idx] || null;
+      const sourceId = String(item.sourceId || fallback?.sourceId || `btn${idx+1}`).trim() || `btn${idx+1}`;
       sel.value = sourceId;
       if(String(sel.value || '').trim() !== sourceId){
-        const fallback = getHomeButtonLibrary()[idx];
         sel.value = fallback ? fallback.sourceId : sourceId;
       }
       sel.dataset.prevValue = sel.value;
