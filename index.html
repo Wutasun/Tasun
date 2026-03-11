@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- TASUN_REBUILD_STAMP:index_v2 2026-03-05 00:00:00 (zw-bottom-up + sso-inferRole) -->
+<!-- TASUN_REBUILD_STAMP:index_v2 2026-03-09 00:00:00 (mobile-login-cloud-auth-fix) -->
 
 <html lang="zh-Hant">
 <head>
@@ -20,7 +20,7 @@
   <!-- ✅（效能降載）低記憶體/省流量/減少動作 → 自動關閉高成本特效 -->
   <script>
   (function(){
-    console.log('[TASUN BUILD] index_v5_version_guard_fix_v14 2026-03-10');
+    console.log('[TASUN BUILD] index_admin_auth_excluded_fix_v17 2026-03-11');
 
     try{
       const dm = navigator.deviceMemory || 0;
@@ -37,30 +37,8 @@
 
   <!-- ✅全站版本 -->
   <script>
-    window.APP_VER = window.APP_VER || "20260310_14";
+    window.APP_VER = window.APP_VER || "20260309_05";
     window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
-    window.__TASUN_VER_READY__ = (function(){
-      const urlV = (() => { try{ return String(new URL(location.href).searchParams.get("v") || "").trim(); }catch(_e){ return ""; } })();
-      if(urlV){
-        window.APP_VER = urlV;
-        window.TASUN_APP_VER = urlV;
-      }
-      try{
-        return fetch('tasun-version.json?_=' + Date.now(), { cache:'no-store' })
-          .then(r => r.ok ? r.json() : null)
-          .then(j => {
-            const v = String((j && (j.version || j.ver || j.appVersion || j.appVer)) || urlV || window.TASUN_APP_VER || window.APP_VER || '').trim();
-            if(v){
-              window.APP_VER = v;
-              window.TASUN_APP_VER = v;
-            }
-            return v;
-          })
-          .catch(() => String(urlV || window.TASUN_APP_VER || window.APP_VER || '').trim());
-      }catch(_e){
-        return Promise.resolve(String(urlV || window.TASUN_APP_VER || window.APP_VER || '').trim());
-      }
-    })();
   </script>
 
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
@@ -77,22 +55,17 @@
   (function () {
     "use strict";
 
+    const VER = String(window.TASUN_APP_VER || window.APP_VER || "").trim();
     const url = new URL(location.href);
-    const curV = String(url.searchParams.get("v") || "").trim();
-    const bootV = String(curV || window.TASUN_APP_VER || window.APP_VER || "").trim();
+    const curV = url.searchParams.get("v") || "";
 
-    window.__CACHE_V = bootV || "";
+    if (VER && curV !== VER) {
+      url.searchParams.set("v", VER);
+      location.replace(url.toString());
+      return;
+    }
 
-    Promise.resolve(window.__TASUN_VER_READY__ || bootV).then(function(resolved){
-      try{
-        const finalV = String(resolved || window.TASUN_APP_VER || window.APP_VER || curV || "").trim();
-        if(finalV && curV !== finalV){
-          const next = new URL(location.href);
-          next.searchParams.set("v", finalV);
-          location.replace(next.toString());
-        }
-      }catch(_e){}
-    }).catch(function(){});
+    window.__CACHE_V = VER || curV || "";
 
     window.__withV = window.__withV || function (u) {
       const vv = String(window.__CACHE_V || "").trim();
@@ -1301,7 +1274,7 @@
         <div class="login-field">
           <label for="password">密碼</label>
           <div class="login-pwd-wrapper">
-            <input id="password" name="password" type="password" autocomplete="current-password" class="login-pwd-input" />
+            <input id="password" name="password" type="password" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" enterkeyhint="go" class="login-pwd-input" />
             <button type="button" class="btn-eye-login" id="btnTogglePwd">👁</button>
           </div>
         </div>
@@ -1412,7 +1385,6 @@ function runIndexApp(){
     // ====== ✅SSO：全站免重複登入（由 index 建立 token，子頁讀取 token 直接通過） ======
     const SSO_KEY = "tasunSso_v1";
     const SSO_TTL_MS = 1000 * 60 * 60 * 12; // 12 小時（可自行調整）
-    const SESSION_BRIDGE_KEY = "tasunSessionBridge_v1";
 
     // ✅SSO 角色推斷（避免 inferRole 未定義導致 setSSO 失敗）
     function inferRole(name, role){
@@ -1429,15 +1401,16 @@ function runIndexApp(){
       try{
         const now = Date.now();
         const payload = {
-          name: user?.name || user?.user || user?.username || "",
-          role: user?.role || inferRole(user?.name || user?.user || user?.username || "", user?.role),
+          name: user?.name || user?.user || user?.username || "alex",
+          role: user?.role || inferRole(user?.name || user?.user || user?.username || "alex", user?.role),
           at: now,
           exp: now + SSO_TTL_MS,
           v: (window.__CACHE_V || window.TASUN_APP_VER || "")
         };
-        if(!payload.name) return;
         sessionStorage.setItem(SSO_KEY, JSON.stringify(payload));
+        // 子頁常用：CURRENT_KEY
         try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ name: payload.name, user: payload.name, role: payload.role })); }catch(_e){}
+        // 同頁簽章（避免某些瀏覽器 sessionStorage 被清）
         try{ sessionStorage.setItem("tasunSsoTab_v1", "1"); }catch(_e){}
       }catch(_e){}
     }
@@ -1453,29 +1426,11 @@ function runIndexApp(){
       }catch(_e){ return null; }
     }
 
-    function writeSessionBridge(userLike){
-      try{
-        const name = String(userLike?.username || userLike?.user || userLike?.name || "").trim();
-        const role = String(userLike?.level || userLike?.role || inferRole(name, userLike?.role)).trim().toLowerCase();
-        if(!name) return;
-        const payload = { user:name, username:name, name:name, role:role || "read", at:Date.now(), v:(window.__CACHE_V || window.TASUN_APP_VER || "") };
-        sessionStorage.setItem(CURRENT_KEY, JSON.stringify(payload));
-        localStorage.setItem(CURRENT_KEY, JSON.stringify(payload));
-        localStorage.setItem(SESSION_BRIDGE_KEY, JSON.stringify(payload));
-      }catch(_e){}
-    }
-
-    function clearSessionBridge(){
-      try{ sessionStorage.removeItem(CURRENT_KEY); }catch(_e){}
-      try{ localStorage.removeItem(CURRENT_KEY); }catch(_e){}
-      try{ localStorage.removeItem(SESSION_BRIDGE_KEY); }catch(_e){}
-    }
-
       const INDEX_SESSION_KEY = "tasunIndexSessionAuthed_v1";
       const SESSION_KEY = "tasunSessionLogin_v1";
       const NAV_KEY     = "tasunNavButtons_v1";
-      const ROUTE_KEY   = "tasunNavRoutes_v1";
-      const ROUTE_KEY_ALT = "tasunRoutes_v1";
+      const ROUTE_KEY   = "tasunRoutes_v1";
+      const LEGACY_ROUTE_KEY = "tasunNavRoutes_v1";
 
       const PERM_MATRIX_KEY = "tasunPermMatrix_v1";
       const API_BASE_KEY = "tasunApiBase_v1";
@@ -1485,6 +1440,13 @@ function runIndexApp(){
 
       const METRO_ID    = "btn2";
       const METRO_HREF  = "汐東工程管理表.html";
+      const HOME_BUTTON_LIBRARY = [
+        { sourceId:"metro",    label:"捷運汐止東湖線",     href:"汐東工程管理表.html", target:"" },
+        { sourceId:"zhending", label:"臻鼎時代大廈管理表", href:"臻鼎管理表.html",     target:"" },
+        { sourceId:"engdb",    label:"工程資料庫",         href:"工程資料庫.html",     target:"" },
+        { sourceId:"auth",     label:"系統/權限",         href:"權限表.html",         target:"" },
+        { sourceId:"cloud",    label:"雲端檔案",           href:"https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88", target:"_blank" }
+      ];
 
       const FIXED_ROUTES = {
         "捷運汐東線事項紀錄": "sxdh-notes.html",
@@ -1537,12 +1499,34 @@ function runIndexApp(){
          ========================= */
       const CLOUD_RES_URL = "tasun-resources.json";
       const CLOUD_RESOURCE_KEY = String(window.TASUN_INDEX_CLOUD_KEY || "tasun-index-db").trim() || "tasun-index-db";
-      const CLOUD_KEYS = [AUTH_KEY, NAV_KEY, ROUTE_KEY, ROUTE_KEY_ALT];
+      const CLOUD_KEYS = [AUTH_KEY, NAV_KEY, ROUTE_KEY];
       const CLOUD_KEY_SET = new Set(CLOUD_KEYS);
 
       let cloudCtrl = null;
       let cloudApplying = false;
       let cloudSaveTimer = 0;
+
+      async function ensureCloudAuthReady(){
+        try{
+          const ctrl = await ensureCloudMounted(null);
+          if(ctrl && typeof ctrl.pullNow === "function"){
+            try{ await ctrl.pullNow(); }catch(e){}
+          }
+        }catch(e){}
+        try{
+          migrateAuthToHashedIfNeeded();
+          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+        }catch(e){}
+        return AUTH_TABLE;
+      }
+
+      function normalizeLoginPassword(raw){
+        return String(raw == null ? "" : raw)
+          .replace(/[\u200B-\u200D\uFEFF]/g, "")
+          .replace(/[\u00A0\u2007\u202F]/g, " ")
+          .trim();
+      }
+
 
       function loadScriptOnce(src){
         return new Promise((resolve)=>{
@@ -1749,6 +1733,81 @@ function runIndexApp(){
         return s + ".html";
       }
 
+
+      function getHomeButtonLibrary(){
+        return HOME_BUTTON_LIBRARY.map(it => ({
+          sourceId: String(it.sourceId || "").trim(),
+          label: String(it.label || "").trim(),
+          href: String(it.href || "").trim(),
+          target: String(it.target || "").trim()
+        }));
+      }
+
+      function getLibraryItemBySourceId(sourceId){
+        const sid = String(sourceId || "").trim();
+        return getHomeButtonLibrary().find(x => x.sourceId === sid) || null;
+      }
+
+      function normNavText(s){
+        return String(s || "").trim().replace(/[／]/g, "/").replace(/\s+/g, "");
+      }
+
+      function inferNavSourceId(hit, fallbackId){
+        const rawSourceId = String(hit?.sourceId || "").trim();
+        const library = getHomeButtonLibrary();
+
+        if(rawSourceId && library.some(x => x.sourceId === rawSourceId)) return rawSourceId;
+
+        const href = String(hit?.href || "").trim();
+        if(href){
+          const byHref = library.find(x => String(x.href || "").trim() === href);
+          if(byHref) return byHref.sourceId;
+        }
+
+        const label = normNavText(hit?.label || "");
+        if(label){
+          const byLabel = library.find(x => normNavText(x.label) === label);
+          if(byLabel) return byLabel.sourceId;
+        }
+
+        const num = String(fallbackId || "").replace(/^btn/i, "").trim();
+        if(num && /^\d+$/.test(num)){
+          const idx = Number(num) - 1;
+          if(library[idx]) return library[idx].sourceId;
+        }
+
+        return rawSourceId || String(fallbackId || "").trim() || "metro";
+      }
+
+      function buildRoutesObject(raw){
+        if(raw && typeof raw === "object" && !Array.isArray(raw)) return { ...raw };
+        return {};
+      }
+
+      function setRouteStorageObject(obj){
+        const routes = buildRoutesObject(obj);
+        const json = JSON.stringify(routes, null, 2);
+        try{ localStorage.setItem(ROUTE_KEY, json); }catch(e){}
+        try{ localStorage.setItem(LEGACY_ROUTE_KEY, json); }catch(e){}
+        return routes;
+      }
+
+      function getRouteStorageObject(){
+        const primary = buildRoutesObject(safeJsonParse(localStorage.getItem(ROUTE_KEY) || "null", null));
+        if(Object.keys(primary).length){
+          try{ localStorage.setItem(LEGACY_ROUTE_KEY, JSON.stringify(primary, null, 2)); }catch(e){}
+          return primary;
+        }
+
+        const legacy = buildRoutesObject(safeJsonParse(localStorage.getItem(LEGACY_ROUTE_KEY) || "null", null));
+        if(Object.keys(legacy).length){
+          setRouteStorageObject(legacy);
+          return legacy;
+        }
+
+        return {};
+      }
+
       function collectBackupPayload(reason){
         const now = new Date();
         const keys = [];
@@ -1845,76 +1904,27 @@ function runIndexApp(){
       function applyFixedRoutes(obj){
         const out = (obj && typeof obj === "object") ? { ...obj } : {};
         Object.keys(FIXED_ROUTES).forEach(k => { out[k] = FIXED_ROUTES[k]; });
+        out["btn1"] = "臻鼎管理表.html";
+        out["btn2"] = "汐東工程管理表.html";
+        out["btn3"] = "工程資料庫.html";
+        out["btn4"] = "https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav";
+        delete out["btn5"];
+        out["systemBtn"] = "權限表.html";
         return out;
-      }
-
-
-      function normalizeRowFromStorage(row, btnCount){
-        const n = normalizeAuthLikeRow(row, btnCount);
-        if(!n) return { username:"", level:"read", passHash:"", password:"", buttons:[] };
-        const keys = Array.from({length: btnCount}, (_, i) => `btn${i+1}`);
-        let buttons = Array.isArray(n.buttons) ? n.buttons.slice(0, btnCount) : [];
-        if(!buttons.length){
-          buttons = keys.map((_, i) => {
-            const k = `btn${i+1}`;
-            if(row && Object.prototype.hasOwnProperty.call(row, k)) return !!row[k];
-            return undefined;
-          });
-        }
-        while(buttons.length < btnCount) buttons.push(undefined);
-        return {
-          username: n.username,
-          level: n.level,
-          passHash: String(n.passHash || "").trim().toLowerCase(),
-          password: String(n.password || "").trim(),
-          buttons
-        };
-      }
-
-      function userKey(name){
-        return String(name || "").trim().toLowerCase();
-      }
-
-      function loadPermMatrixSafe(){
-        const raw = safeJsonParse(localStorage.getItem(PERM_MATRIX_KEY) || "null", null);
-        if(raw && typeof raw === "object"){
-          if(!raw.users || typeof raw.users !== "object") raw.users = {};
-          return raw;
-        }
-        return { users:{} };
-      }
-
-      function getPermFromMatrix(pm, username, entryFile, btnId){
-        try{
-          const uKey = userKey(username);
-          const entry = String(entryFile || "index.html").trim() || "index.html";
-          return !!(pm && pm.users && pm.users[uKey] && pm.users[uKey][entry] && pm.users[uKey][entry][btnId]);
-        }catch(e){
-          return false;
-        }
-      }
-
-      function setRouteStorageBoth(obj){
-        try{
-          const json = JSON.stringify(obj, null, 2);
-          localStorage.setItem(ROUTE_KEY, json);
-          localStorage.setItem(ROUTE_KEY_ALT, json);
-        }catch(e){}
       }
 
       function loadRoutes(){
         const seed = applyFixedRoutes({
-          "btn3": "https://www.dropbox.com/",
-          "systemBtn": "權限表.html",
-          [METRO_ID]: METRO_HREF
+          "btn1": "臻鼎管理表.html",
+          "btn2": "汐東工程管理表.html",
+          "btn3": "工程資料庫.html",
+          "btn4": "https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav",
+          "systemBtn": "權限表.html"
         });
 
-        const rawPrimary = localStorage.getItem(ROUTE_KEY);
-        const rawAlt = localStorage.getItem(ROUTE_KEY_ALT);
-        const raw = rawPrimary || rawAlt;
-
+        const raw = localStorage.getItem(ROUTE_KEY);
         if(!raw){
-          setRouteStorageBoth(seed);
+          localStorage.setItem(ROUTE_KEY, JSON.stringify(seed, null, 2));
           return seed;
         }
 
@@ -1922,91 +1932,60 @@ function runIndexApp(){
         const base = (parsed && typeof parsed === "object") ? parsed : {};
         const merged = applyFixedRoutes({ ...base, ...seed });
 
-        if(JSON.stringify(base) !== JSON.stringify(merged) || rawPrimary !== rawAlt){
-          setRouteStorageBoth(merged);
+        if(JSON.stringify(base) !== JSON.stringify(merged)){
+          localStorage.setItem(ROUTE_KEY, JSON.stringify(merged, null, 2));
         }
         return merged;
       }
 
-      function getHomeButtonSeed(){
-        return [
-          { id:"btn1", sourceId:"metro",    label:"捷運汐止東湖線",     href:"汐東工程管理表.html", target:"" },
-          { id:"btn2", sourceId:"zhending", label:"臻鼎時代大廈管理表", href:"臻鼎管理表.html",     target:"" },
-          { id:"btn3", sourceId:"engdb",    label:"工程資料庫",         href:"工程資料庫.html",     target:"" },
-          { id:"btn4", sourceId:"auth",     label:"系統/權限",          href:"權限表.html",         target:"" },
-          { id:"btn5", sourceId:"cloud",    label:"雲端檔案",           href:"https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav", target:"_blank" }
-        ];
-      }
-
-      function normalizeNavButtons(arr){
-        const seed = getHomeButtonSeed();
-        const out = [];
-        const used = new Set();
-        const byId = new Map((Array.isArray(arr) ? arr : []).map(x => [String(x?.id || "").trim().toLowerCase(), x]));
-        const libBySource = new Map(seed.map(x => [String(x.sourceId || "").trim().toLowerCase(), x]));
-        const normLabel = (s) => String(s || "").trim().replace(/[／]/g, "/").replace(/\s+/g, "").toLowerCase();
-
-        function findCanonical(raw, fallback){
-          const sourceId = String(raw?.sourceId || "").trim().toLowerCase();
-          const href = String(raw?.href || raw?.route || "").trim();
-          const label = String(raw?.label || "").trim();
-          if(sourceId && libBySource.has(sourceId)) return libBySource.get(sourceId);
-          const byLabel = seed.find(x => normLabel(x.label) === normLabel(label));
-          if(byLabel) return byLabel;
-          const byHref = seed.find(x => String(x.href || "").trim() === href);
-          if(byHref) return byHref;
-          return fallback;
-        }
-
-        seed.forEach((fallback, idx) => {
-          const id = `btn${idx+1}`;
-          const raw = byId.get(id.toLowerCase()) || {};
-          const canonical = findCanonical(raw, fallback) || fallback;
-          const row = {
-            id,
-            sourceId: String(canonical.sourceId || fallback.sourceId || id).trim(),
-            label: String(canonical.label || fallback.label || id).trim(),
-            href: String(canonical.href || fallback.href || "").trim(),
-            target: String(canonical.target || fallback.target || (/^https?:\/\//i.test(String(canonical.href || fallback.href || "")) ? "_blank" : "")).trim()
-          };
-          const key = `${row.sourceId}__${row.href}`;
-
-          if(used.has(key)){
-            const safe = { ...fallback, id };
-            out.push(safe);
-            used.add(`${safe.sourceId}__${safe.href}`);
-            return;
-          }
-          out.push(row);
-          used.add(key);
-        });
-
-        return { rows: out, changed: JSON.stringify(out) !== JSON.stringify(Array.isArray(arr) ? arr : []) };
-      }
-
       function loadNavButtonsSeedIfMissing(){
-        const seed = getHomeButtonSeed();
+        const seed = [
+          { id:"btn1", sourceId:"zhending", label:"臻鼎時代大廈管理表" },
+          { id:"btn2", sourceId:"metro",    label:"捷運汐止東湖線" },
+          { id:"btn3", sourceId:"engdb",    label:"工程資料庫" },
+          { id:"btn4", sourceId:"cloud",    label:"雲端檔案" }
+        ];
         const raw = localStorage.getItem(NAV_KEY);
-        if(!raw){
-          localStorage.setItem(NAV_KEY, JSON.stringify(seed));
-          return seed;
+        const norm = (s) => String(s || "").trim().replace(/[／]/g,"/").replace(/\s+/g,"").toLowerCase();
+        function canonicalize(arr){
+          const bySource = new Map(seed.map(x => [String(x.sourceId), x]));
+          const byLabel = new Map(seed.map(x => [norm(x.label), x]));
+          const out = [];
+          const used = new Set();
+          (Array.isArray(arr) ? arr : []).forEach(it => {
+            const src = String(it?.sourceId || "").trim();
+            const label = norm(it?.label || "");
+            const href = String(it?.href || "").trim();
+            if(src === "auth" || label === "系統/權限" || /權限表\.html(?:[?#].*)?$/i.test(href)) return;
+            let hit = bySource.get(src) || byLabel.get(label) || null;
+            if(!hit && /dropbox\.com/i.test(href)) hit = bySource.get("cloud");
+            if(!hit && /工程資料庫\.html(?:[?#].*)?$/i.test(href)) hit = bySource.get("engdb");
+            if(!hit && /汐東工程管理表\.html(?:[?#].*)?$/i.test(href)) hit = bySource.get("metro");
+            if(!hit && /臻鼎管理表\.html(?:[?#].*)?$/i.test(href)) hit = bySource.get("zhending");
+            if(!hit) return;
+            if(used.has(hit.sourceId)) return;
+            used.add(hit.sourceId);
+            out.push({ ...hit });
+          });
+          seed.forEach(it => { if(!used.has(it.sourceId)){ used.add(it.sourceId); out.push({ ...it }); } });
+          return out.slice(0, seed.length).map((it, idx) => ({ id:`btn${idx+1}`, sourceId:it.sourceId, label:it.label }));
         }
-        const arr = safeJsonParse(raw, null);
-        const normalized = normalizeNavButtons(arr);
-        if(normalized.changed){
-          localStorage.setItem(NAV_KEY, JSON.stringify(normalized.rows));
-        }
-        return normalized.rows;
+        const arr = safeJsonParse(raw || "null", null);
+        const fixed = canonicalize(arr);
+        try{ localStorage.setItem(NAV_KEY, JSON.stringify(fixed)); }catch(e){}
+        return fixed;
       }
 
       function resolveHref(cfg, routes){
         const id = String(cfg?.id || "").trim();
         const label = String(cfg?.label || "").trim();
+        const sourceId = String(cfg?.sourceId || "").trim();
         const directHref = String(cfg?.href || "").trim();
 
-        if(directHref) return directHref;
         if(label && FIXED_ROUTES[label]) return FIXED_ROUTES[label];
         if(id === METRO_ID) return METRO_HREF;
+        if(directHref) return directHref;
+        if(routes && sourceId && routes[sourceId]) return routes[sourceId];
         if(routes && routes[id]) return routes[id];
         if(routes && label && routes[label]) return routes[label];
 
@@ -2019,108 +1998,68 @@ function runIndexApp(){
         const keys = Array.from({length: btnCount}, (_, i) => `btn${i+1}`);
         const mkAll = () => Object.fromEntries(keys.map(k => [k, true]));
         const mkOnlyLast = () => Object.fromEntries(keys.map((k, i) => [k, i === btnCount - 1]));
+        // ✅不存明碼：預設帳號以 SHA-256(pass) 的 passHash 形式提供（可由權限表再修改）
         return [
-          { user:"alex",  passHash:"7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07", role:"admin", ...mkAll() },
+          { user:"alex",  passHash:"7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07",  role:"admin", ...mkAll() },
           { user:"JOYCE", passHash:"d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815", role:"admin", ...mkAll() },
           { user:"tasun", passHash:"cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba", role:"write", ...mkAll() },
-          { user:"wu",    passHash:"8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92", role:"read",  ...mkOnlyLast() }
+          { user:"wu",    passHash:"8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",    role:"read",  ...mkOnlyLast() }
         ];
       }
 
-      function canonUserKey(v){
-        return String(v || "").trim().toLowerCase();
-      }
+      /* ✅FIX: 讀取權限表時，若舊資料沒有 btn1~btn5 欄位，不要誤判為全關（會只剩 systemBtn） */
+      function normalizeRowFromStorage(row, btnCount){
+        const username = (row?.username ?? row?.user ?? row?.name ?? row?.account ?? "").toString().trim();
+        const password = (row?.password ?? row?.pass ?? "").toString();
+        const level    = (row?.level ?? row?.role ?? "read").toString().trim().toLowerCase();
 
-      function normalizeAuthLikeRow(row, btnCount){
-        if(!row || typeof row !== "object") return null;
-        const username = String(row.username ?? row.user ?? row.name ?? row.account ?? "").trim();
-        if(!username) return null;
-        const level = String(row.level ?? row.role ?? "read").trim().toLowerCase() || "read";
-        const passHash = String(row.passHash ?? row.passwordHash ?? row.hash ?? "").trim().toLowerCase();
-        const password = String(row.password ?? row.pass ?? row.pw ?? "").trim();
-        let buttons = Array.isArray(row.buttons) ? row.buttons.slice() : null;
-        if(!buttons){
-          buttons = [];
-          for(let i=0;i<btnCount;i++){
-            const k = `btn${i+1}`;
-            if(Object.prototype.hasOwnProperty.call(row, k)) buttons[i] = !!row[k];
+        // 支援新格式：buttons: [true,false,...]
+        const arr = Array.isArray(row?.buttons) ? row.buttons : null;
+
+        const buttons = [];
+        for(let i=0;i<btnCount;i++){
+          if(arr && i < arr.length){
+            buttons[i] = !!arr[i];
+            continue;
           }
-          if(!buttons.length) buttons = null;
-        }
-        return { username, level, passHash, password, buttons };
-      }
 
-      function mergeAuthRowsKeepOrder(primary, fallback, btnCount){
-        const out = [];
-        const seen = new Map();
-        const push = (row) => {
-          const n = normalizeAuthLikeRow(row, btnCount);
-          if(!n) return;
-          const key = canonUserKey(n.username);
-          if(seen.has(key)){
-            const idx = seen.get(key);
-            const cur = out[idx];
-            cur.level = n.level || cur.level;
-            if(n.passHash) cur.passHash = n.passHash;
-            if(!cur.passHash && n.password) cur.password = n.password;
-            if(Array.isArray(n.buttons) && n.buttons.length) cur.buttons = n.buttons.slice();
-            return;
+          const k = `btn${i+1}`;
+          const has = row && Object.prototype.hasOwnProperty.call(row, k);
+
+          if(has){
+            buttons[i] = !!row[k];
+          }else{
+            // ✅舊表缺欄位時：admin/write 預設全開；read 預設只開最後一顆
+            if(level === "read"){
+              buttons[i] = (i === btnCount - 1);
+            }else{
+              buttons[i] = true;
+            }
           }
-          seen.set(key, out.length);
-          out.push({ ...n });
-        };
-        (Array.isArray(primary) ? primary : []).forEach(push);
-        (Array.isArray(fallback) ? fallback : []).forEach(push);
-        return out;
-      }
-
-      function authRowToStorageShape(row){
-        const n = normalizeAuthLikeRow(row, LEGACY_BUTTON_KEYS.length);
-        if(!n) return null;
-        const out = {
-          user: n.username,
-          username: n.username,
-          role: n.level,
-          level: n.level,
-          passHash: n.passHash || ""
-        };
-        if(n.password && !n.passHash) out.password = n.password;
-        if(Array.isArray(n.buttons) && n.buttons.length) out.buttons = n.buttons.slice();
-        return out;
-      }
-
-      function repairAuthTableStorage(btnCount){
-        const raw = safeJsonParse(localStorage.getItem(AUTH_KEY) || "null", null);
-        const arr = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.users) ? raw.users : []);
-        const baseline = getDefaultAuthTableLegacy(btnCount);
-        const merged = mergeAuthRowsKeepOrder(arr, baseline, btnCount);
-        const storageRows = merged.map(authRowToStorageShape).filter(Boolean);
-        if(storageRows.length){
-          try{ localStorage.setItem(AUTH_KEY, JSON.stringify(storageRows)); }catch(_e){}
         }
-        return storageRows;
+        const passHash = (row?.passHash ?? row?.passwordHash ?? row?.hash ?? "").toString().trim();
+        return { username, password, passHash, level, buttons };
       }
 
       function loadAuthTable(btnCount){
-        const rows = repairAuthTableStorage(btnCount);
-        if(Array.isArray(rows) && rows.length){
-          return rows.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
+        const raw = localStorage.getItem(AUTH_KEY);
+        if(!raw){
+          const legacy = getDefaultAuthTableLegacy(btnCount);
+          localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
+          return legacy.map(r => normalizeRowFromStorage(r, btnCount));
+        }
+        const parsed = safeJsonParse(raw, null);
+        const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
+        if(Array.isArray(arr)){
+          const mapped = arr.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
+          if(mapped.length) return mapped;
         }
         const legacy = getDefaultAuthTableLegacy(btnCount);
         localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
         return legacy.map(r => normalizeRowFromStorage(r, btnCount));
       }
 
-      function syncAuthUsersBeforeLogin(){
-        try{
-          repairAuthTableStorage(LEGACY_BUTTON_KEYS.length);
-          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-          return true;
-        }catch(_e){
-          return false;
-        }
-      }
-
+      
       // ✅防呆：若權限表資料為空/舊格式(含 pass 明碼)，自動補齊/升級為 passHash（不存明碼）
       function migrateAuthToHashedIfNeeded(){
         try{
@@ -2191,13 +2130,13 @@ function setCookieSession(user){
     if(!payload.u) return;
     const val = encodeURIComponent(_b64e(JSON.stringify(payload)));
     // ✅ Session Cookie：不設定 expires / max-age
-    document.cookie = `${COOKIE_NAME}=${val}; Path=/; SameSite=Lax${location.protocol === "https:" ? "; Secure" : ""}`;
+    document.cookie = `${COOKIE_NAME}=${val}; Path=/; SameSite=Lax; Secure`;
   }catch(_e){}
 }
 
 function clearCookieSession(){
   try{
-    document.cookie = `${COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax${location.protocol === "https:" ? "; Secure" : ""}`;
+    document.cookie = `${COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax; Secure`;
   }catch(_e){}
 }
 
@@ -2222,16 +2161,16 @@ function setSession(user){
   }catch(e){}
   // ✅跨分頁/子頁：用 Session Cookie 共享
   setCookieSession(user);
-  // ✅子頁兼容橋接：同時寫 sessionStorage / localStorage，並在無 session 時由首頁主動清掉
-  writeSessionBridge({ user: user.username, username: user.username, role: String(user.level||"").toLowerCase(), level: String(user.level||"").toLowerCase() });
+  // ✅子頁常用：CURRENT_KEY（改用 sessionStorage）
+  try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: String(user.level||"").toLowerCase() })); }catch(_e){}
 }
 
 function clearSession(){
   try{
     sessionStorage.removeItem(SESSION_KEY);
     sessionStorage.removeItem(INDEX_SESSION_KEY);
+    sessionStorage.removeItem(CURRENT_KEY);
   }catch(e){}
-  clearSessionBridge();
   clearCookieSession();
 }
 
@@ -2248,7 +2187,7 @@ function getSession(){
     try{
       sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: ck.user, role: ck.role, t: Date.now() }));
       sessionStorage.setItem(INDEX_SESSION_KEY, "1");
-      writeSessionBridge({ user: ck.user, username: ck.user, role: ck.role, level: ck.role });
+      sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: ck.user, role: ck.role }));
     }catch(_e){}
     return { user: ck.user, role: ck.role, t: Date.now() };
   }
@@ -2260,20 +2199,9 @@ function getSession(){
         "btn2": ["admin","write","read"],
         "btn3": ["admin","write","read"],
         "btn4": ["admin","write","read"],
-        "btn5": ["admin","write","read"]
+        "systemBtn": ["admin"]
       };
-
-      function isAuthButton(cfg){
-        const sourceId = String(cfg?.sourceId || "").trim().toLowerCase();
-        const label = String(cfg?.label || "").trim().replace(/\s+/g, "");
-        const href = String(cfg?.href || "").trim();
-        return sourceId === "auth" || /權限表\.html(?:[?#].*)?$/i.test(href) || label === "系統/權限" || label === "系統／權限";
-      }
-
-      function rolesForButton(cfg){
-        if(isAuthButton(cfg)) return ["admin"];
-        return ROLE_MAP[String(cfg?.id || "").trim()] || ["admin","write","read"];
-      }
+      const SYSTEM_BTN = { id:"systemBtn", sourceId:"auth", label:"系統 / 權限", href:"權限表.html", roles:["admin"] };
 
       let BTN_CONFIGS = [];
       let mainNavBtns = [];
@@ -2286,15 +2214,13 @@ function getSession(){
         return cfg.roles.includes(level);
       }
       function isAllowedByAuth(user, cfg){
-        if(isAuthButton(cfg)) return true;
-        // ✅若有「入口權限矩陣」(tasunPermMatrix_v1)，優先使用它（支援後續新增頁面/按鍵）
+        if(cfg && cfg.id === "systemBtn") return true;
         try{
           const pm = loadPermMatrixSafe();
           const id = String(cfg?.id||"");
           if(/^btn\d+$/i.test(id)){
             const entryFile = "index.html";
             const allowed = getPermFromMatrix(pm, user?.username, entryFile, id);
-            // 若矩陣有設定，直接回傳（避免舊 buttons 陣列失準）
             if(pm?.users && pm.users[userKey(user?.username)] && pm.users[userKey(user?.username)][entryFile] && Object.prototype.hasOwnProperty.call(pm.users[userKey(user?.username)][entryFile], id)){
               return allowed;
             }
@@ -2302,9 +2228,10 @@ function getSession(){
         }catch(_){ }
 
         const flags = Array.isArray(user.buttons) ? user.buttons : [];
-        const m = String(cfg?.id || "").match(/^btn(\d+)$/i);
-        if(!m) return true;
-        const idx = parseInt(m[1], 10) - 1;
+        const legacyIndexMap = { btn1:0, btn2:1, btn3:2, btn4:4 };
+        const key = String(cfg?.id || "").trim();
+        if(!Object.prototype.hasOwnProperty.call(legacyIndexMap, key)) return true;
+        const idx = legacyIndexMap[key];
         const v = flags[idx];
         return (v === undefined) ? true : !!v;
       }
@@ -2316,12 +2243,11 @@ function getSession(){
         BTN_CONFIGS = NAV_ARR.map(x => {
           const id = String(x?.id || "").trim();
           const label = String(x?.label || "").trim();
-          const href = String(x?.href || "").trim();
-          const target = String(x?.target || "").trim() || (/^https?:\/\//i.test(href) ? "_blank" : "");
           const sourceId = String(x?.sourceId || "").trim();
-          const roles = rolesForButton({ id, label, href, sourceId });
-          return { id, label, href, target, sourceId, roles };
-        });
+          const roles = ROLE_MAP[id] || ["admin","write","read"];
+          const target = (sourceId === "cloud") ? "_blank" : "";
+          return { id, label, sourceId, roles, target };
+        }).filter(cfg => String(cfg.sourceId || "").toLowerCase() !== "auth").concat([SYSTEM_BTN]);
 
         mainNavBtns = [];
         navArea.innerHTML = "";
@@ -2331,7 +2257,7 @@ function getSession(){
           a.className = "nav-btn";
           a.id = cfg.id || "";
 
-          if(isAuthButton(cfg)) a.classList.add("is-system");
+          if(cfg.id === "systemBtn") a.classList.add("is-system");
 
           const span = document.createElement("span");
           span.textContent = cfg.label;
@@ -2340,7 +2266,6 @@ function getSession(){
           a.appendChild(span);
 
           const finalHref = resolveHref(cfg, ROUTES);
-          a.setAttribute("data-href-base", finalHref);
           a.setAttribute("href", hrefToDom(finalHref));
 
           const t = cfg.target || "";
@@ -2352,31 +2277,6 @@ function getSession(){
           a.style.display = "none";
           navArea.appendChild(a);
           mainNavBtns.push(a);
-        });
-
-        bindNavClickBridge();
-      }
-
-      function bindNavClickBridge(){
-        mainNavBtns.forEach((btn, index) => {
-          if(!btn || btn.__tasunBridgeBound__) return;
-          btn.__tasunBridgeBound__ = true;
-          btn.addEventListener("click", (ev) => {
-            try{
-              const cfg = BTN_CONFIGS[index] || null;
-              const href = String((cfg && resolveHref(cfg, ROUTES)) || btn.getAttribute("data-href-base") || btn.getAttribute("href") || "").trim();
-              if(!href || href === "#") return;
-              if(CURRENT_USER) writeSessionBridge({ user: CURRENT_USER.username, username: CURRENT_USER.username, role: CURRENT_USER.level, level: CURRENT_USER.level });
-              const finalDomHref = hrefToDom(href);
-              btn.setAttribute("href", finalDomHref);
-              if(/^https?:\/\//i.test(href)) return;
-              if(btn.target === "_blank") return;
-              if(finalDomHref && finalDomHref !== location.href){
-                ev.preventDefault();
-                location.href = finalDomHref;
-              }
-            }catch(_e){}
-          }, { capture:true });
         });
       }
 
@@ -2412,13 +2312,7 @@ function getSession(){
 
           ROUTES = loadRoutes();
           NAV_ARR = loadNavButtonsSeedIfMissing();
-          try{
-            AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-          }catch(_e){
-            const fallback = getDefaultAuthTableLegacy(LEGACY_BUTTON_KEYS.length);
-            localStorage.setItem(AUTH_KEY, JSON.stringify(fallback));
-            AUTH_TABLE = fallback.map(r => normalizeRowFromStorage(r, LEGACY_BUTTON_KEYS.length)).filter(x => x.username);
-          }
+          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
 
           try{
             if(loginOverlay && loginOverlay.style.display === "flex"){
@@ -2427,6 +2321,16 @@ function getSession(){
           }catch(e){}
 
           buildMainButtonsDOM();
+
+          
+    // ✅若已在其他頁登入過（SSO token 有效），本頁直接套用，不再跳登入表
+    (function(){
+      const sso = getSSO();
+      if(sso && sso.name){
+        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ name:sso.name, user:sso.name, role:sso.role })); }catch(_e){}
+        try{ sessionStorage.setItem(INDEX_SESSION_KEY, "1"); }catch(_e){}
+      }
+    })();
 if(CURRENT_USER){
             refreshButtonsForCurrentUser();
           }else{
@@ -3124,25 +3028,7 @@ if(CURRENT_USER){
       document.addEventListener("keydown", (e) => { if(e.key === "Escape") closeUsernameMenu(); });
 
       function populateUserSelect(){
-        let table = [];
-        try{
-          syncAuthUsersBeforeLogin();
-          table = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-        }catch(_e){
-          table = [];
-        }
-
-        if(!Array.isArray(table) || !table.length){
-          try{
-            const fallback = getDefaultAuthTableLegacy(LEGACY_BUTTON_KEYS.length);
-            localStorage.setItem(AUTH_KEY, JSON.stringify(fallback));
-            table = fallback.map(r => normalizeRowFromStorage(r, LEGACY_BUTTON_KEYS.length)).filter(x => x.username);
-          }catch(_e){
-            table = [];
-          }
-        }
-
-        AUTH_TABLE = Array.isArray(table) ? table : [];
+        AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
         usernameSel.innerHTML = "";
 
         if(!AUTH_TABLE.length){
@@ -3152,7 +3038,6 @@ if(CURRENT_USER){
           opt.disabled = true;
           opt.selected = true;
           usernameSel.appendChild(opt);
-          if(loginSub) loginSub.textContent = "尚未載入使用者資料，請先確認權限表與雲端同步。";
           refreshUsernamePicker();
           return;
         }
@@ -3164,9 +3049,8 @@ if(CURRENT_USER){
         ph.selected = true;
         usernameSel.appendChild(ph);
 
-        const names = Array.from(new Set(AUTH_TABLE.map(r => String(r.username || '').trim()).filter(Boolean)));
+        const names = Array.from(new Set(AUTH_TABLE.map(r => r.username).filter(Boolean)));
         names.sort((a,b)=>a.localeCompare(b, "zh-Hant"));
-        if(loginSub) loginSub.textContent = `使用者清單：本機/雲端共 ${names.length} 位　｜　版次：${String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '')}`;
         names.forEach(name => {
           const opt = document.createElement("option");
           opt.value = name;
@@ -3179,13 +3063,13 @@ if(CURRENT_USER){
 
       function tryEnterBySessionSilently(){
         try{
+          if(sessionStorage.getItem(INDEX_SESSION_KEY) !== "1") return false;
           const sess = getSession();
           if(!sess || !sess.user) return false;
-          const u = AUTH_TABLE.find(r => canonUserKey(r.username) === canonUserKey(sess.user));
+          const u = AUTH_TABLE.find(r => r.username === sess.user);
           if(!u){
             clearSession();
-            try{ sessionStorage.removeItem(SSO_KEY); }catch(_e){}
-            try{ localStorage.removeItem(CURRENT_KEY); }catch(_e){}
+            try{ localStorage.removeItem("tasunSso_v1"); }catch(_e){}
             return false;
           }
           if(String(u.level||"").toLowerCase() !== String(sess.role||"").toLowerCase()){
@@ -3201,14 +3085,15 @@ if(CURRENT_USER){
 
       function tryAutoLoginSSO(){
         try{
-          const raw = sessionStorage.getItem(SSO_KEY);
+          const raw = localStorage.getItem(SSO_KEY);
           if(!raw) return false;
           const sso = safeJsonParse(raw, null);
           if(!sso || !sso.name) return false;
+          const nonce = sessionStorage.getItem(SSO_NONCE_KEY) || "";
+          if(!nonce || nonce !== String(sso.nonce || "")) return false;
           if(sso.exp && Date.now() > Number(sso.exp)) return false;
-          const u = AUTH_TABLE.find(r => canonUserKey(r.username) === canonUserKey(String(sso.name).trim()));
+          const u = AUTH_TABLE.find(r => r.username === String(sso.name).trim());
           if(!u) return false;
-          setSession({ username: u.username, level: u.level });
           applyUser(u);
           return true;
         }catch(e){
@@ -3221,7 +3106,7 @@ if(CURRENT_USER){
         if(loginOverlay) loginOverlay.style.display = "flex";
         if(loginError) loginError.textContent = "";
         if(loginSub) loginSub.textContent = "";
-        try{ const pwdEl = $("#password"); if(pwdEl) pwdEl.value = ""; }catch(e){}
+        try{ if(loginPass) loginPass.value = ""; else $("#password").value = ""; }catch(e){}
         populateUserSelect();
         resetButtonsForLogout();
         if(userInfo){
@@ -3249,8 +3134,8 @@ if(CURRENT_USER){
         loginOverlay.style.display = "none";
         loginSub.textContent = "";
 
-        // v5.11：維持同瀏覽器工作階段登入，並補一份跨舊頁面相容橋接資料
-        writeSessionBridge({ user: user.username, username: user.username, role: user.level, level: user.level });
+        // v4.1: 登入狀態由 TasunAuthV4 以 Session Cookie + sessionStorage 維持（同瀏覽器工作階段一次登入即可）
+        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: user.level })); }catch(e){}
 
         CURRENT_USER = user;
 
@@ -3300,24 +3185,10 @@ if(CURRENT_USER){
       function scheduleAll(){ try{ scheduleLayout(); }catch(e){} }
       scheduleLayout = rafDebounce(layoutButtons);
 
-      try{
-        AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-      }catch(_e){
-        const fallback = getDefaultAuthTableLegacy(LEGACY_BUTTON_KEYS.length);
-        localStorage.setItem(AUTH_KEY, JSON.stringify(fallback));
-        AUTH_TABLE = fallback.map(r => normalizeRowFromStorage(r, LEGACY_BUTTON_KEYS.length)).filter(x => x.username);
-      }
+      AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
       buildMainButtonsDOM();
 
       ensureCloudMounted(null).catch(()=>{});
-
-      try{
-        if(!getSession()){
-          try{ sessionStorage.removeItem(SSO_KEY); }catch(_e){}
-          clearSessionBridge();
-          try{ localStorage.removeItem(SSO_KEY); }catch(_e){}
-        }
-      }catch(_e){}
 
       // ✅進入首頁：先嘗試同瀏覽器有效 session / SSO，失敗時一定顯示登入
       if(!(tryAutoLoginSSO() || tryEnterBySessionSilently() || autoEnterIfSessionValid())){
@@ -3337,7 +3208,7 @@ if(zenImg){
         e.preventDefault();
 
         const username = (usernameSel && usernameSel.value ? String(usernameSel.value) : "").trim();
-        const password = String($("#password") ? $("#password").value : "").trim();
+        const password = normalizeLoginPassword($("#password") ? $("#password").value : "");
 
         if(!username){
           loginError.textContent = "請選擇使用者";
@@ -3351,10 +3222,11 @@ if(zenImg){
         loginError.textContent = "登入中…";
 
         try{
-          // ✅登入前先修復權限表資料，確保四個基準帳號都存在，避免桌機/手機顯示不一致
-          syncAuthUsersBeforeLogin();
-          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-          const u = AUTH_TABLE.find(r => canonUserKey(r.username) === canonUserKey(username));
+          // ✅先拉雲端最新權限表，避免手機沿用舊 localStorage 導致桌機可登入、手機卻密碼錯誤
+          await ensureCloudAuthReady();
+
+          // ✅本機/雲端合併後的權限表驗證（不依賴登入前額外頁面跳轉）
+          const u = AUTH_TABLE.find(r => String(r.username||"").trim() === username);
 
           if(!u){
             loginError.textContent = "查無此使用者（請到「系統 / 權限」新增）";
@@ -3363,11 +3235,11 @@ if(zenImg){
 
           const pwHash = await sha256Hex(password);
           const storedHash = String(u.passHash || "").trim().toLowerCase();
-          const storedPlain = String(u.password || u.pass || "").trim();
-          const baseline = getDefaultAuthTableLegacy(LEGACY_BUTTON_KEYS.length).find(r => canonUserKey(r.user) === canonUserKey(username));
-          const baselineHash = String((baseline && baseline.passHash) || "").trim().toLowerCase();
 
-          const ok = (storedHash && pwHash === storedHash) || (baselineHash && pwHash === baselineHash) || (!!storedPlain && password === storedPlain);
+          // 兼容極舊資料：若仍有明碼 password 欄位，仍允許驗證，但成功後會由 migrateAuthToHashedIfNeeded 升級
+          const storedPlain = String(u.password || "").trim();
+
+          const ok = (storedHash && pwHash === storedHash) || (!!storedPlain && password === storedPlain);
 
           if(!ok){
             loginError.textContent = "密碼錯誤";
@@ -3376,6 +3248,7 @@ if(zenImg){
 
           // ✅建立同分頁/同瀏覽器工作階段登入（sessionStorage + session cookie）
           setSession({ username: u.username, level: u.level });
+
           // ✅建立 SSO token（子頁免重複登入）
           try{ setSSO({ name: u.username, role: u.level }); }catch(_e){}
 
@@ -3400,26 +3273,12 @@ if(zenImg){
 
       btnSwitch.addEventListener("click", () => {
         clearSession();
-        try{ localStorage.removeItem(CURRENT_KEY); }catch(_e){}
-        try{ sessionStorage.removeItem(SSO_KEY); }catch(_e){}
+        localStorage.removeItem(CURRENT_KEY);
         CURRENT_USER = null;
         showLogin();
         scheduleExport("switchUser");
         scheduleAll();
       });
-
-      const btnLogout = $("#btnLogout");
-      if(btnLogout){
-        btnLogout.addEventListener("click", () => {
-          clearSession();
-          try{ sessionStorage.removeItem(SSO_KEY); }catch(_e){}
-          try{ localStorage.removeItem(CURRENT_KEY); }catch(_e){}
-          CURRENT_USER = null;
-          showLogin();
-          scheduleExport("logout");
-          scheduleAll();
-        });
-      }
 
       btnTogglePwd.addEventListener("click", () => {
         const pwd = $("#password");
@@ -3457,8 +3316,8 @@ if(zenImg){
       if(!overlay) return;
       var hidden = getComputedStyle(overlay).display === 'none';
       var bodyLocked = document.body && document.body.classList.contains('locked');
-      var hasSession = /(?:^|; )tasun_session_v3=/.test(document.cookie || '');
-      if((bodyLocked || !hasSession) && hidden){
+      var noButtons = !document.querySelector('.nav-area .nav-btn:not([style*="display: none"])');
+      if((bodyLocked || noButtons) && hidden){
         overlay.style.display = 'flex';
         document.body.classList.add('locked');
       }
