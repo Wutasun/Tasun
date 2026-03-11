@@ -5,7 +5,7 @@
   <script>
   (function(){
     "use strict";
-    const TARGET_VER = "20260311_26";
+    const TARGET_VER = "20260311_27";
     const INDEX_SESSION_KEY = "tasunIndexSessionAuthed_v1";
     const SESSION_KEY = "tasunSessionLogin_v1";
     const CURRENT_KEY = "tasunCurrentUser_v1";
@@ -71,8 +71,8 @@
     }catch(e){}
   })();
   </script>
-  <script src="tasun-next-fix.js?v=20260311_26"></script>
-  <script src="tasun-global-auth-v65.js?v=20260311_26"></script>
+  <script src="tasun-next-fix.js?v=20260311_27"></script>
+  <script src="tasun-global-auth-v65.js?v=20260311_27"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Tasun 資料首頁 · 空無明</title>
@@ -84,7 +84,7 @@
 
   <script>
   (function(){
-    console.log('[TASUN BUILD] index_formal_online_v25_login_first_normal_window_fix 2026-03-11');
+    console.log('[TASUN BUILD] index_formal_online_v27_login_userlist_guard 2026-03-11');
     try{
       const dm = navigator.deviceMemory || 0;
       const conn = navigator.connection || {};
@@ -101,16 +101,16 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet">
-  <script src="tasun-cloudwrap-v4.js?v=20260311_26"></script>
-  <script src="tasun-auth-v4.js?v=20260311_26"></script>
-  <script src="tasun-guard-v4.js?v=20260311_26"></script>
+  <script src="tasun-cloudwrap-v4.js?v=20260311_27"></script>
+  <script src="tasun-auth-v4.js?v=20260311_27"></script>
+  <script src="tasun-guard-v4.js?v=20260311_27"></script>
 </head>
 
 <body class="locked booting">
   <script>
   (function () {
     "use strict";
-    const VER = String(window.TASUN_APP_VER || window.APP_VER || "").trim() || "20260311_26";
+    const VER = String(window.TASUN_APP_VER || window.APP_VER || "").trim() || "20260311_27";
     window.__CACHE_V = VER;
     window.__withV = window.__withV || function (u) {
       const vv = String(window.__CACHE_V || "").trim();
@@ -997,7 +997,17 @@ function runIndexApp(){
         const raw = safeJsonParse(localStorage.getItem(AUTH_KEY) || "null", null);
         const arr = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.users) ? raw.users : []);
         const baseline = getDefaultAuthTableLegacy(btnCount);
-        const merged = mergeAuthRowsKeepOrder(arr, baseline, btnCount);
+        let merged = mergeAuthRowsKeepOrder(arr, baseline, btnCount);
+
+        const baselineKeys = new Set(baseline.map(r => canonUserKey(r.user || r.username || "")).filter(Boolean));
+        const mergedKeys = new Set(merged.map(r => canonUserKey(r.username || r.user || "")).filter(Boolean));
+        const missingBaseline = Array.from(baselineKeys).some(k => !mergedKeys.has(k));
+        const noValidUsers = !merged.length;
+
+        if(noValidUsers || missingBaseline){
+          merged = mergeAuthRowsKeepOrder(baseline, merged, btnCount);
+        }
+
         const storageRows = merged.map(authRowToStorageShape).filter(Boolean);
         if(storageRows.length){
           try{ localStorage.setItem(AUTH_KEY, JSON.stringify(storageRows)); }catch(_e){}
@@ -1015,10 +1025,28 @@ function runIndexApp(){
         return legacy.map(r => normalizeRowFromStorage(r, btnCount));
       }
 
+      function ensureLoginUsersReady(btnCount){
+        let table = [];
+        try{
+          table = loadAuthTable(btnCount);
+        }catch(_e){ table = []; }
+
+        const baseline = getDefaultAuthTableLegacy(btnCount).map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
+        const wanted = new Set(baseline.map(x => canonUserKey(x.username)));
+        const seen = new Set((Array.isArray(table) ? table : []).map(x => canonUserKey(x.username)).filter(Boolean));
+        const missing = Array.from(wanted).some(k => !seen.has(k));
+
+        if(!Array.isArray(table) || !table.length || missing){
+          try{ localStorage.setItem(AUTH_KEY, JSON.stringify(getDefaultAuthTableLegacy(btnCount))); }catch(_e){}
+          table = baseline;
+        }
+        return table;
+      }
+
       function syncAuthUsersBeforeLogin(){
         try{
           repairAuthTableStorage(LEGACY_BUTTON_KEYS.length);
-          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+          AUTH_TABLE = ensureLoginUsersReady(LEGACY_BUTTON_KEYS.length);
           return true;
         }catch(_e){
           return false;
@@ -1279,7 +1307,7 @@ function getSession(){
           ROUTES = loadRoutes();
           NAV_ARR = loadNavButtonsSeedIfMissing();
           try{
-            AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+            AUTH_TABLE = ensureLoginUsersReady(LEGACY_BUTTON_KEYS.length);
           }catch(_e){
             const fallback = getDefaultAuthTableLegacy(LEGACY_BUTTON_KEYS.length);
             localStorage.setItem(AUTH_KEY, JSON.stringify(fallback));
@@ -2003,7 +2031,7 @@ if(CURRENT_USER){
         let table = [];
         try{
           syncAuthUsersBeforeLogin();
-          table = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+          table = ensureLoginUsersReady(LEGACY_BUTTON_KEYS.length);
         }catch(_e){
           table = [];
         }
@@ -2040,7 +2068,12 @@ if(CURRENT_USER){
         ph.selected = true;
         usernameSel.appendChild(ph);
 
-        const names = Array.from(new Set(AUTH_TABLE.map(r => String(r.username || '').trim()).filter(Boolean)));
+        let names = Array.from(new Set(AUTH_TABLE.map(r => String(r.username || '').trim()).filter(Boolean)));
+        if(!names.length){
+          names = getDefaultAuthTableLegacy(LEGACY_BUTTON_KEYS.length)
+            .map(r => String(r.user || r.username || "").trim())
+            .filter(Boolean);
+        }
         names.sort((a,b)=>a.localeCompare(b, "zh-Hant"));
         if(loginSub) loginSub.textContent = `使用者清單：本機/雲端共 ${names.length} 位　｜　版次：${String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '')}`;
         names.forEach(name => {
@@ -2179,7 +2212,7 @@ if(CURRENT_USER){
       scheduleLayout = rafDebounce(layoutButtons);
 
       try{
-        AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+        AUTH_TABLE = ensureLoginUsersReady(LEGACY_BUTTON_KEYS.length);
       }catch(_e){
         const fallback = getDefaultAuthTableLegacy(LEGACY_BUTTON_KEYS.length);
         localStorage.setItem(AUTH_KEY, JSON.stringify(fallback));
