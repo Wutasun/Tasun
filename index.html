@@ -20,7 +20,7 @@
   <!-- ✅（效能降載）低記憶體/省流量/減少動作 → 自動關閉高成本特效 -->
   <script>
   (function(){
-    console.log('[TASUN BUILD] index_formal_online_v18 2026-03-11');
+    console.log('[TASUN BUILD] index_formal_online_v19_name_route_bind_fix 2026-03-11');
 
     try{
       const dm = navigator.deviceMemory || 0;
@@ -37,7 +37,7 @@
 
   <!-- ✅全站版本 -->
   <script>
-    window.APP_VER = window.APP_VER || "20260311_18";
+    window.APP_VER = window.APP_VER || "20260311_19";
     window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
   </script>
 
@@ -1444,8 +1444,8 @@ function runIndexApp(){
         { sourceId:"metro",    label:"捷運汐止東湖線",     href:"汐東工程管理表.html", target:"" },
         { sourceId:"zhending", label:"臻鼎時代大廈管理表", href:"臻鼎管理表.html",     target:"" },
         { sourceId:"engdb",    label:"工程資料庫",         href:"工程資料庫.html",     target:"" },
-        { sourceId:"auth",     label:"系統/權限",         href:"權限表.html",         target:"" },
-        { sourceId:"cloud",    label:"雲端檔案",           href:"https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88", target:"_blank" }
+        { sourceId:"auth",     label:"系統/權限",          href:"權限表.html",         target:"" },
+        { sourceId:"cloud",    label:"雲端檔案",           href:"https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav", target:"_blank" }
       ];
 
       const FIXED_ROUTES = {
@@ -1904,36 +1904,48 @@ function runIndexApp(){
       function applyFixedRoutes(obj){
         const out = (obj && typeof obj === "object") ? { ...obj } : {};
         Object.keys(FIXED_ROUTES).forEach(k => { out[k] = FIXED_ROUTES[k]; });
-        out["btn1"] = "臻鼎管理表.html";
-        out["btn2"] = "汐東工程管理表.html";
-        out["btn3"] = "工程資料庫.html";
-        out["btn4"] = "https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav";
+
+        const fixedEntries = [
+          ["metro", "汐東工程管理表.html"],
+          ["捷運汐止東湖線", "汐東工程管理表.html"],
+          ["zhending", "臻鼎管理表.html"],
+          ["臻鼎時代大廈管理表", "臻鼎管理表.html"],
+          ["engdb", "工程資料庫.html"],
+          ["工程資料庫", "工程資料庫.html"],
+          ["cloud", "https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav"],
+          ["雲端檔案", "https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav"],
+          ["auth", "權限表.html"],
+          ["系統/權限", "權限表.html"],
+          ["系統 / 權限", "權限表.html"],
+          ["systemBtn", "權限表.html"]
+        ];
+        fixedEntries.forEach(([k, v]) => { out[k] = v; });
+
+        const navRows = safeJsonParse(localStorage.getItem(NAV_KEY) || "null", null);
+        if(Array.isArray(navRows)){
+          navRows.forEach(row => {
+            const id = String(row?.id || "").trim();
+            const sourceId = String(row?.sourceId || "").trim();
+            const label = String(row?.label || "").trim();
+            const lib = getLibraryItemBySourceId(sourceId);
+            const href = String((lib && lib.href) || out[sourceId] || out[label] || "").trim();
+            if(id && href) out[id] = href;
+          });
+        }
         delete out["btn5"];
-        out["systemBtn"] = "權限表.html";
         return out;
       }
 
       function loadRoutes(){
-        const seed = applyFixedRoutes({
-          "btn1": "臻鼎管理表.html",
-          "btn2": "汐東工程管理表.html",
-          "btn3": "工程資料庫.html",
-          "btn4": "https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav",
-          "systemBtn": "權限表.html"
-        });
-
         const raw = localStorage.getItem(ROUTE_KEY);
-        if(!raw){
-          localStorage.setItem(ROUTE_KEY, JSON.stringify(seed, null, 2));
-          return seed;
-        }
-
-        const parsed = safeJsonParse(raw, null);
+        const parsed = safeJsonParse(raw || "null", null);
         const base = (parsed && typeof parsed === "object") ? parsed : {};
-        const merged = applyFixedRoutes({ ...base, ...seed });
+        const merged = applyFixedRoutes(base);
 
-        if(JSON.stringify(base) !== JSON.stringify(merged)){
-          localStorage.setItem(ROUTE_KEY, JSON.stringify(merged, null, 2));
+        if(!raw || JSON.stringify(base) !== JSON.stringify(merged)){
+          const json = JSON.stringify(merged, null, 2);
+          localStorage.setItem(ROUTE_KEY, json);
+          localStorage.setItem(LEGACY_ROUTE_KEY, json);
         }
         return merged;
       }
@@ -1981,13 +1993,21 @@ function runIndexApp(){
         const label = String(cfg?.label || "").trim();
         const sourceId = String(cfg?.sourceId || "").trim();
         const directHref = String(cfg?.href || "").trim();
+        const normalizedLabel = label.replace(/[／]/g, "/").trim();
+        const libraryItem = getLibraryItemBySourceId(sourceId);
 
-        if(label && FIXED_ROUTES[label]) return FIXED_ROUTES[label];
-        if(id === METRO_ID) return METRO_HREF;
         if(directHref) return directHref;
+        if(sourceId && libraryItem && libraryItem.href) return libraryItem.href;
+        if(normalizedLabel){
+          const byLabel = getHomeButtonLibrary().find(x => String(x.label || "").replace(/[／]/g, "/").trim() === normalizedLabel);
+          if(byLabel && byLabel.href) return byLabel.href;
+        }
         if(routes && sourceId && routes[sourceId]) return routes[sourceId];
-        if(routes && routes[id]) return routes[id];
         if(routes && label && routes[label]) return routes[label];
+        if(routes && normalizedLabel && routes[normalizedLabel]) return routes[normalizedLabel];
+        if(routes && id && routes[id]) return routes[id];
+        if(label && FIXED_ROUTES[label]) return FIXED_ROUTES[label];
+        if(normalizedLabel && FIXED_ROUTES[normalizedLabel]) return FIXED_ROUTES[normalizedLabel];
 
         const guess = labelToFile(label);
         if(FIXED_ROUTES[guess]) return FIXED_ROUTES[guess];
@@ -2194,6 +2214,31 @@ function getSession(){
   return null;
 }
 
+      function userKey(name){
+        return String(name || "").trim().toLowerCase();
+      }
+
+      function loadPermMatrixSafe(){
+        const raw = safeJsonParse(localStorage.getItem(PERM_MATRIX_KEY) || "null", null);
+        if(raw && typeof raw === "object"){
+          if(!raw.users || typeof raw.users !== "object") raw.users = {};
+          return raw;
+        }
+        return { users:{} };
+      }
+
+      function getPermFromMatrix(pm, username, entryFile, btnId){
+        try{
+          const uk = userKey(username);
+          const entry = String(entryFile || "index.html").trim() || "index.html";
+          return !!(pm && pm.users && pm.users[uk] && pm.users[uk][entry] && pm.users[uk][entry][btnId]);
+        }catch(e){
+          return false;
+        }
+      }
+
+      const loginPass = document.getElementById("password");
+
       const ROLE_MAP = {
         "btn1": ["admin","write","read"],
         "btn2": ["admin","write","read"],
@@ -2242,11 +2287,13 @@ function getSession(){
 
         BTN_CONFIGS = NAV_ARR.map(x => {
           const id = String(x?.id || "").trim();
-          const label = String(x?.label || "").trim();
           const sourceId = String(x?.sourceId || "").trim();
+          const lib = getLibraryItemBySourceId(sourceId);
+          const label = String(x?.label || (lib && lib.label) || "").trim();
           const roles = ROLE_MAP[id] || ["admin","write","read"];
-          const target = (sourceId === "cloud") ? "_blank" : "";
-          return { id, label, sourceId, roles, target };
+          const target = String((lib && lib.target) || (sourceId === "cloud" ? "_blank" : "")).trim();
+          const href = String((lib && lib.href) || "").trim();
+          return { id, label, sourceId, href, roles, target };
         }).filter(cfg => String(cfg.sourceId || "").toLowerCase() !== "auth").concat([SYSTEM_BTN]);
 
         mainNavBtns = [];
@@ -3085,15 +3132,11 @@ if(CURRENT_USER){
 
       function tryAutoLoginSSO(){
         try{
-          const raw = localStorage.getItem(SSO_KEY);
-          if(!raw) return false;
-          const sso = safeJsonParse(raw, null);
+          const sso = getSSO();
           if(!sso || !sso.name) return false;
-          const nonce = sessionStorage.getItem(SSO_NONCE_KEY) || "";
-          if(!nonce || nonce !== String(sso.nonce || "")) return false;
-          if(sso.exp && Date.now() > Number(sso.exp)) return false;
-          const u = AUTH_TABLE.find(r => r.username === String(sso.name).trim());
+          const u = AUTH_TABLE.find(r => String(r.username || "").trim() === String(sso.name).trim());
           if(!u) return false;
+          setSession({ username: u.username, level: u.level });
           applyUser(u);
           return true;
         }catch(e){
@@ -3273,7 +3316,7 @@ if(zenImg){
 
       btnSwitch.addEventListener("click", () => {
         clearSession();
-        localStorage.removeItem(CURRENT_KEY);
+        try{ localStorage.removeItem(CURRENT_KEY); }catch(_e){}
         CURRENT_USER = null;
         showLogin();
         scheduleExport("switchUser");
