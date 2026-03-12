@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Tasun｜捷運汐東線事項記錄 連線下載診斷</title>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <style>
+    body{font-family:Arial,"Noto Sans TC",sans-serif;background:#f5f6f7;color:#222;margin:0;padding:20px}
+    .wrap{max-width:1200px;margin:0 auto}
+    .card{background:#fff;border:1px solid #ddd;border-radius:14px;padding:16px;margin-bottom:16px;box-shadow:0 4px 14px rgba(0,0,0,.05)}
+    h1{font-size:28px;margin:0 0 12px}
+    h2{font-size:18px;margin:0 0 10px}
+    .row{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
+    button{border:1px solid #bbb;border-radius:999px;padding:10px 16px;background:#fff;cursor:pointer;font-weight:700}
+    button:hover{background:#f0f0f0}
+    .ok{color:#0b7a28;font-weight:700}
+    .bad{color:#b42318;font-weight:700}
+    .warn{color:#9a6700;font-weight:700}
+    .info{color:#175cd3;font-weight:700}
+    pre{background:#111;color:#f7f7f7;border-radius:12px;padding:14px;overflow:auto;white-space:pre-wrap;word-break:break-word;max-height:420px}
+    table{width:100%;border-collapse:collapse}
+    td,th{border:1px solid #ddd;padding:8px;text-align:left;font-size:14px;vertical-align:top}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .tip{margin-top:10px;padding:10px 12px;border-radius:10px;background:#fff7e6;border:1px solid #f7d28b;color:#8a5300;line-height:1.6}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>捷運汐東線事項記錄｜連線下載診斷</h1>
+    <div>用途：一步一步確認 <b>桌機是否真的有連到版本檔、資源檔、Worker health、Worker read、以及本機 IndexedDB / localStorage</b>。</div>
+    <div class="tip" id="envTip"></div>
+    <div class="row">
+      <button id="btnStep1">Step 1：測試版本檔</button>
+      <button id="btnStep2">Step 2：測試資源檔</button>
+      <button id="btnStep3">Step 3：測試 Worker Health</button>
+      <button id="btnStep4">Step 4：測試 Worker Read</button>
+      <button id="btnStep5">Step 5：檢查本機資料</button>
+      <button id="btnAll">全部測試</button>
+      <button id="btnClear">清空結果</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>即時結果</h2>
+    <table>
+      <tbody id="summary"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>詳細輸出</h2>
+    <pre id="log"></pre>
+  </div>
+</div>
+<script>
+(function(){
+  'use strict';
+  const PAGE_KEY='sxdh-notes';
+  const FALLBACK_API_BASE='https://tasun-worker.wutasun.workers.dev';
+  const logEl=document.getElementById('log');
+  const sumEl=document.getElementById('summary');
+  const envTip=document.getElementById('envTip');
+  const isFile=(location.protocol==='file:');
+  const state={};
+
+  function now(){return new Date().toLocaleString('zh-Hant-TW',{hour12:false});}
+  function addLog(title,obj){
+    const head=`\n[${now()}] ${title}\n`;
+    let body='';
+    if(typeof obj==='string') body=obj;
+    else {
+      try{body=JSON.stringify(obj,null,2);}catch(e){body=String(obj);}
+    }
+    logEl.textContent += head + body + '\n';
+    logEl.scrollTop=logEl.scrollHeight;
+  }
+  function setSummary(k,v,cls){ state[k]={v,cls}; renderSummary(); }
+  function renderSummary(){
+    sumEl.innerHTML='';
+    Object.keys(state).forEach(k=>{
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<th style="width:230px">${k}</th><td class="${state[k].cls||''}">${state[k].v}</td>`;
+      sumEl.appendChild(tr);
+    });
+  }
+  function norm(s){return (s===undefined||s===null)?'':String(s).trim();}
+  function addV(url,ver){
+    try{const u=new URL(url,location.href); if(ver) u.searchParams.set('v',ver); u.searchParams.set('_',Date.now()); return u.toString();}
+    catch(e){return url + (url.includes('?')?'&':'?') + '_=' + Date.now();}
+  }
+  function safeParse(text){ try{return JSON.parse(text);}catch(e){ return null; } }
+  function fileModeError(step, target){
+    const msg=`目前是 file:// 本機檔模式，瀏覽器會攔截對相對檔案的 fetch。${step} 無法直接讀取 ${target}。請改用 https:// 正式站台或 http://127.0.0.1 本機伺服器測試。`;
+    return { ok:false, status:0, url:target, fileMode:true, error:msg };
+  }
+  async function fetchJson(url, opt){
+    opt=opt||{};
+    if(isFile && !opt.allowFileFetch && !/^https?:/i.test(String(url||''))){
+      return fileModeError(opt.step||'此步驟', url);
+    }
+    try{
+      const res=await fetch(url,{cache:'no-store'});
+      const text=await res.text();
+      const json=safeParse(text);
+      return {ok:res.ok,status:res.status,url:res.url,text,json};
+    }catch(e){
+      return {ok:false,status:0,url, error:String(e && e.message || e), stack:String(e && e.stack || '')};
+    }
+  }
+  async function step1(){
+    const r=await fetchJson(addV('tasun-version.json'), {step:'Step 1'});
+    if(!r.ok){
+      setSummary('Step 1 版本檔', r.fileMode ? '停止｜file:// 模式不可直接抓相對版本檔' : `失敗｜${r.error||('HTTP '+r.status)}`, r.fileMode?'warn':'bad');
+      addLog('Step 1 tasun-version.json', r);
+      return '';
+    }
+    const ver=norm(r.json && (r.json.version||r.json.ver||r.json.appVersion||r.json.appVer));
+    setSummary('Step 1 版本檔', `成功｜HTTP ${r.status}｜版本 ${ver||'空白'}`, ver?'ok':'warn');
+    addLog('Step 1 tasun-version.json', {status:r.status, ok:r.ok, version:ver, json:r.json||r.text.slice(0,1000)});
+    return ver;
+  }
+  async function step2(ver){
+    const r=await fetchJson(addV('tasun-resources.json', ver||''), {step:'Step 2'});
+    if(!r.ok){
+      setSummary('Step 2 資源檔', r.fileMode ? '停止｜file:// 模式不可直接抓相對資源檔' : `失敗｜${r.error||('HTTP '+r.status)}`, r.fileMode?'warn':'bad');
+      addLog('Step 2 tasun-resources.json', r);
+      return {json:null,pageCfg:null,apiBase:FALLBACK_API_BASE,fileMode:!!r.fileMode};
+    }
+    let pageCfg=null;
+    const json=r.json||{};
+    if(json.resources && typeof json.resources==='object'){
+      pageCfg=json.resources['捷運汐東線事項記錄.html']||json.resources[PAGE_KEY]||json.resources['*']||null;
+    }
+    const apiBase=norm(pageCfg && pageCfg.apiBase || json.apiBase || FALLBACK_API_BASE);
+    setSummary('Step 2 資源檔', `成功｜HTTP ${r.status}｜apiBase ${apiBase||'未找到'}`, apiBase?'ok':'warn');
+    addLog('Step 2 tasun-resources.json', {status:r.status, ok:r.ok, apiBase, pageCfg, topLevel:json});
+    return {json,pageCfg,apiBase,fileMode:false};
+  }
+  function buildCfg(resources){
+    const pageCfg=(resources && resources.pageCfg)||{};
+    const top=(resources && resources.json)||{};
+    const apiBase=norm((resources && resources.apiBase) || pageCfg.apiBase || top.apiBase || FALLBACK_API_BASE);
+    const endpoints=Object.assign({health:'/api/tasun/health',read:'/api/tasun/read',merge:'/api/tasun/merge'}, top.endpoints||{}, pageCfg.endpoints||{});
+    return {apiBase,endpoints};
+  }
+  async function fetchFirstOk(urls){
+    const tries=[];
+    for(const url of urls){
+      try{
+        const res=await fetch(url,{cache:'no-store'});
+        const text=await res.text();
+        const json=safeParse(text);
+        tries.push({url,status:res.status,ok:res.ok,body:json||text.slice(0,1000)});
+        if(res.ok) return {hit:{url,status:res.status,ok:res.ok,body:json||text.slice(0,1000)},tries};
+      }catch(e){ tries.push({url,error:String(e && e.message || e)}); }
+    }
+    return {hit:null,tries};
+  }
+  async function step3(resources){
+    const cfg=buildCfg(resources);
+    const base=cfg.apiBase.replace(/\/+$/,'');
+    const urls=[cfg.endpoints.health,'/api/ping','/api/tasun/ping','/api/health'].map(p=>/^https?:/i.test(p)?p:(base + (p.startsWith('/')?'':'/') + p));
+    const out=await fetchFirstOk(urls);
+    setSummary('Step 3 Worker Health', out.hit ? `成功｜${out.hit.status}｜${out.hit.url}` : '失敗｜全部 health 路徑都未成功', out.hit?'ok':'bad');
+    addLog('Step 3 Worker Health', Object.assign({apiBase:cfg.apiBase}, out));
+    return cfg;
+  }
+  function extractRows(payload){
+    const p=payload&&typeof payload==='object'?(payload.payload||payload.data||payload.result||payload):payload;
+    if(Array.isArray(p)) return p;
+    if(!p||typeof p!=='object') return [];
+    if(Array.isArray(p.db)) return p.db;
+    if(Array.isArray(p.rows)) return p.rows;
+    if(Array.isArray(p.items)) return p.items;
+    if(Array.isArray(p.records)) return p.records;
+    return [];
+  }
+  async function step4(resources){
+    const cfg=buildCfg(resources);
+    const base=cfg.apiBase.replace(/\/+$/,'');
+    const cands=[cfg.endpoints.read,'/api/tasun/read','/api/tasun/pull','/api/read','/api/pull']
+      .map(p=>/^https?:/i.test(p)?p:(base + (p.startsWith('/')?'':'/') + p))
+      .map(u=>u + (u.includes('?')?'&':'?') + 'key=' + encodeURIComponent(PAGE_KEY) + '&_=' + Date.now());
+    const out=await fetchFirstOk(cands);
+    if(out.hit){
+      const rows=extractRows(out.hit.body);
+      const count=rows.length;
+      setSummary('Step 4 Worker Read', `成功｜${out.hit.status}｜讀到 ${count} 筆`, count>0?'ok':'warn');
+      addLog('Step 4 Worker Read', {apiBase:cfg.apiBase, hit:out.hit, tries:out.tries, rowCount:count, firstRow:rows[0]||null});
+    }else{
+      setSummary('Step 4 Worker Read', '失敗｜read/pull 路徑都未成功', 'bad');
+      addLog('Step 4 Worker Read', Object.assign({apiBase:cfg.apiBase}, out));
+    }
+  }
+  async function inspectIDB(){
+    return await new Promise((resolve)=>{
+      const req=indexedDB.open('tasun_notes_idb_v1');
+      req.onsuccess=()=>{
+        const db=req.result;
+        if(!db.objectStoreNames.contains('rows')) return resolve({ok:true, rows:[], meta:null, note:'rows store 不存在'});
+        const tx=db.transaction(['rows','meta'],'readonly');
+        const idx=tx.objectStore('rows').index('by_page');
+        const rowsReq=idx.getAll(PAGE_KEY);
+        const metaReq=tx.objectStore('meta').get(PAGE_KEY);
+        tx.oncomplete=()=>resolve({ok:true, rows:rowsReq.result||[], meta:metaReq.result||null});
+        tx.onerror=()=>resolve({ok:false, error:String(tx.error||'idb tx error')});
+      };
+      req.onerror=()=>resolve({ok:false,error:String(req.error||'idb open error')});
+      req.onupgradeneeded=()=>{};
+    });
+  }
+  async function step5(){
+    const localKeys=[];
+    for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(k) localKeys.push(k); }
+    const sessionKeys=[];
+    for(let i=0;i<sessionStorage.length;i++){ const k=sessionStorage.key(i); if(k) sessionKeys.push(k); }
+    const idb=await inspectIDB();
+    const localMain=(safeParse(localStorage.getItem('tasunSxdhNotes_v1')||'[]')||[]).length||0;
+    const localSnap=(safeParse(localStorage.getItem('tasunSxdhNotes_cloudSnapshot_v1')||'[]')||[]).length||0;
+    const sessionSnap=(safeParse(sessionStorage.getItem('tasunSxdhNotes_cloudSnapshot_v1')||'[]')||[]).length||0;
+    const idbRows=(idb.rows||[]).length;
+    const msg=`local主資料 ${localMain} 筆｜local快照 ${localSnap} 筆｜session快照 ${sessionSnap} 筆｜IDB ${idbRows} 筆`;
+    setSummary('Step 5 本機資料', msg, (localMain||localSnap||sessionSnap||idbRows)?'ok':'bad');
+    addLog('Step 5 本機資料', {
+      localMainCount:localMain,
+      localSnapshotCount:localSnap,
+      sessionSnapshotCount:sessionSnap,
+      idbRowsCount:idbRows,
+      idbMeta:idb.meta||null,
+      importantLocalKeys: localKeys.filter(k=>/tasun|sxdh|汐東|捷運/i.test(k)).sort(),
+      importantSessionKeys: sessionKeys.filter(k=>/tasun|sxdh|汐東|捷運/i.test(k)).sort(),
+      firstLocalRow:(safeParse(localStorage.getItem('tasunSxdhNotes_v1')||'[]')||[])[0]||null,
+      firstSnapshotRow:(safeParse(localStorage.getItem('tasunSxdhNotes_cloudSnapshot_v1')||'[]')||[])[0]||null,
+      firstIdbRow:(idb.rows||[])[0]||null
+    });
+  }
+  async function runAll(){
+    try{
+      const ver=await step1();
+      const res=await step2(ver);
+      await step3(res);
+      await step4(res);
+      await step5();
+    }catch(e){
+      addLog('全部測試失敗', String(e&&e.stack||e));
+      setSummary('全部測試', String(e&&e.message||e), 'bad');
+    }
+  }
+  async function wrap(fn, key){
+    try{ return await fn(); }
+    catch(e){
+      const msg=String(e&&e.message||e);
+      setSummary(key, msg, 'bad');
+      addLog(key+' 例外', {message:msg, stack:String(e&&e.stack||'')});
+      return null;
+    }
+  }
+
+  document.getElementById('btnStep1').onclick=()=>wrap(step1,'Step 1 版本檔');
+  document.getElementById('btnStep2').onclick=async()=>wrap(async()=>step2(await step1()),'Step 2 資源檔');
+  document.getElementById('btnStep3').onclick=async()=>wrap(async()=>step3(await step2(await step1())),'Step 3 Worker Health');
+  document.getElementById('btnStep4').onclick=async()=>wrap(async()=>step4(await step2(await step1())),'Step 4 Worker Read');
+  document.getElementById('btnStep5').onclick=()=>wrap(step5,'Step 5 本機資料');
+  document.getElementById('btnAll').onclick=()=>runAll();
+  document.getElementById('btnClear').onclick=()=>{logEl.textContent=''; for(const k in state) delete state[k]; renderSummary(); initEnv();};
+
+  function initEnv(){
+    const mode = isFile ? '目前是 file:// 本機檔模式。Step 1 / Step 2 讀相對 JSON 會被 Chrome 擋掉，這不是 Worker 壞掉。請改用 https:// 正式站台，或先在資料夾執行 python -m http.server 8080 再用 http://127.0.0.1:8080/ 開啟本頁。' : '目前是正常網頁模式，可直接測版本檔、資源檔與 Worker。';
+    envTip.textContent = mode;
+    setSummary('執行環境', `${location.protocol}//${location.host || '(local file)'}`, isFile?'warn':'info');
+  }
+
+  initEnv();
+  addLog('診斷頁已載入', {href:location.href,userAgent:navigator.userAgent,protocol:location.protocol});
+})();
+</script>
+</body>
+</html>
