@@ -1964,6 +1964,19 @@ function getVisibleRows(){
     function renderTable(rows){
       var tb = $("tbody");
       tb.innerHTML = "";
+      if(!rows || !rows.length){
+        var tr0 = document.createElement("tr");
+        var td0 = document.createElement("td");
+        td0.colSpan = 9;
+        td0.style.textAlign = "center";
+        td0.style.padding = "24px 12px";
+        td0.style.color = "rgba(90,60,20,.72)";
+        td0.style.fontWeight = "800";
+        td0.textContent = "目前沒有可顯示資料；系統會自動嘗試雲端同步。";
+        tr0.appendChild(td0);
+        tb.appendChild(tr0);
+        return;
+      }
       for(var i=0;i<rows.length;i++){
         var r = rows[i];
         var tr = document.createElement("tr");
@@ -2026,6 +2039,13 @@ function getVisibleRows(){
     function renderCards(rows){
       var box = $("cards");
       box.innerHTML = "";
+      if(!rows || !rows.length){
+        var empty = document.createElement("div");
+        empty.className = "noteCard";
+        empty.innerHTML = '<div class="noteBody" style="text-align:center;">目前沒有可顯示資料；系統會自動嘗試雲端同步。</div>';
+        box.appendChild(empty);
+        return;
+      }
       for(var i=0;i<rows.length;i++){
         var r = rows[i];
         var card = document.createElement("div");
@@ -2831,7 +2851,14 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       $("btnEdit").addEventListener("click", openEdit);
       $("btnAdd").addEventListener("click", openAdd);
 
-      $("btnCloud").addEventListener("click", syncFromCloud);
+      $("btnCloud").addEventListener("click", async function(){
+        try{
+          await syncFromCloud({ silent:false });
+          await syncToCloud({ silent:true, reason:"manual-cloud", fullUpload:false });
+        }catch(e){
+          try{ scheduleSync("manual-cloud-retry", true); }catch(_e){}
+        }
+      });
       $("btnExport").addEventListener("click", exportBackup);
       $("btnClear").addEventListener("click", function(){
         $("qText").value="";
@@ -2887,13 +2914,8 @@ $("btnSave").addEventListener("click", async function(){
         upsertRow(row);
         state.selectedUid = row.uid;
         closeMask();
-        // ✅ 儲存後立即上傳雲端；失敗則保留待同步並自動重試
-        try{
-          await syncToCloud({ silent:true, reason:"save", fullUpload:false });
-        }catch(e){
-          try{ state.cloud.ok = false; refresh(); }catch(_e){}
-          scheduleSync("save-retry", true);
-        }
+        // ✅ 自動同步：不阻塞 UI（離線會自動重試）
+        scheduleSync("save", true);
       });
 
       $("btnDelete").addEventListener("click", async function(){
@@ -2902,13 +2924,8 @@ $("btnSave").addEventListener("click", async function(){
         if(!confirm("確定刪除？（可在雲端同步後仍保留刪除狀態）")) return;
         deleteRow(state.selectedUid);
         closeMask();
-        // ✅ 刪除後立即上傳雲端；失敗則保留待同步並自動重試
-        try{
-          await syncToCloud({ silent:true, reason:"delete", fullUpload:false });
-        }catch(e){
-          try{ state.cloud.ok = false; refresh(); }catch(_e){}
-          scheduleSync("delete-retry", true);
-        }
+        // ✅ 自動同步：不阻塞 UI（離線會自動重試）
+        scheduleSync("delete", true);
       });
 
       // prompt
@@ -2982,7 +2999,9 @@ $("btnSave").addEventListener("click", async function(){
 
         try{ wire(); }catch(e){}
         try{ refresh(); }catch(e){}
-        try{ cloudHealth(); }catch(e){}
+        try{ await cloudHealth(); }catch(e){}
+        try{ await syncFromCloud({ silent:true }); }catch(e){}
+        try{ refresh(); }catch(e){}
         try{ if(!cur) openLogin(); }catch(e){}
 
         try{
@@ -3002,6 +3021,21 @@ $("btnSave").addEventListener("click", async function(){
         console.error(e);
       }
     }
+
+    window.addEventListener("storage", async function(e){
+      var k = String((e && e.key) || "");
+      if(k && [DB_KEY, COUNTER_KEY, READ_MODE_KEY, AUTH_KEY, CURRENT_KEY].indexOf(k)===-1) return;
+      try{
+        var p2 = await loadDb();
+        state.db = p2.db;
+        state.counter = p2.counter;
+        var cur2 = getCurrentUser();
+        if(cur2) applyUser(cur2);
+        state.readMode = localStorage.getItem(READ_MODE_KEY)==="1";
+        applyReadMode(state.readMode);
+        refresh();
+      }catch(err){}
+    });
 
     boot().catch(function(e){ console.error(e); });
   })();
