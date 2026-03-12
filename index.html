@@ -1076,7 +1076,9 @@
 
     /* ===== 自製下拉（保留） ===== */
     .select-wrap{ position:relative; width:100%; }
-    .select-wrap select{ position:absolute; inset:0; opacity:0; pointer-events:none; }
+    .select-wrap select{ position:absolute; inset:0; opacity:0; pointer-events:none; z-index:3; -webkit-appearance:none; appearance:none; background:transparent; border:0; color:transparent; }
+    .select-wrap.native-touch select{ opacity:.01; pointer-events:auto; }
+    .select-wrap.native-touch .select-menu{ display:none !important; }
     .select-display{
       width:100%; display:flex; align-items:center; justify-content:flex-start; text-align:left;
       padding: .78rem 2.90rem .78rem .96rem;
@@ -1274,7 +1276,7 @@
         <div class="login-field">
           <label for="password">密碼</label>
           <div class="login-pwd-wrapper">
-            <input id="password" name="password" type="password" autocomplete="current-password" class="login-pwd-input" />
+            <input id="password" name="password" type="password" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" class="login-pwd-input" />
             <button type="button" class="btn-eye-login" id="btnTogglePwd">👁</button>
           </div>
         </div>
@@ -1384,6 +1386,7 @@ function runIndexApp(){
       const CURRENT_KEY = "tasunCurrentUser_v1";
     // ====== ✅SSO：全站免重複登入（由 index 建立 token，子頁讀取 token 直接通過） ======
     const SSO_KEY = "tasunSso_v1";
+    const SSO_NONCE_KEY = "tasunSsoNonce_v1";
     const SSO_TTL_MS = 1000 * 60 * 60 * 12; // 12 小時（可自行調整）
 
     // ✅SSO 角色推斷（避免 inferRole 未定義導致 setSSO 失敗）
@@ -1476,42 +1479,36 @@ function runIndexApp(){
       const usernameSel = document.getElementById("username");
       const usernameDisplay = document.getElementById("usernameDisplay");
       const usernameMenu = document.getElementById("usernameMenu");
+      const IS_TOUCH_DEVICE = (function(){
+        try{
+          return !!(("ontouchstart" in window) || (navigator.maxTouchPoints > 0) || (window.matchMedia && window.matchMedia("(pointer: coarse)").matches));
+        }catch(e){ return false; }
+      })();
 
-      /* =========================
-         ✅雲端（index.html：多個 localStorage key 同步）Type (B)
-         resourceKey：tasun-index-db
-         本頁本地資料來源（keys 清單）：
-           - tasunAuthTable_v1  (AUTH_KEY)
-           - tasunNavButtons_v1 (NAV_KEY)
-           - tasunNavRoutes_v1  (ROUTE_KEY)
-         雲端 rows 結構（payload.db）：
-           [{ id:1, k:"tasunAuthTable_v1",  v:"..." }, ...]
-         合併策略：saveMerged(mode:"merge") → 多人同時寫入自動合併、不互相覆蓋
-         UI：維持 kit 預設（右下角），不改頁面 UI
-         ========================= */
-      const CLOUD_RES_URL = "tasun-resources.json";
-      const CLOUD_RESOURCE_KEY = String(window.TASUN_INDEX_CLOUD_KEY || "tasun-index-db").trim() || "tasun-index-db";
-      const CLOUD_KEYS = [AUTH_KEY, NAV_KEY, ROUTE_KEY];
-      const CLOUD_KEY_SET = new Set(CLOUD_KEYS);
-
-      let cloudCtrl = null;
-      let cloudApplying = false;
-      let cloudSaveTimer = 0;
-
-      function loadScriptOnce(src){
-        return new Promise((resolve)=>{
-          try{
-            const id = "tasunScript__" + src;
-            if(document.getElementById(id)) return resolve(true);
-            const s = document.createElement("script");
-            s.id = id;
-            s.src = src;
-            s.async = true;
-            s.onload = ()=>resolve(true);
-            s.onerror = ()=>resolve(false);
-            document.head.appendChild(s);
-          }catch(e){ resolve(false); }
-        });
+      function enableNativeUsernameSelectIfNeeded(){
+        try{
+          if(!usernameWrap || !usernameSel || !usernameDisplay) return;
+          usernameWrap.classList.add("native-touch");
+          usernameSel.setAttribute("size", "1");
+          usernameSel.style.pointerEvents = "auto";
+          usernameSel.style.opacity = "0.01";
+          usernameSel.style.zIndex = "3";
+          usernameSel.removeAttribute("disabled");
+          usernameSel.addEventListener("change", function(){
+            syncUsernameDisplay();
+            closeUsernameMenu();
+          });
+          usernameSel.addEventListener("input", function(){
+            syncUsernameDisplay();
+          });
+          if(usernameDisplay){
+            usernameDisplay.addEventListener("click", function(){
+              try{ usernameSel.focus({preventScroll:true}); }catch(e){}
+              try{ usernameSel.click(); }catch(e){}
+              try{ if(typeof usernameSel.showPicker === "function") usernameSel.showPicker(); }catch(e){}
+            });
+          }
+        }catch(e){}
       }
 
       const INDEX_KEY_UID_MAP_KEY = "tasunIndexKeyUidMap_v1";
@@ -2755,7 +2752,7 @@ if(CURRENT_USER){
         const idx = items.findIndex(it => (it.dataset.value || "") === (usernameSel.value || ""));
         setActiveIndex(idx >= 0 ? idx : 0, true);
       }
-      function toggleUsernameMenu(){ if(isMenuOpen()) closeUsernameMenu(); else openUsernameMenu(); }
+      function toggleUsernameMenu(){ if(IS_TOUCH_DEVICE){ try{ usernameSel.focus({preventScroll:true}); }catch(e){} try{ usernameSel.click(); }catch(e){} return; } if(isMenuOpen()) closeUsernameMenu(); else openUsernameMenu(); }
 
       function syncUsernameDisplay(){
         if(!usernameSel || !usernameDisplay) return;
@@ -2893,6 +2890,7 @@ if(CURRENT_USER){
         if(isMenuOpen() && !usernameWrap.contains(e.target)) closeUsernameMenu();
       });
       document.addEventListener("keydown", (e) => { if(e.key === "Escape") closeUsernameMenu(); });
+      enableNativeUsernameSelectIfNeeded();
 
       function populateUserSelect(){
         AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
@@ -2926,6 +2924,43 @@ if(CURRENT_USER){
         });
 
         refreshUsernamePicker();
+      }
+
+      function normalizeLoginPassword(v){
+        let s = String(v == null ? "" : v);
+        try{ s = s.normalize("NFKC"); }catch(e){}
+        s = s.replace(/[​-‍﻿]/g, "");
+        s = s.replace(/ /g, " ");
+        s = s.replace(/[
+	]/g, "");
+        return s.trim();
+      }
+
+      async function pullCloudAuthForLogin(){
+        try{
+          if(loginSub) loginSub.textContent = "正在讀取雲端權限資料…";
+          const ctrl = await ensureCloudMounted(null);
+          if(ctrl && typeof ctrl.pullNow === "function"){
+            await Promise.race([
+              ctrl.pullNow(),
+              new Promise((_, reject)=>setTimeout(()=>reject(new Error("雲端讀取逾時")), 4000))
+            ]).catch(()=>null);
+          }
+        }catch(e){}
+        AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+        try{ populateUserSelect(); }catch(e){}
+        return AUTH_TABLE;
+      }
+
+      async function preloadLoginAuthSources(){
+        try{
+          await pullCloudAuthForLogin();
+          if(loginSub){
+            loginSub.textContent = AUTH_TABLE.length ? "已讀取雲端 / 本機權限資料" : "未讀到雲端權限，使用本機資料";
+          }
+        }catch(e){
+          if(loginSub) loginSub.textContent = "未讀到雲端權限，使用本機資料";
+        }
       }
 
       function tryEnterBySessionSilently(){
@@ -2972,16 +3007,25 @@ if(CURRENT_USER){
         document.body.classList.add("locked");
         if(loginOverlay) loginOverlay.style.display = "flex";
         if(loginError) loginError.textContent = "";
-        if(loginSub) loginSub.textContent = "";
+        if(loginSub) loginSub.textContent = "正在載入登入資料…";
         try{ if(loginPass) loginPass.value = ""; else $("#password").value = ""; }catch(e){}
         populateUserSelect();
+        preloadLoginAuthSources().catch(()=>{});
         resetButtonsForLogout();
         if(userInfo){
           userInfo.textContent = "目前使用者：未登入";
           userInfo.setAttribute("data-text", "目前使用者：未登入");
         }
         try{ scheduleAll(); }catch(e){}
-        setTimeout(() => { try{ usernameDisplay && usernameDisplay.focus(); }catch(e){} }, 0);
+        setTimeout(() => {
+          try{
+            if(usernameSel && usernameSel.options && usernameSel.options.length > 1 && !usernameSel.value){
+              usernameSel.selectedIndex = 1;
+              syncUsernameDisplay();
+            }
+            usernameDisplay && usernameDisplay.focus();
+          }catch(e){}
+        }, 0);
       }
 
       function autoEnterIfSessionValid(){
@@ -3075,7 +3119,7 @@ if(zenImg){
         e.preventDefault();
 
         const username = (usernameSel && usernameSel.value ? String(usernameSel.value) : "").trim();
-        const password = String($("#password") ? $("#password").value : "").trim();
+        const password = normalizeLoginPassword(String($("#password") ? $("#password").value : ""));
 
         if(!username){
           loginError.textContent = "請選擇使用者";
@@ -3087,46 +3131,43 @@ if(zenImg){
         }
 
         loginError.textContent = "登入中…";
+        if(loginSub) loginSub.textContent = "先讀取雲端權限，再進行密碼比對…";
 
         try{
-          // ✅本機權限表驗證（不依賴外部 Worker，避免登入畫面消失/按鍵不顯示）
-          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-          const u = AUTH_TABLE.find(r => String(r.username||"").trim() === username);
+          await pullCloudAuthForLogin();
+
+          const uname = String(username || "").trim().toLowerCase();
+          const u = AUTH_TABLE.find(r => String(r.username||"").trim().toLowerCase() === uname);
 
           if(!u){
             loginError.textContent = "查無此使用者（請到「系統 / 權限」新增）";
+            if(loginSub) loginSub.textContent = "已比對雲端 / 本機權限資料";
             return;
           }
 
           const pwHash = await sha256Hex(password);
           const storedHash = String(u.passHash || "").trim().toLowerCase();
-
-          // 兼容極舊資料：若仍有明碼 password 欄位，仍允許驗證，但成功後會由 migrateAuthToHashedIfNeeded 升級
-          const storedPlain = String(u.password || "").trim();
-
+          const storedPlain = normalizeLoginPassword(String(u.password || "").trim());
           const ok = (storedHash && pwHash === storedHash) || (!!storedPlain && password === storedPlain);
 
           if(!ok){
             loginError.textContent = "密碼錯誤";
+            if(loginSub) loginSub.textContent = "已讀取雲端權限，密碼比對未通過";
             return;
           }
 
-          // ✅建立同分頁/同瀏覽器工作階段登入（sessionStorage + session cookie）
           setSession({ username: u.username, level: u.level });
-
-          // ✅建立 SSO token（子頁免重複登入）
           try{ setSSO({ name: u.username, role: u.level }); }catch(_e){}
-
-          // ✅套用使用者、顯示按鍵
           applyUser(u);
 
-          // 清空密碼
           try{ $("#password").value = ""; }catch(_e){}
           loginError.textContent = "";
+          if(loginSub) loginSub.textContent = "已使用雲端 / 本機同步後權限資料完成登入";
         }catch(err){
           loginError.textContent = "登入失敗：" + (err && err.message ? err.message : String(err));
+          if(loginSub) loginSub.textContent = "雲端讀取失敗，請稍後再試";
         }
-      });btnForceRelogin.addEventListener("click", () => {
+      });      });btnForceRelogin.addEventListener("click", () => {
         clearSession();
         loginSub.textContent = "請重新輸入密碼登入";
         loginError.textContent = "";

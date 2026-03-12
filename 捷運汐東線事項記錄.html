@@ -852,7 +852,7 @@
     window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
     window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
-    var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || (function(){try{var u=new URL(location.href);return (u.searchParams.get("v")||"").trim();}catch(e){return ""}})() || "20260312_39";
+    var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || (function(){try{var u=new URL(location.href);return (u.searchParams.get("v")||"").trim();}catch(e){return ""}})() || "20260312_40";
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
@@ -934,24 +934,75 @@
       if(!u || typeof u !== "object") return null;
       var user = norm(u.user || u.username || u.name || u.account || "");
       if(!user) return null;
-      var role = norm(u.role || "read").toLowerCase();
+      var role = norm(u.role || u.level || "read").toLowerCase();
       if(role!=="admin" && role!=="write" && role!=="read") role="read";
-      return { user:user, name:norm(u.name || u.username || u.user || user) || user, role:role, pass:norm(u.pass || u.password || "") };
+      return {
+        user:user,
+        name:norm(u.name || u.username || u.user || user) || user,
+        role:role,
+        pass:norm(u.pass || u.password || u.plainPass || ""),
+        passHash:norm(u.passHash || u.passwordHash || "")
+      };
     }
     function getSeedAuthUsers(){ return DEFAULT_AUTH_USERS.map(function(x){ return Object.assign({}, x); }); }
+    function mergeAuthUsers(list){
+      var map = new Map();
+      (list||[]).forEach(function(item){
+        var u = normalizeAuthUser(item);
+        if(!u) return;
+        var key = norm(u.user).toLowerCase();
+        if(!map.has(key)) map.set(key, u);
+        else {
+          var old = map.get(key);
+          map.set(key, {
+            user: old.user || u.user,
+            name: u.name || old.name || old.user || u.user,
+            role: (u.role && u.role!=="read") ? u.role : (old.role || u.role || "read"),
+            pass: u.pass || old.pass || "",
+            passHash: u.passHash || old.passHash || ""
+          });
+        }
+      });
+      return Array.from(map.values());
+    }
     function getAuthUsers(){
-      var raw = safeJSON(localStorage.getItem(AUTH_KEY));
-      var arr = Array.isArray(raw) ? raw : ((raw && typeof raw==="object" && Array.isArray(raw.users)) ? raw.users : []);
-      arr = arr.map(normalizeAuthUser).filter(Boolean);
-      if(!arr.length){ arr = getSeedAuthUsers().map(normalizeAuthUser).filter(Boolean); try{ localStorage.setItem(AUTH_KEY, JSON.stringify(getSeedAuthUsers())); }catch(e){} }
+      var raws = [];
+      try{ raws.push(safeJSON(localStorage.getItem(AUTH_KEY))); }catch(e){}
+      try{ raws.push(safeJSON(sessionStorage.getItem(AUTH_KEY))); }catch(e){}
+      var arr = [];
+      raws.forEach(function(raw){
+        if(Array.isArray(raw)) arr = arr.concat(raw);
+        else if(raw && typeof raw === "object" && Array.isArray(raw.users)) arr = arr.concat(raw.users);
+      });
+      arr = mergeAuthUsers(arr);
+      if(!arr.length){
+        arr = mergeAuthUsers(getSeedAuthUsers());
+        try{ localStorage.setItem(AUTH_KEY, JSON.stringify(getSeedAuthUsers())); }catch(e){}
+      }
       return arr;
     }
     function ensureAuthTable(){ return { users:getAuthUsers(), updatedAt:nowISO(), rev:"runtime" }; }
+    function getCurrentUserFromAuthV4(){
+      try{
+        var api = window.TasunAuthV4 || window.TasunGlobalAuth || null;
+        var sess = api && api.getSession ? api.getSession() : null;
+        if(sess && (sess.user || sess.name)){
+          return {
+            user: norm(sess.user || sess.name),
+            name: norm(sess.name || sess.user),
+            role: norm(sess.role || sess.level || "read").toLowerCase() || "read",
+            at: nowISO()
+          };
+        }
+      }catch(e){}
+      return null;
+    }
     function getCurrentUser(){
       var cur = safeJSON(localStorage.getItem(CURRENT_KEY)); if(cur && (cur.user || cur.name)) return cur;
       cur = safeJSON(sessionStorage.getItem(CURRENT_KEY)); if(cur && (cur.user || cur.name)) return cur;
       cur = safeJSON(localStorage.getItem(SSO_KEY)); if(cur && (cur.user || cur.name)) return { user:cur.user || cur.name, name:cur.name || cur.user, role:norm(cur.role||"read").toLowerCase() || "read", at:cur.at || nowISO() };
       cur = safeJSON(sessionStorage.getItem(SSO_KEY)); if(cur && (cur.user || cur.name)) return { user:cur.user || cur.name, name:cur.name || cur.user, role:norm(cur.role||"read").toLowerCase() || "read", at:cur.at || nowISO() };
+      cur = getCurrentUserFromAuthV4(); if(cur && (cur.user || cur.name)) return cur;
       return null;
     }
     function setSSOUser(u){ if(!u) return; var name=norm(u.name || u.user || "") || "alex"; var now=Date.now(); var payload={ name:name, user:name, role:norm(u.role||"read").toLowerCase() || "read", at:nowISO(), exp:now + SSO_TTL_MS, v:APP_VER }; try{ localStorage.setItem(SSO_KEY, JSON.stringify(payload)); }catch(e){} try{ sessionStorage.setItem(SSO_KEY, JSON.stringify(payload)); }catch(e){} }
@@ -963,8 +1014,27 @@
     function getCloudTokenExp(){ var n=Number(_readStorageKeys([CLOUD_TOKEN_EXP_KEY, CLOUD_TOKEN_SHARED_EXP_KEY])||0); return Number.isFinite(n)?n:0; }
     function hasUsableCloudToken(){ var t=getCloudToken(); if(!t) return false; var exp=getCloudTokenExp(); return !(exp && Date.now()>exp); }
     function findAuthUser(userName){ userName=norm(userName).toLowerCase(); var users=getAuthUsers(); for(var i=0;i<users.length;i++){ if(norm(users[i].user).toLowerCase()===userName) return users[i]; } return null; }
-    function getPasswordCandidates(userName, authUser){ var out=[]; function push(v){ v=norm(v); if(v && out.indexOf(v)<0) out.push(v); } if(authUser) push(authUser.pass); var key=norm(userName).toLowerCase(); DEFAULT_AUTH_USERS.forEach(function(u){ if(norm(u.user).toLowerCase()===key) push(u.pass); }); return out; }
-    function handleCloudUnauth(message){ clearCloudToken(); if(message) toast(message); try{ openLogin(); }catch(e){} }
+    function getPasswordCandidates(userName, authUser){
+      var out=[];
+      function push(v){ v=norm(v); if(v && out.indexOf(v)<0) out.push(v); }
+      if(authUser){ push(authUser.pass); }
+      var key=norm(userName).toLowerCase();
+      getAuthUsers().forEach(function(u){ if(norm(u.user).toLowerCase()===key) push(u.pass); });
+      DEFAULT_AUTH_USERS.forEach(function(u){ if(norm(u.user).toLowerCase()===key) push(u.pass); });
+      return out;
+    }
+    function getVisibleLocalCount(){
+      try{ return state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length; }catch(e){ return 0; }
+    }
+    function handleCloudUnauth(message, forcePrompt){
+      clearCloudToken();
+      state.cloud.ok = false;
+      refresh();
+      if(message) toast(message);
+      if(forcePrompt || !getVisibleLocalCount()){
+        try{ openLogin(); }catch(e){}
+      }
+    }
 
     function normalizeRow(x){
       if(!x || typeof x!=="object") return null;
@@ -1120,7 +1190,7 @@
     function mkBtn(text,onClick){ var b=document.createElement("button"); b.className="attBtn"; b.type="button"; var span=document.createElement("span"); span.className="t"; span.textContent=text; b.appendChild(span); b.addEventListener("click", onClick); return b; }
     function renderTable(rows){ var tb=$("tbody"); tb.innerHTML=""; if(!rows || !rows.length){ var tr0=document.createElement("tr"), td0=document.createElement("td"); td0.colSpan=9; td0.style.textAlign="center"; td0.style.padding="24px 12px"; td0.style.color="rgba(90,60,20,.72)"; td0.style.fontWeight="800"; td0.textContent="目前沒有可顯示資料；系統會自動嘗試雲端同步。"; tr0.appendChild(td0); tb.appendChild(tr0); return; } rows.forEach(function(r, i){ var tr=document.createElement("tr"); if(r.uid===state.selectedUid) tr.classList.add("sel"); var cols=[String(i+1), r.text||"", r.trade||"", r.sys||"", r.source||"", null, r.remark||"", r.date||"", null]; cols.forEach(function(v, idx){ var td=document.createElement("td"); if(idx===0||idx===2||idx===3||idx===4||idx===7||idx===8) td.style.textAlign="center"; if(idx===5) td.appendChild(attachCell(r.attach)); else if(idx===8) td.appendChild(mkBtn("選取", function(e){ e.stopPropagation(); selectRow(r.uid); })); else td.textContent=v; tr.appendChild(td); }); tr.addEventListener("click", function(){ selectRow(r.uid); }); tb.appendChild(tr); }); }
     function renderCards(rows){ var box=$("cards"); box.innerHTML=""; if(!rows || !rows.length){ var empty=document.createElement("div"); empty.className="noteCard"; empty.innerHTML='<div class="noteBody" style="text-align:center;">目前沒有可顯示資料；系統會自動嘗試雲端同步。</div>'; box.appendChild(empty); return; } rows.forEach(function(r, i){ var card=document.createElement("div"); card.className="noteCard" + (r.uid===state.selectedUid ? " sel" : ""); card.dataset.uid=r.uid; var head=document.createElement("div"); head.className="noteHead"; var meta=document.createElement("div"); meta.className="noteMeta"; function tag(txt){ var s=document.createElement("span"); s.className="noteTag"; s.textContent=txt; return s; } meta.appendChild(tag("項次 " + (i+1))); if(r.trade) meta.appendChild(tag(r.trade)); if(r.sys) meta.appendChild(tag(r.sys)); if(r.source) meta.appendChild(tag(r.source)); if(r.date) meta.appendChild(tag(r.date)); head.appendChild(meta); head.appendChild(mkBtn("選取", function(e){ e.stopPropagation(); selectRow(r.uid); })); var body=document.createElement("div"); body.className="noteBody"; body.textContent=r.text||""; var more=document.createElement("div"); more.className="noteMore miniHint"; more.textContent="點一下展開/收合內容"; card.appendChild(head); card.appendChild(body); card.appendChild(more); card.addEventListener("click", function(){ selectRow(r.uid); card.classList.toggle("open"); }); box.appendChild(card); }); }
-    function refresh(){ rebuildFilterOptions(); var rows=getVisibleRows(); renderTable(rows); renderCards(rows); var cloudTxt = state.cloud.ok ? "已同步" : (state.cloud.cfgOk ? (hasUsableCloudToken() ? "待同步" : "待登入") : "未設定"); var lastTxt = state.cloud.lastOkAt ? fmtClock(state.cloud.lastOkAt) : "—"; $("hint").innerHTML=""; function hb(k,v,bad){ var s=document.createElement("span"); s.className="hb" + (bad?" bad":""); s.innerHTML='<span class="k">'+escHtml(k)+'</span><span class="v">'+escHtml(v)+'</span>'; return s; } $("hint").appendChild(hb("版本", APP_VER)); $("hint").appendChild(hb("筆數", String(rows.length) + " / " + String(state.db.map(normalizeRow).filter(Boolean).filter(function(r){return !r.deleted;}).length))); $("hint").appendChild(hb("選取", state.selectedUid ? "已選取" : "未選取", !state.selectedUid)); $("hint").appendChild(hb("雲端", cloudTxt, !state.cloud.ok)); $("hint").appendChild(hb("最後", lastTxt)); }
+    function refresh(){ rebuildFilterOptions(); var rows=getVisibleRows(); renderTable(rows); renderCards(rows); var hasLocalUser = !!(state.user && norm(state.user.user || state.user.name) && norm(state.user.user || state.user.name)!=="—"); var cloudTxt = state.cloud.ok ? "已同步" : (state.cloud.cfgOk ? (hasUsableCloudToken() ? "待同步" : (hasLocalUser ? "待驗證" : "待登入")) : "未設定"); var lastTxt = state.cloud.lastOkAt ? fmtClock(state.cloud.lastOkAt) : "—"; $("hint").innerHTML=""; function hb(k,v,bad){ var s=document.createElement("span"); s.className="hb" + (bad?" bad":""); s.innerHTML='<span class="k">'+escHtml(k)+'</span><span class="v">'+escHtml(v)+'</span>'; return s; } $("hint").appendChild(hb("版本", APP_VER)); $("hint").appendChild(hb("筆數", String(rows.length) + " / " + String(state.db.map(normalizeRow).filter(Boolean).filter(function(r){return !r.deleted;}).length))); $("hint").appendChild(hb("選取", state.selectedUid ? "已選取" : "未選取", !state.selectedUid)); $("hint").appendChild(hb("雲端", cloudTxt, !state.cloud.ok)); $("hint").appendChild(hb("最後", lastTxt)); }
     function selectRow(uid){ state.selectedUid=norm(uid); refresh(); }
     function currentRowByUid(uid){ uid=norm(uid); for(var i=0;i<state.db.length;i++){ var r=ensureRowV1(state.db[i]); if(r && r.uid===uid) return r; } return null; }
     function fillModal(row){ row=row||{}; $("mText").value=norm(row.text); $("mTradeSel").value=norm(row.trade); onModalTradeChanged(); $("mSysSel").value=norm(row.sys); $("mSourceSel").value=norm(row.source); $("mAttach").value=norm(row.attach); $("mRemark").value=norm(row.remark); $("mDate").value=norm(row.date)||todayISO(); $("mNo").value=row.uid ? String(displayNoOf(row.uid)||"") : ""; }
@@ -1189,7 +1259,22 @@
     async function ensureCloudSession(userName){
       if(hasUsableCloudToken()) return true;
       userName = norm(userName || (state.user && (state.user.user || state.user.name)) || "");
-      if(!userName){ var cur=getCurrentUser(); userName = norm(cur && (cur.user || cur.name) || ""); }
+      if(!userName){
+        var cur=getCurrentUser();
+        if(cur && (cur.user || cur.name)){
+          setCurrentUser(cur);
+          if(!state.user || !norm(state.user.user || state.user.name)) applyUser(cur);
+          userName = norm(cur.user || cur.name || "");
+        }
+      }
+      if(!userName){
+        var v4 = getCurrentUserFromAuthV4();
+        if(v4 && (v4.user || v4.name)){
+          setCurrentUser(v4);
+          applyUser(v4);
+          userName = norm(v4.user || v4.name || "");
+        }
+      }
       if(!userName) return false;
       var authUser = findAuthUser(userName);
       var pwds = getPasswordCandidates(userName, authUser);
@@ -1197,9 +1282,10 @@
         try{
           var j = await workerLogin(userName, pwds[i]);
           var cur2 = { user:userName, name:(authUser && authUser.name) || userName, role:norm((authUser && authUser.role) || j.role || "read").toLowerCase() || "read", at:nowISO() };
-          setCurrentUser(cur2); applyUser(cur2); return true;
+          setCurrentUser(cur2); applyUser(cur2); refresh(); return true;
         }catch(e){}
       }
+      refresh();
       return false;
     }
     async function syncFromCloud(opts){
@@ -1272,7 +1358,7 @@
       $("btnView").addEventListener("click", openView);
       $("btnEdit").addEventListener("click", openEdit);
       $("btnAdd").addEventListener("click", openAdd);
-      $("btnCloud").addEventListener("click", async function(){ await syncFromCloud({ silent:false, aggressive:true }); await syncToCloud({ silent:true, reason:"manual-cloud", fullUpload:true }); });
+      $("btnCloud").addEventListener("click", async function(){ if(!hasUsableCloudToken()){ var ok = await ensureCloudSession((state.user && (state.user.user || state.user.name)) || ""); if(!ok){ handleCloudUnauth("請先完成雲端驗證", true); return; } } await syncFromCloud({ silent:false, aggressive:true }); await syncToCloud({ silent:true, reason:"manual-cloud", fullUpload:true }); });
       $("btnExport").addEventListener("click", exportBackup);
       $("btnClear").addEventListener("click", function(){ $("qText").value=""; $("fTrade").value=""; $("fSys").value=""; refresh(); });
       $("qText").addEventListener("input", refresh);
@@ -1292,8 +1378,8 @@
       $("btnToken").addEventListener("click", openToken); $("tokenClose").addEventListener("click", closeToken); $("tokenSave").addEventListener("click", saveToken); $("tokenClear").addEventListener("click", clearToken); $("tokenToggle").addEventListener("click", toggleTokenVis);
       $("loginClose").addEventListener("click", closeLogin); $("loginBtn").addEventListener("click", doLogin); $("loginPass").addEventListener("keydown", function(e){ if(e.key==="Enter") doLogin(); }); $("loginToAuth").addEventListener("click", function(){ navTo("權限表.html"); });
       window.addEventListener("online", function(){ scheduleSync("online", true); });
-      window.addEventListener("focus", function(){ scheduleSync("focus"); });
-      document.addEventListener("visibilitychange", function(){ if(!document.hidden) scheduleSync("visible"); });
+      window.addEventListener("focus", function(){ if(!hasUsableCloudToken() && state.user && norm(state.user.user || state.user.name) && norm(state.user.user || state.user.name)!=="—"){ ensureCloudSession(state.user.user || state.user.name || "").then(function(ok){ if(ok) refresh(); }).catch(function(){}); } scheduleSync("focus"); });
+      document.addEventListener("visibilitychange", function(){ if(!document.hidden){ if(!hasUsableCloudToken() && state.user && norm(state.user.user || state.user.name) && norm(state.user.user || state.user.name)!=="—"){ ensureCloudSession(state.user.user || state.user.name || "").then(function(ok){ if(ok) refresh(); }).catch(function(){}); } scheduleSync("visible"); } });
       setInterval(function(){ scheduleSync("periodic"); }, SYNC_PERIODIC_MS);
     }
 
@@ -1305,30 +1391,30 @@
         buildDictsFromDb();
         state.readMode = localStorage.getItem(READ_MODE_KEY) === "1"; applyReadMode(state.readMode);
         cur = getCurrentUser();
-        if(cur) applyUser(cur); else applyUser({ user:"—", role:"read", name:"—" });
+        if(cur) { setCurrentUser(cur); applyUser(cur); } else applyUser({ user:"—", role:"read", name:"—" });
         wire();
         await loadCloudCfg();
         await cloudHealth();
         if(cur) await ensureCloudSession(cur.user || cur.name || "");
-        var localCount = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
+        var localCount = getVisibleLocalCount();
         await syncFromCloud({ silent:true, aggressive:(localCount===0) });
         refresh();
-        var visibleCount = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
-        if(!cur || (!hasUsableCloudToken() && !visibleCount)) openLogin();
-        setTimeout(function(){ var n=state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length; if(!n) syncFromCloud({ silent:true, aggressive:true }); }, 1200);
-        setTimeout(function(){ var n=state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length; if(!n) syncFromCloud({ silent:true, aggressive:true }); }, 4200);
-      }catch(e){ console.error(e); try{ refresh(); }catch(_e){} try{ if(!cur) openLogin(); }catch(_e){} }
+        var visibleCount = getVisibleLocalCount();
+        if(!cur && !visibleCount) openLogin();
+        setTimeout(function(){ if(!hasUsableCloudToken() && state.user && norm(state.user.user || state.user.name) && norm(state.user.user || state.user.name)!=="—"){ ensureCloudSession(state.user.user || state.user.name || "").then(function(ok){ if(ok) return syncFromCloud({ silent:true, aggressive:true }); }).catch(function(){}); } }, 1200);
+        setTimeout(function(){ if(!hasUsableCloudToken() && state.user && norm(state.user.user || state.user.name) && norm(state.user.user || state.user.name)!=="—"){ ensureCloudSession(state.user.user || state.user.name || "").then(function(ok){ if(ok) return syncFromCloud({ silent:true, aggressive:true }); }).catch(function(){}); } var n=getVisibleLocalCount(); if(!n) syncFromCloud({ silent:true, aggressive:true }); }, 4200);
+      }catch(e){ console.error(e); try{ refresh(); }catch(_e){} try{ if(!cur && !getVisibleLocalCount()) openLogin(); }catch(_e){} }
     }
 
     window.addEventListener("storage", function(e){
       var k = String((e && e.key) || "");
       if(k && [DB_KEY, COUNTER_KEY, READ_MODE_KEY, AUTH_KEY, CURRENT_KEY, SSO_KEY, CLOUD_TOKEN_KEY, CLOUD_TOKEN_EXP_KEY, CLOUD_TOKEN_SHARED_KEY, CLOUD_TOKEN_SHARED_EXP_KEY, DB_SNAPSHOT_KEY, DB_SNAPSHOT_META_KEY, DB_SNAPSHOT_SESSION_KEY, DB_SNAPSHOT_SESSION_META_KEY].indexOf(k)===-1) return;
-      try{ var p=loadDb(); state.db=p.db||[]; state.counter=p.counter||0; var cur=getCurrentUser(); if(cur) applyUser(cur); state.readMode = localStorage.getItem(READ_MODE_KEY)==="1"; applyReadMode(state.readMode); refresh(); }catch(err){}
+      try{ var p=loadDb(); state.db=p.db||[]; state.counter=p.counter||0; var cur=getCurrentUser(); if(cur) { setCurrentUser(cur); applyUser(cur); } state.readMode = localStorage.getItem(READ_MODE_KEY)==="1"; applyReadMode(state.readMode); refresh(); if(!hasUsableCloudToken() && cur && norm(cur.user || cur.name)){ ensureCloudSession(cur.user || cur.name || "").then(function(ok){ if(ok) refresh(); }).catch(function(){}); } }catch(err){}
     });
 
     boot().catch(function(e){ console.error(e); });
   })();
-  </script></script>
+  </script>
 
 <script src="tasun-global-auth-v65.js"></script>
 <script>window.TasunGuardV4 && window.TasunGuardV4.boot({ pageKey: "捷運汐東線事項記錄.html" });</script>
