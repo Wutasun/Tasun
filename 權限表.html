@@ -15,7 +15,7 @@
      * ✅你每次更新本頁，只要改 APP_VER（例如：20260130_01 → 20260203_01）
      * 全部使用者會自動跳到 ?v=APP_VER，保證同步最新版。
      */
-    const APP_VER = "20260309_08";  // ←←← 每次改版請改這裡（建議與首頁/管理表一致）
+    const APP_VER = "20260312_32";  // ←←← 每次改版請改這裡（建議與首頁/管理表一致）
     const VER_KEY = "tasun_app_ver_auth_v1";
     const TAB_GUARD = "tasun_tab_replaced_once_auth_v1";
 
@@ -238,6 +238,18 @@
       font-family: inherit;
     }
     select.field{ max-width: 520px; }
+    select.field option,
+    select.field optgroup{ color:#000; background:#fff; }
+
+    .navDynamicHost{ display:none; }
+    .navMirrorNote{
+      grid-column: 1 / -1;
+      font-size: 12px;
+      opacity:.9;
+      letter-spacing:.06em;
+      line-height:1.6;
+      color: rgba(246,211,122,.86);
+    }
 
     .entryHint{
       grid-column: 1 / -1;
@@ -656,10 +668,11 @@
             <button class="btn" id="navCloseBtn">關閉</button>
           </div>
           <div class="navGrid">
-            <div class="navHint">
+            <div class="navHint" id="navHint">
               說明：按鍵位置固定不改，左側仍依 <b>btn1～btn5</b> 排序。右側改成下拉式選單，選項會帶出「目前入口網頁按鍵名稱＋對應連結」。<br>
               你在這裡調整的是「首頁入口按鍵的排序對應」，儲存後會同步寫入 localStorage：<b>tasunNavButtons_v1</b> 與 <b>tasunRoutes_v1</b>，名稱與連結會一起移動，不會拆開。
             </div>
+            <div class="navDynamicHost" id="navDynamicHost"></div>
 
             <div class="navLabel">btn1</div>
             <select class="field" id="navName1"></select>
@@ -842,6 +855,11 @@
   const downloadTokenBtnM = el('downloadTokenBtnM');
 
   const navPanel   = el('navPanel');
+  const navGrid    = navPanel ? navPanel.querySelector('.navGrid') : null;
+  const navPanelTitle = navPanel ? navPanel.querySelector('.navPanelHead strong') : null;
+  const navHintEl  = el('navHint');
+  const navDynamicHost = el('navDynamicHost');
+  const NAV_HINT_HOME_HTML = '說明：按鍵位置固定不改，左側仍依 <b>btn1～btn5</b> 排序。右側改成下拉式選單，選項會帶出「目前入口網頁按鍵名稱＋對應連結」。<br>你在這裡調整的是「首頁入口按鍵的排序對應」，儲存後會同步寫入 localStorage：<b>tasunNavButtons_v1</b> 與 <b>tasunRoutes_v1</b>，名稱與連結會一起移動，不會拆開。';
   const navCloseBtn= el('navCloseBtn');
   const navReloadBtn=el('navReloadBtn');
   const navSaveBtn = el('navSaveBtn');
@@ -1570,6 +1588,7 @@ function safeJsonParse(s, fallback){
       renderTable();
       renderCards();
       renderEntryPreview();
+      renderNavPanelMode();
       return;
     }
 
@@ -1584,6 +1603,7 @@ function safeJsonParse(s, fallback){
     renderTable();
     renderCards();
     renderEntryPreview();
+    renderNavPanelMode();
   }
 
   function renderHeaders(){
@@ -2014,6 +2034,7 @@ function safeJsonParse(s, fallback){
     saveSelectedEntry(v);
     renderAll();
     updateStates(`已切換入口網頁：${v}\n（下方欄位與預覽已同步切換）`);
+    renderNavPanelMode();
     scheduleCloudPush('entry-changed');
   }
   entrySelect.addEventListener('change', onEntryChanged);
@@ -2347,6 +2368,64 @@ function safeJsonParse(s, fallback){
     return [navName1, navName2, navName3, navName4, navName5];
   }
 
+  function isHomeEntry(entry){
+    return String(entry || '').trim() === 'index.html';
+  }
+
+  function getNavStaticNodes(){
+    return getNavSelectControls().flatMap(sel => {
+      if(!sel) return [];
+      const label = sel.previousElementSibling;
+      return label ? [label, sel] : [sel];
+    });
+  }
+
+  function setNavStaticVisible(show){
+    getNavStaticNodes().forEach(node => {
+      if(node) node.style.display = show ? '' : 'none';
+    });
+    if(navDynamicHost) navDynamicHost.style.display = show ? 'none' : 'contents';
+  }
+
+  function renderNavPanelMode(){
+    if(!navPanel) return;
+    const entry = resolveEntryValue();
+    const items = Array.isArray(btnMeta) ? btnMeta.slice() : [];
+
+    if(isHomeEntry(entry)){
+      if(navPanelTitle) navPanelTitle.textContent = '按鍵名稱設定（btn1～btn5）';
+      if(navHintEl) navHintEl.innerHTML = NAV_HINT_HOME_HTML;
+      if(navDynamicHost) navDynamicHost.innerHTML = '';
+      setNavStaticVisible(true);
+      navReloadBtn.disabled = !isAdmin;
+      navSaveBtn.disabled = !isAdmin;
+      navReloadBtn.textContent = '重新讀取目前名稱';
+      navSaveBtn.textContent = '儲存並同步';
+      return;
+    }
+
+    if(navPanelTitle) navPanelTitle.textContent = `按鍵名稱設定（${entry}）`;
+    if(navHintEl){
+      navHintEl.innerHTML = `說明：目前入口網頁為 <b>${escapeHtml(entry)}</b>，下方會與上方權限欄位同步顯示相同的按鍵名稱與數量。<br>此模式僅供核對目前入口頁按鍵，不會改動首頁 btn1～btn5 固定綁定。`;
+    }
+    if(navDynamicHost){
+      if(items.length){
+        navDynamicHost.innerHTML = items.map((b, idx) => `
+          <div class="navLabel">btn${idx + 1}</div>
+          <input class="field" value="${escapeHtml(b.name || b.key)} ｜ ${escapeHtml(b.key)}" disabled>
+        `).join('');
+      }else{
+        navDynamicHost.innerHTML = '<div class="navMirrorNote">目前入口頁尚未解析出按鍵名稱。</div>';
+      }
+    }
+    setNavStaticVisible(false);
+    navReloadBtn.disabled = false;
+    navSaveBtn.disabled = true;
+    navReloadBtn.textContent = '重新同步目前入口';
+    navSaveBtn.textContent = '此入口僅同步顯示';
+  }
+
+
   function refreshNavSelectOptions(){
     const list = getNavSourceList();
     const selects = getNavSelectControls();
@@ -2366,6 +2445,7 @@ function safeJsonParse(s, fallback){
       }
       sel.dataset.prevValue = sel.value;
     });
+    renderNavPanelMode();
   }
 
   function bindNavSelectSwap(sel){
@@ -2437,7 +2517,8 @@ function safeJsonParse(s, fallback){
   function openNavPanel(){
     if(!isAdmin){ setMsg('你不是 admin，不能修改按鍵名稱。', true); return; }
     navPanel.classList.add('show');
-    loadNavNamesIntoInputs();
+    renderNavPanelMode();
+    if(isHomeEntry(resolveEntryValue())) loadNavNamesIntoInputs();
   }
   function closeNavPanel(){ navPanel.classList.remove('show'); }
 
@@ -2463,6 +2544,7 @@ function safeJsonParse(s, fallback){
 
   function saveNavNamesFromInputs(){
     if(!isAdmin){ setMsg('你不是 admin，不能儲存按鍵名稱。', true); return; }
+    if(!isHomeEntry(resolveEntryValue())){ renderNavPanelMode(); return; }
 
     const sourceList = getNavSourceList();
     const sourceMap = new Map(sourceList.map(it => [String(it.sourceId || '').trim(), it]));
@@ -2583,7 +2665,7 @@ function safeJsonParse(s, fallback){
 </script>
 
 <!-- ✅✅✅ [段落 #1] tasun-cloud-kit.js（版本需與本頁 APP_VER 一致） -->
-<script src="tasun-cloud-kit.js?v=20260203_01"></script>
+<script src="tasun-cloud-kit.js?v=20260312_32"></script>
 
 <!-- ✅✅✅ [段落 #2] 永遠自動上雲端（TasunCloudKit）
      - 同步本頁關鍵 localStorage keys
