@@ -884,6 +884,23 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     var SYS_DICT_KEY   = "tasunSxdhNotes_sysDict_v1";
     var SOURCE_DICT_KEY = "tasunSxdhNotes_sourceDict_v1";
     var TRADE_SYS_MAP_KEY = "tasunSxdhNotes_tradeSysMap_v1";
+    var DB_SNAPSHOT_KEY = "tasunSxdhNotes_cloudSnapshot_v1";
+    var DB_SNAPSHOT_META_KEY = "tasunSxdhNotes_cloudSnapshotMeta_v1";
+    var LEGACY_DB_KEYS = [
+      "tasunSxdhNotes_v1",
+      "tasunSxdhNotes_v2",
+      "tasunSxdhNotes_db_v1",
+      "tasunSxdhNotes_db_v2",
+      "tasunSxdhNotes_rows_v1",
+      "tasunSxdhNotes_rows_v2",
+      "tasunSxdhNotes_data_v1",
+      "tasunSxdhNotes_data_v2",
+      "tasunSxdhNotes",
+      "sxdh-notes",
+      "sxdh_notes",
+      "捷運汐東線事項記錄",
+      "捷運汐東線事項紀錄"
+    ];
 
     // Optional overrides
     var API_BASE_LS_KEY = "tasunApiBase_v1";
@@ -1138,12 +1155,19 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     function getCurrentUser(){
       var cur = safeJSON(localStorage.getItem(CURRENT_KEY));
       if(cur && cur.user && cur.role) return cur;
+      cur = safeJSON(sessionStorage.getItem(CURRENT_KEY));
+      if(cur && cur.user && cur.role) return cur;
       return null;
     }
 
     function setCurrentUser(u){
-      if(!u) localStorage.removeItem(CURRENT_KEY);
-      else localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
+      if(!u){
+        localStorage.removeItem(CURRENT_KEY);
+        try{ sessionStorage.removeItem(CURRENT_KEY); }catch(e){}
+      }else{
+        localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
+        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(u)); }catch(e){}
+      }
     }
 
     function roleRank(role){
@@ -1266,6 +1290,23 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     // Local data + dicts
     // ---------------------------
         async function loadDb(){
+      function tryArray(raw){
+        var parsed = safeJSON(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      }
+
+      function pickLegacyDbArr(){
+        var best = [];
+        var keys = [DB_KEY].concat(LEGACY_DB_KEYS);
+        for(var i=0;i<keys.length;i++){
+          var k = keys[i];
+          var arr = [];
+          try{ arr = tryArray(localStorage.getItem(k)); }catch(e){ arr = []; }
+          if(arr.length > best.length) best = arr;
+        }
+        return best;
+      }
+
       // 1) try IDB
       var meta = null, rows = [];
       try{
@@ -1273,15 +1314,39 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
         rows = await idbGetAllRows(PAGE_KEY);
       }catch(e){ meta=null; rows=[]; }
 
-      if(meta || (rows && rows.length)){
-        var counter = Number(meta && meta.counter || 0) || 0;
-        state.lastSyncAt = Number(meta && meta.lastSyncAt || 0) || 0;
-        state.clientId = norm(meta && meta.clientId) || getClientId();
-        return { db: rows||[], counter: counter };
+      // 1.5) snapshot / legacy fallback merge (桌機常因舊 localStorage key 或空 IDB 導致無資料)
+      var snapshotRows = [];
+      try{
+        snapshotRows = tryArray(localStorage.getItem(DB_SNAPSHOT_KEY));
+      }catch(e){ snapshotRows = []; }
+      var legacyRows = [];
+      try{
+        legacyRows = pickLegacyDbArr();
+      }catch(e){ legacyRows = []; }
+
+      var mergedRows = [];
+      try{
+        mergedRows = mergePayload({ db: rows || [], counter: Number(meta && meta.counter || 0) || 0 }, { db: snapshotRows.concat(legacyRows), counter: 0 }).db || [];
+      }catch(e){
+        mergedRows = (rows && rows.length) ? rows : ((snapshotRows && snapshotRows.length) ? snapshotRows : legacyRows);
       }
 
-      // 2) migrate from localStorage (legacy)
-      var arr = safeJSON(localStorage.getItem(DB_KEY));
+      if(meta || (mergedRows && mergedRows.length)){
+        var counter = Number(meta && meta.counter || 0) || 0;
+        if(!counter) counter = Number(localStorage.getItem(COUNTER_KEY)||"0") || 0;
+        state.lastSyncAt = Number(meta && meta.lastSyncAt || 0) || 0;
+        state.clientId = norm(meta && meta.clientId) || getClientId();
+        try{
+          if((mergedRows && mergedRows.length) && JSON.stringify(mergedRows)!==JSON.stringify(rows||[])){
+            await idbPutRows(PAGE_KEY, mergedRows);
+          }
+        }catch(e){}
+        return { db: mergedRows||[], counter: counter };
+      }
+
+      // 2) migrate from localStorage / snapshot / legacy cache
+      var arr = pickLegacyDbArr();
+      if(!Array.isArray(arr) || !arr.length) arr = snapshotRows;
       if(!Array.isArray(arr)) arr = [];
       var c = Number(localStorage.getItem(COUNTER_KEY)||"0");
       if(!Number.isFinite(c) || c<0) c = 0;
@@ -1297,6 +1362,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
       return { db: arr, counter: c };
     }
+
 
     // 嘗試復原舊版本本機資料（不同 key / 舊備份格式），並合併回目前 db
     function recoverLegacyLocal(){
@@ -1654,6 +1720,29 @@ function getVisibleRows(){
         m[k] = Array.from(set).sort();
       });
       localStorage.setItem(TRADE_SYS_MAP_KEY, JSON.stringify(m));
+    }
+
+    function saveSnapshot(rows, meta){
+      try{ localStorage.setItem(DB_SNAPSHOT_KEY, JSON.stringify(Array.isArray(rows) ? rows : [])); }catch(e){}
+      try{ localStorage.setItem(DB_SNAPSHOT_META_KEY, JSON.stringify(Object.assign({ at: nowISO(), appVer: APP_VER, pageKey: PAGE_KEY }, meta||{}))); }catch(e){}
+    }
+
+    function loadSnapshotRows(){
+      var arr = safeJSON(localStorage.getItem(DB_SNAPSHOT_KEY));
+      return Array.isArray(arr) ? arr : [];
+    }
+
+    function normalizeCloudDbPayload(payload){
+      var p = unwrap(payload);
+      if(Array.isArray(p)) return p;
+      if(!p || typeof p!=="object") return [];
+      if(Array.isArray(p.db)) return p.db;
+      if(Array.isArray(p.rows)) return p.rows;
+      if(Array.isArray(p.items)) return p.items;
+      if(Array.isArray(p.records)) return p.records;
+      if(Array.isArray(p.data)) return p.data;
+      if(p.payload && typeof p.payload==="object") return normalizeCloudDbPayload(p.payload);
+      return [];
     }
 
     function unwrap(obj){
@@ -2423,11 +2512,11 @@ function getPromptOptions(mode){
       }
 
       function _normalizePullResponse(json){
-        // Accept both {ok:true,payload:{db,counter}} and legacy {payload:{...}} and raw payload.
+        // Accept {ok,payload:{db}} / {data:{rows}} / raw {items} / Worker variants.
         const j = (json && typeof json==="object") ? json : {};
         const payload = (j.payload && typeof j.payload==="object") ? j.payload : (j.data && typeof j.data==="object") ? j.data : j;
-        const db = Array.isArray(payload.db) ? payload.db : (Array.isArray(payload.items) ? payload.items : []);
-        const counter = Number.isFinite(Number(payload.counter)) ? Number(payload.counter) : 0;
+        const db = normalizeCloudDbPayload(payload);
+        const counter = Number.isFinite(Number((payload && payload.counter) || j.counter)) ? Number((payload && payload.counter) || j.counter) : (Array.isArray(db) ? db.length : 0);
         return { db, counter };
       }
 
@@ -2492,30 +2581,31 @@ function getPromptOptions(mode){
     async function syncFromCloud(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
       var silent = !!opts.silent;
+      var aggressive = !!opts.aggressive;
 
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)){
         if(!silent) toast("雲端未設定/無效"); 
-        return;
+        return false;
       }
 
       try{
         var remote = await cloudRead(cfg, PAGE_KEY);
-
-        // If cloud is empty but local has data, offer to bootstrap to cloud (one-time)
-        var cloudEmpty = !remote || !Array.isArray(remote.db) || remote.db.length===0;
-        var localHas = Array.isArray(state.db) && state.db.length>0;
+        var remoteDb = normalizeCloudDbPayload(remote);
+        var localDb = (state.db || []).map(ensureRowV1).filter(Boolean);
         var bootKey = "tasunCloudBooted_" + PAGE_KEY;
         var autoFillKey = "tasunCloudAutoFill_" + PAGE_KEY;
-        var localDb = (state.db || []);
-        var remoteDb = (remote && remote.payload && Array.isArray(remote.payload.db)) ? remote.payload.db : [];
 
         function _uid(x){
           if(!x) return "";
           return String(x.uid || x.pk || x.Uid || x.ID || x.id || "");
         }
 
-        var rSet = new Set(remoteDb.map(_uid).filter(Boolean));
+        if(remoteDb && remoteDb.length){
+          saveSnapshot(remoteDb, { source:"cloud-read", counter: remote.counter||remoteDb.length });
+        }
+
+        var rSet = new Set((remoteDb||[]).map(_uid).filter(Boolean));
         var missing = localDb.filter(function(it){
           var u = _uid(it);
           return u && !rSet.has(u);
@@ -2524,8 +2614,7 @@ function getPromptOptions(mode){
         var remoteEmpty = (!remoteDb || remoteDb.length === 0);
         var localHas = (localDb.length > 0);
 
-        // Auto bootstrap when cloud empty OR auto-fill when cloud has fewer items than local.
-        // Run once per page-load to avoid loops.
+        // 桌機/新裝置若雲端有資料，直接以下拉為主；若雲端空白但本機有資料，才回填雲端
         if(localHas && (remoteEmpty || missing.length > 0) && !sessionStorage.getItem(autoFillKey)){
           sessionStorage.setItem(autoFillKey, "1");
           try{
@@ -2538,18 +2627,33 @@ function getPromptOptions(mode){
               at: nowISO(),
               reason: reason
             });
-            if(merged && merged.ok && merged.payload){
-              remote = merged; // use merged payload as latest remote snapshot
+            var mergedDb = normalizeCloudDbPayload(merged);
+            if(mergedDb && mergedDb.length){
+              remote = merged;
+              remoteDb = mergedDb;
+              saveSnapshot(remoteDb, { source:reason, counter: merged.counter||remoteDb.length });
               if(remoteEmpty) localStorage.setItem(bootKey, "1");
-              toast(remoteEmpty
-                ? ("雲端空白，已自動倒入本機資料：" + localDb.length + " 筆")
-                : ("已自動補齊雲端缺少資料：" + missing.length + " 筆"), "ok");
+              if(!silent){
+                toast(remoteEmpty
+                  ? ("雲端空白，已自動倒入本機資料：" + localDb.length + " 筆")
+                  : ("已自動補齊雲端缺少資料：" + missing.length + " 筆"));
+              }
             }
           }catch(e){
-            toast("雲端自動補齊失敗：" + (e && (e.message||e) ? (e.message||e) : e), "warn");
+            if(!silent) toast("雲端自動補齊失敗：" + (e && (e.message||e) ? (e.message||e) : e));
           }
         }
-var out = mergePayload(remote, { db: state.db, counter: state.counter });
+
+        // 若雲端仍空，但本機有 snapshot，至少先用 snapshot 恢復桌機畫面，避免桌機/手機不同步觀感
+        if((!remoteDb || !remoteDb.length) && aggressive){
+          var snap = loadSnapshotRows();
+          if(snap && snap.length){
+            remote = { db: snap, counter: snap.length };
+            remoteDb = snap;
+          }
+        }
+
+        var out = mergePayload({ db: remoteDb || [], counter: remote.counter || (remoteDb ? remoteDb.length : 0) }, { db: state.db, counter: state.counter });
         state.db = out.db;
         state.counter = out.counter;
 
@@ -2562,16 +2666,36 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         }catch(e){}
         await idbClearOps(PAGE_KEY);
         await saveLocal({ db: state.db, counter: state.counter });
+        saveSnapshot(state.db, { source:"merged-local-cloud", counter: state.counter });
 
         buildDictsFromDb();
         refresh();
         if(!silent) toast("已從雲端更新");
+        return true;
       }catch(e){
         try{ state.cloud.ok = false; }catch(_e){}
+
+        // 回退：嘗試 snapshot，避免桌機空白但手機有資料
+        try{
+          var snap2 = loadSnapshotRows();
+          if(snap2 && snap2.length){
+            var out2 = mergePayload({ db: snap2, counter: snap2.length }, { db: state.db, counter: state.counter });
+            state.db = out2.db;
+            state.counter = out2.counter;
+            await saveLocal({ db: state.db, counter: state.counter });
+            buildDictsFromDb();
+            refresh();
+            if(!silent) toast("雲端暫時不可用，已先載入本機快照資料");
+            return true;
+          }
+        }catch(_snapErr){}
+
         if(!silent) toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
         try{ refresh(); }catch(_e){}
+        return false;
       }
     }
+
     async function syncToCloud(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
       var silent = !!opts.silent;
@@ -2630,6 +2754,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         }catch(e){}
         await idbClearOps(PAGE_KEY);
         await saveLocal({ db: state.db, counter: state.counter });
+        saveSnapshot(state.db, { source:"cloud-merge", counter: state.counter });
 
         buildDictsFromDb();
         refresh();
@@ -2965,8 +3090,8 @@ $("btnSave").addEventListener("click", async function(){
     // Boot
     // ---------------------------
         async function boot(){
-      // ✅ 目的：無論雲端/IndexedDB 是否異常，都要「先畫出」版本/筆數/選取/雲端/最後 等資訊。
-      // 這段只加防護，不改 UI/DOM/CSS。
+      // ✅ 目的：無論雲端/IndexedDB 是否異常，都要先畫出版本/筆數/選取/雲端/最後。
+      // ✅ 加入：桌機首進頁面若本機空白，會優先雲端下拉 + 快照回復，避免手機有資料、桌機沒資料。
       var cur = null;
       try{
         try{ await openIDB(); }catch(e){}
@@ -3000,7 +3125,24 @@ $("btnSave").addEventListener("click", async function(){
         try{ wire(); }catch(e){}
         try{ refresh(); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
-        try{ await syncFromCloud({ silent:true }); }catch(e){}
+
+        var localCount = 0;
+        try{ localCount = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length; }catch(e){ localCount = 0; }
+        try{ await syncFromCloud({ silent:true, aggressive:(localCount===0) }); }catch(e){}
+
+        // 若第一次下拉後仍空，再用快照補畫面一次，避免桌機空白。
+        try{
+          var visibleCount = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
+          if(!visibleCount){
+            var snap = loadSnapshotRows();
+            if(snap && snap.length){
+              state.db = mergePayload({ db: snap, counter: snap.length }, { db: state.db, counter: state.counter }).db;
+              state.counter = Math.max(Number(state.counter||0)||0, snap.length);
+              await saveLocal({ db: state.db, counter: state.counter });
+            }
+          }
+        }catch(e){}
+
         try{ refresh(); }catch(e){}
         try{ if(!cur) openLogin(); }catch(e){}
 
@@ -3014,7 +3156,6 @@ $("btnSave").addEventListener("click", async function(){
           });
         }catch(e){}
       }catch(e){
-        // 任何未預期錯誤：仍然嘗試畫出狀態列，避免出現「空白資訊列」。
         try{ wire(); }catch(_e){}
         try{ refresh(); }catch(_e){}
         try{ if(!cur) openLogin(); }catch(_e){}
@@ -3022,9 +3163,10 @@ $("btnSave").addEventListener("click", async function(){
       }
     }
 
+
     window.addEventListener("storage", async function(e){
       var k = String((e && e.key) || "");
-      if(k && [DB_KEY, COUNTER_KEY, READ_MODE_KEY, AUTH_KEY, CURRENT_KEY].indexOf(k)===-1) return;
+      if(k && [DB_KEY, COUNTER_KEY, READ_MODE_KEY, AUTH_KEY, CURRENT_KEY, DB_SNAPSHOT_KEY, DB_SNAPSHOT_META_KEY].indexOf(k)===-1) return;
       try{
         var p2 = await loadDb();
         state.db = p2.db;
@@ -3033,6 +3175,14 @@ $("btnSave").addEventListener("click", async function(){
         if(cur2) applyUser(cur2);
         state.readMode = localStorage.getItem(READ_MODE_KEY)==="1";
         applyReadMode(state.readMode);
+        if((k===DB_SNAPSHOT_KEY || k===DB_SNAPSHOT_META_KEY) && (!state.db || !state.db.length)){
+          var snapRows = loadSnapshotRows();
+          if(snapRows && snapRows.length){
+            state.db = snapRows;
+            state.counter = Math.max(Number(state.counter||0)||0, snapRows.length);
+            await saveLocal({ db: state.db, counter: state.counter });
+          }
+        }
         refresh();
       }catch(err){}
     });
