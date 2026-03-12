@@ -1,369 +1,175 @@
-/* tasun-version-loader.js (Unified Entry)
-   全站唯一入口：抓 tasun-version.json → 鎖 URL ?v=latest → 安裝 __withV → 載入 tasun-core.js?v
-   並提供 TasunBoot / TasunLoader / TasunCore.ready 相容介面
-*/
-(function (window, document) {
+(function(){
   "use strict";
 
-  var Loader = window.TasunVersionLoader || {};
-  var VERSION_URL = "tasun-version.json";
-  var STORE_KEY = "tasun_latest_ver_v1";
+  var VERSION_JSON_URL = "tasun-version.json";
+  var CACHE_KEY = "tasun_auto_version_cache_v3";
+  var READY_RESOLVE = function(){};
+  var READY = new Promise(function(resolve){ READY_RESOLVE = resolve; });
+  window.__TASUN_VERSION_READY__ = READY;
 
-  var READY_FLAG = "__tasun_core_ready_fired__";
-  var URL_LOCK_PREFIX = "tasun_force_v_once__";
-  var CORE_DEFAULT = "tasun-core.js";
-
-  function str(v) { return (v === undefined || v === null) ? "" : String(v); }
-  function trim(v) { return str(v).trim(); }
-
-  function safeGet(store, k) {
-    try { return store.getItem(k); } catch (e) { return null; }
+  function norm(s){ return (s===undefined || s===null) ? "" : String(s).trim(); }
+  function safeJSON(raw){ try{ return JSON.parse(raw); }catch(e){ return null; } }
+  function currentBaseName(){
+    try{
+      var p = location.pathname || "";
+      var fn = p.split("/").pop() || "";
+      fn = decodeURIComponent(fn || "");
+      return fn || "index.html";
+    }catch(e){
+      return "index.html";
+    }
   }
-  function safeSet(store, k, v) {
-    try { store.setItem(k, v); } catch (e) {}
-  }
-
-  function parseVer(j) {
-    if (!j || typeof j !== "object") return "";
-    return trim(j.ver || j.version || j.appVer || j.latest || "");
-  }
-
-  function withV(url, v) {
-    v = trim(v);
-    if (!v) return url;
-
-    try {
-      var u = new URL(url, document.baseURI);
-      var sameOrigin = (u.origin === location.origin);
-      var fileMode = (location.protocol === "file:" || u.protocol === "file:");
-      if (sameOrigin || fileMode) {
-        u.searchParams.set("v", v);
-        return u.toString();
-      }
-    } catch (e) {}
-
-    var s = str(url);
-    if (!s) return s;
-    var hash = "";
-    var p = s.indexOf("#");
-    if (p >= 0) { hash = s.slice(p); s = s.slice(0, p); }
-    return s + (s.indexOf("?") >= 0 ? "&" : "?") + "v=" + encodeURIComponent(v) + hash;
-  }
-
-  function installGlobals(ver) {
-    var v = trim(ver) || String(Date.now());
-    window.APP_VER = v;
-    window.TASUN_APP_VER = v;
-    window.__CACHE_V = v;
-
-    // 永遠以「最新 ver」覆蓋 __withV（避免不同套混用造成分歧）
-    window.__withV = function (u) { return withV(u, v); };
-
-    Loader.ver = v;
-    Loader.withV = function (u) { return withV(u, v); };
-  }
-
-  function fetchLatestVer(url) {
-    // file:// 模式通常 fetch 會受限，直接略過
-    if (location.protocol === "file:") return Promise.resolve("");
-
-    var u = url + (url.indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
-    return fetch(u, { cache: "no-store" })
-      .then(function (r) { return r.json(); })
-      .then(function (j) { return parseVer(j); })
-      .catch(function () { return ""; });
-  }
-
-  function forceUrlV(ver) {
-    var v = trim(ver);
-    if (!v) return false;
-
-    try {
-      var url = new URL(location.href);
-      var cur = trim(url.searchParams.get("v") || "");
-
-      // 同版：也寫入鎖，避免下次又 replace
-      if (cur === v) {
-        safeSet(sessionStorage, URL_LOCK_PREFIX + location.pathname, v);
-        return false;
-      }
-
-      var guard = URL_LOCK_PREFIX + location.pathname + "__" + (cur || "none") + "_to_" + v;
-      if (safeGet(sessionStorage, guard) === "1") return false;
-
-      safeSet(sessionStorage, guard, "1");
-      url.searchParams.set("v", v);
-      location.replace(url.toString());
-      return true;
-    } catch (e) {}
-    return false;
-  }
-
-  function addScript(src, id) {
-    return new Promise(function (resolve) {
-      try {
-        if (id && document.getElementById(id)) return resolve(true);
-
-        var s = document.createElement("script");
-        if (id) s.id = id;
-        s.async = false;
-        s.src = src;
-        s.onload = function () { resolve(true); };
-        s.onerror = function () { resolve(false); };
-        document.head.appendChild(s);
-      } catch (e) {
-        resolve(false);
-      }
+  function unique(arr){
+    var out = [], map = Object.create(null);
+    (arr || []).forEach(function(v){
+      v = norm(v);
+      if(!v || map[v]) return;
+      map[v] = 1;
+      out.push(v);
     });
+    return out;
   }
-
-  function fireCoreReadyOnce() {
-    try {
-      if (window[READY_FLAG]) return;
-      window[READY_FLAG] = true;
-      window.dispatchEvent(new CustomEvent("tasun:core-ready"));
-    } catch (e) {
-      try {
-        var ev = document.createEvent("Event");
-        ev.initEvent("tasun:core-ready", false, false);
-        window.dispatchEvent(ev);
-      } catch (e2) {}
+  function addVer(url, ver){
+    var vv = norm(ver);
+    if(!vv) return url;
+    try{
+      var u = new URL(url, location.href);
+      if(u.origin !== location.origin) return url;
+      u.searchParams.set("v", vv);
+      return u.pathname + u.search + u.hash;
+    }catch(e){
+      var s = String(url || "");
+      if(!s || /^https?:\/\//i.test(s) || /^mailto:/i.test(s) || /^tel:/i.test(s)) return s;
+      return s + (s.indexOf("?") >= 0 ? "&" : "?") + "v=" + encodeURIComponent(vv);
     }
   }
-
-  function coreReady() {
-    var C = window.TasunCore;
-    return !!(C && (typeof C.withV === "function" || typeof C.__withV === "function" || typeof C.init === "function"));
+  function setGlobals(ver){
+    ver = norm(ver);
+    if(!ver) return;
+    window.APP_VER = ver;
+    window.TASUN_APP_VER = ver;
+    window.__CACHE_V = ver;
+    window.__withV = function(href){ return addVer(href, ver); };
   }
-
-  function installReadyAdapter() {
-    window.TasunCore = window.TasunCore || {};
-    var C = window.TasunCore;
-
-    if (!C.__readyQ) C.__readyQ = [];
-
-    if (typeof C.ready !== "function") {
-      C.ready = function (fn, timeoutMs) {
-        if (typeof fn === "function") C.__readyQ.push(fn);
-        Loader.ready(function(){}, timeoutMs);
-      };
+  function fnv1a(str){
+    str = String(str || "");
+    var h = 0x811c9dc5;
+    for(var i=0;i<str.length;i++){
+      h ^= str.charCodeAt(i);
+      h = (h + ((h<<1) + (h<<4) + (h<<7) + (h<<8) + (h<<24))) >>> 0;
     }
+    return ("0000000" + h.toString(16)).slice(-8);
   }
-
-  function drainReadyQueue() {
-    try {
-      var C = window.TasunCore;
-      if (!C || !C.__readyQ || !C.__readyQ.length) return;
-      var q = C.__readyQ.slice(0);
-      C.__readyQ.length = 0;
-      for (var i = 0; i < q.length; i++) {
-        try { q[i](window.TasunCore); } catch (e) {}
-      }
-    } catch (e2) {}
+  async function fetchTextNoStore(path){
+    var url = new URL(path, location.href);
+    url.searchParams.set("_", String(Date.now()) + "_" + Math.random().toString(16).slice(2));
+    var res = await fetch(url.toString(), { cache:"no-store", credentials:"omit" });
+    if(!res.ok) throw new Error(path + ":HTTP " + res.status);
+    return await res.text();
   }
-
-  function loadExtras(ver) {
-    var extra = window.TASUN_PAGE_SCRIPTS;
-    if (!Array.isArray(extra) || !extra.length) return Promise.resolve(true);
-
-    var seq = Promise.resolve(true);
-    for (var i = 0; i < extra.length; i++) {
-      (function (p) {
-        seq = seq.then(function () {
-          p = trim(p);
-          if (!p) return true;
-          return addScript(withV(p, ver));
-        });
-      })(extra[i]);
-    }
-    return seq;
-  }
-
-  function runPageMain() {
-    try {
-      var fn = window.TASUN_PAGE_MAIN;
-      if (typeof fn === "function") fn(window.TasunCore);
-    } catch (e) {}
-  }
-
-  function buildInitOpts(opts) {
-    opts = opts || {};
-    var pageKey = trim(opts.pageKey || window.TASUN_PAGE_KEY || "");
+  function parseConfig(raw){
+    raw = (raw && typeof raw === "object") ? raw : {};
+    var fallback = norm(raw.fallbackVersion || raw.manualVersion || raw.appVer || raw.APP_VER || raw.ver || raw.version || raw.appVersion || "") || "20260312_43";
+    var mode = norm(raw.versionMode || raw.mode || "manual").toLowerCase();
+    var sources = [];
+    if(Array.isArray(raw.versionSources)) sources = raw.versionSources.slice();
+    if(Array.isArray(raw.sources)) sources = sources.concat(raw.sources);
     return {
-      pageKey: pageKey,
-      forceUrlV: true,
-      forceVersionSync: (opts.forceVersionSync !== false),
-      patchResources: (opts.patchResources !== false),
-      networkToast: (opts.networkToast !== false),
-      appHeightVar: (opts.appHeightVar !== false)
+      mode: mode,
+      fallbackVersion: fallback,
+      versionSources: unique(sources),
+      includeCurrentPage: raw.includeCurrentPage !== false,
+      app: norm(raw.app || "Tasun"),
+      notes: norm(raw.notes || "")
+    };
+  }
+  function getCurrentUrlVersion(){
+    try{ return norm(new URL(location.href).searchParams.get("v")); }catch(e){ return ""; }
+  }
+  function saveCache(ver, meta){
+    try{
+      var payload = { ver: norm(ver), at: Date.now(), meta: meta || {} };
+      localStorage.setItem(CACHE_KEY, JSON.stringify(payload));
+      sessionStorage.setItem(CACHE_KEY, JSON.stringify(payload));
+    }catch(e){}
+  }
+  function readCache(){
+    var raw = null;
+    try{ raw = localStorage.getItem(CACHE_KEY); }catch(e){}
+    if(!raw){ try{ raw = sessionStorage.getItem(CACHE_KEY); }catch(e){} }
+    var j = safeJSON(raw);
+    return (j && typeof j === "object") ? j : null;
+  }
+  function normalizeSourceList(cfg){
+    var list = [];
+    if(cfg.includeCurrentPage !== false) list.push(currentBaseName());
+    list = list.concat(cfg.versionSources || []);
+    if(list.indexOf(VERSION_JSON_URL) < 0) list.push(VERSION_JSON_URL);
+    if(list.indexOf("tasun-resources.json") < 0) list.push("tasun-resources.json");
+    if(list.indexOf("tasun-version-loader.js") < 0) list.push("tasun-version-loader.js");
+    return unique(list);
+  }
+  async function computeAutoVersion(cfg){
+    var sources = normalizeSourceList(cfg);
+    var parts = [];
+    for(var i=0;i<sources.length;i++){
+      var p = sources[i];
+      try{
+        var text = await fetchTextNoStore(p);
+        parts.push(p + "|" + text.length + "|" + fnv1a(text));
+      }catch(e){
+        parts.push(p + "|ERR|" + fnv1a(String(e && e.message ? e.message : e)));
+      }
+    }
+    var seed = JSON.stringify({ app: cfg.app, mode: cfg.mode, notes: cfg.notes, sources: sources }) + "\n" + parts.join("\n");
+    return "auto_" + fnv1a(seed);
+  }
+  function maybeRedirect(ver){
+    ver = norm(ver);
+    if(!ver) return;
+    try{
+      var u = new URL(location.href);
+      var cur = norm(u.searchParams.get("v"));
+      var manualTs = (cur && /^\d{10,}$/.test(cur) && cur !== ver) ? cur : "";
+      var guard = "tasun_auto_ver_guard__" + currentBaseName() + "__" + ver;
+      var already = false;
+      try{ already = sessionStorage.getItem(guard) === "1"; }catch(e){}
+      if((cur !== ver || manualTs) && !already){
+        try{ sessionStorage.setItem(guard, "1"); }catch(e){}
+        u.searchParams.set("v", ver);
+        u.searchParams.set("_", manualTs || String(Date.now()));
+        location.replace(u.toString());
+      }
+    }catch(e){}
+  }
+
+  var cached = readCache();
+  var initial = norm(getCurrentUrlVersion() || (cached && cached.ver) || "");
+  if(initial) setGlobals(initial);
+  else if(!window.__withV){
+    window.__withV = function(href){
+      var cur = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || getCurrentUrlVersion() || "");
+      return addVer(href, cur);
     };
   }
 
-  function pickCurUrlV() {
-    try {
-      var u = new URL(location.href);
-      return trim(u.searchParams.get("v") || "");
-    } catch (e) {}
-    return "";
-  }
-
-  function startInternal(opts) {
-    opts = opts || {};
-
-    var verUrl = trim(opts.verUrl || VERSION_URL);
-    var corePath = trim(opts.corePath || CORE_DEFAULT);
-    var forceV = (opts.forceUrlV !== false);
-
-    var curV = pickCurUrlV();
-    var stored = trim(safeGet(localStorage, STORE_KEY) || "");
-    var preset = trim(opts.appVer || window.TASUN_APP_VER || window.APP_VER || "");
-
-    var initOpts = buildInitOpts(opts);
-
-    return fetchLatestVer(verUrl).then(function (latest) {
-      var v = trim(latest) || stored || curV || preset || String(Date.now());
-      safeSet(localStorage, STORE_KEY, v);
-
-      installGlobals(v);
-      installReadyAdapter();
-
-      if (forceV) {
-        if (forceUrlV(v)) return { redirected: true, ver: v };
+  (async function(){
+    try{
+      var raw = safeJSON(await fetchTextNoStore(VERSION_JSON_URL)) || {};
+      var cfg = parseConfig(raw);
+      var ver = "";
+      if(cfg.mode.indexOf("auto") >= 0){
+        ver = await computeAutoVersion(cfg);
       }
-
-      // core 已存在：直接 init
-      if (window.TasunCore && typeof window.TasunCore.init === "function") {
-        try { window.TasunCore.init(initOpts); } catch (e) {}
-        fireCoreReadyOnce();
-        drainReadyQueue();
-        return loadExtras(v).then(function () {
-          runPageMain();
-          return { ok: true, ver: v };
-        });
-      }
-
-      // 載入 core?v
-      return addScript(withV(corePath, v), "__tasun_core__").then(function (ok) {
-        if (window.TasunCore && typeof window.TasunCore.init === "function") {
-          try { window.TasunCore.init(initOpts); } catch (e) {}
-        }
-        fireCoreReadyOnce();
-        drainReadyQueue();
-        return loadExtras(v).then(function () {
-          runPageMain();
-          return { ok: ok, ver: v };
-        });
-      });
-    }).catch(function () {
-      // fetch 失敗：用 stored/cur/preset 保底
-      var v2 = stored || curV || preset || String(Date.now());
-      safeSet(localStorage, STORE_KEY, v2);
-
-      installGlobals(v2);
-      installReadyAdapter();
-
-      if (forceV) {
-        if (forceUrlV(v2)) return { redirected: true, ver: v2 };
-      }
-
-      if (window.TasunCore && typeof window.TasunCore.init === "function") {
-        try { window.TasunCore.init(initOpts); } catch (e) {}
-        fireCoreReadyOnce();
-        drainReadyQueue();
-        return loadExtras(v2).then(function () {
-          runPageMain();
-          return { ok: true, ver: v2 };
-        });
-      }
-
-      return addScript(withV(corePath, v2), "__tasun_core__").then(function (ok2) {
-        if (window.TasunCore && typeof window.TasunCore.init === "function") {
-          try { window.TasunCore.init(initOpts); } catch (e) {}
-        }
-        fireCoreReadyOnce();
-        drainReadyQueue();
-        return loadExtras(v2).then(function () {
-          runPageMain();
-          return { ok: ok2, ver: v2 };
-        });
-      });
-    });
-  }
-
-  // ===== public: ready =====
-  Loader.ready = function (fn, timeoutMs) {
-    var cb = (typeof fn === "function") ? fn : function(){};
-    var tmax = Number(timeoutMs || 8000);
-    if (!(tmax >= 0)) tmax = 8000;
-
-    if (coreReady()) {
-      fireCoreReadyOnce();
-      drainReadyQueue();
-      try { cb(); } catch (e) {}
-      return;
+      if(!ver) ver = cfg.fallbackVersion || initial || "20260312_43";
+      setGlobals(ver);
+      saveCache(ver, { mode: cfg.mode, current: currentBaseName() });
+      maybeRedirect(ver);
+      READY_RESOLVE(true);
+    }catch(e){
+      var fallback = initial || "20260312_43";
+      setGlobals(fallback);
+      READY_RESOLVE(true);
     }
-
-    var done = false;
-    function finish() {
-      if (done) return;
-      done = true;
-
-      if (coreReady()) {
-        fireCoreReadyOnce();
-        drainReadyQueue();
-      }
-      try { cb(); } catch (e2) {}
-    }
-
-    window.addEventListener("tasun:core-ready", function () {
-      if (coreReady()) finish();
-      else requestAnimationFrame(function () { finish(); });
-    }, { once: true });
-
-    var t0 = Date.now();
-    var timer = setInterval(function () {
-      if (coreReady()) { clearInterval(timer); finish(); return; }
-      if (Date.now() - t0 > tmax) { clearInterval(timer); finish(); }
-    }, 50);
-  };
-
-  // ===== public: start (single-run) =====
-  Loader._startPromise = Loader._startPromise || null;
-  Loader.start = function (opts) {
-    if (Loader._startPromise) return Loader._startPromise;
-    Loader._startPromise = startInternal(opts || {});
-    return Loader._startPromise;
-  };
-
-  Loader.getVersion = function () {
-    return trim(Loader.ver || window.TASUN_APP_VER || window.APP_VER || "");
-  };
-
-  window.TasunVersionLoader = Loader;
-
-  // ===== Compatibility: TasunBoot / TasunLoader =====
-  window.TasunBoot = window.TasunBoot || {};
-  window.TasunBoot.start = function (opts) { Loader.start(opts || {}); };
-  window.TasunBoot.onReady = function (cb) {
-    Loader.ready(function () { try { cb && cb(window.TasunCore); } catch (e) {} }, 8000);
-  };
-
-  window.TasunLoader = window.TasunLoader || {};
-  window.TasunLoader.start = function (opts) { Loader.start(opts || {}); };
-  window.TasunLoader.ready = function (fn, t) { Loader.ready(fn, t); };
-
-  // ===== Auto start (default ON) =====
-  if (!window.__TASUN_AUTO_START_DISABLED__) {
-    window.__TASUN_READY__ = Loader.start({
-      pageKey: window.TASUN_PAGE_KEY || "",
-      verUrl: VERSION_URL,
-      corePath: CORE_DEFAULT,
-      forceUrlV: true,
-      forceVersionSync: true,
-      patchResources: true,
-      networkToast: true,
-      appHeightVar: true
-    });
-  }
-
-})(window, document);
+  })();
+})();
