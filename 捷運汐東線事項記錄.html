@@ -886,6 +886,8 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     var TRADE_SYS_MAP_KEY = "tasunSxdhNotes_tradeSysMap_v1";
     var DB_SNAPSHOT_KEY = "tasunSxdhNotes_cloudSnapshot_v1";
     var DB_SNAPSHOT_META_KEY = "tasunSxdhNotes_cloudSnapshotMeta_v1";
+    var DB_SNAPSHOT_SESSION_KEY = "tasunSxdhNotes_cloudSnapshot_session_v1";
+    var DB_SNAPSHOT_SESSION_META_KEY = "tasunSxdhNotes_cloudSnapshotMeta_session_v1";
     var LEGACY_DB_KEYS = [
       "tasunSxdhNotes_v1",
       "tasunSxdhNotes_v2",
@@ -895,11 +897,15 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       "tasunSxdhNotes_rows_v2",
       "tasunSxdhNotes_data_v1",
       "tasunSxdhNotes_data_v2",
+      "tasunSxdhNotes_cloudSnapshot_v1",
+      "tasunSxdhNotes_cloudSnapshot_session_v1",
       "tasunSxdhNotes",
       "sxdh-notes",
       "sxdh_notes",
       "捷運汐東線事項記錄",
-      "捷運汐東線事項紀錄"
+      "捷運汐東線事項紀錄",
+      "捷運汐東線事項記錄_backup",
+      "捷運汐東線事項紀錄_backup"
     ];
 
     // Optional overrides
@@ -1295,38 +1301,61 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
         return Array.isArray(parsed) ? parsed : [];
       }
 
+      function tryPayloadRows(raw){
+        var parsed = safeJSON(raw);
+        if(!parsed) return [];
+        var payload = unwrap(parsed);
+        if(Array.isArray(payload)) return payload;
+        if(payload && typeof payload==="object"){
+          if(Array.isArray(payload.db)) return payload.db;
+          if(Array.isArray(payload.rows)) return payload.rows;
+          if(Array.isArray(payload.items)) return payload.items;
+          if(Array.isArray(payload.records)) return payload.records;
+          if(Array.isArray(payload.data)) return payload.data;
+        }
+        return [];
+      }
+
       function pickLegacyDbArr(){
         var best = [];
-        var keys = [DB_KEY].concat(LEGACY_DB_KEYS);
-        for(var i=0;i<keys.length;i++){
-          var k = keys[i];
-          var arr = [];
-          try{ arr = tryArray(localStorage.getItem(k)); }catch(e){ arr = []; }
-          if(arr.length > best.length) best = arr;
+        var stores = [localStorage, sessionStorage];
+        var keys = [DB_KEY, DB_SNAPSHOT_KEY, DB_SNAPSHOT_SESSION_KEY].concat(LEGACY_DB_KEYS);
+        for(var s=0;s<stores.length;s++){
+          var storage = stores[s];
+          for(var i=0;i<keys.length;i++){
+            var k = keys[i];
+            var arr = [];
+            try{
+              arr = tryArray(storage.getItem(k));
+              if(!arr.length) arr = tryPayloadRows(storage.getItem(k));
+            }catch(e){ arr = []; }
+            if(arr.length > best.length) best = arr;
+          }
         }
         return best;
       }
 
-      // 1) try IDB
       var meta = null, rows = [];
       try{
         meta = await idbGetMeta(PAGE_KEY);
         rows = await idbGetAllRows(PAGE_KEY);
       }catch(e){ meta=null; rows=[]; }
 
-      // 1.5) snapshot / legacy fallback merge (桌機常因舊 localStorage key 或空 IDB 導致無資料)
       var snapshotRows = [];
-      try{
-        snapshotRows = tryArray(localStorage.getItem(DB_SNAPSHOT_KEY));
-      }catch(e){ snapshotRows = []; }
+      try{ snapshotRows = tryArray(localStorage.getItem(DB_SNAPSHOT_KEY)); }catch(e){ snapshotRows = []; }
+      if(!snapshotRows.length){ try{ snapshotRows = tryArray(sessionStorage.getItem(DB_SNAPSHOT_SESSION_KEY)); }catch(e){ snapshotRows = []; } }
+      if(!snapshotRows.length){ try{ snapshotRows = tryPayloadRows(localStorage.getItem(DB_SNAPSHOT_KEY)); }catch(e){ snapshotRows = []; } }
+      if(!snapshotRows.length){ try{ snapshotRows = tryPayloadRows(sessionStorage.getItem(DB_SNAPSHOT_SESSION_KEY)); }catch(e){ snapshotRows = []; } }
+
       var legacyRows = [];
-      try{
-        legacyRows = pickLegacyDbArr();
-      }catch(e){ legacyRows = []; }
+      try{ legacyRows = pickLegacyDbArr(); }catch(e){ legacyRows = []; }
 
       var mergedRows = [];
       try{
-        mergedRows = mergePayload({ db: rows || [], counter: Number(meta && meta.counter || 0) || 0 }, { db: snapshotRows.concat(legacyRows), counter: 0 }).db || [];
+        mergedRows = mergePayload(
+          { db: rows || [], counter: Number(meta && meta.counter || 0) || 0 },
+          { db: (snapshotRows || []).concat(legacyRows || []), counter: 0 }
+        ).db || [];
       }catch(e){
         mergedRows = (rows && rows.length) ? rows : ((snapshotRows && snapshotRows.length) ? snapshotRows : legacyRows);
       }
@@ -1344,7 +1373,6 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
         return { db: mergedRows||[], counter: counter };
       }
 
-      // 2) migrate from localStorage / snapshot / legacy cache
       var arr = pickLegacyDbArr();
       if(!Array.isArray(arr) || !arr.length) arr = snapshotRows;
       if(!Array.isArray(arr)) arr = [];
@@ -1354,7 +1382,6 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       state.lastSyncAt = 0;
       state.clientId = getClientId();
 
-      // write into IDB for the first time
       try{
         await idbPutRows(PAGE_KEY, arr);
         await idbPutMeta({ pageKey: PAGE_KEY, counter: c, lastSyncAt: 0, clientId: state.clientId, updatedAt: nowISO() });
@@ -1500,6 +1527,9 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       try{
         localStorage.setItem(DB_KEY, JSON.stringify(dbArr));
         localStorage.setItem(COUNTER_KEY, String(counter));
+      }catch(e){}
+      try{
+        saveSnapshot(dbArr, { source:"saveLocal", counter: counter });
       }catch(e){}
     }
 
@@ -1723,12 +1753,18 @@ function getVisibleRows(){
     }
 
     function saveSnapshot(rows, meta){
-      try{ localStorage.setItem(DB_SNAPSHOT_KEY, JSON.stringify(Array.isArray(rows) ? rows : [])); }catch(e){}
-      try{ localStorage.setItem(DB_SNAPSHOT_META_KEY, JSON.stringify(Object.assign({ at: nowISO(), appVer: APP_VER, pageKey: PAGE_KEY }, meta||{}))); }catch(e){}
+      var arr = Array.isArray(rows) ? rows : [];
+      try{ localStorage.setItem(DB_SNAPSHOT_KEY, JSON.stringify(arr)); }catch(e){}
+      try{ sessionStorage.setItem(DB_SNAPSHOT_SESSION_KEY, JSON.stringify(arr)); }catch(e){}
+      var metaObj = Object.assign({ at: nowISO(), appVer: APP_VER, pageKey: PAGE_KEY }, meta||{});
+      try{ localStorage.setItem(DB_SNAPSHOT_META_KEY, JSON.stringify(metaObj)); }catch(e){}
+      try{ sessionStorage.setItem(DB_SNAPSHOT_SESSION_META_KEY, JSON.stringify(metaObj)); }catch(e){}
     }
 
     function loadSnapshotRows(){
       var arr = safeJSON(localStorage.getItem(DB_SNAPSHOT_KEY));
+      if(Array.isArray(arr) && arr.length) return arr;
+      arr = safeJSON(sessionStorage.getItem(DB_SNAPSHOT_SESSION_KEY));
       return Array.isArray(arr) ? arr : [];
     }
 
@@ -2524,31 +2560,50 @@ function getPromptOptions(mode){
         cfg = cfg || await loadCloudCfg();
         const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-        const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/pull";
-
-        const url = _joinUrl(apiBase, readPath) + (readPath.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(pageKey);
-
-        const r = await fetch(url, {
-          method: "GET",
-          cache: "no-store",
-          credentials: (cfg && cfg.credentials) ? "include" : "omit",
-          headers: { "accept":"application/json" }
-        });
-        if(!r.ok){
-          const t = await r.text().catch(()=> "");
-          throw new Error("cloud read failed: " + r.status + " " + t.slice(0,200));
+        const readPaths = [];
+        function pushPath(p){
+          p = norm(p);
+          if(!p) return;
+          if(readPaths.indexOf(p) < 0) readPaths.push(p);
         }
-        const j = await r.json();
-        return _normalizePullResponse(j);
+        pushPath((eps && eps.read) ? String(eps.read) : "/api/tasun/read");
+        pushPath("/api/tasun/read");
+        pushPath("/api/tasun/pull");
+        pushPath("/api/read");
+        pushPath("/api/pull");
+
+        var lastErr = null;
+        for(var i=0;i<readPaths.length;i++){
+          const readPath = readPaths[i];
+          const url = _joinUrl(apiBase, readPath) + (readPath.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(pageKey) + "&_=" + encodeURIComponent(String(Date.now()));
+          try{
+            const r = await fetch(url, {
+              method: "GET",
+              cache: "no-store",
+              credentials: (cfg && cfg.credentials) ? "include" : "omit",
+              headers: { "accept":"application/json" }
+            });
+            if(!r.ok){
+              const t = await r.text().catch(()=> "");
+              lastErr = new Error("cloud read failed: " + r.status + " " + t.slice(0,200));
+              continue;
+            }
+            const j = await r.json();
+            const payload = _normalizePullResponse(j);
+            if(payload && Array.isArray(payload.db)) return payload;
+            return { db:[], counter:0 };
+          }catch(err){
+            lastErr = err;
+          }
+        }
+        throw (lastErr || new Error("cloud read failed"));
       }
 
       async function cloudMerge(cfg, pageKey, payloadLike, clientInfo){
         cfg = cfg || await loadCloudCfg();
         const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-        const mergePath = (eps && eps.merge) ? String(eps.merge) : "/api/tasun/merge";
 
-        // Accept: {key,payload:{db,counter}} / {payload:{db,counter}} / raw {db,counter}
         let payload = payloadLike;
         if(payload && typeof payload === "object"){
           if(payload.payload && typeof payload.payload==="object") payload = payload.payload;
@@ -2562,21 +2617,39 @@ function getPromptOptions(mode){
           client: clientInfo && typeof clientInfo==="object" ? clientInfo : {}
         };
 
-        const url = _joinUrl(apiBase, mergePath);
-
-        const r = await fetch(url, {
-          method: "POST",
-          cache: "no-store",
-          credentials: (cfg && cfg.credentials) ? "include" : "omit",
-          headers: { "content-type":"application/json", "accept":"application/json" },
-          body: JSON.stringify(body)
-        });
-        if(!r.ok){
-          const t = await r.text().catch(()=> "");
-          throw new Error("cloud merge failed: " + r.status + " " + t.slice(0,200));
+        const mergePaths = [];
+        function pushPath(p){
+          p = norm(p);
+          if(!p) return;
+          if(mergePaths.indexOf(p) < 0) mergePaths.push(p);
         }
-        const j = await r.json();
-        return _normalizePullResponse(j);
+        pushPath((eps && eps.merge) ? String(eps.merge) : "/api/tasun/merge");
+        pushPath("/api/tasun/merge");
+        pushPath("/api/merge");
+
+        var lastErr = null;
+        for(var i=0;i<mergePaths.length;i++){
+          const url = _joinUrl(apiBase, mergePaths[i]);
+          try{
+            const r = await fetch(url, {
+              method: "POST",
+              cache: "no-store",
+              credentials: (cfg && cfg.credentials) ? "include" : "omit",
+              headers: { "content-type":"application/json", "accept":"application/json" },
+              body: JSON.stringify(body)
+            });
+            if(!r.ok){
+              const t = await r.text().catch(()=> "");
+              lastErr = new Error("cloud merge failed: " + r.status + " " + t.slice(0,200));
+              continue;
+            }
+            const j = await r.json();
+            return _normalizePullResponse(j);
+          }catch(err){
+            lastErr = err;
+          }
+        }
+        throw (lastErr || new Error("cloud merge failed"));
       }
     async function syncFromCloud(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
@@ -3091,7 +3164,7 @@ $("btnSave").addEventListener("click", async function(){
     // ---------------------------
         async function boot(){
       // ✅ 目的：無論雲端/IndexedDB 是否異常，都要先畫出版本/筆數/選取/雲端/最後。
-      // ✅ 加入：桌機首進頁面若本機空白，會優先雲端下拉 + 快照回復，避免手機有資料、桌機沒資料。
+      // ✅ 強化：桌機首進頁面若本機空白，會主動雲端下拉 + 快照回復 + 延遲重試，避免手機有資料、桌機沒資料。
       var cur = null;
       try{
         try{ await openIDB(); }catch(e){}
@@ -3128,9 +3201,9 @@ $("btnSave").addEventListener("click", async function(){
 
         var localCount = 0;
         try{ localCount = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length; }catch(e){ localCount = 0; }
+
         try{ await syncFromCloud({ silent:true, aggressive:(localCount===0) }); }catch(e){}
 
-        // 若第一次下拉後仍空，再用快照補畫面一次，避免桌機空白。
         try{
           var visibleCount = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
           if(!visibleCount){
@@ -3155,6 +3228,20 @@ $("btnSave").addEventListener("click", async function(){
             updatedAt: nowISO()
           });
         }catch(e){}
+
+        setTimeout(function(){
+          try{
+            var n = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
+            if(!n) syncFromCloud({ silent:true, aggressive:true }).catch(function(){});
+          }catch(_e){}
+        }, 1200);
+
+        setTimeout(function(){
+          try{
+            var n = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
+            if(!n) syncFromCloud({ silent:true, aggressive:true }).catch(function(){});
+          }catch(_e){}
+        }, 4200);
       }catch(e){
         try{ wire(); }catch(_e){}
         try{ refresh(); }catch(_e){}
@@ -3166,7 +3253,7 @@ $("btnSave").addEventListener("click", async function(){
 
     window.addEventListener("storage", async function(e){
       var k = String((e && e.key) || "");
-      if(k && [DB_KEY, COUNTER_KEY, READ_MODE_KEY, AUTH_KEY, CURRENT_KEY, DB_SNAPSHOT_KEY, DB_SNAPSHOT_META_KEY].indexOf(k)===-1) return;
+      if(k && [DB_KEY, COUNTER_KEY, READ_MODE_KEY, AUTH_KEY, CURRENT_KEY, DB_SNAPSHOT_KEY, DB_SNAPSHOT_META_KEY, DB_SNAPSHOT_SESSION_KEY, DB_SNAPSHOT_SESSION_META_KEY].indexOf(k)===-1) return;
       try{
         var p2 = await loadDb();
         state.db = p2.db;
@@ -3184,6 +3271,10 @@ $("btnSave").addEventListener("click", async function(){
           }
         }
         refresh();
+        try{
+          var n2 = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
+          if(!n2) syncFromCloud({ silent:true, aggressive:true }).catch(function(){});
+        }catch(_e){}
       }catch(err){}
     });
 
