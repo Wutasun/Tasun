@@ -4,9 +4,98 @@
 <html lang="zh-Hant">
 <head>
   
-    <!-- Tasun v4 FINAL: next-fix + 全站守門（不動UI） -->
-    <script src="tasun-next-fix.js"></script>
-    <script src="tasun-global-auth-v65.js"></script>
+    <!-- ✅ v34 穩定開機器：先讀最新版號，再統一載入所有 head scripts（避免版次變動時混載舊 JS） -->
+    <script>
+    (function(){
+      if(window.__TASUN_HEAD_BOOTSTRAP__) return;
+      window.__TASUN_HEAD_BOOTSTRAP__ = true;
+
+      var FALLBACK_VER = "20260312_34";
+      var HEAD_GUARD = "tasun_head_redirect_once_v34";
+
+      function norm(v){ return (v===undefined||v===null)?"":String(v).trim(); }
+      function pickVer(j){
+        if(!j || typeof j!=="object") return "";
+        return norm(j.appVersion || j.appVer || j.version || j.ver || j.TASUN_APP_VER || j.APP_VER);
+      }
+      function sameOriginPath(src){
+        var s = norm(src);
+        if(!s) return s;
+        if (/^(https?:)?\/\//i.test(s) || /^data:/i.test(s) || /^mailto:/i.test(s) || /^tel:/i.test(s)) return s;
+        return s;
+      }
+      function withVersion(src, ver){
+        var s = sameOriginPath(src);
+        if(!s) return s;
+        try{
+          var u = new URL(s, location.href);
+          if(u.origin === location.origin){
+            u.searchParams.set("v", ver);
+            return u.toString();
+          }
+          return s;
+        }catch(e){
+          return s + (s.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(ver);
+        }
+      }
+      function loadScript(src){
+        return new Promise(function(resolve){
+          try{
+            var id = "tasun-head-script::" + src;
+            if(document.getElementById(id)) return resolve(true);
+            var s = document.createElement("script");
+            s.id = id;
+            s.src = src;
+            s.async = false;
+            s.onload = function(){ resolve(true); };
+            s.onerror = function(){ resolve(false); };
+            document.head.appendChild(s);
+          }catch(_e){ resolve(false); }
+        });
+      }
+
+      window.__TASUN_HEAD_READY__ = (async function(){
+        var ver = FALLBACK_VER;
+        try{
+          var r = await fetch("tasun-version.json?_=" + Date.now(), { cache:"no-store" });
+          if(r && r.ok){
+            var j = await r.json();
+            ver = pickVer(j) || FALLBACK_VER;
+          }
+        }catch(_e){}
+
+        window.APP_VER = ver;
+        window.TASUN_APP_VER = ver;
+        window.__CACHE_V = ver;
+        window.__withV = function(href){ return withVersion(href, ver); };
+
+        try{
+          var u = new URL(location.href);
+          var curV = norm(u.searchParams.get("v"));
+          var guardKey = HEAD_GUARD + "::" + curV + "=>" + ver;
+          if(curV !== ver && !sessionStorage.getItem(guardKey)){
+            sessionStorage.setItem(guardKey, "1");
+            u.searchParams.set("v", ver);
+            u.searchParams.set("_", String(Date.now()));
+            location.replace(u.toString());
+            return false;
+          }
+        }catch(_e){}
+
+        var scripts = [
+          "tasun-next-fix.js",
+          "tasun-global-auth-v65.js",
+          "tasun-cloudwrap-v4.js",
+          "tasun-auth-v4.js",
+          "tasun-guard-v4.js"
+        ];
+        for(var i=0;i<scripts.length;i++){
+          await loadScript(withVersion(scripts[i], ver));
+        }
+        return true;
+      })();
+    })();
+    </script>
 <meta charset="UTF-8" />
   <!-- ✅ iOS / Android：用 visualViewport + svh/dvh 穩定首屏，降低地址列收合跳動 -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -37,30 +126,15 @@
 
   <!-- ✅全站版本 -->
   <script>
-    window.APP_VER = window.APP_VER || "20260310_07";
-    window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
-    (function(){
-      try{
-        fetch('tasun-version.json?_=' + Date.now(), { cache:'no-store' })
-          .then(r => r.ok ? r.json() : null)
-          .then(j => {
-            const v = String((j && (j.version || j.ver || j.appVer)) || window.TASUN_APP_VER || window.APP_VER || '').trim();
-            if(v){
-              window.APP_VER = v;
-              window.TASUN_APP_VER = v;
-            }
-          })
-          .catch(()=>{});
-      }catch(_e){}
-    })();
+    // ✅ v34：版號由上方 bootstrap 先行決定，這裡只保留相容欄位
+    window.APP_VER = String(window.APP_VER || window.TASUN_APP_VER || "20260312_34").trim();
+    window.TASUN_APP_VER = String(window.TASUN_APP_VER || window.APP_VER || "20260312_34").trim();
   </script>
 
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet">
-  <script src="tasun-cloudwrap-v4.js?v=20260305_v4_1"></script>
-  <script src="tasun-auth-v4.js?v=20260305_v4_1"></script>
-  <script src="tasun-guard-v4.js?v=20260305_v4_1"></script>
+  <!-- ✅ tasun-cloudwrap / tasun-auth / tasun-guard 已由 head bootstrap 統一依最新版號載入 -->
 </head>
 
 <body class="locked booting">
@@ -206,6 +280,7 @@
       }
 
       (async()=>{
+        try{ if(window.__TASUN_HEAD_READY__) await window.__TASUN_HEAD_READY__; }catch(_e){}
         await loadScript(withV("tasun-boot.js"));
         await loadScript(withV("tasun-loader.js"));
 
@@ -1907,6 +1982,29 @@ function runIndexApp(){
           if(!buttons.length) buttons = null;
         }
         return { username, level, passHash, password, buttons };
+      }
+
+      function normalizeRowFromStorage(row, btnCount){
+        const n = normalizeAuthLikeRow(row, btnCount);
+        if(!n) return { username:"", level:"read", passHash:"", password:"", buttons:Array.from({length:btnCount}, ()=>false) };
+
+        const level = ["admin","write","read"].includes(n.level) ? n.level : "read";
+        let buttons = Array.isArray(n.buttons) ? n.buttons.slice(0, btnCount) : [];
+        while(buttons.length < btnCount) buttons.push(false);
+
+        // 若未設定按鍵權限：admin/write 預設全開；read 只開最後一顆（沿用既有固定基準）
+        const hasExplicit = buttons.some(v => v === true);
+        if(!hasExplicit){
+          buttons = buttons.map((_, idx) => (level === "read" ? idx === (btnCount - 1) : true));
+        }
+
+        return {
+          username: n.username,
+          level: level,
+          passHash: n.passHash || "",
+          password: n.password || "",
+          buttons: buttons
+        };
       }
 
       function mergeAuthRowsKeepOrder(primary, fallback, btnCount){
