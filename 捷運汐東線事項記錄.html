@@ -1239,13 +1239,6 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       }
 
       _cloudCfgCache = cfg;
-      try{
-        setCloudState({
-          cfgOk: !!(cfg && isValidApiBase(cfg.apiBase)),
-          apiBase: norm(cfg && cfg.apiBase),
-          endpoints: (cfg && cfg.endpoints) ? Object.assign({}, cfg.endpoints) : null
-        }, true);
-      }catch(e){}
       return cfg;
     }
 
@@ -1668,17 +1661,9 @@ function getVisibleRows(){
       selectedUid: "",
       mode: "view",
       readMode: false,
-      cloud: { ok:false, cfgOk:false, apiBase:"", endpoints:null, lastSyncAt:"", lastOkAt:"" },
+      cloud: { ok:false, cfgOk:false, reachable:false, apiBase:"", endpoints:null, lastSyncAt:"", lastOkAt:"" },
       _legacyScan: null
     };
-
-    function setCloudState(patch, skipRefresh){
-      patch = (patch && typeof patch === "object") ? patch : {};
-      state.cloud = Object.assign({}, state.cloud || {}, patch);
-      if(!skipRefresh){
-        try{ refresh(); }catch(e){}
-      }
-    }
 
     // load map once (kept in memory + persisted on change)
     var TRADE_SYS_MAP = loadMap();
@@ -2079,7 +2064,7 @@ function getVisibleRows(){
       renderCards(rows);
 
       // hint
-      var cloudTxt = state.cloud.ok ? "已同步" : (state.cloud.cfgOk ? "待同步" : "未設定");
+      var cloudTxt = state.cloud.ok ? "已同步" : (state.cloud.reachable ? "可連線" : (state.cloud.cfgOk ? "待同步" : "未設定"));
       var lastTxt = state.cloud.lastOkAt ? fmtClock(state.cloud.lastOkAt) : "—";
       var roleTxt = state.role==="admin" ? "admin" : (state.role==="write"?"可編輯":"唯讀");
 
@@ -2348,32 +2333,21 @@ function getPromptOptions(mode){
           cfg = cfg || await loadCloudCfg();
           const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
           const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-          const cfgOk = !!(cfg && isValidApiBase(apiBase));
           const candidates = [];
           if(eps && eps.health) candidates.push(_joinUrl(apiBase, eps.health));
+          // common fallbacks
           candidates.push(_joinUrl(apiBase, "/api/ping"));
           candidates.push(_joinUrl(apiBase, "/api/tasun/ping"));
-          candidates.push(_joinUrl(apiBase, "/api/health"));
+          candidates.push(_joinUrl(apiBase, "/api/ping"));
 
-          let ok = false;
-          if(cfgOk){
-            for(const url of candidates){
-              try{
-                const r = await fetch(url, { method:"GET", credentials: (cfg && cfg.credentials) ? "include" : "omit", cache:"no-store" });
-                if(r.ok){ ok = true; break; }
-              }catch(_e){}
-            }
+          for(const url of candidates){
+            try{
+              const r = await fetch(url, { method:"GET", credentials: (cfg && cfg.credentials) ? "include" : "omit", cache:"no-store" });
+              if(r.ok) return true;
+            }catch(_e){}
           }
-          setCloudState({
-            cfgOk: cfgOk,
-            ok: ok,
-            apiBase: apiBase,
-            endpoints: eps || null,
-            lastOkAt: ok ? Date.now() : (state.cloud && state.cloud.lastOkAt ? state.cloud.lastOkAt : "")
-          });
-          return ok;
+          return false;
         }catch(_e){
-          setCloudState({ ok:false, cfgOk:false });
           return false;
         }
       }
@@ -2457,16 +2431,12 @@ function getPromptOptions(mode){
 
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)){
-        setCloudState({ cfgOk:false, ok:false, apiBase:"", endpoints:null });
         if(!silent) toast("雲端未設定/無效"); 
         return;
       }
-      setCloudState({ cfgOk:true, apiBase:norm(cfg.apiBase), endpoints:cfg.endpoints || null }, true);
 
       try{
         var remote = await cloudRead(cfg, PAGE_KEY);
-
-        setCloudState({ ok:true, lastOkAt: Date.now(), lastSyncAt: nowISO() }, true);
 
         // If cloud is empty but local has data, offer to bootstrap to cloud (one-time)
         var cloudEmpty = !remote || !Array.isArray(remote.db) || remote.db.length===0;
@@ -2496,16 +2466,10 @@ function getPromptOptions(mode){
           sessionStorage.setItem(autoFillKey, "1");
           try{
             var reason = remoteEmpty ? "auto-bootstrap-cloud-empty" : "auto-fill-cloud-missing";
-            var merged = await cloudMerge(cfg, PAGE_KEY, { db: localDb, counter: state.counter }, {
-              user: state.user || "",
-              role: state.role || "",
-              appVer: APP_VER,
-              clientId: state.clientId || getClientId(),
-              at: nowISO(),
-              reason: reason
-            });
+            var merged = await cloudMerge({ payload: { db: localDb, counter: state.counter }, reason: reason });
             if(merged && merged.ok && merged.payload){
               remote = merged; // use merged payload as latest remote snapshot
+              setCloudState({ ok:true, cfgOk:true, reachable:true, lastOkAt: Date.now(), lastSyncAt: nowISO() }, true);
               if(remoteEmpty) localStorage.setItem(bootKey, "1");
               toast(remoteEmpty
                 ? ("雲端空白，已自動倒入本機資料：" + localDb.length + " 筆")
@@ -2525,10 +2489,8 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
 
         buildDictsFromDb();
         refresh();
-        setCloudState({ ok:true, cfgOk:true, lastOkAt: Date.now(), lastSyncAt: nowISO() });
         if(!silent) toast("已從雲端更新");
       }catch(e){
-        setCloudState({ ok:false, cfgOk:true, apiBase:norm(cfg && cfg.apiBase), endpoints:(cfg && cfg.endpoints) ? cfg.endpoints : null });
         if(!silent) toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
       }
     }
@@ -2540,11 +2502,9 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
 
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)){
-        setCloudState({ cfgOk:false, ok:false, apiBase:"", endpoints:null });
         if(!silent) toast("雲端未設定/無效"); 
         return;
       }
-      setCloudState({ cfgOk:true, apiBase:norm(cfg.apiBase), endpoints:cfg.endpoints || null }, true);
 
       var meta = null;
       try{ meta = await idbGetMeta(PAGE_KEY); }catch(e){ meta=null; }
@@ -2589,10 +2549,8 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
 
         buildDictsFromDb();
         refresh();
-        setCloudState({ ok:true, cfgOk:true, lastOkAt: Date.now(), lastSyncAt: nowISO() });
         if(!silent) toast(fullUpload ? "雲端同步完成（全量）" : "雲端同步完成（增量）");
       }catch(e){
-        setCloudState({ ok:false, cfgOk:true, apiBase:norm(cfg && cfg.apiBase), endpoints:(cfg && cfg.endpoints) ? cfg.endpoints : null });
         if(!silent) toast("雲端同步失敗：" + (e && e.message ? e.message : String(e)));
       }
     }
@@ -2795,6 +2753,25 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       inp.type = (inp.type==="password") ? "text" : "password";
     }
 
+    var _autoPullInFlight = false;
+    var _autoPullLastAt = 0;
+
+    async function autoHydrateFromCloud(reason){
+      var now = Date.now();
+      if(_autoPullInFlight) return false;
+      if((now - _autoPullLastAt) < 5000) return false;
+      _autoPullInFlight = true;
+      try{
+        await syncFromCloud({ silent:true, reason: reason || "autoHydrate" });
+        _autoPullLastAt = Date.now();
+        return true;
+      }catch(e){
+        return false;
+      }finally{
+        _autoPullInFlight = false;
+      }
+    }
+
     // ---------------------------
     // Wire events
     // ---------------------------
@@ -2900,10 +2877,19 @@ $("btnSave").addEventListener("click", async function(){
       // ---------------------------
       // ✅ Auto sync triggers
       // ---------------------------
-      window.addEventListener("online", function(){ scheduleSync("online", true); });
-      window.addEventListener("focus", function(){ scheduleSync("focus"); });
+      window.addEventListener("online", function(){
+        autoHydrateFromCloud("online");
+        scheduleSync("online", true);
+      });
+      window.addEventListener("focus", function(){
+        if(!state.db || !state.db.length) autoHydrateFromCloud("focus-empty");
+        scheduleSync("focus");
+      });
       document.addEventListener("visibilitychange", function(){
-        if(!document.hidden) scheduleSync("visible");
+        if(!document.hidden){
+          if(!state.db || !state.db.length) autoHydrateFromCloud("visible-empty");
+          scheduleSync("visible");
+        }
       });
       // 週期保底同步（避免長時間開著頁面但沒互動）
       setInterval(function(){ scheduleSync("periodic"); }, SYNC_PERIODIC_MS);
@@ -2948,8 +2934,7 @@ $("btnSave").addEventListener("click", async function(){
 
         try{ wire(); }catch(e){}
         try{ refresh(); }catch(e){}
-        try{ await cloudHealth(); }catch(e){}
-        try{ refresh(); }catch(e){}
+        try{ cloudHealth(); }catch(e){}
         try{ if(!cur) openLogin(); }catch(e){}
 
         try{
