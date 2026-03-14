@@ -14,19 +14,41 @@
   <!-- ✅ 自動版本控版：改成 tasun-version.json + tasun-version-loader.js 自動雜湊 -->
   <script>document.write('<script src="tasun-version-loader.js?_=' + Date.now() + '"><\/script>');</script>
   <script>
-  // ✅SSO（免重複登入）：若 index 已登入，子頁直接沿用（不改 UI）
+  // ✅ 同一瀏覽器工作階段沿用 index.html 登入；關閉瀏覽器後失效（session cookie）
   (function(){
-    const SSO_KEY="tasunSso_v1", CURRENT_KEY="tasunCurrentUser_v1";
+    const CURRENT_KEY = 'tasunCurrentUser_v1';
+    const SESSION_KEY = 'tasunSessionLogin_v2';
+    const COOKIE_NAME = 'tasun_session_v4';
     function jparse(s,f){ try{return JSON.parse(s);}catch(_){return f;} }
-    function inferRole(n,r){ if(r) return r; if(n==="alex") return "admin"; if(n==="tasun") return "write"; return "read"; }
-    const sso = jparse(localStorage.getItem(SSO_KEY)||"", null);
-    if(sso && sso.name && (!sso.exp || Date.now() <= Number(sso.exp))){
+    function inferRole(n,r){ if(r) return String(r).toLowerCase(); if(n==='alex'||n==='joyce') return 'admin'; if(n==='tasun') return 'write'; return 'read'; }
+    function b64d(s){ try{ return decodeURIComponent(escape(atob(s))); }catch(_e){ return ''; } }
+    function getCookieSession(){
       try{
-        localStorage.setItem(CURRENT_KEY, JSON.stringify({ name:sso.name, user:sso.name, role: inferRole(sso.name, sso.role) }));
-      }catch(_e){}
-      try{ sessionStorage.setItem("tasunSsoTab_v1","1"); }catch(_e2){}
-      window.__TASUN_SSO_OK__=true;
+        const m = const m = document.cookie.match(new RegExp('(?:^|; )' + COOKIE_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '=([^;]*)'));
+        if(!m) return null;
+        const raw = decodeURIComponent(m[1] || '');
+        const obj = jparse(b64d(raw), null);
+        if(!obj || !obj.u) return null;
+        if(obj.exp && Date.now() > Number(obj.exp)) return null;
+        return { user:String(obj.u), role:inferRole(obj.u, obj.r) };
+      }catch(_e){ return null; }
     }
+    function syncCurrent(cur){
+      if(!cur || !cur.user) return false;
+      try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user:cur.user, role:inferRole(cur.user, cur.role), t:Date.now() })); }catch(_e){}
+      try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ name:cur.user, user:cur.user, role:inferRole(cur.user, cur.role) })); }catch(_e){}
+      try{ localStorage.setItem(CURRENT_KEY, JSON.stringify({ name:cur.user, user:cur.user, role:inferRole(cur.user, cur.role) })); }catch(_e){}
+      window.__TASUN_SSO_OK__ = true;
+      return true;
+    }
+    const sess = jparse(sessionStorage.getItem(SESSION_KEY)||'', null);
+    if(sess && sess.user){ syncCurrent({ user:sess.user, role:sess.role }); return; }
+    const cur = jparse(sessionStorage.getItem(CURRENT_KEY)||'', null) || jparse(localStorage.getItem(CURRENT_KEY)||'', null);
+    const curName = cur && (cur.user || cur.name || cur.username || cur.account);
+    if(curName){ syncCurrent({ user:curName, role:cur.role }); return; }
+    const ck = getCookieSession();
+    if(ck && ck.user){ syncCurrent(ck); return; }
+    window.__TASUN_SSO_OK__ = false;
   })();
   </script>
 
@@ -595,26 +617,56 @@
       { name:"wu",    role:"read"  },
     ];
     const CURRENT_KEY = "tasunCurrentUser_v1";
+    const SESSION_KEY = 'tasunSessionLogin_v2';
+    const COOKIE_NAME = 'tasun_session_v4';
     const $ = (id) => document.getElementById(id);
 
     function safeParse(s, fallback){ try{ return JSON.parse(s); }catch(_){ return fallback; } }
-
+    function inferRole(name, role){ if(role) return String(role).toLowerCase(); if(name==='alex'||name==='joyce') return 'admin'; if(name==='tasun') return 'write'; return 'read'; }
+    function b64d(s){ try{ return decodeURIComponent(escape(atob(s))); }catch(_e){ return ''; } }
+    function getCookieSession(){
+      try{
+        const m = const m = document.cookie.match(new RegExp('(?:^|; )' + COOKIE_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '=([^;]*)'));
+        if(!m) return null;
+        const raw = decodeURIComponent(m[1] || '');
+        const obj = safeParse(b64d(raw), null);
+        if(!obj || !obj.u) return null;
+        if(obj.exp && Date.now() > Number(obj.exp)) return null;
+        return { name:String(obj.u), user:String(obj.u), role:inferRole(obj.u, obj.r) };
+      }catch(_e){ return null; }
+    }
     function getCurrent(){
-      const raw = localStorage.getItem(CURRENT_KEY);
-      if(!raw) return USERS[0];
-      const obj = safeParse(raw, null);
+      const sess = safeParse(sessionStorage.getItem(SESSION_KEY) || '', null);
+      if(sess && sess.user) return { name:sess.user, user:sess.user, role:inferRole(sess.user, sess.role) };
+      const sCur = safeParse(sessionStorage.getItem(CURRENT_KEY) || '', null);
+      const lCur = safeParse(localStorage.getItem(CURRENT_KEY) || '', null);
+      const obj = sCur || lCur;
       const name = obj?.name || obj?.user || obj?.username || obj?.account;
-      const hit = USERS.find(u => u.name === name);
-      return hit || USERS[0];
+      if(name) return { name, user:name, role:inferRole(name, obj?.role) };
+      const ck = getCookieSession();
+      if(ck && ck.user) return ck;
+      return null;
     }
 
     function setCurrent(u){
-      localStorage.setItem(CURRENT_KEY, JSON.stringify({ name:u.name, user:u.name, role:u.role }));
+      const row = { name:u.name, user:u.name, role:inferRole(u.name, u.role) };
+      try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user:row.user, role:row.role, t:Date.now() })); }catch(_e){}
+      try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(_e){}
+      try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(_e){}
     }
 
+    function ensureSessionGuard(){
+      const cur = getCurrent();
+      if(cur && cur.user) return true;
+      const next = encodeURIComponent((location.pathname.split('/').pop() || '汐東工程管理表.html') + location.search + location.hash);
+      const target = (typeof window.__withV === 'function') ? window.__withV('index.html') : 'index.html';
+      location.replace(target + (target.includes('?') ? '&' : '?') + 'next=' + next);
+      return false;
+    }
 
     const AUTH_ENTRY_BUTTONS_KEY = "tasunAuthEntryButtons_v1";
     const ROUTE_KEY = "tasunRoutes_v1";
+    const ROUTE_KEY_ALT = 'tasunNavRoutes_v1';
     const ENTRY_FILE = "汐東工程管理表.html";
     const DEFAULT_ENTRY_BUTTONS = [
       { key:"xidong_record", name:"捷運汐東線事項記錄", href:"捷運汐東線事項記錄.html", target:"", roles:["admin","write","read"] },
@@ -636,7 +688,7 @@
     }
     function resolveEntryButtons(){
       const store = sParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || '{}', {});
-      const routes = sParse(localStorage.getItem(ROUTE_KEY) || '{}', {});
+      const routes = Object.assign({}, sParse(localStorage.getItem(ROUTE_KEY_ALT) || '{}', {}), sParse(localStorage.getItem(ROUTE_KEY) || '{}', {}));
       const raw = Array.isArray(store[ENTRY_FILE]) && store[ENTRY_FILE].length ? store[ENTRY_FILE] : DEFAULT_ENTRY_BUTTONS;
       return raw.map((x, i) => {
         const fallback = DEFAULT_ENTRY_BUTTONS[i] || DEFAULT_ENTRY_BUTTONS.find(d => d.key === x?.key) || { key: 'btn' + (i+1), name: 'btn' + (i+1), href:'', target:'', roles:["admin","write","read"] };
@@ -671,6 +723,7 @@
 
     function renderUser(){
       const u = getCurrent();
+      if(!u || !u.user){ return; }
       $("who").textContent  = u.name;
       $("role").textContent = u.role;
       applyEntryButtons();
@@ -731,6 +784,7 @@
       window.__go("index.html");
     });
 
+    if(!ensureSessionGuard()) return;
     applyWithV();
     applyVehicleBg();
     enableStableNavigate();
