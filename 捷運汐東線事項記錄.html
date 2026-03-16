@@ -900,71 +900,6 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     function fmtClock(ts){ if(!ts) return ""; var d = new Date(ts); return pad2(d.getHours())+":"+pad2(d.getMinutes())+":"+pad2(d.getSeconds()); }
     function uuid(){ return "u" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2); }
 
-    function readCookie(name){
-      try{
-        var esc = String(name||"").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
-        return m ? decodeURIComponent(m[1] || "") : "";
-      }catch(e){ return ""; }
-    }
-
-    function readAnySessionToken(){
-      var keys = [
-        "tasunBearerToken_v1","tasunAccessToken_v1","tasun_token","tasunToken",
-        "tasun_auth_token","authToken","access_token","token"
-      ];
-      for(var i=0;i<keys.length;i++){
-        try{
-          var v = norm(sessionStorage.getItem(keys[i]) || localStorage.getItem(keys[i]) || "");
-          if(v) return v;
-        }catch(e){}
-      }
-      var ck = norm(readCookie("tasun_bearer_token") || readCookie("tasun_token") || readCookie("token"));
-      return ck || "";
-    }
-
-    function buildWorkerAuthHeaders(extra){
-      var headers = {};
-      if(extra && typeof extra === "object"){
-        Object.keys(extra).forEach(function(k){ headers[k] = extra[k]; });
-      }
-      var token = readAnySessionToken();
-      if(token && !headers.Authorization && !headers.authorization){
-        headers.Authorization = /^Bearer\s+/i.test(token) ? token : ("Bearer " + token);
-      }
-      return headers;
-    }
-
-    function readLikelyCurrentUserObject(){
-      var stores = [sessionStorage, localStorage];
-      var keys = [
-        CURRENT_KEY, SESSION_KEY, "tasunCurrentUser_v2", "tasunCurrentUser",
-        "tasunUser", "currentUser", "user"
-      ];
-      for(var s=0;s<stores.length;s++){
-        for(var i=0;i<keys.length;i++){
-          try{
-            var raw = stores[s].getItem(keys[i]);
-            var obj = safeJSON(raw || "");
-            if(obj && (obj.user || obj.name || obj.username || obj.account)) return obj;
-          }catch(e){}
-        }
-      }
-      try{
-        if(window.TasunAuthV4 && typeof window.TasunAuthV4.getCurrentUser === "function"){
-          var u = window.TasunAuthV4.getCurrentUser();
-          if(u && (u.user || u.name || u.username || u.account)) return u;
-        }
-      }catch(e){}
-      try{
-        if(window.TASUN_AUTH && typeof window.TASUN_AUTH === "object"){
-          var au = window.TASUN_AUTH.currentUser || window.TASUN_AUTH.user || null;
-          if(au && (au.user || au.name || au.username || au.account)) return au;
-        }
-      }catch(e){}
-      return null;
-    }
-
     // ---------------------------
     // IndexedDB helpers
     // ---------------------------
@@ -1188,66 +1123,44 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       return t;
     }
 
-    var SESSION_KEY = "tasunSessionLogin_v2";
-    var COOKIE_NAME = "tasun_session_v4";
-
-    function inferRole(name, role){
-      var r = norm(role).toLowerCase();
-      if(r) return r;
-      var u = norm(name).toLowerCase();
-      if(u==="alex" || u==="joyce") return "admin";
-      if(u==="tasun") return "write";
-      return "read";
-    }
-
-    function safeAtobUnicode(s){
-      try{ return decodeURIComponent(escape(atob(s))); }catch(e){ return ""; }
-    }
-
-    function getCookieSession(){
-      try{
-        var esc = COOKIE_NAME.replace(/[.*+?^${}()|[\]\]/g, "\$&");
-        var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
-        if(!m) return null;
-        var raw = decodeURIComponent(m[1] || "");
-        var obj = safeJSON(safeAtobUnicode(raw));
-        if(!obj || !obj.u) return null;
-        if(obj.exp && Date.now() > Number(obj.exp)) return null;
-        return { user:String(obj.u), role:inferRole(obj.u, obj.r), name:String(obj.u) };
-      }catch(e){ return null; }
-    }
-
     function getCurrentUser(){
-      var sess = safeJSON(sessionStorage.getItem(SESSION_KEY) || "");
-      if(sess && (sess.user || sess.name)){
-        var su = sess.user || sess.name;
-        return { user:su, role:inferRole(su, sess.role), name:(sess.name || su) };
-      }
-      var cur = readLikelyCurrentUserObject();
-      var who = cur && (cur.user || cur.name || cur.username || cur.account);
-      if(who){
-        return { user:who, role:inferRole(who, cur.role), name:(cur.name || who) };
-      }
-      return getCookieSession();
+      var cur = safeJSON(localStorage.getItem(CURRENT_KEY));
+      if(cur && cur.user && cur.role) return cur;
+      return null;
     }
 
     function setCurrentUser(u){
-      if(!u){
-        try{ sessionStorage.removeItem(SESSION_KEY); }catch(e){}
-        try{ sessionStorage.removeItem(CURRENT_KEY); }catch(e){}
-        try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
-        return;
-      }
-      var row = { user:(u.user||u.name||""), role:inferRole(u.user||u.name, u.role), name:(u.name||u.user||"") };
-      try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user:row.user, role:row.role, t:Date.now() })); }catch(e){}
-      try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(e){}
-      try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(e){}
+      if(!u) localStorage.removeItem(CURRENT_KEY);
+      else localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
     }
 
     function roleRank(role){
       if(role==="admin") return 3;
       if(role==="write") return 2;
       return 1;
+    }
+
+    function getSharedWorkerToken(){
+      var keys = [
+        "tasunCloudToken_v1",
+        "tasunCloudToken_v1__sxdh-notes",
+        "tasunCloudToken_v1__auth-table"
+      ];
+      for(var i=0;i<keys.length;i++){
+        var key = keys[i];
+        var v = norm(localStorage.getItem(key) || sessionStorage.getItem(key) || "");
+        if(v) return v;
+      }
+      return "";
+    }
+
+    function buildWorkerAuthHeaders(extra){
+      var headers = Object.assign({}, extra || {});
+      var bearer = getSharedWorkerToken();
+      if(bearer && !headers.Authorization && !headers.authorization){
+        headers.Authorization = "Bearer " + bearer;
+      }
+      return headers;
     }
 
     // ---------------------------
@@ -2438,43 +2351,46 @@ function getPromptOptions(mode){
         return base + path;
       }
 
-      function normalizeWorkerTimestamp(v){
-        if(v===undefined || v===null || v==="") return "";
-        var n = Number(v);
-        if(Number.isFinite(n) && n > 1000000000){
-          try{ return new Date(n).toISOString(); }catch(e){}
-        }
-        var s = String(v).trim();
-        if(/^\d{13}$/.test(s)){ try{ return new Date(Number(s)).toISOString(); }catch(e){} }
-        return s;
-      }
-
-      function setCloudState(patch, silent){
-        state.cloud = Object.assign({}, state.cloud || {}, patch || {});
-        if(!silent){ try{ refresh(); }catch(e){} }
-      }
-
       async function cloudHealth(cfg){
-        cfg = cfg || await loadCloudCfg();
-        if(!cfg || !isValidApiBase(cfg.apiBase)){
-          setCloudState({ ok:false, cfgOk:false, apiBase:"", endpoints:null }, true);
-          return false;
-        }
-        var apiBase = String(cfg.apiBase || "");
-        var eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-        var url = _joinUrl(apiBase, (eps && eps.health) ? eps.health : "/api/tasun/health");
         try{
-          var r = await fetch(url, {
-            method:"GET",
-            cache:"no-store",
-            credentials:(cfg && cfg.credentials) ? "include" : "omit",
-            headers: buildWorkerAuthHeaders({ accept:"application/json" })
-          });
-          if(!r.ok) throw new Error("health " + r.status);
-          setCloudState({ ok:true, cfgOk:true, apiBase:norm(apiBase), endpoints:eps || null, lastOkAt:Date.now() }, true);
-          return true;
-        }catch(e){
-          setCloudState({ ok:false, cfgOk:true, apiBase:norm(apiBase), endpoints:eps || null }, true);
+          cfg = cfg || await loadCloudCfg();
+          const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
+          const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
+          state.cloud.cfgOk = !!isValidApiBase(apiBase);
+          state.cloud.apiBase = apiBase || "";
+          state.cloud.endpoints = eps || null;
+          if(!state.cloud.cfgOk){
+            state.cloud.ok = false;
+            refresh();
+            return false;
+          }
+          const candidates = [];
+          if(eps && eps.health) candidates.push(_joinUrl(apiBase, eps.health));
+          candidates.push(_joinUrl(apiBase, "/api/tasun/health"));
+          candidates.push(_joinUrl(apiBase, "/api/ping"));
+          candidates.push(_joinUrl(apiBase, "/api/tasun/ping"));
+
+          for(const url of candidates){
+            try{
+              const r = await fetch(url, {
+                method:"GET",
+                credentials: (cfg && cfg.credentials) ? "include" : "omit",
+                cache:"no-store",
+                headers: buildWorkerAuthHeaders({ "accept":"application/json" })
+              });
+              if(r.ok){
+                state.cloud.cfgOk = true;
+                refresh();
+                return true;
+              }
+            }catch(_e){}
+          }
+          state.cloud.ok = false;
+          refresh();
+          return false;
+        }catch(_e){
+          state.cloud.ok = false;
+          refresh();
           return false;
         }
       }
@@ -2484,184 +2400,215 @@ function getPromptOptions(mode){
       }
 
       function _normalizePullResponse(json){
-        var j = (json && typeof json === "object") ? json : {};
-        var rows = Array.isArray(j.rows) ? j.rows : [];
-        if(!rows.length && j.payload && Array.isArray(j.payload.db)) rows = j.payload.db;
-        if(!rows.length && j.data && Array.isArray(j.data.db)) rows = j.data.db;
-        var db = [];
-        for(var i=0;i<rows.length;i++){
-          var row = rows[i];
-          if(!row || typeof row !== "object") continue;
-          var data = row.data;
-          if(typeof data === "string") data = safeJSON(data) || {};
-          if(!data || typeof data !== "object") data = {};
-          var merged = Object.assign({}, data, row);
-          delete merged.data;
-          delete merged.resourceKey;
-          merged.uid = norm(merged.uid || data.uid || data.pk || data.uuid || row.uid);
-          merged.updatedAt = normalizeWorkerTimestamp(merged.updatedAt || row.updatedAt || data.updatedAt);
-          merged.rev = String(merged.rev || row.rev || data.rev || merged.updatedAt || "");
-          merged.deleted = !!(row.deleted || data.deleted || merged.deleted);
-          if(merged.uid) db.push(merged);
-        }
-        return { db: db, counter: Number(j.count || (j.payload && j.payload.counter) || (j.data && j.data.counter) || db.length) || db.length };
+        const j = (json && typeof json==="object") ? json : {};
+        const payload = (j.payload && typeof j.payload === "object") ? j.payload
+          : (j.data && typeof j.data === "object") ? j.data
+          : j;
+        const db = Array.isArray(payload.db) ? payload.db
+          : Array.isArray(payload.rows) ? payload.rows
+          : Array.isArray(payload.items) ? payload.items
+          : [];
+        const counter = Number.isFinite(Number(payload.counter)) ? Number(payload.counter)
+          : Array.isArray(db) ? db.length
+          : 0;
+        return { db, counter, ok: !!j.ok };
       }
 
       async function cloudRead(cfg, pageKey){
         cfg = cfg || await loadCloudCfg();
-        var apiBase = String((cfg && cfg.apiBase) || "");
-        var eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-        var readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/read";
-        var url = _joinUrl(apiBase, readPath);
-        var r = await fetch(url, {
+        const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
+        const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
+        const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/read";
+        const url = _joinUrl(apiBase, readPath);
+
+        const r = await fetch(url, {
           method: "POST",
           cache: "no-store",
           credentials: (cfg && cfg.credentials) ? "include" : "omit",
-          headers: buildWorkerAuthHeaders({ "content-type":"application/json", accept:"application/json" }),
+          headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
           body: JSON.stringify({ resourceKey: pageKey })
         });
         if(!r.ok){
-          var t = await r.text().catch(function(){ return ""; });
-          var err = new Error("cloud read failed: " + r.status + " " + t.slice(0,200));
-          err.status = r.status;
-          throw err;
+          const t = await r.text().catch(()=> "");
+          throw new Error("cloud read failed: " + r.status + " " + t.slice(0,200));
         }
-        return _normalizePullResponse(await r.json());
+        const j = await r.json();
+        return _normalizePullResponse(j);
       }
 
       async function cloudMerge(cfg, pageKey, payloadLike, clientInfo){
         cfg = cfg || await loadCloudCfg();
-        var apiBase = String((cfg && cfg.apiBase) || "");
-        var eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-        var mergePath = (eps && eps.merge) ? String(eps.merge) : "/api/tasun/merge";
-        var payload = payloadLike;
+        const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
+        const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
+        const mergePath = (eps && eps.merge) ? String(eps.merge) : "/api/tasun/merge";
+
+        let payload = payloadLike;
         if(payload && typeof payload === "object"){
-          if(payload.payload && typeof payload.payload === "object") payload = payload.payload;
-          if(payload.data && typeof payload.data === "object") payload = payload.data;
+          if(payload.payload && typeof payload.payload==="object") payload = payload.payload;
+          if(payload.data && typeof payload.data==="object") payload = payload.data;
         }
         payload = payload || { db:[], counter:0 };
-        var body = {
+
+        const body = {
           resourceKey: pageKey,
-          payload: { db: Array.isArray(payload.db) ? payload.db : [], counter: Number(payload.counter)||0 },
-          client: clientInfo && typeof clientInfo === "object" ? clientInfo : {}
+          payload: { db: Array.isArray(payload.db)? payload.db : [], counter: Number(payload.counter)||0 },
+          client: clientInfo && typeof clientInfo==="object" ? clientInfo : {}
         };
-        var url = _joinUrl(apiBase, mergePath);
-        var r = await fetch(url, {
+
+        const url = _joinUrl(apiBase, mergePath);
+
+        const r = await fetch(url, {
           method: "POST",
           cache: "no-store",
           credentials: (cfg && cfg.credentials) ? "include" : "omit",
-          headers: buildWorkerAuthHeaders({ "content-type":"application/json", accept:"application/json" }),
+          headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
           body: JSON.stringify(body)
         });
         if(!r.ok){
-          var t = await r.text().catch(function(){ return ""; });
-          var err = new Error("cloud merge failed: " + r.status + " " + t.slice(0,200));
-          err.status = r.status;
-          throw err;
+          const t = await r.text().catch(()=> "");
+          throw new Error("cloud merge failed: " + r.status + " " + t.slice(0,200));
         }
-        return _normalizePullResponse(await r.json());
+        const j = await r.json();
+        return _normalizePullResponse(j);
+      }
+    async function syncFromCloud(opts){
+      opts = (opts && typeof opts==="object") ? opts : {};
+      var silent = !!opts.silent;
+
+      var cfg = await loadCloudCfg();
+      if(!cfg || !isValidApiBase(cfg.apiBase)){
+        if(!silent) toast("雲端未設定/無效"); 
+        return;
       }
 
-      function buildCloudClientInfo(reason){
-        return {
+      try{
+        var remote = await cloudRead(cfg, PAGE_KEY);
+
+        // If cloud is empty but local has data, offer to bootstrap to cloud (one-time)
+        var cloudEmpty = !remote || !Array.isArray(remote.db) || remote.db.length===0;
+        var localHas = Array.isArray(state.db) && state.db.length>0;
+        var bootKey = "tasunCloudBooted_" + PAGE_KEY;
+        var autoFillKey = "tasunCloudAutoFill_" + PAGE_KEY;
+        var localDb = (state.db || []);
+        var remoteDb = (remote && Array.isArray(remote.db)) ? remote.db : [];
+
+        function _uid(x){
+          if(!x) return "";
+          return String(x.uid || x.pk || x.Uid || x.ID || x.id || "");
+        }
+
+        var rSet = new Set(remoteDb.map(_uid).filter(Boolean));
+        var missing = localDb.filter(function(it){
+          var u = _uid(it);
+          return u && !rSet.has(u);
+        });
+
+        var remoteEmpty = (!remoteDb || remoteDb.length === 0);
+        var localHas = (localDb.length > 0);
+
+        // Auto bootstrap when cloud empty OR auto-fill when cloud has fewer items than local.
+        // Run once per page-load to avoid loops.
+        if(localHas && (remoteEmpty || missing.length > 0) && !sessionStorage.getItem(autoFillKey)){
+          sessionStorage.setItem(autoFillKey, "1");
+          try{
+            var reason = remoteEmpty ? "auto-bootstrap-cloud-empty" : "auto-fill-cloud-missing";
+            var merged = await cloudMerge(cfg, PAGE_KEY, { db: localDb, counter: state.counter }, { user: state.user || "", role: state.role || "", appVer: APP_VER, clientId: state.clientId || getClientId(), at: nowISO(), reason: reason });
+            if(merged && Array.isArray(merged.db)){
+              remote = merged; // use merged payload as latest remote snapshot
+              if(remoteEmpty) localStorage.setItem(bootKey, "1");
+              toast(remoteEmpty
+                ? ("雲端空白，已自動倒入本機資料：" + localDb.length + " 筆")
+                : ("已自動補齊雲端缺少資料：" + missing.length + " 筆"), "ok");
+            }
+          }catch(e){
+            toast("雲端自動補齊失敗：" + (e && (e.message||e) ? (e.message||e) : e), "warn");
+          }
+        }
+var out = mergePayload(remote, { db: state.db, counter: state.counter });
+        state.db = out.db;
+        state.counter = out.counter;
+
+        state.lastSyncAt = Date.now();
+        await idbClearOps(PAGE_KEY);
+        await saveLocal({ db: state.db, counter: state.counter });
+
+        buildDictsFromDb();
+        state.cloud.cfgOk = true;
+        state.cloud.ok = true;
+        state.cloud.lastOkAt = Date.now();
+        refresh();
+        if(!silent) toast("已從雲端更新");
+      }catch(e){
+        state.cloud.ok = false;
+        refresh();
+        if(!silent) toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
+      }
+    }
+    async function syncToCloud(opts){
+      opts = (opts && typeof opts==="object") ? opts : {};
+      var silent = !!opts.silent;
+      var reason = opts.reason || "";
+      var fullUpload = !!opts.fullUpload;
+
+      var cfg = await loadCloudCfg();
+      if(!cfg || !isValidApiBase(cfg.apiBase)){
+        if(!silent) toast("雲端未設定/無效"); 
+        return;
+      }
+
+      var meta = null;
+      try{ meta = await idbGetMeta(PAGE_KEY); }catch(e){ meta=null; }
+      var lastSyncAt = Number(state.lastSyncAt || (meta && meta.lastSyncAt) || 0) || 0;
+
+      var sendRows = [];
+      if(fullUpload){
+        sendRows = (state.db||[]).map(ensureRowV1).filter(Boolean);
+      }else{
+        var dirtyUids = [];
+        try{ dirtyUids = await idbGetDirtyUids(PAGE_KEY, lastSyncAt); }catch(e){ dirtyUids = []; }
+
+        if(!dirtyUids.length){
+          if(!silent) toast("沒有需要上傳的本機變更");
+          return;
+        }
+
+        var dirtySet = new Set(dirtyUids.map(norm));
+        sendRows = (state.db||[])
+          .map(ensureRowV1)
+          .filter(Boolean)
+          .filter(function(r){ return dirtySet.has(norm(r.uid)); });
+      }
+
+      try{
+        var merged = await cloudMerge(cfg, PAGE_KEY, { db: sendRows, counter: state.counter }, {
           user: state.user || "",
           role: state.role || "",
           appVer: APP_VER,
           clientId: state.clientId || getClientId(),
           at: nowISO(),
-          reason: reason || "auto"
-        };
-      }
+          reason: reason || (fullUpload ? "fullUpload" : "incremental")
+        });
 
-      async function syncFromCloud(opts){
-        opts = (opts && typeof opts === "object") ? opts : {};
-        var silent = !!opts.silent;
-        var cfg = await loadCloudCfg();
-        if(!cfg || !isValidApiBase(cfg.apiBase)){
-          setCloudState({ cfgOk:false, ok:false, apiBase:"", endpoints:null });
-          if(!silent) toast("雲端未設定/無效");
-          return;
-        }
-        setCloudState({ cfgOk:true, apiBase:norm(cfg.apiBase), endpoints:cfg.endpoints || null }, true);
+        var out = mergePayload(merged, { db: state.db, counter: state.counter });
+        state.db = out.db;
+        state.counter = out.counter;
 
-        try{
-          var remote = await cloudRead(cfg, PAGE_KEY);
-          var remoteDb = Array.isArray(remote.db) ? remote.db.slice() : [];
-          var localDb = (state.db || []).map(ensureRowV1).filter(Boolean);
-          var autoFillKey = "tasunCloudAutoFill_" + PAGE_KEY;
-          function _uid(x){ return String((x && (x.uid || x.pk || x.uuid || x.id)) || "").trim(); }
-          var remoteSet = new Set(remoteDb.map(_uid).filter(Boolean));
-          var missing = localDb.filter(function(it){ var u=_uid(it); return u && !remoteSet.has(u); });
-          var remoteEmpty = remoteDb.length === 0;
-          if(localDb.length && (remoteEmpty || missing.length) && !sessionStorage.getItem(autoFillKey)){
-            sessionStorage.setItem(autoFillKey, "1");
-            remote = await cloudMerge(cfg, PAGE_KEY, { db: localDb, counter: state.counter }, buildCloudClientInfo(remoteEmpty ? "auto-bootstrap-cloud-empty" : "auto-fill-cloud-missing"));
-            remoteDb = Array.isArray(remote.db) ? remote.db.slice() : [];
-            if(!silent){
-              toast(remoteEmpty ? ("雲端空白，已自動補齊本機資料：" + localDb.length + " 筆") : ("已自動補齊雲端缺少資料：" + missing.length + " 筆"));
-            }
-          }
-          var out = mergePayload({ db: remoteDb, counter: remote.counter || remoteDb.length }, { db: state.db, counter: state.counter });
-          state.db = out.db;
-          state.counter = out.counter;
-          state.lastSyncAt = Date.now();
-          await idbClearOps(PAGE_KEY);
-          await saveLocal({ db: state.db, counter: state.counter });
-          buildDictsFromDb();
-          setCloudState({ ok:true, cfgOk:true, lastOkAt:Date.now(), lastSyncAt:nowISO() });
-          refresh();
-          if(!silent) toast("已從雲端更新");
-        }catch(e){
-          setCloudState({ ok:false, cfgOk:true, apiBase:norm(cfg && cfg.apiBase), endpoints:(cfg && cfg.endpoints) ? cfg.endpoints : null });
-          if(!silent) toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
-        }
-      }
+        state.lastSyncAt = Date.now();
+        await idbClearOps(PAGE_KEY);
+        await saveLocal({ db: state.db, counter: state.counter });
 
-      async function syncToCloud(opts){
-        opts = (opts && typeof opts === "object") ? opts : {};
-        var silent = !!opts.silent;
-        var reason = opts.reason || "";
-        var fullUpload = !!opts.fullUpload;
-        var cfg = await loadCloudCfg();
-        if(!cfg || !isValidApiBase(cfg.apiBase)){
-          setCloudState({ cfgOk:false, ok:false, apiBase:"", endpoints:null });
-          if(!silent) toast("雲端未設定/無效");
-          return;
-        }
-        setCloudState({ cfgOk:true, apiBase:norm(cfg.apiBase), endpoints:cfg.endpoints || null }, true);
-        var meta = null;
-        try{ meta = await idbGetMeta(PAGE_KEY); }catch(e){ meta = null; }
-        var lastSyncAt = Number(state.lastSyncAt || (meta && meta.lastSyncAt) || 0) || 0;
-        var sendRows = [];
-        if(fullUpload){
-          sendRows = (state.db || []).map(ensureRowV1).filter(Boolean);
-        }else{
-          var dirtyUids = [];
-          try{ dirtyUids = await idbGetDirtyUids(PAGE_KEY, lastSyncAt); }catch(e){ dirtyUids = []; }
-          if(!dirtyUids.length){
-            if(!silent) toast("沒有需要上傳的本機變更");
-            return;
-          }
-          var dirtySet = new Set(dirtyUids.map(norm));
-          sendRows = (state.db || []).map(ensureRowV1).filter(Boolean).filter(function(r){ return dirtySet.has(norm(r.uid)); });
-        }
-        try{
-          var merged = await cloudMerge(cfg, PAGE_KEY, { db: sendRows, counter: state.counter }, buildCloudClientInfo(reason || (fullUpload ? "fullUpload" : "incremental")));
-          var out = mergePayload({ db: merged.db, counter: merged.counter || merged.db.length }, { db: state.db, counter: state.counter });
-          state.db = out.db;
-          state.counter = out.counter;
-          state.lastSyncAt = Date.now();
-          await idbClearOps(PAGE_KEY);
-          await saveLocal({ db: state.db, counter: state.counter });
-          buildDictsFromDb();
-          setCloudState({ ok:true, cfgOk:true, lastOkAt:Date.now(), lastSyncAt:nowISO() });
-          refresh();
-          if(!silent) toast(fullUpload ? "雲端同步完成（全量）" : "雲端同步完成（增量）");
-        }catch(e){
-          setCloudState({ ok:false, cfgOk:true, apiBase:norm(cfg && cfg.apiBase), endpoints:(cfg && cfg.endpoints) ? cfg.endpoints : null });
-          if(!silent) toast("雲端同步失敗：" + (e && e.message ? e.message : String(e)));
-        }
+        buildDictsFromDb();
+        state.cloud.cfgOk = true;
+        state.cloud.ok = true;
+        state.cloud.lastOkAt = Date.now();
+        refresh();
+        if(!silent) toast(fullUpload ? "雲端同步完成（全量）" : "雲端同步完成（增量）");
+      }catch(e){
+        state.cloud.ok = false;
+        refresh();
+        if(!silent) toast("雲端同步失敗：" + (e && e.message ? e.message : String(e)));
       }
+    }
 
     // ---------------------------
     // Export / Import helpers (backup)
@@ -3015,8 +2962,7 @@ $("btnSave").addEventListener("click", async function(){
         try{ wire(); }catch(e){}
         try{ refresh(); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
-        try{ await syncFromCloud({ silent:true }); }catch(e){}
-        try{ refresh(); }catch(e){}
+        try{ if(cur) scheduleSync("boot-sync", true); }catch(e){}
         try{ if(!cur) openLogin(); }catch(e){}
 
         try{
