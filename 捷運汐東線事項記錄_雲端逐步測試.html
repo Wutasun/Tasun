@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>捷運汐東線事項記錄｜雲端逐步測試</title>
+  <script>document.write('<script src="tasun-version-loader.js?_=' + Date.now() + '"><\/script>');</script>
+  <style>
+    :root{--bg:#edf2f1;--panel:#ffffff;--border:#d6d6d6;--ink:#1d1d1f;--muted:#666;--accent:#8a5b16;--ok:#0a7a37;--warn:#a35b00;--bad:#b42318}
+    *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,"Segoe UI","Noto Sans TC",sans-serif;background:var(--bg);color:var(--ink)}
+    .wrap{max-width:1180px;margin:24px auto;padding:0 16px}
+    h1{font-size:24px;margin:0 0 16px}
+    .toolbar,.grid,.panel{background:var(--panel);border:1px solid var(--border);border-radius:16px}
+    .toolbar{padding:14px;display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+    button{border:1px solid #bbb;background:#fff;border-radius:12px;padding:10px 14px;font:inherit;cursor:pointer}
+    button:hover{border-color:#888}
+    .grid{display:grid;grid-template-columns:1.05fr 1fr;gap:14px;padding:14px;margin-bottom:14px}
+    .card{border:1px solid var(--border);border-radius:14px;padding:12px;background:#fff}
+    label{display:block;font-weight:700;margin:10px 0 6px}
+    input,textarea{width:100%;border:1px solid #cfcfcf;border-radius:12px;padding:10px 12px;font:inherit}
+    textarea{min-height:220px;resize:vertical}
+    .summary{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;line-height:1.5}
+    .logs{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.5;background:#fafafa}
+    .status-ok{color:var(--ok);font-weight:700}.status-warn{color:var(--warn);font-weight:700}.status-bad{color:var(--bad);font-weight:700}
+    .muted{color:var(--muted)} .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    @media (max-width:900px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>捷運汐東線事項記錄｜雲端逐步測試</h1>
+
+    <div class="toolbar">
+      <button id="btnAll">全部測試</button>
+      <button id="btnStep13">Step 1~3：讀取 resources / apiBase</button>
+      <button id="btnHealth">Step 4：測 Health</button>
+      <button id="btnRead">Step 5~6：測 Read</button>
+      <button id="btnMerge">Step 7~8：測 Merge + 再 Read</button>
+      <button id="btnLocal">Step 9：檢查本機 localStorage / IDB</button>
+      <button id="btnUpload">Step 10：本機資料上傳雲端</button>
+      <button id="btnClear">清空畫面</button>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <label>頁面 key / resourceKey</label>
+        <input id="resourceKey" value="sxdh-notes" />
+
+        <label>resources 檔名</label>
+        <input id="resourcesFile" value="tasun-resources.json" />
+
+        <label>apiBase（可手動覆蓋）</label>
+        <input id="apiBase" placeholder="例如：https://tasun-worker.wutasun.workers.dev" />
+
+        <label>health endpoint</label>
+        <input id="healthEp" value="/api/tasun/health" />
+
+        <label>read endpoint</label>
+        <input id="readEp" value="/api/tasun/read" />
+
+        <label>merge endpoint</label>
+        <input id="mergeEp" value="/api/tasun/merge" />
+
+        <label>本機 localStorage key（可手動指定）</label>
+        <input id="localKey" value="tasunSxdhNotes_v1" />
+      </div>
+
+      <div class="card">
+        <label>測試結果摘要</label>
+        <div id="summary" class="summary"></div>
+      </div>
+    </div>
+
+    <div class="panel" style="padding:14px;margin-bottom:14px;">
+      <label>逐步測試輸出</label>
+      <div id="logs" class="card logs" style="min-height:240px"></div>
+    </div>
+
+    <div class="panel" style="padding:14px;">
+      <label>最後一次 Read / Merge 回傳</label>
+      <textarea id="payloadView" spellcheck="false"></textarea>
+    </div>
+  </div>
+
+<script>
+(function(){
+  "use strict";
+  const $ = (id)=>document.getElementById(id);
+  const logs = $("logs");
+  const summary = $("summary");
+  const payloadView = $("payloadView");
+  const state = { resolved:null, lastRead:null, lastMerge:null, localRows:[], localMeta:null };
+
+  function norm(v){ return (v===undefined||v===null)?"":String(v).trim(); }
+  function safeJSON(v){ try{return JSON.parse(v);}catch(e){return null;} }
+  function esc(s){ return String(s).replace(/[&<>]/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[m])); }
+  function now(){ return new Date().toISOString(); }
+  function log(){
+    const line = Array.from(arguments).join(" ");
+    logs.textContent += (logs.textContent?"\n":"") + line;
+    logs.scrollTop = logs.scrollHeight;
+  }
+  function setSummary(text){ summary.textContent = text || ""; }
+  function setPayload(obj){ payloadView.value = typeof obj === 'string' ? obj : JSON.stringify(obj||{}, null, 2); }
+  function clearAll(){ logs.textContent=""; summary.textContent=""; payloadView.value=""; }
+
+  function readCookie(name){
+    try{
+      const escName = String(name||"").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const m = document.cookie.match(new RegExp("(?:^|; )" + escName + "=([^;]*)"));
+      return m ? decodeURIComponent(m[1] || "") : "";
+    }catch(e){ return ""; }
+  }
+
+  function readAnySessionToken(){
+    const keys = [
+      "tasunBearerToken_v1","tasunAccessToken_v1","tasun_token","tasunToken",
+      "tasun_auth_token","authToken","access_token","token"
+    ];
+    for(const k of keys){
+      try{
+        const v = norm(sessionStorage.getItem(k) || localStorage.getItem(k) || "");
+        if(v) return v;
+      }catch(e){}
+    }
+    return norm(readCookie("tasun_bearer_token") || readCookie("tasun_token") || readCookie("token"));
+  }
+
+  function authHeaders(extra){
+    const headers = Object.assign({}, extra||{});
+    const token = readAnySessionToken();
+    if(token && !headers.Authorization && !headers.authorization){
+      headers.Authorization = /^Bearer\s+/i.test(token) ? token : ("Bearer " + token);
+    }
+    return headers;
+  }
+
+  function parseJsonLenient(raw){
+    raw = String(raw||"");
+    try{return JSON.parse(raw);}catch(e){}
+    try{return JSON.parse(raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/,\s*([}\]])/g, "$1"));}catch(e){}
+    return null;
+  }
+
+  function filename(){
+    try{ return decodeURIComponent((location.pathname || '').split('/').pop() || ''); }catch(e){ return (location.pathname||'').split('/').pop()||''; }
+  }
+
+  function resourcePick(json, resourceKey){
+    if(!json || typeof json !== 'object') return null;
+    const resources = json.resources && typeof json.resources === 'object' ? json.resources : {};
+    return resources[filename()] || resources[resourceKey] || resources['*'] || null;
+  }
+
+  async function fetchTextNoStore(url){
+    const res = await fetch(url, { cache:'no-store', credentials:'omit' });
+    const text = await res.text();
+    return { ok: res.ok, status: res.status, text, url: res.url || url };
+  }
+
+  async function resolveConfig(){
+    const resourceKey = norm($("resourceKey").value) || 'sxdh-notes';
+    const resourcesFile = norm($("resourcesFile").value) || 'tasun-resources.json';
+    const manualBase = norm($("apiBase").value);
+    const cfg = {
+      resourceKey,
+      resourcesFile,
+      apiBase: manualBase,
+      endpoints: {
+        health: norm($("healthEp").value) || '/api/tasun/health',
+        read: norm($("readEp").value) || '/api/tasun/read',
+        merge: norm($("mergeEp").value) || '/api/tasun/merge'
+      },
+      localKey: norm($("localKey").value) || 'tasunSxdhNotes_v1',
+      resourcesJson: null,
+      from: manualBase ? 'manual' : 'default'
+    };
+
+    log('===== Step 1~3：讀取 resources / apiBase =====');
+    log('目前頁面 URL:', location.href);
+    log('resources 檔案:', resourcesFile);
+
+    try{
+      const rt = await fetchTextNoStore(resourcesFile + '?_=' + Date.now());
+      log('resources 讀取狀態:', String(rt.status));
+      if(rt.ok){
+        const json = parseJsonLenient(rt.text);
+        cfg.resourcesJson = json;
+        const picked = resourcePick(json, resourceKey) || {};
+        const topApi = json && json.api ? json.api : {};
+        const topEndpoints = json && json.endpoints ? json.endpoints : {};
+        if(!cfg.apiBase){
+          cfg.apiBase = norm(topApi.base || json.apiBase || picked.apiBase || '');
+          cfg.from = cfg.apiBase ? 'resources' : cfg.from;
+        }
+        cfg.endpoints.health = norm(picked.health || (picked.endpoints && picked.endpoints.health) || topApi.health || topEndpoints.health || cfg.endpoints.health);
+        cfg.endpoints.read   = norm(picked.read   || (picked.endpoints && picked.endpoints.read)   || topApi.read   || topEndpoints.read   || cfg.endpoints.read);
+        cfg.endpoints.merge  = norm(picked.merge  || (picked.endpoints && picked.endpoints.merge)  || topApi.merge  || topEndpoints.merge  || cfg.endpoints.merge);
+      } else {
+        log('resources 讀取失敗：', rt.text.slice(0, 200));
+      }
+    }catch(err){
+      log('resources 例外：', String(err && err.message || err));
+    }
+
+    if(!cfg.apiBase){
+      try{
+        const raw = localStorage.getItem('tasunApiBase_v1') || sessionStorage.getItem('tasunApiBase_v1') || '';
+        cfg.apiBase = norm(raw);
+        if(cfg.apiBase) cfg.from = 'storage';
+      }catch(e){}
+    }
+
+    state.resolved = cfg;
+    setSummary([
+      'Step 1~3：' + (cfg.apiBase ? '完成' : '失敗'),
+      'apiBase: ' + (cfg.apiBase || '(空)'),
+      'read: ' + cfg.endpoints.read,
+      'merge: ' + cfg.endpoints.merge,
+      '來源: ' + cfg.from
+    ].join('\n'));
+    return cfg;
+  }
+
+  function joinUrl(base, path){
+    base = norm(base).replace(/\/+$/,'');
+    path = norm(path);
+    if(!path) return base;
+    if(/^https?:\/\//i.test(path)) return path;
+    if(path.charAt(0) !== '/') path = '/' + path;
+    return base + path;
+  }
+
+  async function stepHealth(){
+    const cfg = state.resolved || await resolveConfig();
+    log('\n===== Step 4：測 Health =====');
+    if(!cfg.apiBase){ log('apiBase 為空，無法測試'); return null; }
+    const url = joinUrl(cfg.apiBase, cfg.endpoints.health);
+    log('Health URL:', url);
+    try{
+      const res = await fetch(url, { method:'GET', cache:'no-store', headers: authHeaders({ accept:'application/json' }) });
+      const text = await res.text();
+      log('HTTP:', String(res.status));
+      log('Body:', text.slice(0, 400));
+      const okish = res.ok || res.status === 401;
+      setSummary((summary.textContent?summary.textContent+'\n':'') + 'Step 4：' + (okish ? '可到達' : '失敗') + '（HTTP ' + res.status + '）');
+      return { status: res.status, body: text };
+    }catch(err){
+      log('Health 例外：', String(err && err.message || err));
+      return null;
+    }
+  }
+
+  async function stepRead(){
+    const cfg = state.resolved || await resolveConfig();
+    log('\n===== Step 5~6：測 Read =====');
+    if(!cfg.apiBase){ log('apiBase 為空，無法測試'); return null; }
+    const url = joinUrl(cfg.apiBase, cfg.endpoints.read);
+    const body = { resourceKey: cfg.resourceKey };
+    log('Read URL:', url);
+    log('Read body:', JSON.stringify(body));
+    try{
+      const res = await fetch(url, {
+        method:'POST',
+        cache:'no-store',
+        headers: authHeaders({ 'content-type':'application/json', accept:'application/json' }),
+        body: JSON.stringify(body)
+      });
+      const text = await res.text();
+      log('HTTP:', String(res.status));
+      log('Body:', text.slice(0, 800));
+      const json = parseJsonLenient(text) || { raw: text };
+      state.lastRead = json;
+      setPayload(json);
+      const rows = Array.isArray(json.rows) ? json.rows.length : 0;
+      setSummary((summary.textContent?summary.textContent+'\n':'') + 'Step 5~6：HTTP ' + res.status + '，rows=' + rows);
+      return { status: res.status, json };
+    }catch(err){
+      log('Read 例外：', String(err && err.message || err));
+      return null;
+    }
+  }
+
+  async function stepMergeProbe(){
+    const cfg = state.resolved || await resolveConfig();
+    log('\n===== Step 7~8：測 Merge + 再 Read =====');
+    if(!cfg.apiBase){ log('apiBase 為空，無法測試'); return null; }
+    const mergeUrl = joinUrl(cfg.apiBase, cfg.endpoints.merge);
+    const probe = {
+      uid: 'probe_' + Date.now(),
+      id: 0,
+      text: 'cloud-probe',
+      trade: 'PROBE',
+      sys: 'PROBE',
+      source: 'tester',
+      attach: '',
+      remark: 'probe',
+      date: new Date().toISOString().slice(0,10),
+      updatedAt: Date.now(),
+      rev: Date.now(),
+      deleted: true
+    };
+    const body = { resourceKey: cfg.resourceKey, payload: { db:[probe] } };
+    log('Merge URL:', mergeUrl);
+    log('Merge body:', JSON.stringify(body));
+    try{
+      const res = await fetch(mergeUrl, {
+        method:'POST',
+        cache:'no-store',
+        headers: authHeaders({ 'content-type':'application/json', accept:'application/json' }),
+        body: JSON.stringify(body)
+      });
+      const text = await res.text();
+      log('HTTP:', String(res.status));
+      log('Body:', text.slice(0, 800));
+      const json = parseJsonLenient(text) || { raw:text };
+      state.lastMerge = json;
+      setPayload(json);
+      await stepRead();
+      return { status: res.status, json };
+    }catch(err){
+      log('Merge 例外：', String(err && err.message || err));
+      return null;
+    }
+  }
+
+  async function openIDB(){
+    return await new Promise((resolve,reject)=>{
+      const req = indexedDB.open('tasun_notes_idb_v1', 1);
+      req.onsuccess = ()=>resolve(req.result);
+      req.onerror = ()=>reject(req.error || new Error('IDB open error'));
+      req.onupgradeneeded = ()=>{};
+    });
+  }
+
+  async function readLocalRows(){
+    const cfg = state.resolved || await resolveConfig();
+    const resourceKey = cfg.resourceKey;
+    const out = { localKey: cfg.localKey, localRows: [], localStorageRaw:null, idbRows: [], idbMeta:null, allKeys:[] };
+
+    try{ out.allKeys = Object.keys(localStorage); }catch(e){}
+    try{ out.localStorageRaw = localStorage.getItem(cfg.localKey); }catch(e){}
+    const parsed = safeJSON(out.localStorageRaw || '');
+    if(Array.isArray(parsed)) out.localRows = parsed;
+    else if(parsed && Array.isArray(parsed.db)) out.localRows = parsed.db;
+
+    try{
+      const db = await openIDB();
+      await new Promise((resolve,reject)=>{
+        const tx = db.transaction(['rows','meta'], 'readonly');
+        const rowsReq = tx.objectStore('rows').index('by_page').getAll(resourceKey);
+        const metaReq = tx.objectStore('meta').get(resourceKey);
+        tx.oncomplete = ()=>{
+          out.idbRows = (rowsReq.result || []).map(r => { const x = Object.assign({}, r); delete x.pageKey; return x; });
+          out.idbMeta = metaReq.result || null;
+          resolve();
+        };
+        tx.onerror = ()=>reject(tx.error || new Error('IDB tx error'));
+      });
+    }catch(e){ out.idbError = String(e && e.message || e); }
+
+    state.localRows = out.idbRows.length ? out.idbRows : out.localRows;
+    state.localMeta = out.idbMeta || null;
+    return out;
+  }
+
+  async function stepLocal(){
+    const data = await readLocalRows();
+    log('\n===== Step 9：檢查本機 localStorage / IDB =====');
+    log('指定 localKey:', data.localKey);
+    log('localStorage 筆數:', String((data.localRows||[]).length));
+    log('IndexedDB 筆數:', String((data.idbRows||[]).length));
+    if(data.idbMeta) log('IndexedDB meta:', JSON.stringify(data.idbMeta));
+    if(data.idbError) log('IndexedDB error:', data.idbError);
+    log('疑似相關 keys 數量:', String((data.allKeys||[]).length));
+    setSummary([
+      'Step 9：完成',
+      '指定 localKey: ' + data.localKey,
+      'localStorage 筆數: ' + (data.localRows||[]).length,
+      'IndexedDB 筆數: ' + (data.idbRows||[]).length,
+      '疑似相關 keys 數量: ' + (data.allKeys||[]).length
+    ].join('\n'));
+    setPayload(data);
+    return data;
+  }
+
+  async function stepUploadLocal(){
+    const cfg = state.resolved || await resolveConfig();
+    const local = await readLocalRows();
+    log('\n===== Step 10：本機資料上傳雲端 =====');
+    if(!cfg.apiBase){ log('apiBase 為空，無法上傳'); return null; }
+    const rows = (local.idbRows && local.idbRows.length) ? local.idbRows : (local.localRows || []);
+    log('準備上傳筆數:', String(rows.length));
+    if(!rows.length){ log('本機沒有可上傳資料'); return null; }
+    const mergeUrl = joinUrl(cfg.apiBase, cfg.endpoints.merge);
+    const body = { resourceKey: cfg.resourceKey, payload: { db: rows } };
+    try{
+      const res = await fetch(mergeUrl, {
+        method:'POST',
+        cache:'no-store',
+        headers: authHeaders({ 'content-type':'application/json', accept:'application/json' }),
+        body: JSON.stringify(body)
+      });
+      const text = await res.text();
+      log('HTTP:', String(res.status));
+      log('Body:', text.slice(0, 1000));
+      const json = parseJsonLenient(text) || { raw:text };
+      setPayload(json);
+      await stepRead();
+      return { status: res.status, json };
+    }catch(err){
+      log('上傳例外：', String(err && err.message || err));
+      return null;
+    }
+  }
+
+  async function runAll(){
+    clearAll();
+    await resolveConfig();
+    await stepHealth();
+    await stepRead();
+    await stepMergeProbe();
+    await stepLocal();
+  }
+
+  $('btnAll').onclick = runAll;
+  $('btnStep13').onclick = async ()=>{ clearAll(); await resolveConfig(); };
+  $('btnHealth').onclick = async ()=>{ await stepHealth(); };
+  $('btnRead').onclick = async ()=>{ await stepRead(); };
+  $('btnMerge').onclick = async ()=>{ await stepMergeProbe(); };
+  $('btnLocal').onclick = async ()=>{ await stepLocal(); };
+  $('btnUpload').onclick = async ()=>{ await stepUploadLocal(); };
+  $('btnClear').onclick = clearAll;
+})();
+</script>
+</body>
+</html>
