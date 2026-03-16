@@ -900,6 +900,71 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     function fmtClock(ts){ if(!ts) return ""; var d = new Date(ts); return pad2(d.getHours())+":"+pad2(d.getMinutes())+":"+pad2(d.getSeconds()); }
     function uuid(){ return "u" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2); }
 
+    function readCookie(name){
+      try{
+        var esc = String(name||"").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
+        return m ? decodeURIComponent(m[1] || "") : "";
+      }catch(e){ return ""; }
+    }
+
+    function readAnySessionToken(){
+      var keys = [
+        "tasunBearerToken_v1","tasunAccessToken_v1","tasun_token","tasunToken",
+        "tasun_auth_token","authToken","access_token","token"
+      ];
+      for(var i=0;i<keys.length;i++){
+        try{
+          var v = norm(sessionStorage.getItem(keys[i]) || localStorage.getItem(keys[i]) || "");
+          if(v) return v;
+        }catch(e){}
+      }
+      var ck = norm(readCookie("tasun_bearer_token") || readCookie("tasun_token") || readCookie("token"));
+      return ck || "";
+    }
+
+    function buildWorkerAuthHeaders(extra){
+      var headers = {};
+      if(extra && typeof extra === "object"){
+        Object.keys(extra).forEach(function(k){ headers[k] = extra[k]; });
+      }
+      var token = readAnySessionToken();
+      if(token && !headers.Authorization && !headers.authorization){
+        headers.Authorization = /^Bearer\s+/i.test(token) ? token : ("Bearer " + token);
+      }
+      return headers;
+    }
+
+    function readLikelyCurrentUserObject(){
+      var stores = [sessionStorage, localStorage];
+      var keys = [
+        CURRENT_KEY, SESSION_KEY, "tasunCurrentUser_v2", "tasunCurrentUser",
+        "tasunUser", "currentUser", "user"
+      ];
+      for(var s=0;s<stores.length;s++){
+        for(var i=0;i<keys.length;i++){
+          try{
+            var raw = stores[s].getItem(keys[i]);
+            var obj = safeJSON(raw || "");
+            if(obj && (obj.user || obj.name || obj.username || obj.account)) return obj;
+          }catch(e){}
+        }
+      }
+      try{
+        if(window.TasunAuthV4 && typeof window.TasunAuthV4.getCurrentUser === "function"){
+          var u = window.TasunAuthV4.getCurrentUser();
+          if(u && (u.user || u.name || u.username || u.account)) return u;
+        }
+      }catch(e){}
+      try{
+        if(window.TASUN_AUTH && typeof window.TASUN_AUTH === "object"){
+          var au = window.TASUN_AUTH.currentUser || window.TASUN_AUTH.user || null;
+          if(au && (au.user || au.name || au.username || au.account)) return au;
+        }
+      }catch(e){}
+      return null;
+    }
+
     // ---------------------------
     // IndexedDB helpers
     // ---------------------------
@@ -1154,10 +1219,11 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     function getCurrentUser(){
       var sess = safeJSON(sessionStorage.getItem(SESSION_KEY) || "");
-      if(sess && sess.user){
-        return { user:sess.user, role:inferRole(sess.user, sess.role), name:sess.user };
+      if(sess && (sess.user || sess.name)){
+        var su = sess.user || sess.name;
+        return { user:su, role:inferRole(su, sess.role), name:(sess.name || su) };
       }
-      var cur = safeJSON(sessionStorage.getItem(CURRENT_KEY) || "") || safeJSON(localStorage.getItem(CURRENT_KEY) || "");
+      var cur = readLikelyCurrentUserObject();
       var who = cur && (cur.user || cur.name || cur.username || cur.account);
       if(who){
         return { user:who, role:inferRole(who, cur.role), name:(cur.name || who) };
