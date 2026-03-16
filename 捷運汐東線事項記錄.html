@@ -863,6 +863,8 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     var AUTH_KEY = "tasunAuthTable_v1";
     var CURRENT_KEY = "tasunCurrentUser_v1";
+    var SESSION_KEY = "tasunSessionLogin_v2";
+    var INDEX_SESSION_KEY = "tasunIndexSessionAuthed_v2";
 
     var DB_KEY = "tasunSxdhNotes_v1";
     var COUNTER_KEY = "tasunSxdhNotes_counter_v1";
@@ -1128,6 +1130,8 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       if(cur && cur.user && cur.role) return cur;
       cur = safeJSON(sessionStorage.getItem(CURRENT_KEY));
       if(cur && cur.user && cur.role) return cur;
+      cur = safeJSON(sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY));
+      if(cur && (cur.user || cur.name) && (cur.role || cur.level)) return { user: norm(cur.user || cur.name), name: norm(cur.name || cur.user), role: norm(cur.role || cur.level || "read") || "read", at: nowISO() };
       var sso = safeJSON(sessionStorage.getItem("tasunSso_v2") || sessionStorage.getItem("tasunSso_v1") || localStorage.getItem("tasunSso_v2") || localStorage.getItem("tasunSso_v1"));
       if(sso && (sso.user || sso.name || sso.username)){
         return {
@@ -1151,24 +1155,73 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       }
     }
 
-    function roleRank(role){
-      if(role==="admin") return 3;
-      if(role==="write") return 2;
-      return 1;
+    function readCookie(name){
+      try{
+        var esc = String(name||"").replace(/[.*+?^${}()|[\]\]/g, "\$&");
+        var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
+        return m ? decodeURIComponent(m[1] || "") : "";
+      }catch(e){ return ""; }
     }
 
     function getSharedWorkerToken(){
       var keys = [
         "tasunCloudToken_v1",
         "tasunCloudToken_v1__sxdh-notes",
-        "tasunCloudToken_v1__auth-table"
+        "tasunCloudToken_v1__auth-table",
+        "tasunBearerToken_v1",
+        "tasunAccessToken_v1",
+        "tasun_token",
+        "tasunToken",
+        "tasun_auth_token",
+        "authToken",
+        "access_token",
+        "token"
       ];
       for(var i=0;i<keys.length;i++){
         var key = keys[i];
-        var v = norm(localStorage.getItem(key) || sessionStorage.getItem(key) || "");
-        if(v) return v;
+        try{
+          var v = norm(sessionStorage.getItem(key) || localStorage.getItem(key) || "");
+          if(v) return v;
+        }catch(e){}
       }
-      return "";
+      try{
+        if(window.TasunAuthV4 && typeof window.TasunAuthV4.getToken === "function"){
+          var t1 = norm(window.TasunAuthV4.getToken() || "");
+          if(t1) return t1;
+        }
+      }catch(e){}
+      try{
+        if(window.TASUN_AUTH && typeof window.TASUN_AUTH === "object"){
+          var t2 = norm(window.TASUN_AUTH.token || window.TASUN_AUTH.accessToken || "");
+          if(t2) return t2;
+        }
+      }catch(e){}
+      var ck = norm(readCookie("tasun_bearer_token") || readCookie("tasun_token") || readCookie("token") || "");
+      return ck || "";
+    }
+
+    function hydrateCrossPageAuth(){
+      try{
+        var cur = getCurrentUser();
+        if(cur && (cur.user || cur.name || cur.username)){
+          var row = {
+            user: norm(cur.user || cur.name || cur.username),
+            name: norm(cur.name || cur.user || cur.username),
+            role: norm(cur.role || cur.level || "read") || "read",
+            at: norm(cur.at || nowISO())
+          };
+          try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(e){}
+          try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(e){}
+          try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: row.user, role: row.role, t: Date.now() })); }catch(e){}
+          try{ sessionStorage.setItem(INDEX_SESSION_KEY, "1"); }catch(e){}
+        }
+        var token = getSharedWorkerToken();
+        if(token){
+          var normalized = /^Bearer\s+/i.test(token) ? token.replace(/^Bearer\s+/i, "") : token;
+          try{ sessionStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
+          try{ localStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
+        }
+      }catch(e){}
     }
 
     function buildWorkerAuthHeaders(extra){
@@ -1178,6 +1231,12 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
         headers.Authorization = /^Bearer\s+/i.test(bearer) ? bearer : ("Bearer " + bearer);
       }
       return headers;
+    }
+
+    function roleRank(role){
+      if(role==="admin") return 3;
+      if(role==="write") return 2;
+      return 1;
     }
 
     // ---------------------------
@@ -1701,18 +1760,9 @@ function getVisibleRows(){
       selectedUid: "",
       mode: "view",
       readMode: false,
-      cloud: { ok:false, cfgOk:false, reachable:false, apiBase:"", endpoints:null, lastSyncAt:"", lastOkAt:"" },
+      cloud: { ok:false, cfgOk:false, apiBase:"", endpoints:null, lastSyncAt:"", lastOkAt:"" },
       _legacyScan: null
     };
-
-    function setCloudState(patch, skipRefresh){
-      patch = (patch && typeof patch==="object") ? patch : {};
-      state.cloud = Object.assign({}, state.cloud || {}, patch);
-      if(!skipRefresh){
-        try{ refresh(); }catch(e){}
-      }
-      return state.cloud;
-    }
 
     // load map once (kept in memory + persisted on change)
     var TRADE_SYS_MAP = loadMap();
@@ -2379,17 +2429,10 @@ function getPromptOptions(mode){
 
       async function cloudHealth(cfg){
         try{
+          try{ hydrateCrossPageAuth(); }catch(e){}
           cfg = cfg || await loadCloudCfg();
           const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
           const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-          state.cloud.cfgOk = !!isValidApiBase(apiBase);
-          state.cloud.apiBase = apiBase || "";
-          state.cloud.endpoints = eps || null;
-          if(!state.cloud.cfgOk){
-            state.cloud.ok = false;
-            refresh();
-            return false;
-          }
           const candidates = [];
           if(eps && eps.health) candidates.push(_joinUrl(apiBase, eps.health));
           candidates.push(_joinUrl(apiBase, "/api/tasun/health"));
@@ -2400,23 +2443,15 @@ function getPromptOptions(mode){
             try{
               const r = await fetch(url, {
                 method:"GET",
-                credentials: (cfg && cfg.credentials) ? "include" : "omit",
+                credentials:"include",
                 cache:"no-store",
                 headers: buildWorkerAuthHeaders({ "accept":"application/json" })
               });
-              if(r.ok){
-                state.cloud.cfgOk = true;
-                refresh();
-                return true;
-              }
+              if(r.ok) return true;
             }catch(_e){}
           }
-          state.cloud.ok = false;
-          refresh();
           return false;
         }catch(_e){
-          state.cloud.ok = false;
-          refresh();
           return false;
         }
       }
@@ -2441,6 +2476,7 @@ function getPromptOptions(mode){
       }
 
       async function cloudRead(cfg, pageKey){
+        try{ hydrateCrossPageAuth(); }catch(e){}
         cfg = cfg || await loadCloudCfg();
         const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
@@ -2450,7 +2486,7 @@ function getPromptOptions(mode){
         const r = await fetch(url, {
           method: "POST",
           cache: "no-store",
-          credentials: (cfg && cfg.credentials) ? "include" : "omit",
+          credentials: "include",
           headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
           body: JSON.stringify({ resourceKey: pageKey })
         });
@@ -2463,6 +2499,7 @@ function getPromptOptions(mode){
       }
 
       async function cloudMerge(cfg, pageKey, payloadLike, clientInfo){
+        try{ hydrateCrossPageAuth(); }catch(e){}
         cfg = cfg || await loadCloudCfg();
         const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
@@ -2486,7 +2523,7 @@ function getPromptOptions(mode){
         const r = await fetch(url, {
           method: "POST",
           cache: "no-store",
-          credentials: (cfg && cfg.credentials) ? "include" : "omit",
+          credentials: "include",
           headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
           body: JSON.stringify(body)
         });
@@ -2516,7 +2553,7 @@ function getPromptOptions(mode){
         var bootKey = "tasunCloudBooted_" + PAGE_KEY;
         var autoFillKey = "tasunCloudAutoFill_" + PAGE_KEY;
         var localDb = (state.db || []);
-        var remoteDb = (remote && Array.isArray(remote.db)) ? remote.db : [];
+        var remoteDb = (remote && remote.payload && Array.isArray(remote.payload.db)) ? remote.payload.db : [];
 
         function _uid(x){
           if(!x) return "";
@@ -2538,8 +2575,8 @@ function getPromptOptions(mode){
           sessionStorage.setItem(autoFillKey, "1");
           try{
             var reason = remoteEmpty ? "auto-bootstrap-cloud-empty" : "auto-fill-cloud-missing";
-            var merged = await cloudMerge(cfg, PAGE_KEY, { db: localDb, counter: state.counter }, { user: state.user || "", role: state.role || "", appVer: APP_VER, clientId: state.clientId || getClientId(), at: nowISO(), reason: reason });
-            if(merged && Array.isArray(merged.db)){
+            var merged = await cloudMerge({ payload: { db: localDb, counter: state.counter }, reason: reason });
+            if(merged && merged.ok && merged.payload){
               remote = merged; // use merged payload as latest remote snapshot
               if(remoteEmpty) localStorage.setItem(bootKey, "1");
               toast(remoteEmpty
@@ -2559,14 +2596,9 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         await saveLocal({ db: state.db, counter: state.counter });
 
         buildDictsFromDb();
-        state.cloud.cfgOk = true;
-        state.cloud.ok = true;
-        state.cloud.lastOkAt = Date.now();
         refresh();
         if(!silent) toast("已從雲端更新");
       }catch(e){
-        state.cloud.ok = false;
-        refresh();
         if(!silent) toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
       }
     }
@@ -2624,14 +2656,9 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         await saveLocal({ db: state.db, counter: state.counter });
 
         buildDictsFromDb();
-        state.cloud.cfgOk = true;
-        state.cloud.ok = true;
-        state.cloud.lastOkAt = Date.now();
         refresh();
         if(!silent) toast(fullUpload ? "雲端同步完成（全量）" : "雲端同步完成（增量）");
       }catch(e){
-        state.cloud.ok = false;
-        refresh();
         if(!silent) toast("雲端同步失敗：" + (e && e.message ? e.message : String(e)));
       }
     }
@@ -2727,7 +2754,6 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
     function applyUser(u){
       state.user = u;
       state.role = u && u.role ? u.role : "read";
-      if(u && (u.user || u.name)) setCurrentUser({ user: norm(u.user || u.name), name: norm(u.name || u.user), role: state.role, at: nowISO() });
       $("uName").textContent = u && (u.name||u.user) ? (u.name||u.user) : "—";
       $("uRole").textContent = state.role || "—";
 
@@ -2755,6 +2781,8 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       }
       var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
       setCurrentUser(cur);
+      try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: cur.user, role: cur.role, t: Date.now() })); }catch(e){}
+      try{ sessionStorage.setItem(INDEX_SESSION_KEY, "1"); }catch(e){}
       applyUser(cur);
       closeLogin();
       toast("登入成功");
@@ -2958,6 +2986,7 @@ $("btnSave").addEventListener("click", async function(){
       // 這段只加防護，不改 UI/DOM/CSS。
       var cur = null;
       try{
+        try{ hydrateCrossPageAuth(); }catch(e){}
         try{ await openIDB(); }catch(e){}
 
         try{
@@ -2989,8 +3018,10 @@ $("btnSave").addEventListener("click", async function(){
         try{ wire(); }catch(e){}
         try{ refresh(); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
-        try{ if(state.cloud && state.cloud.cfgOk) await syncFromCloud({ silent:true }); }catch(e){}
-        try{ if(!cur) openLogin(); }catch(e){}
+        try{
+          var hasCrossSession = !!(safeJSON(sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY) || "") || getSharedWorkerToken());
+          if(!cur && !hasCrossSession) openLogin();
+        }catch(e){}
 
         try{
           await idbPutMeta({
