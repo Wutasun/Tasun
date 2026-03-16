@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>捷運汐東線事項記錄｜雲端逐步測試</title>
+  <style>
+    body{
+      font-family: Arial, "Noto Sans TC", sans-serif;
+      margin:0; padding:20px;
+      background:#f5f7f7; color:#222;
+    }
+    .wrap{max-width:1200px; margin:0 auto;}
+    h1{margin:0 0 16px;}
+    .row{display:flex; gap:12px; flex-wrap:wrap; margin-bottom:12px;}
+    button{
+      padding:10px 14px; border-radius:10px; border:1px solid #bbb;
+      background:#fff; cursor:pointer; font-size:14px;
+    }
+    input, textarea, select{
+      width:100%; padding:10px; border-radius:10px; border:1px solid #bbb;
+      font-size:14px; box-sizing:border-box;
+    }
+    .card{
+      background:#fff; border:1px solid #ddd; border-radius:14px;
+      padding:14px; margin-bottom:14px;
+      box-shadow:0 4px 14px rgba(0,0,0,.05);
+    }
+    .grid{
+      display:grid; grid-template-columns:1fr 1fr; gap:14px;
+    }
+    @media (max-width:900px){
+      .grid{grid-template-columns:1fr;}
+    }
+    .ok{color:#0a7a2f; font-weight:700;}
+    .bad{color:#b42318; font-weight:700;}
+    .warn{color:#9a6700; font-weight:700;}
+    pre{
+      white-space:pre-wrap; word-break:break-word;
+      background:#f8f8f8; border:1px solid #e5e5e5;
+      border-radius:10px; padding:12px; overflow:auto;
+    }
+    .stepTitle{
+      font-size:16px; font-weight:800; margin-bottom:8px;
+    }
+    .mono{font-family:Consolas, monospace;}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>捷運汐東線事項記錄｜雲端逐步測試</h1>
+
+  <div class="card">
+    <div class="row">
+      <button id="btnRunAll">全部測試</button>
+      <button id="btnLoadRes">Step 1~3：讀取 resources / apiBase</button>
+      <button id="btnHealth">Step 4：測 Health</button>
+      <button id="btnRead">Step 5~6：測 Read</button>
+      <button id="btnMerge">Step 7~8：測 Merge + 再 Read</button>
+      <button id="btnLocal">Step 9：檢查本機 localStorage</button>
+      <button id="btnBootstrap">Step 10：本機資料上傳雲端</button>
+      <button id="btnClear">清空畫面</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="stepTitle">基本設定</div>
+      <label>頁面 key / resourceKey</label>
+      <input id="pageKey" value="sxdh-notes" />
+
+      <div style="height:10px;"></div>
+
+      <label>resources 檔名</label>
+      <input id="resourcesUrl" value="tasun-resources.json" />
+
+      <div style="height:10px;"></div>
+
+      <label>apiBase（可手動覆蓋）</label>
+      <input id="apiBase" placeholder="例如：https://tasun-worker.wutasun.workers.dev" />
+
+      <div style="height:10px;"></div>
+
+      <label>health endpoint</label>
+      <input id="epHealth" value="/api/tasun/health" />
+
+      <div style="height:10px;"></div>
+
+      <label>read endpoint</label>
+      <input id="epRead" value="/api/tasun/read" />
+
+      <div style="height:10px;"></div>
+
+      <label>merge endpoint</label>
+      <input id="epMerge" value="/api/tasun/merge" />
+
+      <div style="height:10px;"></div>
+
+      <label>本機 localStorage key（可手動指定）</label>
+      <input id="localKey" value="tasunSxdhNotes_v1" />
+    </div>
+
+    <div class="card">
+      <div class="stepTitle">測試結果摘要</div>
+      <pre id="summary"></pre>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stepTitle">逐步測試輸出</div>
+    <pre id="log"></pre>
+  </div>
+
+  <div class="card">
+    <div class="stepTitle">最後一次 Read / Merge 回傳</div>
+    <pre id="payload"></pre>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  const $ = id => document.getElementById(id);
+  const logEl = $("log");
+  const summaryEl = $("summary");
+  const payloadEl = $("payload");
+
+  const state = {
+    resources: null,
+    apiBase: "",
+    endpoints: {
+      health: "/api/tasun/health",
+      read: "/api/tasun/read",
+      merge: "/api/tasun/merge"
+    },
+    lastRead: null,
+    lastMerge: null
+  };
+
+  function log(msg, obj){
+    const line = typeof msg === "string" ? msg : JSON.stringify(msg, null, 2);
+    logEl.textContent += line + "\n";
+    if(obj !== undefined){
+      logEl.textContent += JSON.stringify(obj, null, 2) + "\n";
+    }
+  }
+
+  function setSummary(lines){
+    summaryEl.textContent = lines.join("\n");
+  }
+
+  function showPayload(obj){
+    payloadEl.textContent = JSON.stringify(obj, null, 2);
+  }
+
+  function clearOutput(){
+    logEl.textContent = "";
+    summaryEl.textContent = "";
+    payloadEl.textContent = "";
+  }
+
+  function norm(s){
+    return (s === undefined || s === null) ? "" : String(s).trim();
+  }
+
+  function joinUrl(base, path){
+    base = norm(base).replace(/\/+$/,"");
+    path = norm(path);
+    if(!path) return base;
+    if(/^https?:\/\//i.test(path)) return path;
+    if(path.charAt(0) !== "/") path = "/" + path;
+    return base + path;
+  }
+
+  function getCurrentVersion(){
+    try{
+      const u = new URL(location.href);
+      return u.searchParams.get("v") || "";
+    }catch(e){
+      return "";
+    }
+  }
+
+  async function safeFetchJson(url, options){
+    const res = await fetch(url, options || {});
+    const text = await res.text();
+    let json = null;
+    try{ json = JSON.parse(text); }catch(e){}
+    return {
+      ok: res.ok,
+      status: res.status,
+      url: res.url,
+      text,
+      json
+    };
+  }
+
+  async function step1to3_loadResources(){
+    log("===== Step 1~3：讀取 resources / apiBase =====");
+    const version = getCurrentVersion();
+    log("目前頁面 URL: " + location.href);
+    log("目前 v 參數: " + (version || "(空)"));
+
+    const resourcesUrl = norm($("resourcesUrl").value);
+    const url = resourcesUrl + (resourcesUrl.includes("?") ? "&" : "?") + "_=" + Date.now();
+
+    log("準備讀取 resources: " + url);
+
+    const ret = await safeFetchJson(url, { cache: "no-store" });
+    log("resources HTTP 狀態: " + ret.status);
+
+    if(!ret.ok){
+      log("讀取失敗");
+      setSummary([
+        "Step 1~3：失敗",
+        "問題點：tasun-resources.json 無法讀取",
+        "HTTP: " + ret.status
+      ]);
+      return false;
+    }
+
+    state.resources = ret.json;
+    log("resources 內容如下：", ret.json);
+
+    const manualApiBase = norm($("apiBase").value);
+    const fn = decodeURIComponent((location.pathname || "").split("/").pop() || "");
+    let apiBase = manualApiBase;
+
+    if(!apiBase && ret.json && ret.json.resources){
+      const pick =
+        ret.json.resources[fn] ||
+        ret.json.resources[$("pageKey").value] ||
+        ret.json.resources["*"] ||
+        null;
+
+      if(pick && pick.apiBase) apiBase = pick.apiBase;
+
+      if(pick && pick.endpoints){
+        if(pick.endpoints.health) $("epHealth").value = pick.endpoints.health;
+        if(pick.endpoints.read) $("epRead").value = pick.endpoints.read;
+        if(pick.endpoints.merge) $("epMerge").value = pick.endpoints.merge;
+      }
+    }
+
+    if(!apiBase && ret.json && ret.json.apiBase){
+      apiBase = ret.json.apiBase;
+    }
+
+    state.apiBase = apiBase;
+    state.endpoints.health = norm($("epHealth").value);
+    state.endpoints.read = norm($("epRead").value);
+    state.endpoints.merge = norm($("epMerge").value);
+
+    $("apiBase").value = apiBase || "";
+
+    log("解析得到 apiBase: " + (apiBase || "(空)"));
+    log("health endpoint: " + state.endpoints.health);
+    log("read endpoint: " + state.endpoints.read);
+    log("merge endpoint: " + state.endpoints.merge);
+
+    const ok = !!apiBase;
+    setSummary([
+      "Step 1~3：" + (ok ? "成功" : "失敗"),
+      "apiBase: " + (apiBase || "(空)"),
+      "read: " + state.endpoints.read,
+      "merge: " + state.endpoints.merge
+    ]);
+    return ok;
+  }
+
+  async function step4_health(){
+    log("===== Step 4：測 Health =====");
+
+    const apiBase = norm($("apiBase").value);
+    const epHealth = norm($("epHealth").value);
+    if(!apiBase){
+      log("apiBase 為空，無法測試");
+      return false;
+    }
+
+    const url = joinUrl(apiBase, epHealth);
+    log("Health URL: " + url);
+
+    try{
+      const ret = await safeFetchJson(url + "?_=" + Date.now(), {
+        method: "GET",
+        cache: "no-store",
+        credentials: "include",
+        headers: { "accept":"application/json" }
+      });
+
+      log("Health HTTP 狀態: " + ret.status);
+      showPayload(ret.json || ret.text);
+
+      if(ret.ok){
+        setSummary([
+          "Step 4：成功",
+          "Health URL: " + url,
+          "HTTP: " + ret.status
+        ]);
+        return true;
+      }else{
+        setSummary([
+          "Step 4：失敗",
+          "Health URL: " + url,
+          "HTTP: " + ret.status
+        ]);
+        return false;
+      }
+    }catch(err){
+      log("Health 例外: " + err.message);
+      setSummary([
+        "Step 4：失敗",
+        "例外: " + err.message
+      ]);
+      return false;
+    }
+  }
+
+  async function step5to6_read(){
+    log("===== Step 5~6：測 Read =====");
+
+    const apiBase = norm($("apiBase").value);
+    const epRead = norm($("epRead").value);
+    const pageKey = norm($("pageKey").value);
+
+    if(!apiBase){
+      log("apiBase 為空，無法測試");
+      return false;
+    }
+
+    const url = joinUrl(apiBase, epRead) + "?key=" + encodeURIComponent(pageKey) + "&_=" + Date.now();
+    log("Read URL: " + url);
+
+    try{
+      const ret = await safeFetchJson(url, {
+        method: "GET",
+        cache: "no-store",
+        credentials: "include",
+        headers: { "accept":"application/json" }
+      });
+
+      log("Read HTTP 狀態: " + ret.status);
+      showPayload(ret.json || ret.text);
+
+      state.lastRead = ret.json || null;
+
+      if(!ret.ok){
+        setSummary([
+          "Step 5~6：失敗",
+          "Read HTTP: " + ret.status
+        ]);
+        return false;
+      }
+
+      const payload = (ret.json && (ret.json.payload || ret.json.data || ret.json.result || ret.json)) || {};
+      const db = Array.isArray(payload.db) ? payload.db : [];
+      const counter = Number(payload.counter || 0) || 0;
+
+      log("Read payload.db 筆數: " + db.length);
+      log("Read payload.counter: " + counter);
+
+      setSummary([
+        "Step 5~6：成功",
+        "Read HTTP: " + ret.status,
+        "db 筆數: " + db.length,
+        "counter: " + counter
+      ]);
+      return true;
+    }catch(err){
+      log("Read 例外: " + err.message);
+      setSummary([
+        "Step 5~6：失敗",
+        "例外: " + err.message
+      ]);
+      return false;
+    }
+  }
+
+  async function step7to8_merge(){
+    log("===== Step 7~8：測 Merge + 再 Read =====");
+
+    const apiBase = norm($("apiBase").value);
+    const epMerge = norm($("epMerge").value);
+    const pageKey = norm($("pageKey").value);
+
+    if(!apiBase){
+      log("apiBase 為空，無法測試");
+      return false;
+    }
+
+    const testRow = {
+      uid: "test_" + Date.now(),
+      id: 999999,
+      text: "雲端連線測試_" + new Date().toISOString(),
+      trade: "測試工種",
+      sys: "測試系統",
+      source: "測試來源",
+      attach: "",
+      remark: "僅供測試，可刪",
+      date: new Date().toISOString().slice(0,10),
+      updatedAt: new Date().toISOString(),
+      rev: "r" + Date.now(),
+      deleted: false
+    };
+
+    const body = {
+      key: pageKey,
+      payload: {
+        db: [testRow],
+        counter: 999999
+      },
+      client: {
+        user: "debug",
+        role: "admin",
+        appVer: getCurrentVersion() || "debug",
+        at: new Date().toISOString(),
+        reason: "step-test"
+      }
+    };
+
+    const url = joinUrl(apiBase, epMerge);
+    log("Merge URL: " + url);
+    log("Merge body:", body);
+
+    try{
+      const ret = await safeFetchJson(url, {
+        method: "POST",
+        cache: "no-store",
+        credentials: "include",
+        headers: {
+          "content-type":"application/json",
+          "accept":"application/json"
+        },
+        body: JSON.stringify(body)
+      });
+
+      log("Merge HTTP 狀態: " + ret.status);
+      showPayload(ret.json || ret.text);
+      state.lastMerge = ret.json || null;
+
+      if(!ret.ok){
+        setSummary([
+          "Step 7~8：失敗",
+          "Merge HTTP: " + ret.status
+        ]);
+        return false;
+      }
+
+      log("Merge 成功，接著再讀一次確認");
+      const okRead = await step5to6_read();
+
+      setSummary([
+        "Step 7：Merge " + (ret.ok ? "成功" : "失敗"),
+        "Step 8：再 Read " + (okRead ? "成功" : "失敗"),
+        "若 Read 後看到 testRow，代表 Worker 可寫可讀"
+      ]);
+      return okRead;
+    }catch(err){
+      log("Merge 例外: " + err.message);
+      setSummary([
+        "Step 7~8：失敗",
+        "例外: " + err.message
+      ]);
+      return false;
+    }
+  }
+
+  function step9_local(){
+    log("===== Step 9：檢查本機 localStorage =====");
+
+    const keys = [];
+    for(let i=0;i<localStorage.length;i++){
+      const k = localStorage.key(i);
+      keys.push(k);
+    }
+
+    const suspect = keys.filter(k =>
+      /tasun|sxdh|note|notes|record|事項|汐東/i.test(String(k || ""))
+    );
+
+    const manualKey = norm($("localKey").value);
+    let localData = null;
+    try{
+      localData = JSON.parse(localStorage.getItem(manualKey) || "null");
+    }catch(e){
+      localData = null;
+    }
+
+    log("localStorage 全部 keys：", keys);
+    log("疑似相關 keys：", suspect);
+    log("指定 localKey: " + manualKey);
+    log("指定 key 內容：", localData);
+
+    let count = 0;
+    if(Array.isArray(localData)) count = localData.length;
+    if(localData && Array.isArray(localData.db)) count = localData.db.length;
+
+    setSummary([
+      "Step 9：完成",
+      "指定 localKey: " + manualKey,
+      "本機資料筆數: " + count,
+      "疑似相關 keys 數量: " + suspect.length
+    ]);
+    showPayload({
+      allKeys: keys,
+      suspectKeys: suspect,
+      selectedKey: manualKey,
+      selectedData: localData
+    });
+    return true;
+  }
+
+  async function step10_bootstrap(){
+    log("===== Step 10：本機資料上傳雲端 =====");
+
+    const apiBase = norm($("apiBase").value);
+    const epMerge = norm($("epMerge").value);
+    const pageKey = norm($("pageKey").value);
+    const localKey = norm($("localKey").value);
+
+    if(!apiBase){
+      log("apiBase 為空，無法上傳");
+      return false;
+    }
+
+    let localData = null;
+    try{
+      localData = JSON.parse(localStorage.getItem(localKey) || "null");
+    }catch(e){
+      log("localStorage JSON parse 失敗");
+      return false;
+    }
+
+    let db = [];
+    let counter = 0;
+
+    if(Array.isArray(localData)){
+      db = localData;
+    }else if(localData && Array.isArray(localData.db)){
+      db = localData.db;
+      counter = Number(localData.counter || 0) || 0;
+    }
+
+    if(!db.length){
+      log("本機沒有可上傳資料");
+      setSummary([
+        "Step 10：停止",
+        "原因：本機 localStorage 指定 key 沒有資料"
+      ]);
+      return false;
+    }
+
+    const body = {
+      key: pageKey,
+      payload: { db, counter },
+      client: {
+        user: "debug-bootstrap",
+        role: "admin",
+        appVer: getCurrentVersion() || "debug",
+        at: new Date().toISOString(),
+        reason: "bootstrap-local-to-cloud"
+      }
+    };
+
+    const url = joinUrl(apiBase, epMerge);
+    log("Bootstrap Merge URL: " + url);
+    log("準備上傳本機筆數: " + db.length);
+
+    try{
+      const ret = await safeFetchJson(url, {
+        method: "POST",
+        cache: "no-store",
+        credentials: "include",
+        headers: {
+          "content-type":"application/json",
+          "accept":"application/json"
+        },
+        body: JSON.stringify(body)
+      });
+
+      log("Bootstrap Merge HTTP: " + ret.status);
+      showPayload(ret.json || ret.text);
+
+      if(!ret.ok){
+        setSummary([
+          "Step 10：失敗",
+          "Bootstrap Merge HTTP: " + ret.status
+        ]);
+        return false;
+      }
+
+      const okRead = await step5to6_read();
+
+      setSummary([
+        "Step 10：完成",
+        "本機資料已送出",
+        "再 Read 結果：" + (okRead ? "成功" : "失敗")
+      ]);
+      return okRead;
+    }catch(err){
+      log("Bootstrap 例外: " + err.message);
+      setSummary([
+        "Step 10：失敗",
+        "例外: " + err.message
+      ]);
+      return false;
+    }
+  }
+
+  async function runAll(){
+    clearOutput();
+    const a = await step1to3_loadResources();
+    if(!a) return;
+
+    await step4_health();
+    await step5to6_read();
+    step9_local();
+  }
+
+  $("btnRunAll").addEventListener("click", runAll);
+  $("btnLoadRes").addEventListener("click", step1to3_loadResources);
+  $("btnHealth").addEventListener("click", step4_health);
+  $("btnRead").addEventListener("click", step5to6_read);
+  $("btnMerge").addEventListener("click", step7to8_merge);
+  $("btnLocal").addEventListener("click", step9_local);
+  $("btnBootstrap").addEventListener("click", step10_bootstrap);
+  $("btnClear").addEventListener("click", clearOutput);
+
+  clearOutput();
+  log("測試頁已載入，請先按「全部測試」");
+})();
+</script>
+</body>
+</html>
