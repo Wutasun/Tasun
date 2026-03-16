@@ -1126,41 +1126,35 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     function getCurrentUser(){
       var cur = safeJSON(localStorage.getItem(CURRENT_KEY));
       if(cur && cur.user && cur.role) return cur;
+      cur = safeJSON(sessionStorage.getItem(CURRENT_KEY));
+      if(cur && cur.user && cur.role) return cur;
+      var sso = safeJSON(sessionStorage.getItem("tasunSso_v2") || sessionStorage.getItem("tasunSso_v1") || localStorage.getItem("tasunSso_v2") || localStorage.getItem("tasunSso_v1"));
+      if(sso && (sso.user || sso.name || sso.username)){
+        return {
+          user: norm(sso.user || sso.name || sso.username),
+          name: norm(sso.name || sso.user || sso.username),
+          role: norm(sso.role || sso.level || "read") || "read",
+          at: nowISO()
+        };
+      }
       return null;
     }
 
     function setCurrentUser(u){
-      if(!u) localStorage.removeItem(CURRENT_KEY);
-      else localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
+      if(!u){
+        localStorage.removeItem(CURRENT_KEY);
+        try{ sessionStorage.removeItem(CURRENT_KEY); }catch(e){}
+      }else{
+        var payload = JSON.stringify(u);
+        localStorage.setItem(CURRENT_KEY, payload);
+        try{ sessionStorage.setItem(CURRENT_KEY, payload); }catch(e){}
+      }
     }
 
     function roleRank(role){
       if(role==="admin") return 3;
       if(role==="write") return 2;
       return 1;
-    }
-
-    function getSharedWorkerToken(){
-      var keys = [
-        "tasunCloudToken_v1",
-        "tasunCloudToken_v1__sxdh-notes",
-        "tasunCloudToken_v1__auth-table"
-      ];
-      for(var i=0;i<keys.length;i++){
-        var key = keys[i];
-        var v = norm(localStorage.getItem(key) || sessionStorage.getItem(key) || "");
-        if(v) return v;
-      }
-      return "";
-    }
-
-    function buildWorkerAuthHeaders(extra){
-      var headers = Object.assign({}, extra || {});
-      var bearer = getSharedWorkerToken();
-      if(bearer && !headers.Authorization && !headers.authorization){
-        headers.Authorization = "Bearer " + bearer;
-      }
-      return headers;
     }
 
     // ---------------------------
@@ -1684,9 +1678,18 @@ function getVisibleRows(){
       selectedUid: "",
       mode: "view",
       readMode: false,
-      cloud: { ok:false, cfgOk:false, apiBase:"", endpoints:null, lastSyncAt:"", lastOkAt:"" },
+      cloud: { ok:false, cfgOk:false, reachable:false, apiBase:"", endpoints:null, lastSyncAt:"", lastOkAt:"" },
       _legacyScan: null
     };
+
+    function setCloudState(patch, skipRefresh){
+      patch = (patch && typeof patch==="object") ? patch : {};
+      state.cloud = Object.assign({}, state.cloud || {}, patch);
+      if(!skipRefresh){
+        try{ refresh(); }catch(e){}
+      }
+      return state.cloud;
+    }
 
     // load map once (kept in memory + persisted on change)
     var TRADE_SYS_MAP = loadMap();
@@ -2356,77 +2359,57 @@ function getPromptOptions(mode){
           cfg = cfg || await loadCloudCfg();
           const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
           const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-          state.cloud.cfgOk = !!isValidApiBase(apiBase);
-          state.cloud.apiBase = apiBase || "";
-          state.cloud.endpoints = eps || null;
-          if(!state.cloud.cfgOk){
-            state.cloud.ok = false;
-            refresh();
-            return false;
-          }
           const candidates = [];
           if(eps && eps.health) candidates.push(_joinUrl(apiBase, eps.health));
-          candidates.push(_joinUrl(apiBase, "/api/tasun/health"));
           candidates.push(_joinUrl(apiBase, "/api/ping"));
           candidates.push(_joinUrl(apiBase, "/api/tasun/ping"));
+          candidates.push(_joinUrl(apiBase, "/api/ping"));
 
+          var ok = false;
           for(const url of candidates){
             try{
-              const r = await fetch(url, {
-                method:"GET",
-                credentials: (cfg && cfg.credentials) ? "include" : "omit",
-                cache:"no-store",
-                headers: buildWorkerAuthHeaders({ "accept":"application/json" })
-              });
-              if(r.ok){
-                state.cloud.cfgOk = true;
-                refresh();
-                return true;
-              }
+              const r = await fetch(url, { method:"GET", credentials: (cfg && cfg.credentials) ? "include" : "omit", cache:"no-store" });
+              if(r.ok){ ok = true; break; }
             }catch(_e){}
           }
-          state.cloud.ok = false;
-          refresh();
-          return false;
+          setCloudState({ cfgOk: !!isValidApiBase(apiBase), reachable: ok, ok: ok, apiBase: apiBase, endpoints: eps, lastOkAt: ok ? Date.now() : (state.cloud.lastOkAt || "") }, true);
+          try{ refresh(); }catch(e){}
+          return ok;
         }catch(_e){
-          state.cloud.ok = false;
-          refresh();
+          setCloudState({ ok:false, reachable:false }, true);
+          try{ refresh(); }catch(e){}
           return false;
         }
       }
 
       function buildCloudEnvelope(pageKey, payload){
-        return { resourceKey: pageKey, payload: payload || { db:[], counter:0 } };
+        // Backward compatible wrapper; cloudMerge/cloudRead no longer require this shape,
+        // but keep it to avoid touching other code paths.
+        return { key: pageKey, payload: payload || { db:[], counter:0 } };
       }
 
       function _normalizePullResponse(json){
+        // Accept both {ok:true,payload:{db,counter}} and legacy {payload:{...}} and raw payload.
         const j = (json && typeof json==="object") ? json : {};
-        const payload = (j.payload && typeof j.payload === "object") ? j.payload
-          : (j.data && typeof j.data === "object") ? j.data
-          : j;
-        const db = Array.isArray(payload.db) ? payload.db
-          : Array.isArray(payload.rows) ? payload.rows
-          : Array.isArray(payload.items) ? payload.items
-          : [];
-        const counter = Number.isFinite(Number(payload.counter)) ? Number(payload.counter)
-          : Array.isArray(db) ? db.length
-          : 0;
-        return { db, counter, ok: !!j.ok };
+        const payload = (j.payload && typeof j.payload==="object") ? j.payload : (j.data && typeof j.data==="object") ? j.data : j;
+        const db = Array.isArray(payload.db) ? payload.db : (Array.isArray(payload.items) ? payload.items : []);
+        const counter = Number.isFinite(Number(payload.counter)) ? Number(payload.counter) : 0;
+        return { db, counter };
       }
 
       async function cloudRead(cfg, pageKey){
         cfg = cfg || await loadCloudCfg();
         const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-        const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/read";
-        const url = _joinUrl(apiBase, readPath);
+        const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/pull";
+
+        const url = _joinUrl(apiBase, readPath) + (readPath.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(pageKey);
 
         const r = await fetch(url, {
-          method: "POST",
+          method: "GET",
           cache: "no-store",
           credentials: (cfg && cfg.credentials) ? "include" : "omit",
-          headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
-          body: JSON.stringify({ resourceKey: pageKey })
+          headers: { "accept":"application/json" }
         });
         if(!r.ok){
           const t = await r.text().catch(()=> "");
@@ -2442,6 +2425,7 @@ function getPromptOptions(mode){
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
         const mergePath = (eps && eps.merge) ? String(eps.merge) : "/api/tasun/merge";
 
+        // Accept: {key,payload:{db,counter}} / {payload:{db,counter}} / raw {db,counter}
         let payload = payloadLike;
         if(payload && typeof payload === "object"){
           if(payload.payload && typeof payload.payload==="object") payload = payload.payload;
@@ -2450,7 +2434,7 @@ function getPromptOptions(mode){
         payload = payload || { db:[], counter:0 };
 
         const body = {
-          resourceKey: pageKey,
+          key: pageKey,
           payload: { db: Array.isArray(payload.db)? payload.db : [], counter: Number(payload.counter)||0 },
           client: clientInfo && typeof clientInfo==="object" ? clientInfo : {}
         };
@@ -2461,7 +2445,7 @@ function getPromptOptions(mode){
           method: "POST",
           cache: "no-store",
           credentials: (cfg && cfg.credentials) ? "include" : "omit",
-          headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
+          headers: { "content-type":"application/json", "accept":"application/json" },
           body: JSON.stringify(body)
         });
         if(!r.ok){
@@ -2512,8 +2496,8 @@ function getPromptOptions(mode){
           sessionStorage.setItem(autoFillKey, "1");
           try{
             var reason = remoteEmpty ? "auto-bootstrap-cloud-empty" : "auto-fill-cloud-missing";
-            var merged = await cloudMerge(cfg, PAGE_KEY, { db: localDb, counter: state.counter }, { user: state.user || "", role: state.role || "", appVer: APP_VER, clientId: state.clientId || getClientId(), at: nowISO(), reason: reason });
-            if(merged && Array.isArray(merged.db)){
+            var merged = await cloudMerge({ payload: { db: localDb, counter: state.counter }, reason: reason });
+            if(merged && merged.ok && merged.payload){
               remote = merged; // use merged payload as latest remote snapshot
               if(remoteEmpty) localStorage.setItem(bootKey, "1");
               toast(remoteEmpty
@@ -2533,13 +2517,11 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         await saveLocal({ db: state.db, counter: state.counter });
 
         buildDictsFromDb();
-        state.cloud.cfgOk = true;
-        state.cloud.ok = true;
-        state.cloud.lastOkAt = Date.now();
+        setCloudState({ ok:true, cfgOk:true, reachable:true, lastOkAt: Date.now(), lastSyncAt: nowISO() }, true);
         refresh();
         if(!silent) toast("已從雲端更新");
       }catch(e){
-        state.cloud.ok = false;
+        setCloudState({ ok:false, cfgOk:true, reachable:false }, true);
         refresh();
         if(!silent) toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
       }
@@ -2598,13 +2580,11 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         await saveLocal({ db: state.db, counter: state.counter });
 
         buildDictsFromDb();
-        state.cloud.cfgOk = true;
-        state.cloud.ok = true;
-        state.cloud.lastOkAt = Date.now();
+        setCloudState({ ok:true, cfgOk:true, reachable:true, lastOkAt: Date.now(), lastSyncAt: nowISO() }, true);
         refresh();
         if(!silent) toast(fullUpload ? "雲端同步完成（全量）" : "雲端同步完成（增量）");
       }catch(e){
-        state.cloud.ok = false;
+        setCloudState({ ok:false, cfgOk:true, reachable:false }, true);
         refresh();
         if(!silent) toast("雲端同步失敗：" + (e && e.message ? e.message : String(e)));
       }
@@ -2701,6 +2681,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
     function applyUser(u){
       state.user = u;
       state.role = u && u.role ? u.role : "read";
+      if(u && (u.user || u.name)) setCurrentUser({ user: norm(u.user || u.name), name: norm(u.name || u.user), role: state.role, at: nowISO() });
       $("uName").textContent = u && (u.name||u.user) ? (u.name||u.user) : "—";
       $("uRole").textContent = state.role || "—";
 
@@ -2962,7 +2943,7 @@ $("btnSave").addEventListener("click", async function(){
         try{ wire(); }catch(e){}
         try{ refresh(); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
-        try{ if(cur) scheduleSync("boot-sync", true); }catch(e){}
+        try{ if(state.cloud && state.cloud.cfgOk) await syncFromCloud({ silent:true }); }catch(e){}
         try{ if(!cur) openLogin(); }catch(e){}
 
         try{
