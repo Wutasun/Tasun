@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>捷運汐東線事項記錄｜雲端逐步測試</title>
+  <title>捷運汐東線事項記錄｜雲端正式診斷版</title>
   <script>document.write('<script src="tasun-version-loader.js?_=' + Date.now() + '"><\/script>');</script>
   <style>
-    :root{--bg:#edf2f1;--panel:#ffffff;--border:#d6d6d6;--ink:#1d1d1f;--muted:#666;--accent:#8a5b16;--ok:#0a7a37;--warn:#a35b00;--bad:#b42318}
+    :root{--bg:#edf2f1;--panel:#ffffff;--border:#d6d6d6;--ink:#1d1d1f;--muted:#666;--accent:#8a5b16;--ok:#0a7a37;--warn:#a35b00;--bad:#b42318;--info:#175cd3}
     *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,"Segoe UI","Noto Sans TC",sans-serif;background:var(--bg);color:var(--ink)}
     .wrap{max-width:1180px;margin:24px auto;padding:0 16px}
     h1{font-size:24px;margin:0 0 16px}
@@ -21,14 +21,21 @@
     textarea{min-height:220px;resize:vertical}
     .summary{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;line-height:1.5}
     .logs{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.5;background:#fafafa}
-    .status-ok{color:var(--ok);font-weight:700}.status-warn{color:var(--warn);font-weight:700}.status-bad{color:var(--bad);font-weight:700}
+    .status-ok{color:var(--ok);font-weight:700}.status-warn{color:var(--warn);font-weight:700}.status-bad{color:var(--bad);font-weight:700}.status-info{color:var(--info);font-weight:700}
     .muted{color:var(--muted)} .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .summaryBox{display:flex;flex-direction:column;gap:10px}
+    .badge{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid var(--border);font-size:13px;font-weight:800;width:max-content}
+    .badge.ok{color:var(--ok);background:#ecfdf3;border-color:#abefc6}.badge.warn{color:var(--warn);background:#fff7ed;border-color:#fed7aa}.badge.bad{color:var(--bad);background:#fef3f2;border-color:#fecdca}.badge.info{color:var(--info);background:#eff8ff;border-color:#b2ddff}
+    .summaryCard{border:1px solid var(--border);border-radius:12px;padding:12px;background:#fafafa}
+    .summaryTitle{font-size:13px;color:var(--muted);font-weight:700;margin-bottom:8px}
+    .summaryText{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;line-height:1.55}
+    .inlineTools{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
     @media (max-width:900px){.grid{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>捷運汐東線事項記錄｜雲端逐步測試</h1>
+    <h1>捷運汐東線事項記錄｜雲端正式診斷版</h1>
 
     <div class="toolbar">
       <button id="btnAll">全部測試</button>
@@ -38,6 +45,8 @@
       <button id="btnMerge">Step 7~8：測 Merge + 再 Read</button>
       <button id="btnLocal">Step 9：檢查本機 localStorage / IDB</button>
       <button id="btnUpload">Step 10：本機資料上傳雲端</button>
+      <button id="btnExport">匯出診斷結果</button>
+      <button id="btnCopy">複製診斷摘要</button>
       <button id="btnClear">清空畫面</button>
     </div>
 
@@ -67,7 +76,13 @@
 
       <div class="card">
         <label>測試結果摘要</label>
-        <div id="summary" class="summary"></div>
+        <div class="summaryBox">
+          <div id="summaryBadge" class="badge info">尚未執行</div>
+          <div class="summaryCard">
+            <div class="summaryTitle">目前步驟 / 中文判讀</div>
+            <div id="summary" class="summaryText"></div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -88,8 +103,9 @@
   const $ = (id)=>document.getElementById(id);
   const logs = $("logs");
   const summary = $("summary");
+  const summaryBadge = $("summaryBadge");
   const payloadView = $("payloadView");
-  const state = { resolved:null, lastRead:null, lastMerge:null, localRows:[], localMeta:null };
+  const state = { resolved:null, lastRead:null, lastMerge:null, localRows:[], localMeta:null, lastSummaryText:"", lastReport:null };
 
   function norm(v){ return (v===undefined||v===null)?"":String(v).trim(); }
   function safeJSON(v){ try{return JSON.parse(v);}catch(e){return null;} }
@@ -100,9 +116,54 @@
     logs.textContent += (logs.textContent?"\n":"") + line;
     logs.scrollTop = logs.scrollHeight;
   }
-  function setSummary(text){ summary.textContent = text || ""; }
+  function statusClass(kind){ return kind === "ok" ? "ok" : kind === "warn" ? "warn" : kind === "bad" ? "bad" : "info"; }
+  function setSummaryText(text, kind){
+    state.lastSummaryText = text || "";
+    summary.textContent = state.lastSummaryText;
+    summaryBadge.className = "badge " + statusClass(kind);
+    summaryBadge.textContent = kind === "ok" ? "測試成功" : kind === "warn" ? "需要注意" : kind === "bad" ? "測試失敗" : "診斷資訊";
+  }
+  function explainHttp(status){
+    if(status === 200) return "連線正常，Worker 端點可達。";
+    if(status === 401) return "已連到 Worker，但目前沒有帶登入憑證，或 session / token 已失效。";
+    if(status === 403) return "已連到 Worker，但目前帳號沒有權限。";
+    if(status === 404) return "已連到主機，但 API 路徑不存在，請檢查 endpoint 路徑。";
+    if(status === 0) return "瀏覽器沒有取得回應，可能是 CORS、網路或網址錯誤。";
+    return "HTTP " + status + "，請再搭配下方逐步輸出判讀。";
+  }
+  function tokenStateText(){
+    const token = readAnySessionToken();
+    return token ? "已找到登入憑證" : "未找到登入憑證";
+  }
+  function setSummary(text){ setSummaryText(text, "info"); }
   function setPayload(obj){ payloadView.value = typeof obj === 'string' ? obj : JSON.stringify(obj||{}, null, 2); }
-  function clearAll(){ logs.textContent=""; summary.textContent=""; payloadView.value=""; }
+  function buildReport(){
+    const cfg = state.resolved || {};
+    return {
+      exportedAt: now(),
+      page: location.href,
+      resourceKey: cfg.resourceKey || norm($("resourceKey").value),
+      apiBase: cfg.apiBase || norm($("apiBase").value),
+      endpoints: cfg.endpoints || { health:norm($("healthEp").value), read:norm($("readEp").value), merge:norm($("mergeEp").value) },
+      tokenState: tokenStateText(),
+      summary: state.lastSummaryText || summary.textContent || "",
+      logs: logs.textContent || "",
+      payload: payloadView.value || ""
+    };
+  }
+  function downloadText(name, text){
+    const blob = new Blob([text], {type:'application/json;charset=utf-8'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 0);
+  }
+  async function copyText(text){
+    try{ await navigator.clipboard.writeText(text); return true; }catch(e){ return false; }
+  }
+  function clearAll(){ logs.textContent=""; summary.textContent=""; payloadView.value=""; state.lastSummaryText=""; summaryBadge.className = "badge info"; summaryBadge.textContent = "尚未執行"; }
 
   function readCookie(name){
     try{
@@ -212,13 +273,14 @@
     }
 
     state.resolved = cfg;
-    setSummary([
+    setSummaryText([
       'Step 1~3：' + (cfg.apiBase ? '完成' : '失敗'),
       'apiBase: ' + (cfg.apiBase || '(空)'),
       'read: ' + cfg.endpoints.read,
       'merge: ' + cfg.endpoints.merge,
-      '來源: ' + cfg.from
-    ].join('\n'));
+      '來源: ' + cfg.from,
+      '登入狀態: ' + tokenStateText()
+    ].join('\n'), cfg.apiBase ? 'ok' : 'bad');
     return cfg;
   }
 
@@ -243,7 +305,7 @@
       log('HTTP:', String(res.status));
       log('Body:', text.slice(0, 400));
       const okish = res.ok || res.status === 401;
-      setSummary((summary.textContent?summary.textContent+'\n':'') + 'Step 4：' + (okish ? '可到達' : '失敗') + '（HTTP ' + res.status + '）');
+      setSummaryText(['Step 4：' + (okish ? '可到達' : '失敗'),'HTTP ' + res.status, explainHttp(res.status)].join('\n'), okish ? (res.status===401 ? 'warn' : 'ok') : 'bad');
       return { status: res.status, body: text };
     }catch(err){
       log('Health 例外：', String(err && err.message || err));
@@ -251,10 +313,15 @@
     }
   }
 
-  async function stepRead(){
+  async function stepRead(opts){
+    opts = opts || {};
     const cfg = state.resolved || await resolveConfig();
     log('\n===== Step 5~6：測 Read =====');
-    if(!cfg.apiBase){ log('apiBase 為空，無法測試'); return null; }
+    if(!cfg.apiBase){
+      log('apiBase 為空，無法測試');
+      if(!opts.silentSummary) setSummaryText('Step 5~6：失敗\napiBase 為空，無法測試', 'bad');
+      return null;
+    }
     const url = joinUrl(cfg.apiBase, cfg.endpoints.read);
     const body = { resourceKey: cfg.resourceKey };
     log('Read URL:', url);
@@ -273,10 +340,13 @@
       state.lastRead = json;
       setPayload(json);
       const rows = Array.isArray(json.rows) ? json.rows.length : 0;
-      setSummary((summary.textContent?summary.textContent+'\n':'') + 'Step 5~6：HTTP ' + res.status + '，rows=' + rows);
-      return { status: res.status, json };
+      if(!opts.silentSummary){
+        setSummaryText(['Step 5~6：' + (res.ok ? '完成' : '異常'),'HTTP ' + res.status,'rows=' + rows, explainHttp(res.status)].join('\n'), res.ok ? 'ok' : (res.status===401 ? 'warn' : 'bad'));
+      }
+      return { status: res.status, json, rows };
     }catch(err){
       log('Read 例外：', String(err && err.message || err));
+      if(!opts.silentSummary) setSummaryText('Step 5~6：例外\n' + String(err && err.message || err), 'bad');
       return null;
     }
   }
@@ -284,7 +354,11 @@
   async function stepMergeProbe(){
     const cfg = state.resolved || await resolveConfig();
     log('\n===== Step 7~8：測 Merge + 再 Read =====');
-    if(!cfg.apiBase){ log('apiBase 為空，無法測試'); return null; }
+    if(!cfg.apiBase){
+      log('apiBase 為空，無法測試');
+      setSummaryText('Step 7~8：失敗\napiBase 為空，無法測試', 'bad');
+      return null;
+    }
     const mergeUrl = joinUrl(cfg.apiBase, cfg.endpoints.merge);
     const probe = {
       uid: 'probe_' + Date.now(),
@@ -316,10 +390,22 @@
       const json = parseJsonLenient(text) || { raw:text };
       state.lastMerge = json;
       setPayload(json);
-      await stepRead();
-      return { status: res.status, json };
+      const readBack = await stepRead({ silentSummary:true });
+      const rows = readBack && typeof readBack.rows === 'number' ? readBack.rows : 0;
+      const readStatus = readBack ? readBack.status : 0;
+      const kind = (res.ok && readBack && readBack.status===200) ? 'ok' : ((res.status===401 || readStatus===401) ? 'warn' : 'bad');
+      setSummaryText([
+        'Step 7~8：' + (kind==='ok' ? '完成' : '異常'),
+        'Merge HTTP ' + res.status,
+        '再 Read HTTP ' + (readBack ? readBack.status : '(未執行)'),
+        'rows=' + rows,
+        'Merge 判讀：' + explainHttp(res.status),
+        'Read 判讀：' + explainHttp(readStatus)
+      ].join('\n'), kind);
+      return { status: res.status, json, readBack };
     }catch(err){
       log('Merge 例外：', String(err && err.message || err));
+      setSummaryText('Step 7~8：例外\n' + String(err && err.message || err), 'bad');
       return null;
     }
   }
@@ -373,13 +459,14 @@
     if(data.idbMeta) log('IndexedDB meta:', JSON.stringify(data.idbMeta));
     if(data.idbError) log('IndexedDB error:', data.idbError);
     log('疑似相關 keys 數量:', String((data.allKeys||[]).length));
-    setSummary([
+    setSummaryText([
       'Step 9：完成',
       '指定 localKey: ' + data.localKey,
       'localStorage 筆數: ' + (data.localRows||[]).length,
       'IndexedDB 筆數: ' + (data.idbRows||[]).length,
-      '疑似相關 keys 數量: ' + (data.allKeys||[]).length
-    ].join('\n'));
+      '疑似相關 keys 數量: ' + (data.allKeys||[]).length,
+      ((data.localRows||[]).length || (data.idbRows||[]).length) ? '本機有資料，可進行 Step 10 上傳測試。' : '本機目前沒有可上傳資料。'
+    ].join('\n'), 'info');
     setPayload(data);
     return data;
   }
@@ -388,10 +475,18 @@
     const cfg = state.resolved || await resolveConfig();
     const local = await readLocalRows();
     log('\n===== Step 10：本機資料上傳雲端 =====');
-    if(!cfg.apiBase){ log('apiBase 為空，無法上傳'); return null; }
+    if(!cfg.apiBase){
+      log('apiBase 為空，無法上傳');
+      setSummaryText('Step 10：失敗\napiBase 為空，無法上傳', 'bad');
+      return null;
+    }
     const rows = (local.idbRows && local.idbRows.length) ? local.idbRows : (local.localRows || []);
     log('準備上傳筆數:', String(rows.length));
-    if(!rows.length){ log('本機沒有可上傳資料'); return null; }
+    if(!rows.length){
+      log('本機沒有可上傳資料');
+      setSummaryText('Step 10：停止\n本機沒有可上傳資料', 'warn');
+      return null;
+    }
     const mergeUrl = joinUrl(cfg.apiBase, cfg.endpoints.merge);
     const body = { resourceKey: cfg.resourceKey, payload: { db: rows } };
     try{
@@ -406,10 +501,23 @@
       log('Body:', text.slice(0, 1000));
       const json = parseJsonLenient(text) || { raw:text };
       setPayload(json);
-      await stepRead();
-      return { status: res.status, json };
+      const readBack = await stepRead({ silentSummary:true });
+      const rowsAfter = readBack && typeof readBack.rows === 'number' ? readBack.rows : 0;
+      const readStatus = readBack ? readBack.status : 0;
+      const kind = (res.ok && readBack && readBack.status===200) ? 'ok' : ((res.status===401 || readStatus===401) ? 'warn' : 'bad');
+      setSummaryText([
+        'Step 10：' + (kind==='ok' ? '完成' : '異常'),
+        '上傳筆數=' + rows.length,
+        'Merge HTTP ' + res.status,
+        '再 Read HTTP ' + (readBack ? readBack.status : '(未執行)'),
+        'rows=' + rowsAfter,
+        'Merge 判讀：' + explainHttp(res.status),
+        'Read 判讀：' + explainHttp(readStatus)
+      ].join('\n'), kind);
+      return { status: res.status, json, readBack };
     }catch(err){
       log('上傳例外：', String(err && err.message || err));
+      setSummaryText('Step 10：例外\n' + String(err && err.message || err), 'bad');
       return null;
     }
   }
@@ -430,6 +538,26 @@
   $('btnMerge').onclick = async ()=>{ await stepMergeProbe(); };
   $('btnLocal').onclick = async ()=>{ await stepLocal(); };
   $('btnUpload').onclick = async ()=>{ await stepUploadLocal(); };
+  $('btnExport').onclick = ()=>{
+    const report = buildReport();
+    state.lastReport = report;
+    downloadText('捷運汐東線事項記錄_雲端正式診斷報告_' + new Date().toISOString().slice(0,19).replace(/[T:]/g,'-') + '.json', JSON.stringify(report, null, 2));
+  };
+  $('btnCopy').onclick = async ()=>{
+    const report = buildReport();
+    const ok = await copyText([
+      '頁面: ' + report.page,
+      'resourceKey: ' + report.resourceKey,
+      'apiBase: ' + report.apiBase,
+      'tokenState: ' + report.tokenState,
+      '摘要:
+' + report.summary
+    ].join('
+'));
+    setSummaryText((report.summary || '尚無摘要') + '
+
+' + (ok ? '已複製診斷摘要。' : '複製失敗，請手動複製。'), ok ? 'info' : 'warn');
+  };
   $('btnClear').onclick = clearAll;
 })();
 </script>
