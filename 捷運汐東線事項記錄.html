@@ -9,45 +9,6 @@
   
   <!-- ✅ 版本鎖定：由 tasun-version.json 驅動（A 模式同名覆蓋 + v=appVer） -->
   <script>document.write('<script src="tasun-version-loader.js?_=' + Date.now() + '"><\/script>');</script>
-  <script>
-  // ✅ Session guard / SSO：同一瀏覽器工作階段只登入一次；關閉瀏覽器後失效
-  (function(){
-    var CURRENT_KEY = 'tasunCurrentUser_v1';
-    var SESSION_KEY = 'tasunSessionLogin_v2';
-    var COOKIE_NAME = 'tasun_session_v4';
-    function jparse(s,f){ try{ return JSON.parse(s); }catch(_){ return f; } }
-    function inferRole(n,r){ if(r) return String(r).toLowerCase(); if(n==='alex'||n==='joyce') return 'admin'; if(n==='tasun') return 'write'; return 'read'; }
-    function b64d(s){ try{ return decodeURIComponent(escape(atob(s))); }catch(_e){ return ''; } }
-    function getCookieSession(){
-      try{
-        var m = document.cookie.match(new RegExp('(?:^|; )' + COOKIE_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '=([^;]*)'));
-        if(!m) return null;
-        var raw = decodeURIComponent(m[1] || '');
-        var obj = jparse(b64d(raw), null);
-        if(!obj || !obj.u) return null;
-        if(obj.exp && Date.now() > Number(obj.exp)) return null;
-        return { user:String(obj.u), role:inferRole(obj.u, obj.r), name:String(obj.u) };
-      }catch(_e){ return null; }
-    }
-    function syncCurrent(cur){
-      if(!cur || !cur.user) return false;
-      var row = { name:cur.name || cur.user, user:cur.user, role:inferRole(cur.user, cur.role) };
-      try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user:row.user, role:row.role, t:Date.now() })); }catch(_e){}
-      try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(_e){}
-      try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(_e){}
-      window.__TASUN_SSO_OK__ = true;
-      return true;
-    }
-    var sess = jparse(sessionStorage.getItem(SESSION_KEY)||'', null);
-    if(sess && sess.user){ syncCurrent({ user:sess.user, role:sess.role, name:sess.user }); return; }
-    var cur = jparse(sessionStorage.getItem(CURRENT_KEY)||'', null) || jparse(localStorage.getItem(CURRENT_KEY)||'', null);
-    var curName = cur && (cur.user || cur.name || cur.username || cur.account);
-    if(curName){ syncCurrent({ user:curName, role:cur.role, name:curName }); return; }
-    var ck = getCookieSession();
-    if(ck && ck.user){ syncCurrent(ck); return; }
-    window.__TASUN_SSO_OK__ = false;
-  })();
-  </script>
 <meta http-equiv="Cache-Control" content="no-cache">
     <!-- ✅ 全站版本：由 tasun-version.json 統一提供（刪除硬寫 window.TASUN_APP_VER=...） -->
   <script>
@@ -1163,25 +1124,8 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     }
 
     function getCurrentUser(){
-      var sess = safeJSON(sessionStorage.getItem('tasunSessionLogin_v2') || "");
-      if(sess && sess.user){
-        return { user: sess.user, role: (sess.role || 'read'), name: sess.user };
-      }
-      var cur = safeJSON(sessionStorage.getItem(CURRENT_KEY) || "") || safeJSON(localStorage.getItem(CURRENT_KEY) || "");
-      if(cur){
-        var nm = cur.user || cur.name || cur.username || cur.account || "";
-        if(nm) return { user: nm, role: (cur.role || 'read'), name: (cur.name || nm) };
-      }
-      try{
-        var m = document.cookie.match(new RegExp('(?:^|; )' + 'tasun_session_v4'.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '=([^;]*)'));
-        if(m){
-          var raw = decodeURIComponent(m[1] || "");
-          var obj = safeJSON(decodeURIComponent(escape(atob(raw))));
-          if(obj && obj.u && (!obj.exp || Date.now() <= Number(obj.exp))){
-            return { user: String(obj.u), role: String(obj.r || (obj.u==='alex'?'admin':(obj.u==='tasun'?'write':'read'))), name: String(obj.u) };
-          }
-        }
-      }catch(e){}
+      var cur = safeJSON(localStorage.getItem(CURRENT_KEY));
+      if(cur && cur.user && cur.role) return cur;
       return null;
     }
 
@@ -1194,32 +1138,6 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       if(role==="admin") return 3;
       if(role==="write") return 2;
       return 1;
-    }
-
-    function ensureSessionGuard(){
-      var cur = getCurrentUser();
-      if(cur && cur.user){
-        try{
-          sessionStorage.setItem('tasunSessionLogin_v2', JSON.stringify({ user: cur.user, role: cur.role || 'read', t: Date.now() }));
-          sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ name: cur.name || cur.user, user: cur.user, role: cur.role || 'read' }));
-        }catch(e){}
-        return true;
-      }
-      try{
-        var next = encodeURIComponent((location.pathname.split('/').pop() || '捷運汐東線事項記錄.html') + location.search + location.hash);
-        var home = (typeof window.__withV === 'function') ? window.__withV('index.html') : 'index.html';
-        location.replace(home + (home.indexOf('?')>=0 ? '&' : '?') + 'next=' + next);
-      }catch(e){
-        location.replace('index.html');
-      }
-      return false;
-    }
-
-    function navTo(href){
-      href = norm(href);
-      if(!href) return;
-      var target = (typeof window.__withV === 'function') ? window.__withV(href) : addV(href);
-      location.href = target;
     }
 
     // ---------------------------
@@ -1747,6 +1665,15 @@ function getVisibleRows(){
       _legacyScan: null
     };
 
+    function setCloudState(patch, doRefresh){
+      patch = (patch && typeof patch === "object") ? patch : {};
+      state.cloud = Object.assign({}, state.cloud || {}, patch);
+      if(doRefresh){
+        try{ refresh(); }catch(_e){}
+      }
+      return state.cloud;
+    }
+
     // load map once (kept in memory + persisted on change)
     var TRADE_SYS_MAP = loadMap();
 
@@ -2146,7 +2073,7 @@ function getVisibleRows(){
       renderCards(rows);
 
       // hint
-      var cloudTxt = state.cloud.ok ? "已同步" : (state.cloud.reachable ? "可連線" : (state.cloud.cfgOk ? "待同步" : "未設定"));
+      var cloudTxt = state.cloud.ok ? "已同步" : (state.cloud.cfgOk ? "待同步" : "未設定");
       var lastTxt = state.cloud.lastOkAt ? fmtClock(state.cloud.lastOkAt) : "—";
       var roleTxt = state.role==="admin" ? "admin" : (state.role==="write"?"可編輯":"唯讀");
 
@@ -2415,6 +2342,7 @@ function getPromptOptions(mode){
           cfg = cfg || await loadCloudCfg();
           const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
           const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
+          const cfgOk = !!(cfg && isValidApiBase(apiBase));
           const candidates = [];
           if(eps && eps.health) candidates.push(_joinUrl(apiBase, eps.health));
           // common fallbacks
@@ -2422,14 +2350,24 @@ function getPromptOptions(mode){
           candidates.push(_joinUrl(apiBase, "/api/tasun/ping"));
           candidates.push(_joinUrl(apiBase, "/api/ping"));
 
+          let ok = false;
           for(const url of candidates){
             try{
               const r = await fetch(url, { method:"GET", credentials: (cfg && cfg.credentials) ? "include" : "omit", cache:"no-store" });
-              if(r.ok) return true;
+              if(r.ok){ ok = true; break; }
             }catch(_e){}
           }
-          return false;
+          setCloudState({
+            cfgOk: cfgOk,
+            reachable: ok,
+            ok: ok,
+            apiBase: apiBase,
+            endpoints: eps || null,
+            lastOkAt: ok ? Date.now() : (state.cloud && state.cloud.lastOkAt ? state.cloud.lastOkAt : "")
+          }, true);
+          return ok;
         }catch(_e){
+          setCloudState({ ok:false, reachable:false, cfgOk:false }, true);
           return false;
         }
       }
@@ -2551,7 +2489,6 @@ function getPromptOptions(mode){
             var merged = await cloudMerge({ payload: { db: localDb, counter: state.counter }, reason: reason });
             if(merged && merged.ok && merged.payload){
               remote = merged; // use merged payload as latest remote snapshot
-              setCloudState({ ok:true, cfgOk:true, reachable:true, lastOkAt: Date.now(), lastSyncAt: nowISO() }, true);
               if(remoteEmpty) localStorage.setItem(bootKey, "1");
               toast(remoteEmpty
                 ? ("雲端空白，已自動倒入本機資料：" + localDb.length + " 筆")
@@ -2570,9 +2507,11 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         await saveLocal({ db: state.db, counter: state.counter });
 
         buildDictsFromDb();
+        setCloudState({ ok:true, cfgOk:true, reachable:true, lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
         refresh();
         if(!silent) toast("已從雲端更新");
       }catch(e){
+        setCloudState({ ok:false }, true);
         if(!silent) toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
       }
     }
@@ -2630,9 +2569,11 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         await saveLocal({ db: state.db, counter: state.counter });
 
         buildDictsFromDb();
+        setCloudState({ ok:true, cfgOk:true, reachable:true, lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
         refresh();
         if(!silent) toast(fullUpload ? "雲端同步完成（全量）" : "雲端同步完成（增量）");
       }catch(e){
+        setCloudState({ ok:false }, true);
         if(!silent) toast("雲端同步失敗：" + (e && e.message ? e.message : String(e)));
       }
     }
@@ -2683,6 +2624,12 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
     // ---------------------------
     // Nav / menus
     // ---------------------------
+    function navTo(href){
+      href = norm(href);
+      if(!href) return;
+      location.href = addV(href);
+    }
+
     function setupMobileMenu(){
       var btn = $("mMoreBtn");
       var menu = $("mMoreMenu");
@@ -2829,25 +2776,6 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       inp.type = (inp.type==="password") ? "text" : "password";
     }
 
-    var _autoPullInFlight = false;
-    var _autoPullLastAt = 0;
-
-    async function autoHydrateFromCloud(reason){
-      var now = Date.now();
-      if(_autoPullInFlight) return false;
-      if((now - _autoPullLastAt) < 5000) return false;
-      _autoPullInFlight = true;
-      try{
-        await syncFromCloud({ silent:true, reason: reason || "autoHydrate" });
-        _autoPullLastAt = Date.now();
-        return true;
-      }catch(e){
-        return false;
-      }finally{
-        _autoPullInFlight = false;
-      }
-    }
-
     // ---------------------------
     // Wire events
     // ---------------------------
@@ -2953,19 +2881,10 @@ $("btnSave").addEventListener("click", async function(){
       // ---------------------------
       // ✅ Auto sync triggers
       // ---------------------------
-      window.addEventListener("online", function(){
-        autoHydrateFromCloud("online");
-        scheduleSync("online", true);
-      });
-      window.addEventListener("focus", function(){
-        if(!state.db || !state.db.length) autoHydrateFromCloud("focus-empty");
-        scheduleSync("focus");
-      });
+      window.addEventListener("online", function(){ scheduleSync("online", true); });
+      window.addEventListener("focus", function(){ scheduleSync("focus"); });
       document.addEventListener("visibilitychange", function(){
-        if(!document.hidden){
-          if(!state.db || !state.db.length) autoHydrateFromCloud("visible-empty");
-          scheduleSync("visible");
-        }
+        if(!document.hidden) scheduleSync("visible");
       });
       // 週期保底同步（避免長時間開著頁面但沒互動）
       setInterval(function(){ scheduleSync("periodic"); }, SYNC_PERIODIC_MS);
@@ -3002,7 +2921,6 @@ $("btnSave").addEventListener("click", async function(){
         }catch(e){ state.readMode = false; }
 
         try{ ensureAuthTable(); }catch(e){}
-        try{ if(!ensureSessionGuard()) return; }catch(e){}
         try{ cur = getCurrentUser(); }catch(e){ cur = null; }
         try{
           if(cur) applyUser(cur);
@@ -3012,6 +2930,7 @@ $("btnSave").addEventListener("click", async function(){
         try{ wire(); }catch(e){}
         try{ refresh(); }catch(e){}
         try{ cloudHealth(); }catch(e){}
+        try{ if(!cur) openLogin(); }catch(e){}
 
         try{
           await idbPutMeta({
@@ -3026,6 +2945,7 @@ $("btnSave").addEventListener("click", async function(){
         // 任何未預期錯誤：仍然嘗試畫出狀態列，避免出現「空白資訊列」。
         try{ wire(); }catch(_e){}
         try{ refresh(); }catch(_e){}
+        try{ if(!cur) openLogin(); }catch(_e){}
         console.error(e);
       }
     }
