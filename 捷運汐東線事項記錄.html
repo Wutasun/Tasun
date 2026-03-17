@@ -225,14 +225,14 @@
 
     .topbar{
       display:grid;
-      grid-template-columns: 1fr auto 1fr;
+      grid-template-columns: minmax(180px,1fr) auto minmax(320px,1fr);
       gap:12px; align-items:center;
       padding:14px 14px;
       border:1px solid var(--border2);
       border-radius:var(--r);
       background: linear-gradient(180deg, var(--paper), var(--paper2));
       box-shadow: var(--shadow);
-      overflow:hidden;
+      overflow:visible;
     }
     @media (max-width:920px){
       .topbar{grid-template-columns:1fr}
@@ -248,7 +248,10 @@
     .title{font-family:"Noto Serif TC","Noto Sans TC",serif; font-weight:820; letter-spacing:.10em; font-size:var(--titleSize); line-height:1.12;}
     .sub{font-size:var(--subSize); color:rgba(0,0,0,.55); letter-spacing:.10em; font-weight:700;}
 
-    .right{display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end; min-width:220px;}
+    .right{
+      display:flex; gap:10px; align-items:center; flex-wrap:nowrap; justify-content:flex-end;
+      min-width:0; overflow:visible;
+    }
     .pill{
       padding:9px 12px; border-radius:999px; border:1px solid var(--border);
       background: rgba(255,255,255,.90); font-size:14px; color: rgba(0,0,0,.78);
@@ -863,8 +866,6 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     var AUTH_KEY = "tasunAuthTable_v1";
     var CURRENT_KEY = "tasunCurrentUser_v1";
-    var SESSION_KEY = "tasunSessionLogin_v2";
-    var INDEX_SESSION_KEY = "tasunIndexSession_v1";
 
     var DB_KEY = "tasunSxdhNotes_v1";
     var COUNTER_KEY = "tasunSxdhNotes_counter_v1";
@@ -1200,88 +1201,46 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       else localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
     }
 
-    function readCookie(name){
-      try{
-        var esc = String(name||"").replace(/[.*+?^${}()|[\]\]/g, "\$&");
-        var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
-        return m ? decodeURIComponent(m[1] || "") : "";
-      }catch(e){ return ""; }
-    }
-
-    function getSharedWorkerToken(){
-      var keys = [
-        "tasunCloudToken_v1",
-        "tasunCloudToken_v1__sxdh-notes",
-        "tasunCloudToken_v1__auth-table",
-        "tasunBearerToken_v1",
-        "tasunAccessToken_v1",
-        "tasun_token",
-        "tasunToken",
-        "tasun_auth_token",
-        "authToken",
-        "access_token",
-        "token"
-      ];
-      for(var i=0;i<keys.length;i++){
-        var key = keys[i];
-        try{
-          var v = norm(sessionStorage.getItem(key) || localStorage.getItem(key) || "");
-          if(v) return v;
-        }catch(e){}
-      }
-      try{
-        if(window.TasunAuthV4 && typeof window.TasunAuthV4.getToken === "function"){
-          var t1 = norm(window.TasunAuthV4.getToken() || "");
-          if(t1) return t1;
-        }
-      }catch(e){}
-      try{
-        if(window.TASUN_AUTH && typeof window.TASUN_AUTH === "object"){
-          var t2 = norm(window.TASUN_AUTH.token || window.TASUN_AUTH.accessToken || "");
-          if(t2) return t2;
-        }
-      }catch(e){}
-      var ck = norm(readCookie("tasun_bearer_token") || readCookie("tasun_token") || readCookie("token") || "");
-      return ck || "";
-    }
-
-    function hydrateCrossPageAuth(){
-      try{
-        var cur = getCurrentUser();
-        if(cur && (cur.user || cur.name || cur.username)){
-          var row = {
-            user: norm(cur.user || cur.name || cur.username),
-            name: norm(cur.name || cur.user || cur.username),
-            role: norm(cur.role || cur.level || "read") || "read",
-            at: norm(cur.at || nowISO())
-          };
-          try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(e){}
-          try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(e){}
-          try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: row.user, role: row.role, t: Date.now() })); }catch(e){}
-          try{ sessionStorage.setItem(INDEX_SESSION_KEY, "1"); }catch(e){}
-        }
-        var token = getSharedWorkerToken();
-        if(token){
-          var normalized = /^Bearer\s+/i.test(token) ? token.replace(/^Bearer\s+/i, "") : token;
-          try{ sessionStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
-          try{ localStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
-        }
-      }catch(e){}
-    }
-
-    function buildWorkerAuthHeaders(extra){
-      var headers = Object.assign({}, extra || {});
-      var bearer = getSharedWorkerToken();
-      if(bearer && !headers.Authorization && !headers.authorization){
-        headers.Authorization = /^Bearer\s+/i.test(bearer) ? bearer : ("Bearer " + bearer);
-      }
-      return headers;
-    }
-
     function roleRank(role){
       if(role==="admin") return 3;
       if(role==="write") return 2;
       return 1;
+    }
+
+    function ensureActionButtonsVisible(){
+      try{
+        var cur = null;
+        try{ cur = getCurrentUser(); }catch(e){ cur = null; }
+        var role = norm((cur && cur.role) || state.role || "read") || "read";
+        if($("btnView")) $("btnView").style.display = "";
+        if($("btnAdd")) $("btnAdd").style.display = (role==="admin" || role==="write") ? "" : "none";
+        if($("btnEdit")) $("btnEdit").style.display = (role==="admin" || role==="write") ? "" : "none";
+        if($("btnToken")) $("btnToken").style.display = (role==="admin") ? "" : "none";
+        if($("uName") && !$("uName").textContent.trim()) $("uName").textContent = (cur && (cur.name||cur.user)) ? (cur.name||cur.user) : "—";
+        if($("uRole") && !$("uRole").textContent.trim()) $("uRole").textContent = role || "—";
+      }catch(e){}
+    }
+
+    function renderHintFallback(){
+      try{
+        var hint = $("hint");
+        if(!hint) return;
+        var visibleCount = 0, totalCount = 0;
+        try{
+          visibleCount = Array.isArray(getVisibleRows()) ? getVisibleRows().length : 0;
+        }catch(e){ visibleCount = 0; }
+        try{
+          totalCount = Array.isArray(state.db) ? state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length : 0;
+        }catch(e){ totalCount = 0; }
+        var cloudTxt = (state.cloud && state.cloud.ok) ? "已同步" : ((state.cloud && state.cloud.cfgOk) ? "待同步" : "未設定");
+        var lastTxt = (state.cloud && state.cloud.lastOkAt) ? fmtClock(state.cloud.lastOkAt) : "—";
+        hint.innerHTML = ""
+          + '<span class="hb"><span class="k">版本</span><span class="v">' + escHtml(APP_VER) + '</span></span>'
+          + '<span class="hb"><span class="k">筆數</span><span class="v">' + escHtml(String(visibleCount) + " / " + String(totalCount)) + '</span></span>'
+          + '<span class="hb' + (state.selectedUid ? '' : ' bad') + '"><span class="k">選取</span><span class="v">' + escHtml(state.selectedUid ? "已選取" : "未選取") + '</span></span>'
+          + '<span class="hb' + ((state.cloud && state.cloud.ok) ? '' : ' bad') + '"><span class="k">雲端</span><span class="v">' + escHtml(cloudTxt) + '</span></span>'
+          + '<span class="hb"><span class="k">最後</span><span class="v">' + escHtml(lastTxt) + '</span></span>';
+      }catch(e){}
     }
 
     function refreshHintSafe(){
@@ -1311,7 +1270,12 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
         hint.appendChild(hb("選取", state.selectedUid ? "已選取" : "未選取", !state.selectedUid));
         hint.appendChild(hb("雲端", cloudTxt, !state.cloud.ok));
         hint.appendChild(hb("最後", lastTxt));
-      }catch(e){}
+        ensureActionButtonsVisible();
+        if(!hint.innerHTML.trim()) renderHintFallback();
+      }catch(e){
+        renderHintFallback();
+        ensureActionButtonsVisible();
+      }
     }
 
     function resolveRuntimeUser(){
@@ -1332,16 +1296,19 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
         tries++;
         var ok = false;
         try{ ok = resolveRuntimeUser(); }catch(e){ ok = false; }
-        try{ refreshHintSafe(); }catch(e){}
+        try{ ensureActionButtonsVisible(); }catch(e){}
+        try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         if(ok || tries >= maxTries) clearInterval(tm);
       }, 250);
       window.addEventListener("focus", function(){
         try{ resolveRuntimeUser(); }catch(e){}
-        try{ refreshHintSafe(); }catch(e){}
+        try{ ensureActionButtonsVisible(); }catch(e){}
+        try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
       });
       window.addEventListener("pageshow", function(){
         try{ resolveRuntimeUser(); }catch(e){}
-        try{ refreshHintSafe(); }catch(e){}
+        try{ ensureActionButtonsVisible(); }catch(e){}
+        try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
       });
     }
 
@@ -2271,12 +2238,14 @@ function getVisibleRows(){
     }
 
     function refresh(){
+      ensureActionButtonsVisible();
       rebuildFilterOptions();
       var rows = getVisibleRows();
 
       renderTable(rows);
       renderCards(rows);
       refreshHintSafe();
+      ensureActionButtonsVisible();
       }
 
     function selectRow(uid){
@@ -2541,7 +2510,7 @@ function getPromptOptions(mode){
           let reachable = false;
           for(const url of candidates){
             try{
-              const r = await fetch(url, { method:"GET", credentials:"include", cache:"no-store", headers: buildWorkerAuthHeaders({ accept:"application/json" }) });
+              const r = await fetch(url, { method:"GET", credentials: (cfg && cfg.credentials) ? "include" : "omit", cache:"no-store" });
               if(r.ok){ reachable = true; break; }
             }catch(_e){}
           }
@@ -2587,8 +2556,8 @@ function getPromptOptions(mode){
         const r = await fetch(url, {
           method: "GET",
           cache: "no-store",
-          credentials: "include",
-          headers: buildWorkerAuthHeaders({ "accept":"application/json" })
+          credentials: (cfg && cfg.credentials) ? "include" : "omit",
+          headers: { "accept":"application/json" }
         });
         if(!r.ok){
           const t = await r.text().catch(()=> "");
@@ -2623,8 +2592,8 @@ function getPromptOptions(mode){
         const r = await fetch(url, {
           method: "POST",
           cache: "no-store",
-          credentials: "include",
-          headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
+          credentials: (cfg && cfg.credentials) ? "include" : "omit",
+          headers: { "content-type":"application/json", "accept":"application/json" },
           body: JSON.stringify(body)
         });
         if(!r.ok){
@@ -2923,9 +2892,11 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       $("uRole").textContent = state.role || "—";
 
       var canWrite = (state.role==="admin" || state.role==="write");
+      $("btnView").style.display = "";
       $("btnAdd").style.display = canWrite ? "" : "none";
       $("btnEdit").style.display = canWrite ? "" : "none";
       $("btnToken").style.display = (state.role==="admin") ? "" : "none";
+      ensureActionButtonsVisible();
       try{ refresh(); }catch(e){ try{ refreshHintSafe(); }catch(_e){} }
     }
 
@@ -3151,6 +3122,8 @@ $("btnSave").addEventListener("click", async function(){
       // 這段只加防護，不改 UI/DOM/CSS。
       var cur = null;
       try{
+        try{ ensureActionButtonsVisible(); }catch(e){}
+        try{ renderHintFallback(); }catch(e){}
         try{ await openIDB(); }catch(e){}
 
         try{
@@ -3180,8 +3153,8 @@ $("btnSave").addEventListener("click", async function(){
         }catch(e){}
 
         try{ wire(); }catch(e){}
-        try{ refresh(); }catch(e){}
-        try{ hydrateCrossPageAuth(); }catch(e){}
+        try{ renderHintFallback(); }catch(e){}
+        try{ refresh(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         try{ await cloudHealth(); }catch(e){}
         // ✅ 開頁同步策略：先檢查本端，有資料先上傳 merge 去重；再下載雲端最新資料。
         try{
@@ -3203,7 +3176,9 @@ $("btnSave").addEventListener("click", async function(){
       }catch(e){
         // 任何未預期錯誤：仍然嘗試畫出狀態列，避免出現「空白資訊列」。
         try{ wire(); }catch(_e){}
-        try{ refresh(); }catch(_e){}
+        try{ renderHintFallback(); }catch(_e){}
+        try{ refresh(); }catch(_e){ try{ renderHintFallback(); }catch(__e){} }
+        try{ ensureActionButtonsVisible(); }catch(_e){}
         try{ if(!cur) openLogin(); }catch(_e){}
         console.error(e);
       }
