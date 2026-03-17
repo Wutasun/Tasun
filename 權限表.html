@@ -15,7 +15,7 @@
      * ✅你每次更新本頁，只要改 APP_VER（例如：20260130_01 → 20260203_01）
      * 全部使用者會自動跳到 ?v=APP_VER，保證同步最新版。
      */
-    const APP_VER = "20260313_01";  // ←←← 每次改版請改這裡（建議與首頁/管理表一致）
+    const APP_VER = "20260317_01";  // ←←← 每次改版請改這裡（建議與首頁/管理表一致）
     const VER_KEY = "tasun_app_ver_auth_v1";
     const TAB_GUARD = "tasun_tab_replaced_once_auth_v1";
 
@@ -738,12 +738,6 @@
     { sourceId:'cloud',    label:'雲端檔案',           href:'https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88', target:'_blank', roles:[] }
   ];
   const roleOptions = ['admin','write','read'];
-  const DEFAULT_AUTH_SEED = {
-    'alex':  { user:'alex',  role:'admin', passHash:'7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07' },
-    'joyce': { user:'JOYCE', role:'admin', passHash:'d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815' },
-    'tasun': { user:'tasun', role:'write', passHash:'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba' },
-    'wu':    { user:'wu',    role:'read',  passHash:'8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92' }
-  };
 
   // ====== 入口頁清單（保留你提供順序，未來建議改 resources.json） ======
   const DEFAULT_ENTRY_FILES = [
@@ -1400,36 +1394,6 @@ function safeJsonParse(s, fallback){
     return cleaned;
   }
 
-  function enforceDefaultCredentialSeeds(){
-    let changed = false;
-    const map = new Map();
-    (Array.isArray(auth) ? auth : []).forEach((row) => {
-      const item = (row && typeof row === 'object') ? { ...row } : {};
-      const key = String(item.user || item.username || item.name || '').trim().toLowerCase();
-      if(!key) return;
-      const seed = DEFAULT_AUTH_SEED[key];
-      if(seed){
-        if(!String(item.passHash || item.passwordHash || item.hash || '').trim() && !String(item.pass || item.password || '').trim()){
-          item.passHash = seed.passHash;
-          changed = true;
-        }
-        if(!String(item.role || item.level || '').trim()){
-          item.role = seed.role;
-          changed = true;
-        }
-        if(!String(item.user || '').trim()){ item.user = seed.user; changed = true; }
-      }
-      map.set(key, item);
-    });
-    Object.keys(DEFAULT_AUTH_SEED).forEach((key) => {
-      if(map.has(key)) return;
-      map.set(key, { ...DEFAULT_AUTH_SEED[key] });
-      changed = true;
-    });
-    auth = Array.from(map.values());
-    if(changed){ try{ localStorage.setItem(AUTH_KEY, JSON.stringify(auth)); }catch(_e){} }
-  }
-
   function seedAuthIfMissing(){
     const a = safeJsonParse(localStorage.getItem(AUTH_KEY) || 'null', null);
     if(Array.isArray(a) && a.length) return;
@@ -1552,15 +1516,14 @@ function safeJsonParse(s, fallback){
     const arr = safeJsonParse(localStorage.getItem(NAV_KEY) || '[]', []);
     if(!Array.isArray(arr) || !arr.length) return null;
 
-    const map = new Map(arr.map(x => [String(x.id||'').toLowerCase(), x]));
     const out = [];
-    for(let i=1;i<=5;i++){
-      const id = `btn${i}`;
-      const hit = map.get(id);
+    arr.forEach((hit) => {
+      if(isSystemAuthButton(hit)) return;
+      const id = String(hit?.id || `btn${out.length + 1}`).trim() || `btn${out.length + 1}`;
       const name = String(hit?.label || id).trim() || id;
       out.push({ key:id, name });
-    }
-    return out;
+    });
+    return out.length ? out : null;
   }
 
   function ensureBtnMetaByEntry(){
@@ -1795,7 +1758,6 @@ function safeJsonParse(s, fallback){
   }
 
   function saveLocal(){
-    enforceDefaultCredentialSeeds();
     localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
     savePermMatrix();
     localState.textContent = '本機：已儲存';
@@ -1893,14 +1855,19 @@ function safeJsonParse(s, fallback){
     if(!k) return;
 
     const entry = resolveEntryValue();
-
-    // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
+    // ✅密碼欄：輸入時先保留可編輯內容，離開欄位（change）才加密寫入
     if(k === "pass"){
       const plain = String(e.target.value || "");
+      if(e.type === 'input'){
+        auth[idx].__pendingPass = plain;
+        localState.textContent = '本機：尚未儲存';
+        return;
+      }
       if(plain.trim()){
         try{
           auth[idx].passHash = await sha256Hex(plain);
           auth[idx].pass = "";
+          auth[idx].__pendingPass = "";
           e.target.value = "";
           setMsg("✅ 已更新密碼（SHA-256 加密儲存）。");
         }catch(_){
@@ -1965,14 +1932,19 @@ function safeJsonParse(s, fallback){
     if(!k) return;
 
     const entry = resolveEntryValue();
-
-    // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
+    // ✅密碼欄：輸入時先保留可編輯內容，離開欄位（change）才加密寫入
     if(k === "pass"){
       const plain = String(e.target.value || "");
+      if(e.type === 'input'){
+        auth[idx].__pendingPass = plain;
+        localState.textContent = '本機：尚未儲存';
+        return;
+      }
       if(plain.trim()){
         try{
           auth[idx].passHash = await sha256Hex(plain);
           auth[idx].pass = "";
+          auth[idx].__pendingPass = "";
           e.target.value = "";
           setMsg("✅ 已更新密碼（SHA-256 加密儲存）。");
         }catch(_){
@@ -2346,6 +2318,27 @@ function safeJsonParse(s, fallback){
     }));
   }
 
+  function isSystemAuthButton(item){
+    const sourceId = String(item?.sourceId || '').trim().toLowerCase();
+    const href = String(item?.href || '').trim();
+    const label = normNavText(item?.label || '');
+    return sourceId === 'auth' || /(?:^|\/)權限表\.html(?:$|[?#])/i.test(href) || label === normNavText('系統/權限') || label === normNavText('系統／權限');
+  }
+
+  function getEditableHomeButtonLibrary(){
+    return getHomeButtonLibrary().filter(it => !isSystemAuthButton(it));
+  }
+
+  function getFixedSystemAuthItem(){
+    return getHomeButtonLibrary().find(it => isSystemAuthButton(it)) || {
+      sourceId:'auth',
+      label:'系統/權限',
+      href:'權限表.html',
+      target:'',
+      roles:[]
+    };
+  }
+
   function inferNavSourceId(hit, fallbackId){
     const rawSourceId = String(hit?.sourceId || '').trim();
     const library = getHomeButtonLibrary();
@@ -2442,8 +2435,8 @@ function safeJsonParse(s, fallback){
 
   function getNavSourceList(){
     const entry = resolveEntryValue();
-    if(entry === 'index.html') return getHomeButtonLibrary();
-    return Array.isArray(currentEntryButtonOptions) && currentEntryButtonOptions.length ? currentEntryButtonOptions.slice() : getHomeButtonLibrary();
+    if(entry === 'index.html') return getEditableHomeButtonLibrary();
+    return Array.isArray(currentEntryButtonOptions) && currentEntryButtonOptions.length ? currentEntryButtonOptions.slice() : getEditableHomeButtonLibrary();
   }
 
   function navOptionText(it){
@@ -2514,12 +2507,14 @@ function safeJsonParse(s, fallback){
   function writeNavButtons(updated){
     const oldNav = readNavButtons();
     const out = [];
+    const editableList = getEditableHomeButtonLibrary();
 
-    for(let i=1;i<=5;i++){
-      const id = `btn${i}`;
-      const src = updated[i-1] || {};
-      const sourceId = String(src.sourceId || '').trim() || (getHomeButtonLibrary()[i-1]?.sourceId || id);
-      const lib = getLibraryItemBySourceId(sourceId);
+    editableList.forEach((fallback, idx) => {
+      const id = `btn${idx + 1}`;
+      const src = updated[idx] || {};
+      const sourceId = String(src.sourceId || '').trim() || String(fallback?.sourceId || id).trim() || id;
+      const lib = getLibraryItemBySourceId(sourceId) || fallback;
+      if(!lib || isSystemAuthButton(lib)) return;
 
       out.push({
         id,
@@ -2529,7 +2524,17 @@ function safeJsonParse(s, fallback){
         target: String(lib?.target || src.target || '').trim(),
         roles: Array.isArray(lib?.roles) ? lib.roles.slice() : (Array.isArray(src.roles) ? src.roles.slice() : [])
       });
-    }
+    });
+
+    const sysItem = getFixedSystemAuthItem();
+    out.push({
+      id: `btn${out.length + 1}`,
+      sourceId: sysItem.sourceId,
+      label: String(sysItem.label || '系統/權限').trim() || '系統/權限',
+      href: String(sysItem.href || '權限表.html').trim(),
+      target: String(sysItem.target || '').trim(),
+      roles: Array.isArray(sysItem.roles) ? sysItem.roles.slice() : []
+    });
 
     localStorage.setItem(NAV_KEY, JSON.stringify(out));
 
@@ -2577,11 +2582,13 @@ function safeJsonParse(s, fallback){
     selects.forEach((sel, idx) => {
       if(!sel) return;
       if(entry === 'index.html'){
-        const item = nav[idx] || {};
-        const sourceId = String(item.sourceId || getHomeButtonLibrary()[idx]?.sourceId || `btn${idx+1}`).trim();
+        const editableNav = nav.filter(item => !isSystemAuthButton(item));
+        const fallbackList = getEditableHomeButtonLibrary();
+        const item = editableNav[idx] || {};
+        const sourceId = String(item.sourceId || fallbackList[idx]?.sourceId || `btn${idx+1}`).trim();
         sel.value = sourceId;
         if(String(sel.value || '').trim() !== sourceId){
-          const fallback = getHomeButtonLibrary()[idx];
+          const fallback = fallbackList[idx];
           sel.value = fallback ? fallback.sourceId : sourceId;
         }
       }else{
@@ -2642,8 +2649,6 @@ function safeJsonParse(s, fallback){
 
     auth = safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []);
     if(!Array.isArray(auth)) auth = [];
-    normalizeAuth();
-    enforceDefaultCredentialSeeds();
     normalizeAuth();
 
     current = safeJsonParse(localStorage.getItem(CURRENT_KEY) || 'null', null);
