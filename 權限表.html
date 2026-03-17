@@ -1513,17 +1513,41 @@ function safeJsonParse(s, fallback){
   }
 
   function buildBtnMetaFromNavKey(){
-    const arr = safeJsonParse(localStorage.getItem(NAV_KEY) || '[]', []);
-    if(!Array.isArray(arr) || !arr.length) return null;
+    const nav = readNavButtons();
+    if(!Array.isArray(nav) || !nav.length) return null;
+    return nav.map((hit, idx) => ({
+      key: `btn${idx + 1}`,
+      name: String(hit?.label || `btn${idx + 1}`).trim() || `btn${idx + 1}`
+    }));
+  }
 
+  function computeBtnMetaFromNavSelection(){
+    const list = getNavSourceList();
+    const sourceMap = new Map(list.map(it => [String(it?.sourceId || '').trim(), it]));
     const out = [];
-    arr.forEach((hit) => {
-      if(isSystemAuthButton(hit)) return;
-      const id = String(hit?.id || `btn${out.length + 1}`).trim() || `btn${out.length + 1}`;
-      const name = String(hit?.label || id).trim() || id;
-      out.push({ key:id, name });
+    getNavSelectControls().forEach((sel, idx) => {
+      if(!sel || sel.style.display === 'none') return;
+      const sourceId = String(sel.value || '').trim();
+      const item = sourceMap.get(sourceId) || list[idx] || null;
+      if(!item || isSystemAuthButton(item)) return;
+      out.push({
+        key: `btn${out.length + 1}`,
+        name: String(item?.label || `btn${out.length + 1}`).trim() || `btn${out.length + 1}`
+      });
     });
-    return out.length ? out : null;
+    return out;
+  }
+
+  function syncBtnMetaFromNavSelection(){
+    const entry = resolveEntryValue();
+    if(entry !== 'index.html') return;
+    const next = computeBtnMetaFromNavSelection();
+    if(!Array.isArray(next) || !next.length) return;
+    btnMeta = next;
+    renderHeaders();
+    renderTable();
+    renderCards();
+    renderEntryPreview();
   }
 
   function ensureBtnMetaByEntry(){
@@ -1536,17 +1560,11 @@ function safeJsonParse(s, fallback){
         localStorage.setItem(BTN_META_KEY, JSON.stringify(btnMeta));
         return;
       }
-      btnMeta = [
-        { key:'btn1', name:'btn1' },
-        { key:'btn2', name:'btn2' },
-        { key:'btn3', name:'btn3' },
-        { key:'btn4', name:'btn4' },
-        { key:'btn5', name:'btn5' },
-      ];
+      const editable = getEditableHomeButtonLibrary();
+      btnMeta = editable.map((it, idx) => ({ key:`btn${idx+1}`, name:String(it?.label || `btn${idx+1}`).trim() || `btn${idx+1}` }));
       return;
     }
 
-    // dynEntryButtons（resources/registry 可覆蓋）
     const list = dynEntryButtons[entry];
     if(Array.isArray(list) && list.length){
       btnMeta = list.map(x => ({ key:String(x.key||'').trim(), name:String(x.name||x.key||'').trim() }));
@@ -1659,6 +1677,7 @@ function safeJsonParse(s, fallback){
     renderCards();
     renderEntryPreview();
     refreshNavSelectOptions();
+    syncBtnMetaFromNavSelection();
   }
 
   function renderHeaders(){
@@ -2400,30 +2419,32 @@ function safeJsonParse(s, fallback){
 
   function readNavButtons(){
     const arr = safeJsonParse(localStorage.getItem(NAV_KEY) || '[]', []);
-    const library = getHomeButtonLibrary();
+    const editableLibrary = getEditableHomeButtonLibrary();
 
     if(Array.isArray(arr) && arr.length){
-      const map = new Map(arr.map(x => [String(x.id||'').toLowerCase(), x]));
-      const out = [];
-      for(let i=1;i<=5;i++){
-        const id = `btn${i}`;
-        const hit = map.get(id) || {};
+      const filtered = arr.filter(it => !isSystemAuthButton(it));
+      const ordered = filtered.sort((a, b) => {
+        const ai = Number(String(a?.id || '').replace(/^btn/i, '')) || 999;
+        const bi = Number(String(b?.id || '').replace(/^btn/i, '')) || 999;
+        return ai - bi;
+      });
+      const out = ordered.map((hit, idx) => {
+        const id = `btn${idx + 1}`;
         const sourceId = inferNavSourceId(hit, id);
-        const lib = getLibraryItemBySourceId(sourceId);
-
-        out.push({
+        const lib = getLibraryItemBySourceId(sourceId) || editableLibrary[idx] || null;
+        return {
           id,
           sourceId,
           label: String(lib?.label || hit?.label || id).trim() || id,
           href: String(lib?.href || hit?.href || '').trim(),
           target: String(lib?.target || hit?.target || '').trim(),
           roles: Array.isArray(lib?.roles) ? lib.roles.slice() : (Array.isArray(hit?.roles) ? hit.roles.slice() : [])
-        });
-      }
-      return out;
+        };
+      }).filter(it => !isSystemAuthButton(it));
+      if(out.length) return out;
     }
 
-    return library.slice(0,5).map((it, idx) => ({
+    return editableLibrary.map((it, idx) => ({
       id: `btn${idx+1}`,
       sourceId: it.sourceId,
       label: it.label,
@@ -2501,6 +2522,7 @@ function safeJsonParse(s, fallback){
 
       sel.dataset.prevValue = sel.value;
       refreshNavSelectOptions();
+      syncBtnMetaFromNavSelection();
     });
   }
 
@@ -2599,6 +2621,7 @@ function safeJsonParse(s, fallback){
     });
 
     refreshNavSelectOptions();
+    syncBtnMetaFromNavSelection();
   }
 
   function saveNavNamesFromInputs(){
