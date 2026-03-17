@@ -863,6 +863,8 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     var AUTH_KEY = "tasunAuthTable_v1";
     var CURRENT_KEY = "tasunCurrentUser_v1";
+    var SESSION_KEY = "tasunSessionLogin_v2";
+    var INDEX_SESSION_KEY = "tasunIndexSession_v1";
 
     var DB_KEY = "tasunSxdhNotes_v1";
     var COUNTER_KEY = "tasunSxdhNotes_counter_v1";
@@ -1196,6 +1198,84 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     function setCurrentUser(u){
       if(!u) localStorage.removeItem(CURRENT_KEY);
       else localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
+    }
+
+    function readCookie(name){
+      try{
+        var esc = String(name||"").replace(/[.*+?^${}()|[\]\]/g, "\$&");
+        var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
+        return m ? decodeURIComponent(m[1] || "") : "";
+      }catch(e){ return ""; }
+    }
+
+    function getSharedWorkerToken(){
+      var keys = [
+        "tasunCloudToken_v1",
+        "tasunCloudToken_v1__sxdh-notes",
+        "tasunCloudToken_v1__auth-table",
+        "tasunBearerToken_v1",
+        "tasunAccessToken_v1",
+        "tasun_token",
+        "tasunToken",
+        "tasun_auth_token",
+        "authToken",
+        "access_token",
+        "token"
+      ];
+      for(var i=0;i<keys.length;i++){
+        var key = keys[i];
+        try{
+          var v = norm(sessionStorage.getItem(key) || localStorage.getItem(key) || "");
+          if(v) return v;
+        }catch(e){}
+      }
+      try{
+        if(window.TasunAuthV4 && typeof window.TasunAuthV4.getToken === "function"){
+          var t1 = norm(window.TasunAuthV4.getToken() || "");
+          if(t1) return t1;
+        }
+      }catch(e){}
+      try{
+        if(window.TASUN_AUTH && typeof window.TASUN_AUTH === "object"){
+          var t2 = norm(window.TASUN_AUTH.token || window.TASUN_AUTH.accessToken || "");
+          if(t2) return t2;
+        }
+      }catch(e){}
+      var ck = norm(readCookie("tasun_bearer_token") || readCookie("tasun_token") || readCookie("token") || "");
+      return ck || "";
+    }
+
+    function hydrateCrossPageAuth(){
+      try{
+        var cur = getCurrentUser();
+        if(cur && (cur.user || cur.name || cur.username)){
+          var row = {
+            user: norm(cur.user || cur.name || cur.username),
+            name: norm(cur.name || cur.user || cur.username),
+            role: norm(cur.role || cur.level || "read") || "read",
+            at: norm(cur.at || nowISO())
+          };
+          try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(e){}
+          try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(e){}
+          try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: row.user, role: row.role, t: Date.now() })); }catch(e){}
+          try{ sessionStorage.setItem(INDEX_SESSION_KEY, "1"); }catch(e){}
+        }
+        var token = getSharedWorkerToken();
+        if(token){
+          var normalized = /^Bearer\s+/i.test(token) ? token.replace(/^Bearer\s+/i, "") : token;
+          try{ sessionStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
+          try{ localStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
+        }
+      }catch(e){}
+    }
+
+    function buildWorkerAuthHeaders(extra){
+      var headers = Object.assign({}, extra || {});
+      var bearer = getSharedWorkerToken();
+      if(bearer && !headers.Authorization && !headers.authorization){
+        headers.Authorization = /^Bearer\s+/i.test(bearer) ? bearer : ("Bearer " + bearer);
+      }
+      return headers;
     }
 
     function roleRank(role){
@@ -2461,7 +2541,7 @@ function getPromptOptions(mode){
           let reachable = false;
           for(const url of candidates){
             try{
-              const r = await fetch(url, { method:"GET", credentials: (cfg && cfg.credentials) ? "include" : "omit", cache:"no-store" });
+              const r = await fetch(url, { method:"GET", credentials:"include", cache:"no-store", headers: buildWorkerAuthHeaders({ accept:"application/json" }) });
               if(r.ok){ reachable = true; break; }
             }catch(_e){}
           }
@@ -2507,8 +2587,8 @@ function getPromptOptions(mode){
         const r = await fetch(url, {
           method: "GET",
           cache: "no-store",
-          credentials: (cfg && cfg.credentials) ? "include" : "omit",
-          headers: { "accept":"application/json" }
+          credentials: "include",
+          headers: buildWorkerAuthHeaders({ "accept":"application/json" })
         });
         if(!r.ok){
           const t = await r.text().catch(()=> "");
@@ -2543,8 +2623,8 @@ function getPromptOptions(mode){
         const r = await fetch(url, {
           method: "POST",
           cache: "no-store",
-          credentials: (cfg && cfg.credentials) ? "include" : "omit",
-          headers: { "content-type":"application/json", "accept":"application/json" },
+          credentials: "include",
+          headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
           body: JSON.stringify(body)
         });
         if(!r.ok){
@@ -3101,6 +3181,7 @@ $("btnSave").addEventListener("click", async function(){
 
         try{ wire(); }catch(e){}
         try{ refresh(); }catch(e){}
+        try{ hydrateCrossPageAuth(); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
         // ✅ 開頁同步策略：先檢查本端，有資料先上傳 merge 去重；再下載雲端最新資料。
         try{
