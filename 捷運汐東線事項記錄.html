@@ -2458,22 +2458,23 @@ function getPromptOptions(mode){
           candidates.push(_joinUrl(apiBase, "/api/tasun/ping"));
           candidates.push(_joinUrl(apiBase, "/api/ping"));
 
-          let ok = false;
+          let reachable = false;
           for(const url of candidates){
             try{
               const r = await fetch(url, { method:"GET", credentials: (cfg && cfg.credentials) ? "include" : "omit", cache:"no-store" });
-              if(r.ok){ ok = true; break; }
+              if(r.ok){ reachable = true; break; }
             }catch(_e){}
           }
+          // ✅ 健康檢查只代表 Worker 可達，不代表資料已完成同步。
           setCloudState({
             cfgOk: cfgOk,
-            reachable: ok,
-            ok: ok,
+            reachable: reachable,
+            ok: !!(state.cloud && state.cloud.ok),
             apiBase: apiBase,
             endpoints: eps || null,
-            lastOkAt: ok ? Date.now() : (state.cloud && state.cloud.lastOkAt ? state.cloud.lastOkAt : "")
+            lastOkAt: reachable ? Date.now() : (state.cloud && state.cloud.lastOkAt ? state.cloud.lastOkAt : "")
           }, true);
-          return ok;
+          return reachable;
         }catch(_e){
           setCloudState({ ok:false, reachable:false, cfgOk:false }, true);
           return false;
@@ -2553,6 +2554,67 @@ function getPromptOptions(mode){
         const j = await r.json();
         return _normalizePullResponse(j);
       }
+    async function reconcileCloudOnOpen(opts){
+      opts = (opts && typeof opts==="object") ? opts : {};
+      var silent = (opts.silent!==false);
+
+      var cfg = await loadCloudCfg();
+      if(!cfg || !isValidApiBase(cfg.apiBase)){
+        setCloudState({ ok:false, cfgOk:false, reachable:false }, true);
+        if(!silent) toast("雲端未設定/無效");
+        return false;
+      }
+
+      try{
+        // 1) 先確認 Worker 可達
+        await cloudHealth(cfg);
+
+        // 2) 先檢查本端資料；若本端已有資料，先送雲端 merge，避免本端較新的資料被空雲端覆蓋
+        var localRows = (state.db||[]).map(ensureRowV1).filter(Boolean);
+        var remoteOrMerged = null;
+
+        if(localRows.length>0){
+          remoteOrMerged = await cloudMerge(cfg, PAGE_KEY, { db: localRows, counter: state.counter }, {
+            user: state.user || "",
+            role: state.role || "",
+            appVer: APP_VER,
+            clientId: state.clientId || getClientId(),
+            at: nowISO(),
+            reason: "boot-reconcile-local-first"
+          });
+        }else{
+          remoteOrMerged = await cloudRead(cfg, PAGE_KEY);
+        }
+
+        // 3) 再抓一次最新雲端資料，確保拿到 merge 後的最終狀態（多人/多設備一致）
+        var remoteFinal = await cloudRead(cfg, PAGE_KEY);
+        var out = mergePayload(remoteFinal || remoteOrMerged, { db: state.db, counter: state.counter });
+
+        state.db = out.db;
+        state.counter = out.counter;
+        state.lastSyncAt = Date.now();
+
+        try{ await idbClearOps(PAGE_KEY); }catch(e){}
+        await saveLocal({ db: state.db, counter: state.counter });
+        buildDictsFromDb();
+
+        setCloudState({
+          ok:true,
+          cfgOk:true,
+          reachable:true,
+          lastOkAt: Date.now(),
+          lastSyncAt: nowISO()
+        }, false);
+        refresh();
+        if(!silent) toast("已完成開啟同步");
+        return true;
+      }catch(e){
+        setCloudState({ ok:false }, true);
+        if(!silent) toast("開啟同步失敗：" + (e && e.message ? e.message : String(e)));
+        return false;
+      }
+    }
+
     async function syncFromCloud(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
       var silent = !!opts.silent;
@@ -2807,6 +2869,8 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       applyUser(cur);
       closeLogin();
       toast("登入成功");
+      // ✅ 登入後立即做一次「本端先 merge，再重抓雲端」
+      setTimeout(function(){ reconcileCloudOnOpen({ silent:true }); }, 60);
     }
 
     // ---------------------------
@@ -3037,7 +3101,13 @@ $("btnSave").addEventListener("click", async function(){
 
         try{ wire(); }catch(e){}
         try{ refresh(); }catch(e){}
-        try{ cloudHealth(); }catch(e){}
+        try{ await cloudHealth(); }catch(e){}
+        // ✅ 開頁同步策略：先檢查本端，有資料先上傳 merge 去重；再下載雲端最新資料。
+        try{
+          if(cur){
+            await reconcileCloudOnOpen({ silent:true });
+          }
+        }catch(e){}
         try{ if(!cur) openLogin(); }catch(e){}
 
         try{
