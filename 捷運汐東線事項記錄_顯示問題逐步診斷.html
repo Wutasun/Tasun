@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>捷運汐東線事項記錄｜顯示問題逐步診斷</title>
+<style>
+  :root{--bg:#edf2f1;--panel:#fff;--line:#d7d7d7;--text:#222;--muted:#666;--ok:#157347;--warn:#b36b00;--bad:#b42318;--info:#175cd3}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI","Noto Sans TC",sans-serif;background:var(--bg);color:var(--text)}
+  .wrap{max-width:1280px;margin:18px auto;padding:0 14px}
+  h1{font-size:28px;margin:0 0 12px}
+  .toolbar,.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 10px 24px rgba(0,0,0,.06)}
+  .toolbar{padding:12px;display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  .grid{display:grid;grid-template-columns:1.1fr 1fr;gap:14px}
+  .card{padding:14px}
+  label{display:block;font-weight:800;margin:10px 0 6px}
+  input,textarea{width:100%;border:1px solid #cfcfcf;border-radius:12px;padding:10px 12px;font:inherit;background:#fff}
+  textarea{min-height:180px;resize:vertical}
+  button{border:1px solid #bcbcbc;background:#fff;border-radius:12px;padding:10px 14px;font:inherit;cursor:pointer}
+  button:hover{border-color:#888}
+  .summary{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;line-height:1.55}
+  .logs{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.55;background:#fafafa}
+  .badge{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;border:1px solid var(--line);font-size:13px;font-weight:800;margin-bottom:10px}
+  .ok{color:var(--ok);background:#ecfdf3;border-color:#abefc6}.warn{color:var(--warn);background:#fff7ed;border-color:#fed7aa}.bad{color:var(--bad);background:#fef3f2;border-color:#fecdca}.info{color:var(--info);background:#eff8ff;border-color:#b2ddff}
+  .mini{font-size:12px;color:var(--muted)}
+  .kvs{display:grid;grid-template-columns:170px 1fr;gap:8px 10px;margin-top:8px;font-size:14px}
+  .kvs div:nth-child(odd){font-weight:800;color:#444}
+  iframe{width:100%;height:520px;border:1px solid var(--line);border-radius:12px;background:#fff}
+  @media (max-width:980px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>捷運汐東線事項記錄｜顯示問題逐步診斷</h1>
+
+  <div class="toolbar">
+    <button id="btnAll">全部測試</button>
+    <button id="btnFetch">Step 1：讀目標 HTML</button>
+    <button id="btnDom">Step 2：檢查必要 DOM</button>
+    <button id="btnAssets">Step 3：檢查 script / 資源</button>
+    <button id="btnFrame">Step 4：iframe 開頁執行</button>
+    <button id="btnProbe">Step 5：檢查右上角 / 狀態列</button>
+    <button id="btnAuth">Step 6：檢查憑證 / 本機資料</button>
+    <button id="btnExport">匯出診斷結果</button>
+    <button id="btnClear">清空畫面</button>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <label>目標頁面 URL 或檔名</label>
+      <input id="targetUrl" value="捷運汐東線事項記錄.html" />
+      <div class="mini">建議直接放你目前出問題的正式檔名；若與本診斷頁同目錄，可只填檔名。</div>
+
+      <label>目前頁面資訊</label>
+      <div class="kvs" id="envBox"></div>
+
+      <label>關鍵 localStorage / sessionStorage</label>
+      <textarea id="storageView" readonly></textarea>
+    </div>
+
+    <div class="card">
+      <div id="summaryBadge" class="badge info">尚未執行</div>
+      <div class="summary" id="summary">請按「全部測試」或逐步執行。</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:14px;">
+    <label>逐步測試輸出</label>
+    <div class="logs" id="logs"></div>
+  </div>
+
+  <div class="card" style="margin-top:14px;">
+    <label>受測頁面即時執行畫面</label>
+    <iframe id="runner"></iframe>
+  </div>
+</div>
+
+<script>
+(function(){
+  const state = {
+    targetUrl:'',
+    fetchedHtml:'',
+    fetchedUrl:'',
+    scriptRefs:[],
+    domCheck:null,
+    assetCheck:null,
+    frameEvents:[],
+    probe:null,
+    auth:null,
+    lastReport:null,
+    summary:''
+  };
+
+  const $ = id => document.getElementById(id);
+  const logs = [];
+
+  function envInfo(){
+    const box = $('envBox');
+    const items = [
+      ['目前頁面', location.href],
+      ['來源目錄', location.href.replace(/[^/]*$/, '')],
+      ['時間', new Date().toISOString()],
+      ['UserAgent', navigator.userAgent]
+    ];
+    box.innerHTML = items.map(([k,v])=>`<div>${escapeHtml(k)}</div><div>${escapeHtml(v)}</div>`).join('');
+  }
+
+  function escapeHtml(s){ return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+  function log(){ logs.push(Array.from(arguments).join(' ')); $('logs').textContent = logs.join('\n'); }
+  function clearAll(){ logs.length=0; $('logs').textContent=''; $('summary').textContent='請按「全部測試」或逐步執行。'; setBadge('尚未執行','info'); $('runner').src='about:blank'; $('storageView').value=''; state.fetchedHtml=''; state.scriptRefs=[]; state.domCheck=null; state.assetCheck=null; state.frameEvents=[]; state.probe=null; state.auth=null; state.summary=''; envInfo(); }
+  function setBadge(text, kind){ const el=$('summaryBadge'); el.className='badge '+kind; el.textContent=text; }
+  function setSummary(text, kind){ state.summary=text; $('summary').textContent=text; setBadge(kind==='ok'?'測試成功':kind==='warn'?'需要注意':kind==='bad'?'測試失敗':'診斷資訊', kind||'info'); }
+  function reportObj(){ return { exportedAt:new Date().toISOString(), targetUrl:state.targetUrl, fetchedUrl:state.fetchedUrl, summary:state.summary, domCheck:state.domCheck, assetCheck:state.assetCheck, frameEvents:state.frameEvents, probe:state.probe, auth:state.auth, logs:logs.join('\n') }; }
+  function downloadText(name, text){ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([text],{type:'application/json'})); a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 500); }
+
+  function getTargetUrl(){
+    const raw = ($('targetUrl').value||'').trim();
+    state.targetUrl = raw || '捷運汐東線事項記錄.html';
+    try{ return new URL(state.targetUrl, location.href).toString(); }catch(e){ return state.targetUrl; }
+  }
+
+  async function stepFetch(){
+    const target = getTargetUrl();
+    log('===== Step 1：讀目標 HTML =====');
+    log('Target:', target);
+    try{
+      const res = await fetch(target, { cache:'no-store' });
+      const text = await res.text();
+      state.fetchedHtml = text;
+      state.fetchedUrl = target;
+      log('HTTP:', String(res.status));
+      log('HTML 長度:', String(text.length));
+      setSummary(['Step 1：完成','HTTP ' + res.status,'已讀到目標 HTML。'].join('\n'),'info');
+      return { status:res.status, text };
+    }catch(err){
+      log('例外:', String(err && err.message || err));
+      setSummary('Step 1：失敗\n無法讀取目標 HTML\n' + String(err && err.message || err),'bad');
+      throw err;
+    }
+  }
+
+  function parseHtml(text){ return new DOMParser().parseFromString(text, 'text/html'); }
+
+  async function stepDom(){
+    if(!state.fetchedHtml) await stepFetch();
+    log('\n===== Step 2：檢查必要 DOM =====');
+    const doc = parseHtml(state.fetchedHtml);
+    const checks = [
+      ['uName', !!doc.getElementById('uName')],
+      ['uRole', !!doc.getElementById('uRole')],
+      ['btnView', !!doc.getElementById('btnView')],
+      ['btnAdd', !!doc.getElementById('btnAdd')],
+      ['btnEdit', !!doc.getElementById('btnEdit')],
+      ['btnToken', !!doc.getElementById('btnToken')],
+      ['hint', !!doc.getElementById('hint')],
+      ['topbar', !!doc.querySelector('.topbar')],
+      ['panelHead', !!doc.querySelector('.panelHead')]
+    ];
+    checks.forEach(([k,v])=>log(k + ':', v ? '存在' : '缺少'));
+    const miss = checks.filter(x=>!x[1]).map(x=>x[0]);
+    state.domCheck = { checks:Object.fromEntries(checks), missing:miss };
+    setSummary([
+      'Step 2：' + (miss.length ? '異常' : '完成'),
+      '必要 DOM ' + (miss.length ? ('缺少：' + miss.join(', ')) : '全部存在'),
+      '若這一步正常，代表畫面元素本身不是消失，而是後續 JS 沒把內容補進去。'
+    ].join('\n'), miss.length ? 'warn' : 'ok');
+    return state.domCheck;
+  }
+
+  async function stepAssets(){
+    if(!state.fetchedHtml) await stepFetch();
+    log('\n===== Step 3：檢查 script / 資源 =====');
+    const doc = parseHtml(state.fetchedHtml);
+    const scripts = Array.from(doc.querySelectorAll('script[src]')).map(s=>s.getAttribute('src'));
+    const inlineCount = Array.from(doc.querySelectorAll('script')).filter(s=>!s.getAttribute('src')).length;
+    const base = new URL(state.fetchedUrl, location.href);
+    const results = [];
+    for(const src of scripts){
+      const abs = new URL(src, base).toString();
+      try{
+        const res = await fetch(abs, { method:'GET', cache:'no-store' });
+        results.push({ src, abs, status:res.status, ok:res.ok });
+        log(src, '=>', String(res.status));
+      }catch(err){
+        results.push({ src, abs, status:0, ok:false, error:String(err && err.message || err) });
+        log(src, '=> 例外', String(err && err.message || err));
+      }
+    }
+    state.scriptRefs = scripts;
+    state.assetCheck = { inlineCount, scripts:results };
+    const bad = results.filter(x=>!x.ok);
+    setSummary([
+      'Step 3：' + (bad.length ? '需要注意' : '完成'),
+      'inline script 數量：' + inlineCount,
+      '外部 script 數量：' + results.length,
+      bad.length ? ('失敗資源：' + bad.map(x=>x.src + ' [' + (x.status||'ERR') + ']').join(', ')) : '所有外部 script 都可讀取。'
+    ].join('\n'), bad.length ? 'warn' : 'ok');
+    return state.assetCheck;
+  }
+
+  function buildSrcdoc(html, targetUrl){
+    const baseHref = targetUrl.replace(/[^/]*([?#].*)?$/, '');
+    const prelude = `\n<script>\n(function(){\n  function post(type,payload){ try{ parent.postMessage({__tasunDiag:true,type:type,payload:payload}, '*'); }catch(e){} }\n  window.addEventListener('error', function(ev){ post('runtime-error',{message:ev.message, source:ev.filename, line:ev.lineno, col:ev.colno}); });\n  window.addEventListener('unhandledrejection', function(ev){ var r=ev.reason; post('promise-error',{message:(r&&r.message)||String(r)}); });\n  var oldErr = console.error; console.error = function(){ try{ post('console-error',{args:[].slice.call(arguments).map(function(v){ try{return typeof v==='string'?v:JSON.stringify(v);}catch(e){return String(v);} })}); }catch(e){}; return oldErr && oldErr.apply(console, arguments); };\n  function snap(label){\n    var q = function(sel){ return document.querySelector(sel); };\n    var byId = function(id){ return document.getElementById(id); };\n    function vis(el){ if(!el) return false; var cs=getComputedStyle(el); return cs.display!=='none' && cs.visibility!=='hidden' && parseFloat(cs.opacity||'1')>0.01; }\n    var hint = byId('hint');\n    post('snapshot',{ label:label, title:(document.title||''), uNameText: byId('uName')?byId('uName').textContent.trim():'', uRoleText: byId('uRole')?byId('uRole').textContent.trim():'', btnView: !!byId('btnView'), btnAddVisible: vis(byId('btnAdd')), btnEditVisible: vis(byId('btnEdit')), btnTokenVisible: vis(byId('btnToken')), hintExists: !!hint, hintText: hint ? hint.textContent.trim() : '', hintHtml: hint ? hint.innerHTML : '', bodyClass: document.body ? document.body.className : '', readyState: document.readyState, windowKeys: Object.keys(window).filter(function(k){ return /auth|session|tasun|refresh|render|hint/i.test(k); }).slice(0,80) });\n  }\n  document.addEventListener('DOMContentLoaded', function(){ post('dom-ready',{title:document.title||''}); setTimeout(function(){snap('after-domcontentloaded-200ms');},200); setTimeout(function(){snap('after-domcontentloaded-1200ms');},1200); setTimeout(function(){snap('after-domcontentloaded-3000ms');},3000); });\n  window.addEventListener('load', function(){ post('window-load',{title:document.title||''}); setTimeout(function(){snap('after-load-300ms');},300); setTimeout(function(){snap('after-load-1800ms');},1800); });\n})();\n<\/script>\n`;
+    return html.replace(/<head([^>]*)>/i, `<head$1><base href="${baseHref}">` + prelude);
+  }
+
+  async function stepFrame(){
+    if(!state.fetchedHtml) await stepFetch();
+    log('\n===== Step 4：iframe 開頁執行 =====');
+    state.frameEvents = [];
+    const frame = $('runner');
+    const srcdoc = buildSrcdoc(state.fetchedHtml, state.fetchedUrl || getTargetUrl());
+    frame.srcdoc = srcdoc;
+    log('已載入 iframe srcdoc，等待事件回報...');
+    setSummary('Step 4：已載入執行環境\n請接著跑 Step 5 檢查右上角與狀態列。','info');
+    await new Promise(r=>setTimeout(r, 3600));
+    return state.frameEvents;
+  }
+
+  function formatEvent(ev){ return '[' + ev.type + '] ' + JSON.stringify(ev.payload); }
+
+  async function stepProbe(){
+    if(!state.frameEvents.length) await stepFrame();
+    log('\n===== Step 5：檢查右上角 / 狀態列 =====');
+    const snaps = state.frameEvents.filter(x=>x.type==='snapshot').map(x=>x.payload);
+    const errs = state.frameEvents.filter(x=>x.type==='runtime-error' || x.type==='promise-error' || x.type==='console-error');
+    const last = snaps[snaps.length-1] || null;
+    if(last){
+      log('最後快照:', JSON.stringify(last));
+    }else{
+      log('沒有拿到任何 snapshot');
+    }
+    errs.forEach(ev=>log(formatEvent(ev)));
+    const diagnosis = [];
+    if(!last){
+      diagnosis.push('iframe 沒有成功執行到快照程式，代表頁面初始化流程很早就中斷，需優先看 runtime error。');
+    }else{
+      if(last.btnView && !last.btnAddVisible && !last.btnEditVisible && !last.btnTokenVisible){
+        diagnosis.push('右上角只有固定的「檢視」存在，動態按鍵沒有補出來，表示 auth / role hydration 或 refresh/render 流程沒有成功跑完。');
+      }
+      if(last.hintExists && !last.hintText){
+        diagnosis.push('狀態列 DOM 存在但內容是空白，表示 hint render / refreshHint / renderStatus 沒有成功執行，問題不是 HTML 少了狀態列，而是執行期沒有把內容寫進去。');
+      }
+      if(last.uNameText==='—' || last.uRoleText==='—' || last.uNameText==='-' || last.uRoleText==='-'){
+        diagnosis.push('uName / uRole 仍是預設值，代表登入資訊沒有成功套到頁面。');
+      }
+    }
+    if(errs.length){
+      diagnosis.push('有執行期錯誤，這通常就是造成右上角與狀態列未顯示的直接原因。');
+    }
+    state.probe = { lastSnapshot:last, errors:errs, diagnosis };
+    setSummary([
+      'Step 5：' + ((diagnosis.length || errs.length) ? '找到問題點' : '未發現異常'),
+      diagnosis.join('\n') || '快照顯示右上角與狀態列有正常內容。',
+      errs.length ? ('錯誤數：' + errs.length) : '沒有捕捉到 runtime error。'
+    ].join('\n'), (diagnosis.length || errs.length) ? 'warn' : 'ok');
+    return state.probe;
+  }
+
+  function inspectStore(storage){
+    const keys = [];
+    for(let i=0;i<storage.length;i++) keys.push(storage.key(i));
+    return keys.filter(k=>/tasun|sso|session|auth|token|notes/i.test(k)).sort().map(k=>{
+      let v='';
+      try{ v = storage.getItem(k); }catch(e){ v='(讀取失敗)'; }
+      if(v && v.length>260) v = v.slice(0,260) + '...';
+      return k + ' = ' + v;
+    });
+  }
+
+  async function stepAuth(){
+    log('\n===== Step 6：檢查憑證 / 本機資料 =====');
+    const ls = inspectStore(localStorage);
+    const ss = inspectStore(sessionStorage);
+    const merged = ['[localStorage]'].concat(ls).concat(['','[sessionStorage]']).concat(ss);
+    $('storageView').value = merged.join('\n');
+    const likely = {};
+    ['tasunSso_v1','tasunSessionBridge_v1','tasunCurrentUser_v1','tasunAuthTable_v1','tasunAuthTableShadow_v1','tasunSxdhNotes_v1'].forEach(k=>{
+      likely[k] = localStorage.getItem(k) || sessionStorage.getItem(k) || '';
+    });
+    state.auth = likely;
+    const summary = [];
+    if(likely.tasunCurrentUser_v1) summary.push('有 tasunCurrentUser_v1'); else summary.push('沒有 tasunCurrentUser_v1');
+    if(likely.tasunSso_v1 || likely.tasunSessionBridge_v1) summary.push('找到跨頁登入憑證/橋接資料'); else summary.push('沒有找到跨頁登入憑證/橋接資料');
+    if(likely.tasunSxdhNotes_v1) summary.push('本機找到記事資料 localStorage'); else summary.push('本機 localStorage 沒找到記事資料');
+    setSummary(['Step 6：完成'].concat(summary).join('\n'),'info');
+    return state.auth;
+  }
+
+  async function runAll(){
+    clearAll();
+    await stepFetch();
+    await stepDom();
+    await stepAssets();
+    await stepFrame();
+    await stepProbe();
+    await stepAuth();
+  }
+
+  window.addEventListener('message', ev=>{
+    const d = ev.data;
+    if(!d || !d.__tasunDiag) return;
+    state.frameEvents.push({ type:d.type, payload:d.payload, at:new Date().toISOString() });
+    if(d.type==='runtime-error' || d.type==='promise-error' || d.type==='console-error'){
+      log('iframe事件', formatEvent({type:d.type,payload:d.payload}));
+    }
+  });
+
+  $('btnAll').onclick = runAll;
+  $('btnFetch').onclick = async ()=>{ await stepFetch(); };
+  $('btnDom').onclick = async ()=>{ await stepDom(); };
+  $('btnAssets').onclick = async ()=>{ await stepAssets(); };
+  $('btnFrame').onclick = async ()=>{ await stepFrame(); };
+  $('btnProbe').onclick = async ()=>{ await stepProbe(); };
+  $('btnAuth').onclick = async ()=>{ await stepAuth(); };
+  $('btnExport').onclick = ()=> downloadText('捷運汐東線事項記錄_顯示問題逐步診斷報告_' + new Date().toISOString().slice(0,19).replace(/[T:]/g,'-') + '.json', JSON.stringify(reportObj(), null, 2));
+  $('btnClear').onclick = clearAll;
+
+  clearAll();
+})();
+</script>
+</body>
+</html>
