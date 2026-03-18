@@ -615,9 +615,11 @@
 
       function isTouchPickerPreferred(){
         try{
-          const hasTouch = ('ontouchstart' in window) || ((navigator.maxTouchPoints || 0) > 0) || ((navigator.msMaxTouchPoints || 0) > 0);
+          const ua = String((navigator && navigator.userAgent) || '').toLowerCase();
+          const mobileUA = /android|iphone|ipad|ipod|mobile|windows phone/.test(ua);
           const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
-          return !!(hasTouch || coarse);
+          const narrow = Math.min(window.innerWidth || 9999, screen.width || 9999) <= 900;
+          return !!(mobileUA || (coarse && narrow));
         }catch(e){ return false; }
       }
       function applyUsernamePickerMode(){
@@ -956,33 +958,10 @@
           { user:'wu',    passHash:'8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92', role:'read', ...mkOnlyLast() }
         ];
       }
-      const KNOWN_LOGIN_SEEDS = {
-        alex:  { username:'alex',  pass:'Tasun08040224', hash:'7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07', level:'admin' },
-        joyce: { username:'JOYCE', pass:'09220224',      hash:'d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815', level:'admin' },
-        tasun: { username:'tasun', pass:'tasun08040224', hash:'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba', level:'write' },
-        wu:    { username:'wu',    pass:'123456',        hash:'8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92', level:'read' }
-      };
-      function extractAuthRows(parsed){
-        if(Array.isArray(parsed)) return parsed;
-        if(!parsed || typeof parsed !== 'object') return null;
-        const candidates = [
-          parsed.users, parsed.auth, parsed.rows, parsed.list, parsed.items, parsed.entries,
-          parsed.data && parsed.data.users, parsed.data && parsed.data.auth, parsed.data && parsed.data.rows,
-          parsed.data && parsed.data.list, parsed.data && parsed.data.items, parsed.data && parsed.data.entries
-        ];
-        for(const c of candidates){
-          if(Array.isArray(c) && c.length) return c;
-        }
-        for(const k of Object.keys(parsed)){
-          const v = parsed[k];
-          if(Array.isArray(v) && v.some(x => x && typeof x === 'object' && (x.user || x.username || x.name || x.account))) return v;
-        }
-        return null;
-      }
       function normalizeRowFromStorage(row, btnCount){
         const username = (row?.username ?? row?.user ?? row?.name ?? row?.account ?? '').toString().trim();
-        const password = (row?.password ?? row?.pass ?? row?.pw ?? '').toString();
-        const level    = (row?.level ?? row?.role ?? row?.perm ?? row?.permission ?? 'read').toString().trim().toLowerCase();
+        const password = (row?.password ?? row?.pass ?? '').toString();
+        const level    = (row?.level ?? row?.role ?? 'read').toString().trim().toLowerCase();
         const arr = Array.isArray(row?.buttons) ? row.buttons : null;
         const buttons = [];
         for(let i=0;i<btnCount;i++){
@@ -995,63 +974,18 @@
         const passHash = (row?.passHash ?? row?.passwordHash ?? row?.hash ?? '').toString().trim();
         return { username, password, passHash, level, buttons };
       }
-      function mergeKnownSeeds(rows, btnCount){
-        const merged = Array.isArray(rows) ? rows.slice() : [];
-        const map = new Map(merged.map((r,i)=>[String(r.username||'').trim().toLowerCase(), i]).filter(x=>x[0]));
-        Object.keys(KNOWN_LOGIN_SEEDS).forEach(key => {
-          const seed = KNOWN_LOGIN_SEEDS[key];
-          const idx = map.has(key) ? map.get(key) : -1;
-          if(idx >= 0){
-            const cur = Object.assign({}, merged[idx]);
-            if(!String(cur.passHash || '').trim() && !String(cur.password || '').trim()) cur.passHash = seed.hash;
-            if(!String(cur.level || '').trim()) cur.level = seed.level;
-            if(!Array.isArray(cur.buttons) || !cur.buttons.length){
-              cur.buttons = normalizeRowFromStorage(seed, btnCount).buttons;
-            }
-            merged[idx] = cur;
-          }else{
-            merged.push(normalizeRowFromStorage(seed, btnCount));
-          }
-        });
-        return merged;
-      }
-      function repairKnownAuthSecrets(){
-        try{
-          const rows = mergeKnownSeeds(loadAuthTable(LEGACY_BUTTON_KEYS.length), LEGACY_BUTTON_KEYS.length);
-          if(rows.length){
-            const legacy = rows.map(r => {
-              const obj = { user:r.username, username:r.username, role:r.level, level:r.level, passHash:r.passHash || '' };
-              (Array.isArray(r.buttons) ? r.buttons : []).forEach((v, i) => obj['btn' + (i+1)] = !!v);
-              return obj;
-            });
-            localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
-          }
-        }catch(e){}
-      }
       function loadAuthTable(btnCount){
         const raw = localStorage.getItem(AUTH_KEY);
-        if(!raw){
-          const legacy = mergeKnownSeeds(getDefaultAuthTableLegacy(btnCount).map(r => normalizeRowFromStorage(r, btnCount)), btnCount);
-          localStorage.setItem(AUTH_KEY, JSON.stringify(legacy.map(r => {
-            const obj = { user:r.username, username:r.username, role:r.level, level:r.level, passHash:r.passHash || '', password:r.password || '' };
-            (Array.isArray(r.buttons) ? r.buttons : []).forEach((v, i) => obj['btn' + (i+1)] = !!v);
-            return obj;
-          })));
-          return legacy;
-        }
+        if(!raw){ const legacy = getDefaultAuthTableLegacy(btnCount); localStorage.setItem(AUTH_KEY, JSON.stringify(legacy)); return legacy.map(r => normalizeRowFromStorage(r, btnCount)); }
         const parsed = safeJsonParse(raw, null);
-        const arr = extractAuthRows(parsed);
+        const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
         if(Array.isArray(arr)){
-          const mapped = mergeKnownSeeds(arr.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username), btnCount);
+          const mapped = arr.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
           if(mapped.length) return mapped;
         }
-        const legacy = mergeKnownSeeds(getDefaultAuthTableLegacy(btnCount).map(r => normalizeRowFromStorage(r, btnCount)), btnCount);
-        localStorage.setItem(AUTH_KEY, JSON.stringify(legacy.map(r => {
-          const obj = { user:r.username, username:r.username, role:r.level, level:r.level, passHash:r.passHash || '', password:r.password || '' };
-          (Array.isArray(r.buttons) ? r.buttons : []).forEach((v, i) => obj['btn' + (i+1)] = !!v);
-          return obj;
-        })));
-        return legacy;
+        const legacy = getDefaultAuthTableLegacy(btnCount);
+        localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
+        return legacy.map(r => normalizeRowFromStorage(r, btnCount));
       }
       function migrateAuthToHashedIfNeeded(){
         try{
@@ -1076,38 +1010,6 @@
           })();
         }catch(e){}
       }
-
-      const KNOWN_LOGIN_SEEDS = {
-        alex:  { username:'alex',  pass:'Tasun08040224', hash:'7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07', level:'admin' },
-        joyce: { username:'JOYCE', pass:'09220224',      hash:'d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815', level:'admin' },
-        tasun: { username:'tasun', pass:'tasun08040224', hash:'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba', level:'write' },
-        wu:    { username:'wu',    pass:'123456',        hash:'8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92', level:'read' }
-      };
-      function repairKnownUserSecret(username){
-        try{
-          const key = String(username || '').trim().toLowerCase();
-          const seed = KNOWN_LOGIN_SEEDS[key];
-          if(!seed) return;
-          const raw = localStorage.getItem(AUTH_KEY);
-          const parsed = safeJsonParse(raw, null);
-          const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
-          if(!Array.isArray(arr) || !arr.length) return;
-          let changed = false;
-          arr.forEach(r => {
-            if(!r || typeof r !== 'object') return;
-            const rk = String(r.user || r.username || r.name || r.account || '').trim().toLowerCase();
-            if(rk !== key) return;
-            const curHash = String(r.passHash || r.passwordHash || r.hash || '').trim().toLowerCase();
-            const curPlain = String(r.password || r.pass || r.pw || '').trim();
-            if(!curHash && !curPlain){
-              r.passHash = seed.hash;
-              changed = true
-            }
-          });
-          if(changed) localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
-        }catch(e){}
-      }
-
 
       const COOKIE_NAME = 'tasun_session_v4';
       const COOKIE_TTL_MS = 1000 * 60 * 60 * 12;
@@ -1295,7 +1197,6 @@
         if(loginOverlay) loginOverlay.style.display = 'flex';
         if(loginSub) loginSub.textContent = msg || '';
         if(loginError) loginError.textContent = '';
-        clearLoginDiagnosticLine();
         if(passwordInput) passwordInput.value = '';
         if(userInfo){ userInfo.textContent = '目前使用者：未登入'; userInfo.setAttribute('data-text', '目前使用者：未登入'); }
         populateUserSelect();
@@ -1338,7 +1239,6 @@
         CURRENT_USER = null;
         if(msg) loginSub.textContent = msg;
         else if(loginSub) loginSub.textContent = '';
-        clearLoginDiagnosticLine();
         document.body.classList.add('locked');
         if(loginOverlay) loginOverlay.style.display = 'flex';
         if(loginError) loginError.textContent = '';
@@ -1595,10 +1495,20 @@
         });
       }
       function refreshUsernamePicker(){ if(!usernameSel) return; const opt = usernameSel.options[usernameSel.selectedIndex]; if(opt && opt.disabled){ const first = Array.from(usernameSel.options).find(o => !o.disabled && String(o.value||'').trim()); if(first) usernameSel.value = first.value; } syncUsernameDisplay(); buildUsernameMenu(); }
-      if(usernameSel){ usernameSel.addEventListener('change', () => { syncUsernameDisplay(); closeUsernameMenu(); clearLoginDiagnosticLine(); }); usernameSel.addEventListener('input', () => { syncUsernameDisplay(); closeUsernameMenu(); clearLoginDiagnosticLine(); }); }
-      if(passwordInput){ passwordInput.addEventListener('input', clearLoginDiagnosticLine); }
+      if(usernameSel){ usernameSel.addEventListener('change', () => { syncUsernameDisplay(); closeUsernameMenu(); }); usernameSel.addEventListener('input', () => { syncUsernameDisplay(); closeUsernameMenu(); }); }
       if(usernameDisplay){
-        usernameDisplay.addEventListener('click', toggleUsernameMenu);
+        usernameDisplay.addEventListener('click', (e) => {
+          try{
+            if(usernameWrap && usernameWrap.classList.contains('native-touch') && usernameSel){
+              e.preventDefault();
+              if(typeof usernameSel.showPicker === 'function') { usernameSel.showPicker(); return; }
+              usernameSel.focus();
+              usernameSel.click();
+              return;
+            }
+          }catch(_e){}
+          toggleUsernameMenu();
+        });
         usernameDisplay.addEventListener('keydown', (e) => {
           if(usernameDisplay.disabled) return;
           const key = e.key;
@@ -1618,20 +1528,6 @@
         const names = Array.from(new Set(AUTH_TABLE.map(r => r.username).filter(Boolean))).sort((a,b)=>a.localeCompare(b, 'zh-Hant'));
         names.forEach(name => { const opt = document.createElement('option'); opt.value = name; opt.textContent = name; usernameSel.appendChild(opt); });
         refreshUsernamePicker();
-        clearLoginDiagnosticLine();
-      }
-
-      function clearLoginDiagnosticLine(){
-        try{
-          const txt = String(loginError?.textContent || '').trim();
-          if(/密碼來源狀態|來源=hash|來源=plain|hash=|plain=|hash有|plain有/i.test(txt)){
-            loginError.textContent = '';
-          }
-          const subTxt = String(loginSub?.textContent || '').trim();
-          if(/密碼來源狀態|來源=hash|來源=plain|hash=|plain=|hash有|plain有/i.test(subTxt)){
-            loginSub.textContent = '';
-          }
-        }catch(e){}
       }
 
       (function patchLocalStorageOnce(){
@@ -1661,9 +1557,7 @@
       function scheduleAll(){ try{ scheduleLayout(); }catch(e){} }
       scheduleLayout = rafDebounce(layoutButtons);
 
-      repairKnownAuthSecrets();
       syncAuthTableFromAuthority().finally(()=>{
-        repairKnownAuthSecrets();
         AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
         buildMainButtonsDOM();
         ensureCloudMounted(null).catch(()=>{});
@@ -1680,22 +1574,13 @@
         if(!password){ loginError.textContent = '請輸入密碼'; return; }
         loginError.textContent = '登入中…';
         try{
-          repairKnownAuthSecrets();
-          repairKnownUserSecret(username);
           AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-          let u = AUTH_TABLE.find(r => String(r.username||'').trim() === username);
+          const u = AUTH_TABLE.find(r => String(r.username||'').trim() === username);
           if(!u){ loginError.textContent = '查無此使用者（請到「系統 / 權限」新增）'; return; }
           const pwHash = await sha256Hex(password);
-          const storedHash = String(u.passHash || u.passwordHash || u.hash || '').trim().toLowerCase();
-          const storedPlain = String(u.password || u.pass || u.pw || '').trim();
-          const seed = KNOWN_LOGIN_SEEDS[String(username).trim().toLowerCase()] || null;
-          let ok = (storedHash && pwHash === storedHash) || (!!storedPlain && password === storedPlain);
-          if(!ok && seed){
-            ok = (pwHash === String(seed.hash || '').trim().toLowerCase()) || (password === String(seed.pass || '').trim());
-            if(ok){
-              try{ repairKnownUserSecret(username); AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length); u = AUTH_TABLE.find(r => String(r.username||'').trim() === username) || u; }catch(_e){}
-            }
-          }
+          const storedHash = String(u.passHash || '').trim().toLowerCase();
+          const storedPlain = String(u.password || '').trim();
+          const ok = (storedHash && pwHash === storedHash) || (!!storedPlain && password === storedPlain);
           if(!ok){ loginError.textContent = '密碼錯誤'; return; }
           setSession({ username: u.username, level: u.level });
           applyUser(u, { skipBroadcast:true });
