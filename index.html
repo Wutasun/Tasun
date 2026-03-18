@@ -588,12 +588,6 @@
         '雲端檔案': 'https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88'
       };
       const LEGACY_BUTTON_KEYS = ['btn1','btn2','btn3','btn4','btn5'];
-      const DEFAULT_AUTH_SEED = {
-        'alex':  { user:'alex',  role:'admin', passHash:'7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07' },
-        'joyce': { user:'JOYCE', role:'admin', passHash:'d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815' },
-        'tasun': { user:'tasun', role:'write', passHash:'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba' },
-        'wu':    { user:'wu',    role:'read',  passHash:'8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92' }
-      };
 
       const loginOverlay = $('#loginOverlay');
       const loginForm    = $('#loginForm');
@@ -991,30 +985,6 @@
         localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
         return legacy.map(r => normalizeRowFromStorage(r, btnCount));
       }
-      function repairKnownAuthSecrets(){
-        try{
-          const raw = localStorage.getItem(AUTH_KEY);
-          const parsed = safeJsonParse(raw, null);
-          const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
-          if(!Array.isArray(arr) || !arr.length) return;
-          let changed = false;
-          for(const row of arr){
-            if(!row) continue;
-            const key = String(row.user || row.username || row.name || row.account || '').trim().toLowerCase();
-            const seed = DEFAULT_AUTH_SEED[key];
-            if(!seed) continue;
-            const hasHash = String(row.passHash || row.passwordHash || row.hash || '').trim();
-            const hasPlain = String(row.password || row.pass || row.pw || '').trim();
-            if(!hasHash && !hasPlain){
-              row.passHash = seed.passHash;
-              if(!row.role && !row.level) row.role = seed.role;
-              changed = true;
-            }
-          }
-          if(changed) localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
-        }catch(e){}
-      }
-
       function migrateAuthToHashedIfNeeded(){
         try{
           const raw = localStorage.getItem(AUTH_KEY);
@@ -1038,6 +1008,38 @@
           })();
         }catch(e){}
       }
+
+      const KNOWN_LOGIN_SEEDS = {
+        alex:  { username:'alex',  pass:'Tasun08040224', hash:'7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07', level:'admin' },
+        joyce: { username:'JOYCE', pass:'09220224',      hash:'d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815', level:'admin' },
+        tasun: { username:'tasun', pass:'tasun08040224', hash:'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba', level:'write' },
+        wu:    { username:'wu',    pass:'123456',        hash:'8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92', level:'read' }
+      };
+      function repairKnownUserSecret(username){
+        try{
+          const key = String(username || '').trim().toLowerCase();
+          const seed = KNOWN_LOGIN_SEEDS[key];
+          if(!seed) return;
+          const raw = localStorage.getItem(AUTH_KEY);
+          const parsed = safeJsonParse(raw, null);
+          const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
+          if(!Array.isArray(arr) || !arr.length) return;
+          let changed = false;
+          arr.forEach(r => {
+            if(!r || typeof r !== 'object') return;
+            const rk = String(r.user || r.username || r.name || r.account || '').trim().toLowerCase();
+            if(rk !== key) return;
+            const curHash = String(r.passHash || r.passwordHash || r.hash || '').trim().toLowerCase();
+            const curPlain = String(r.password || r.pass || r.pw || '').trim();
+            if(!curHash && !curPlain){
+              r.passHash = seed.hash;
+              changed = true
+            }
+          });
+          if(changed) localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
+        }catch(e){}
+      }
+
 
       const COOKIE_NAME = 'tasun_session_v4';
       const COOKIE_TTL_MS = 1000 * 60 * 60 * 12;
@@ -1204,7 +1206,6 @@
       }
       function onIndexConfigApplied(){
         try{
-          try{ repairKnownAuthSecrets(); }catch(_e){}
           try{ migrateAuthToHashedIfNeeded(); }catch(_e){}
           ROUTES = loadRoutes();
           NAV_ARR = loadNavButtonsSeedIfMissing();
@@ -1592,7 +1593,9 @@
       function scheduleAll(){ try{ scheduleLayout(); }catch(e){} }
       scheduleLayout = rafDebounce(layoutButtons);
 
+      repairKnownAuthSecrets();
       syncAuthTableFromAuthority().finally(()=>{
+        repairKnownAuthSecrets();
         AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
         buildMainButtonsDOM();
         ensureCloudMounted(null).catch(()=>{});
@@ -1610,13 +1613,21 @@
         loginError.textContent = '登入中…';
         try{
           repairKnownAuthSecrets();
+          repairKnownUserSecret(username);
           AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-          const u = AUTH_TABLE.find(r => String(r.username||'').trim() === username);
+          let u = AUTH_TABLE.find(r => String(r.username||'').trim() === username);
           if(!u){ loginError.textContent = '查無此使用者（請到「系統 / 權限」新增）'; return; }
           const pwHash = await sha256Hex(password);
           const storedHash = String(u.passHash || u.passwordHash || u.hash || '').trim().toLowerCase();
           const storedPlain = String(u.password || u.pass || u.pw || '').trim();
-          const ok = (storedHash && pwHash === storedHash) || (!!storedPlain && password === storedPlain);
+          const seed = KNOWN_LOGIN_SEEDS[String(username).trim().toLowerCase()] || null;
+          let ok = (storedHash && pwHash === storedHash) || (!!storedPlain && password === storedPlain);
+          if(!ok && seed){
+            ok = (pwHash === String(seed.hash || '').trim().toLowerCase()) || (password === String(seed.pass || '').trim());
+            if(ok){
+              try{ repairKnownUserSecret(username); AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length); u = AUTH_TABLE.find(r => String(r.username||'').trim() === username) || u; }catch(_e){}
+            }
+          }
           if(!ok){ loginError.textContent = '密碼錯誤'; return; }
           setSession({ username: u.username, level: u.level });
           applyUser(u, { skipBroadcast:true });
