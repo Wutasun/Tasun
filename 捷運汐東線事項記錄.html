@@ -1969,6 +1969,77 @@ function getVisibleRows(){
       }catch(e){}
     }
 
+    function resolveDisplayedOrStoredUser(){
+      try{
+        var cur = null;
+        try{ cur = getCurrentUser(); }catch(e){ cur = null; }
+        if(cur) return cur;
+
+        var raw = null;
+        try{ raw = safeJSON(sessionStorage.getItem(CURRENT_KEY) || localStorage.getItem(CURRENT_KEY) || ""); }catch(e){ raw = null; }
+        cur = normalizeAuthUser(raw);
+        if(cur) return cur;
+
+        var shownUser = norm($("uName") && $("uName").textContent);
+        var shownRole = norm($("uRole") && $("uRole").textContent);
+        if(shownUser && shownUser!=="—"){
+          return { user: shownUser, name: shownUser, role: shownRole || state.role || "read", at: nowISO() };
+        }
+      }catch(e){}
+      return null;
+    }
+
+    function forceHeaderAndHintRender(){
+      try{
+        var cur = resolveDisplayedOrStoredUser();
+        if(cur){
+          state.user = cur;
+          state.role = norm(cur.role) || state.role || "read";
+          if($("uName")) $("uName").textContent = norm(cur.name || cur.user) || "—";
+          if($("uRole")) $("uRole").textContent = norm(cur.role) || "read";
+        }else{
+          if($("uName")) $("uName").textContent = norm($("uName").textContent) || "—";
+          if($("uRole")) $("uRole").textContent = norm($("uRole").textContent) || "—";
+        }
+
+        var role = norm((cur && cur.role) || state.role || $("uRole") && $("uRole").textContent || "read") || "read";
+        if($("btnView")) $("btnView").style.display = "";
+        if($("btnAdd")) $("btnAdd").style.display = (role==="admin" || role==="write") ? "" : "none";
+        if($("btnEdit")) $("btnEdit").style.display = (role==="admin" || role==="write") ? "" : "none";
+        if($("btnToken")) $("btnToken").style.display = (role==="admin") ? "" : "none";
+
+        var hint = $("hint");
+        if(hint){
+          var needRebuild = false;
+          if(!hint.childElementCount && !norm(hint.textContent)) needRebuild = true;
+          if(hint.childElementCount < 3) needRebuild = true;
+          if(needRebuild){
+            try{ renderHintFallback(); }catch(e){}
+          }
+        }
+      }catch(e){}
+    }
+
+    function installHeaderHintWatchdog(){
+      try{ forceHeaderAndHintRender(); }catch(e){}
+      var tries = 0;
+      var tm = setInterval(function(){
+        tries++;
+        try{ forceHeaderAndHintRender(); }catch(e){}
+        if(tries >= 80) clearInterval(tm);
+      }, 250);
+      window.addEventListener("focus", function(){ try{ forceHeaderAndHintRender(); }catch(e){}; });
+      window.addEventListener("pageshow", function(){ try{ forceHeaderAndHintRender(); }catch(e){}; });
+      window.addEventListener("storage", function(){ try{ forceHeaderAndHintRender(); }catch(e){}; });
+      try{
+        var right = document.querySelector('.right');
+        var hint = $("hint");
+        var mo = new MutationObserver(function(){ try{ forceHeaderAndHintRender(); }catch(e){}; });
+        if(right) mo.observe(right, { childList:true, subtree:true, attributes:true, characterData:true });
+        if(hint) mo.observe(hint, { childList:true, subtree:true, attributes:true, characterData:true });
+      }catch(e){}
+    }
+
     // load map once (kept in memory + persisted on change)
     var TRADE_SYS_MAP = loadMap();
 
@@ -3300,6 +3371,7 @@ $("btnSave").addEventListener("click", async function(){
         }catch(e){}
         try{ ensureHeaderStateVisible(); }catch(e){}
         try{ if(!cur) openLogin(); }catch(e){}
+        try{ forceHeaderAndHintRender(); }catch(e){}
 
         try{
           await idbPutMeta({
@@ -3324,7 +3396,13 @@ $("btnSave").addEventListener("click", async function(){
     boot().then(function(){
       try{ startAuthHydrationWatch(); }catch(e){}
       try{ ensureHeaderStateVisible(); }catch(e){}
-    }).catch(function(e){ console.error(e); });
+      try{ installHeaderHintWatchdog(); }catch(e){}
+      try{ forceHeaderAndHintRender(); }catch(e){}
+    }).catch(function(e){
+      try{ installHeaderHintWatchdog(); }catch(_e){}
+      try{ forceHeaderAndHintRender(); }catch(_e){}
+      console.error(e);
+    });
   })();
   </script>
 
