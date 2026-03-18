@@ -225,7 +225,7 @@
 
     .topbar{
       display:grid;
-      grid-template-columns: max-content 1fr max-content;
+      grid-template-columns: minmax(180px,1fr) auto minmax(320px,1fr);
       gap:12px; align-items:center;
       padding:14px 14px;
       border:1px solid var(--border2);
@@ -244,13 +244,14 @@
     .nav-mobile{display:none; gap:10px; align-items:center; width:100%;}
     @media (max-width:600px){ .nav-desktop{display:none;} .nav-mobile{display:flex;} }
 
-    .brand{display:flex; flex-direction:column; gap:6px; align-items:center; justify-content:center; text-align:center; min-width:0;}
+    .brand{display:flex; flex-direction:column; gap:6px; align-items:center; justify-content:center; text-align:center;}
     .title{font-family:"Noto Serif TC","Noto Sans TC",serif; font-weight:820; letter-spacing:.10em; font-size:var(--titleSize); line-height:1.12;}
     .sub{font-size:var(--subSize); color:rgba(0,0,0,.55); letter-spacing:.10em; font-weight:700;}
 
     .right{
       display:flex; gap:10px; align-items:center; flex-wrap:nowrap; justify-content:flex-end;
       min-width:0; overflow:visible;
+      justify-self:end;
     }
     .pill{
       padding:9px 12px; border-radius:999px; border:1px solid var(--border);
@@ -541,6 +542,31 @@
 
   <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-guard-v4.js")) || "tasun-guard-v4.js") + '"><\/script>');</script>
   <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-auth-v4.js")) || "tasun-auth-v4.js") + '"><\/script>');</script>
+<!-- Tasun Global Core bridge -->
+<script src="tasun-global-core.js"></script>
+<script>
+(function(){
+  'use strict';
+  function run(){
+    try{
+      if(!window.TasunGlobalCore) return;
+      var core = window.TasunGlobalCore;
+      var cur = core.getCurrentUser();
+      if(cur && cur.user){
+        try{ core.setCurrentUser(cur); }catch(_e){}
+      }
+      try{ core.requireLoginOnColdStart(); }catch(_e){}
+      window.__TASUN_GLOBAL_CORE_READY__ = true;
+      window.__TASUN_GLOBAL_CORE_VERSION__ = core.version || '';
+    }catch(_e){}
+  }
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', run, { once:true });
+  }else{
+    run();
+  }
+})();
+</script>
 </head>
 
 <body>
@@ -869,6 +895,11 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     var SESSION_KEY = "tasunSession_v1";
     var INDEX_SESSION_KEY = "tasunIndexSession_v1";
     var AUTH_BRIDGE_KEYS = [CURRENT_KEY, SESSION_KEY, INDEX_SESSION_KEY, "tasunSessionBridge_v1", "tasunSso_v2", "tasunSso_v1", "tasunAuthSession_v1", "tasunCurrentUser_v2"];
+    var TOKEN_BRIDGE_KEYS = [
+      "tasunCloudToken_v1", "tasunCloudToken_v1__sxdh-notes", "tasunCloudToken_v1__auth-table",
+      "tasunBearerToken_v1", "tasunAccessToken_v1", "tasunAuthToken_v1", "tasunSessionToken_v1",
+      "tasun_token", "tasunToken", "tasun_auth_token", "authToken", "access_token", "token", "x-api-key", "tasunApiKey_v1"
+    ];
 
     var DB_KEY = "tasunSxdhNotes_v1";
     var COUNTER_KEY = "tasunSxdhNotes_counter_v1";
@@ -1130,69 +1161,28 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     }
 
     function getCurrentUser(){
-      var cur = safeJSON(localStorage.getItem(CURRENT_KEY));
-      if(cur && (cur.user || cur.name) && (cur.role || cur.level)){
-        return { user: norm(cur.user || cur.name), name: norm(cur.name || cur.user), role: norm(cur.role || cur.level || "read") || "read", at: norm(cur.at || nowISO()) };
-      }
-
-      cur = safeJSON(sessionStorage.getItem(CURRENT_KEY) || "");
-      if(cur && (cur.user || cur.name) && (cur.role || cur.level)){
-        return { user: norm(cur.user || cur.name), name: norm(cur.name || cur.user), role: norm(cur.role || cur.level || "read") || "read", at: norm(cur.at || nowISO()) };
-      }
-
-      cur = safeJSON(sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY) || "");
-      if(cur && (cur.user || cur.name) && (cur.role || cur.level)){
-        return { user: norm(cur.user || cur.name), name: norm(cur.name || cur.user), role: norm(cur.role || cur.level || "read") || "read", at: nowISO() };
-      }
-
-      var sso = safeJSON(sessionStorage.getItem("tasunSso_v2") || sessionStorage.getItem("tasunSso_v1") || localStorage.getItem("tasunSso_v2") || localStorage.getItem("tasunSso_v1") || "");
-      if(sso && (sso.user || sso.name || sso.username)){
-        return {
-          user: norm(sso.user || sso.name || sso.username),
-          name: norm(sso.name || sso.user || sso.username),
-          role: norm(sso.role || sso.level || "read") || "read",
-          at: nowISO()
-        };
-      }
+      var cur = normalizeAuthUser(readJsonFromKeys(AUTH_BRIDGE_KEYS));
+      if(cur) return cur;
 
       try{
         var g = window.__TASUN_CURRENT_USER__ || window.TASUN_CURRENT_USER || window.tasunCurrentUser || null;
-        if(g && (g.user || g.name || g.username)){
-          return {
-            user: norm(g.user || g.name || g.username),
-            name: norm(g.name || g.user || g.username),
-            role: norm(g.role || g.level || "read") || "read",
-            at: norm(g.at || nowISO())
-          };
-        }
+        cur = normalizeAuthUser(g);
+        if(cur) return cur;
       }catch(e){}
 
       try{
         if(window.TasunAuthV4 && typeof window.TasunAuthV4.getCurrentUser === "function"){
-          var g2 = window.TasunAuthV4.getCurrentUser();
-          if(g2 && (g2.user || g2.name || g2.username)){
-            return {
-              user: norm(g2.user || g2.name || g2.username),
-              name: norm(g2.name || g2.user || g2.username),
-              role: norm(g2.role || g2.level || "read") || "read",
-              at: norm(g2.at || nowISO())
-            };
-          }
+          cur = normalizeAuthUser(window.TasunAuthV4.getCurrentUser());
+          if(cur) return cur;
         }
       }catch(e){}
 
       try{
-        var ga = window.TasunGlobalAuth || window.tasunGlobalAuth || null;
+        var ga = window.TasunGlobalAuth || window.tasunGlobalAuth || window.TASUN_AUTH || null;
         if(ga){
           var g3 = (typeof ga.getCurrentUser === "function") ? ga.getCurrentUser() : (ga.currentUser || ga.user || null);
-          if(g3 && (g3.user || g3.name || g3.username)){
-            return {
-              user: norm(g3.user || g3.name || g3.username),
-              name: norm(g3.name || g3.user || g3.username),
-              role: norm(g3.role || g3.level || "read") || "read",
-              at: norm(g3.at || nowISO())
-            };
-          }
+          cur = normalizeAuthUser(g3);
+          if(cur) return cur;
         }
       }catch(e){}
 
@@ -1200,104 +1190,8 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     }
 
     function setCurrentUser(u){
-      if(!u){
-        try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
-        try{ sessionStorage.removeItem(CURRENT_KEY); }catch(e){}
-      }else{
-        try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(u)); }catch(e){}
-        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(u)); }catch(e){}
-        try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user:u.user, role:u.role, t:Date.now() })); }catch(e){}
-        try{ sessionStorage.setItem(INDEX_SESSION_KEY, '1'); }catch(e){}
-      }
-    }
-
-    function hydrateCrossPageAuth(){
-      try{
-        var cur = getCurrentUser();
-        if(cur) setCurrentUser(cur);
-      }catch(e){}
-    }
-
-    function ensureActionButtonsVisible(){
-      try{
-        var cur = null;
-        try{ cur = getCurrentUser(); }catch(e){ cur = null; }
-        var role = norm((cur && cur.role) || state.role || 'read') || 'read';
-        if($("btnView")) $("btnView").style.display = '';
-        if($("btnAdd")) $("btnAdd").style.display = (role==='admin' || role==='write') ? '' : 'none';
-        if($("btnEdit")) $("btnEdit").style.display = (role==='admin' || role==='write') ? '' : 'none';
-        if($("btnToken")) $("btnToken").style.display = (role==='admin') ? '' : 'none';
-        if($("uName") && !$("uName").textContent.trim()) $("uName").textContent = (cur && (cur.name||cur.user)) ? (cur.name||cur.user) : '—';
-        if($("uRole") && !$("uRole").textContent.trim()) $("uRole").textContent = role || '—';
-      }catch(e){}
-    }
-
-    function renderHintFallback(){
-      try{
-        var hint = $("hint");
-        if(!hint) return;
-        var visibleCount = 0, totalCount = 0;
-        try{ visibleCount = Array.isArray(getVisibleRows()) ? getVisibleRows().length : 0; }catch(e){ visibleCount = 0; }
-        try{ totalCount = Array.isArray(state.db) ? state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length : 0; }catch(e){ totalCount = 0; }
-        var cloudTxt = (state.cloud && state.cloud.ok) ? '已同步' : ((state.cloud && state.cloud.cfgOk) ? '待同步' : '未設定');
-        var lastTxt = (state.cloud && state.cloud.lastOkAt) ? fmtClock(state.cloud.lastOkAt) : '—';
-        hint.innerHTML = ''
-          + '<span class="hb"><span class="k">版本</span><span class="v">' + escHtml(APP_VER) + '</span></span>'
-          + '<span class="hb"><span class="k">筆數</span><span class="v">' + escHtml(String(visibleCount) + ' / ' + String(totalCount)) + '</span></span>'
-          + '<span class="hb' + (state.selectedUid ? '' : ' bad') + '"><span class="k">選取</span><span class="v">' + escHtml(state.selectedUid ? '已選取' : '未選取') + '</span></span>'
-          + '<span class="hb' + ((state.cloud && state.cloud.ok) ? '' : ' bad') + '"><span class="k">雲端</span><span class="v">' + escHtml(cloudTxt) + '</span></span>'
-          + '<span class="hb"><span class="k">最後</span><span class="v">' + escHtml(lastTxt) + '</span></span>';
-      }catch(e){}
-    }
-
-    function refreshHintSafe(){
-      try{
-        var cloudTxt = state.cloud.ok ? '已同步' : (state.cloud.cfgOk ? '待同步' : '未設定');
-        var lastTxt = state.cloud.lastOkAt ? fmtClock(state.cloud.lastOkAt) : '—';
-        var rowsVisible = [];
-        var totalRows = 0;
-        try{ rowsVisible = getVisibleRows(); totalRows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length; }catch(e){ rowsVisible=[]; totalRows=Array.isArray(state.db)?state.db.length:0; }
-        var hint = $("hint");
-        if(!hint) return;
-        hint.innerHTML = '';
-        function hb(k,v,bad){ var s=document.createElement('span'); s.className='hb'+(bad?' bad':''); s.innerHTML='<span class="k">'+escHtml(k)+'</span><span class="v">'+escHtml(v)+'</span>'; return s; }
-        hint.appendChild(hb('版本', APP_VER));
-        hint.appendChild(hb('筆數', String(rowsVisible.length) + ' / ' + String(totalRows)));
-        hint.appendChild(hb('選取', state.selectedUid ? '已選取' : '未選取', !state.selectedUid));
-        hint.appendChild(hb('雲端', cloudTxt, !state.cloud.ok));
-        hint.appendChild(hb('最後', lastTxt));
-        ensureActionButtonsVisible();
-        if(!hint.innerHTML.trim()) renderHintFallback();
-      }catch(e){
-        renderHintFallback();
-        ensureActionButtonsVisible();
-      }
-    }
-
-    function resolveRuntimeUser(){
-      var cur = null;
-      try{ cur = getCurrentUser(); }catch(e){ cur = null; }
-      if(cur){
-        try{ setCurrentUser(cur); }catch(e){}
-        try{ applyUser(cur); }catch(e){}
-        return true;
-      }
-      try{ applyUser({ user:'—', role:'read', name:'—' }); }catch(e){}
-      return false;
-    }
-
-    function startAuthHydrationWatch(){
-      var tries = 0, maxTries = 18;
-      var tm = setInterval(function(){
-        tries++;
-        var ok = false;
-        try{ ok = resolveRuntimeUser(); }catch(e){ ok = false; }
-        try{ ensureActionButtonsVisible(); }catch(e){}
-        try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
-        if(ok || tries >= maxTries) clearInterval(tm);
-      }, 250);
-      window.addEventListener('focus', function(){ try{ resolveRuntimeUser(); }catch(e){} try{ ensureActionButtonsVisible(); }catch(e){} try{ refreshHintSafe(); }catch(e){} });
-      window.addEventListener('pageshow', function(){ try{ resolveRuntimeUser(); }catch(e){} try{ ensureActionButtonsVisible(); }catch(e){} try{ refreshHintSafe(); }catch(e){} });
+      if(!u) localStorage.removeItem(CURRENT_KEY);
+      else localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
     }
 
     function roleRank(role){
@@ -1308,10 +1202,67 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     function readCookie(name){
       try{
-        var esc = String(name||"").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        var esc = String(name||"").replace(/[.*+?^${}()|[\]\]/g, "\$&");
         var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
         return m ? decodeURIComponent(m[1] || "") : "";
       }catch(e){ return ""; }
+    }
+
+    function readStorageValue(key){
+      var v = "";
+      try{ v = sessionStorage.getItem(key) || ""; }catch(e){ v = ""; }
+      if(v) return v;
+      try{ v = localStorage.getItem(key) || ""; }catch(e){ v = ""; }
+      return v || "";
+    }
+
+    function readJsonFromKeys(keys){
+      keys = Array.isArray(keys) ? keys : [];
+      for(var i=0;i<keys.length;i++){
+        var raw = readStorageValue(keys[i]);
+        if(!raw) continue;
+        var js = safeJSON(raw);
+        if(js && typeof js === "object") return js;
+      }
+      return null;
+    }
+
+    function normalizeAuthUser(obj){
+      if(!obj || typeof obj !== "object") return null;
+      var user = norm(obj.user || obj.name || obj.username || obj.account || "");
+      if(!user) return null;
+      return {
+        user: user,
+        name: norm(obj.name || obj.user || obj.username || user) || user,
+        role: norm(obj.role || obj.level || obj.permission || "read") || "read",
+        at: norm(obj.at || obj.updatedAt || obj.loginAt || nowISO()) || nowISO()
+      };
+    }
+
+    async function waitForGlobalAuthBridge(timeoutMs){
+      timeoutMs = Number(timeoutMs);
+      if(!Number.isFinite(timeoutMs) || timeoutMs < 0) timeoutMs = 1800;
+      var start = Date.now();
+      while(Date.now() - start < timeoutMs){
+        var hit = normalizeAuthUser(readJsonFromKeys(AUTH_BRIDGE_KEYS));
+        if(hit) return hit;
+        try{
+          if(window.TasunAuthV4 && typeof window.TasunAuthV4.getCurrentUser === "function"){
+            var u1 = normalizeAuthUser(window.TasunAuthV4.getCurrentUser());
+            if(u1) return u1;
+          }
+        }catch(e){}
+        try{
+          var ga = window.TasunGlobalAuth || window.tasunGlobalAuth || window.TASUN_AUTH || null;
+          if(ga){
+            var gUser = (typeof ga.getCurrentUser === "function") ? ga.getCurrentUser() : (ga.currentUser || ga.user || null);
+            var u2 = normalizeAuthUser(gUser);
+            if(u2) return u2;
+          }
+        }catch(e){}
+        await new Promise(function(r){ setTimeout(r, 120); });
+      }
+      return normalizeAuthUser(readJsonFromKeys(AUTH_BRIDGE_KEYS));
     }
 
     function readBridgeToken(){
@@ -1334,26 +1285,8 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     }
 
     function getSharedWorkerToken(){
-      var keys = [
-        "tasunCloudToken_v1",
-        "tasunCloudToken_v1__sxdh-notes",
-        "tasunCloudToken_v1__auth-table",
-        "tasunBearerToken_v1",
-        "tasunAccessToken_v1",
-        "tasunAuthToken_v1",
-        "tasunSessionToken_v1",
-        "tasun_token",
-        "tasunToken",
-        "tasun_auth_token",
-        "authToken",
-        "access_token",
-        "token",
-        "x-api-key",
-        "tasunApiKey_v1"
-      ];
-      for(var i=0;i<keys.length;i++){
-        var key = keys[i], v="";
-        try{ v = norm(sessionStorage.getItem(key) || localStorage.getItem(key) || ""); }catch(e){ v = ""; }
+      for(var i=0;i<TOKEN_BRIDGE_KEYS.length;i++){
+        var v = norm(readStorageValue(TOKEN_BRIDGE_KEYS[i]));
         if(v) return v;
       }
       try{
@@ -1373,96 +1306,6 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       if(bridge) return bridge;
       var ck = norm(readCookie("tasun_bearer_token") || readCookie("tasun_token") || readCookie("token") || readCookie("tasun_auth_token") || "");
       return ck || "";
-    }
-
-    function setSharedWorkerToken(token){
-      var raw = norm(token);
-      raw = raw.replace(/^Bearer\s+/i, "");
-      if(!raw) return "";
-      var keys = [
-        "tasunCloudToken_v1",
-        "tasunCloudToken_v1__" + PAGE_KEY,
-        "tasunBearerToken_v1",
-        "tasunAccessToken_v1",
-        "tasunAuthToken_v1",
-        "tasunSessionToken_v1"
-      ];
-      for(var i=0;i<keys.length;i++){
-        try{ sessionStorage.setItem(keys[i], raw); }catch(e){}
-        try{ localStorage.setItem(keys[i], raw); }catch(e){}
-      }
-      return raw;
-    }
-
-    function clearSharedWorkerToken(){
-      var keys = [
-        "tasunCloudToken_v1",
-        "tasunCloudToken_v1__" + PAGE_KEY,
-        "tasunBearerToken_v1",
-        "tasunAccessToken_v1",
-        "tasunAuthToken_v1",
-        "tasunSessionToken_v1"
-      ];
-      for(var i=0;i<keys.length;i++){
-        try{ sessionStorage.removeItem(keys[i]); }catch(e){}
-        try{ localStorage.removeItem(keys[i]); }catch(e){}
-      }
-    }
-
-    function getLocalPasswordForUser(username){
-      username = norm(username);
-      if(!username) return "";
-      try{
-        var auth = ensureAuthTable();
-        var hit = (auth.users||[]).find(function(u){ return norm(u.user)===username; });
-        return hit ? String(hit.pass||"") : "";
-      }catch(e){
-        return "";
-      }
-    }
-
-    async function workerLoginWithPassword(username, password){
-      username = norm(username);
-      password = String(password||"");
-      if(!username || !password) return null;
-      var cfg = await loadCloudCfg();
-      var apiBase = norm(cfg && cfg.apiBase);
-      if(!apiBase) return null;
-      var url = joinApiBase(apiBase, "/api/tasun/login");
-      var r = await fetch(url, {
-        method: "POST",
-        cache: "no-store",
-        credentials: getWorkerCredentialMode(cfg),
-        headers: { "content-type":"application/json", "accept":"application/json" },
-        body: JSON.stringify({ username: username, password: password })
-      });
-      if(!r.ok) return null;
-      var j = await r.json().catch(function(){ return null; });
-      var token = norm(j && (j.token || (j.data && j.data.token) || (j.payload && j.payload.token) || ""));
-      if(!token) return null;
-      setSharedWorkerToken(token);
-      return token;
-    }
-
-    async function ensureWorkerToken(opts){
-      opts = (opts && typeof opts==="object") ? opts : {};
-      var force = !!opts.force;
-      var existing = getSharedWorkerToken();
-      if(existing && !force) return existing;
-      var cur = null;
-      try{ cur = getCurrentUser(); }catch(e){ cur = null; }
-      var username = norm(opts.username || (cur && (cur.user || cur.name)) || state.user || "");
-      var password = String(opts.password || getLocalPasswordForUser(username) || "");
-      if(!username || !password){
-        if(force) clearSharedWorkerToken();
-        return "";
-      }
-      try{
-        return await workerLoginWithPassword(username, password) || "";
-      }catch(e){
-        if(force) clearSharedWorkerToken();
-        return "";
-      }
     }
 
     function hydrateCrossPageAuth(){
@@ -1666,7 +1509,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       if(_cloudCfgCache) return _cloudCfgCache;
 
       // Start with defaults
-      var cfg = { apiBase: DEFAULT_API_BASE, endpoints: Object.assign({}, DEFAULT_ENDPOINTS), netDiskUrl: "https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88" };
+      var cfg = { apiBase: DEFAULT_API_BASE, endpoints: Object.assign({}, DEFAULT_ENDPOINTS), netDiskUrl: "https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88", credentials: "include" };
 
       // 1) resources.json (best)
       try{
@@ -1680,12 +1523,14 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
             var pick = r[fn] || r[PAGE_KEY] || r["*"] || null;
             if(pick){
               if(isValidApiBase(pick.apiBase)) cfg.apiBase = pick.apiBase;
+              if(pick.credentials!==undefined && pick.credentials!==null && String(pick.credentials).trim()!=="") cfg.credentials = String(pick.credentials).trim();
               if(pick.endpoints) cfg.endpoints = normalizeEndpoints(pick.endpoints);
               if(pick.netDiskUrl) cfg.netDiskUrl = String(pick.netDiskUrl);
               else if(pick.links && pick.links.netDiskUrl) cfg.netDiskUrl = String(pick.links.netDiskUrl);
 
             }else{
               if(isValidApiBase(json.apiBase)) cfg.apiBase = json.apiBase;
+              if(json.credentials!==undefined && json.credentials!==null && String(json.credentials).trim()!=="") cfg.credentials = String(json.credentials).trim();
               if(json.endpoints) cfg.endpoints = normalizeEndpoints(json.endpoints);
               if(json.netDiskUrl) cfg.netDiskUrl = String(json.netDiskUrl);
               else if(json.links && json.links.netDiskUrl) cfg.netDiskUrl = String(json.links.netDiskUrl);
@@ -1712,13 +1557,6 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       }
 
       _cloudCfgCache = cfg;
-      try{
-        setCloudState({
-          cfgOk: !!(cfg && isValidApiBase(cfg.apiBase)),
-          apiBase: norm(cfg && cfg.apiBase),
-          endpoints: (cfg && cfg.endpoints) ? Object.assign({}, cfg.endpoints) : null
-        }, true);
-      }catch(e){}
       return cfg;
     }
 
@@ -2154,6 +1992,15 @@ function getVisibleRows(){
       return state.cloud;
     }
 
+    function ensureHeaderStateVisible(){
+      try{
+        if($("uName") && !norm($("uName").textContent)) $("uName").textContent = norm(state.user && (state.user.name || state.user.user)) || "—";
+        if($("uRole") && !norm($("uRole").textContent)) $("uRole").textContent = norm(state.role) || "read";
+        if($("btnView")) $("btnView").style.display = "";
+        if($("hint") && !norm($("hint").textContent)) renderHintFallback();
+      }catch(e){}
+    }
+
     // load map once (kept in memory + persisted on change)
     var TRADE_SYS_MAP = loadMap();
 
@@ -2546,14 +2393,15 @@ function getVisibleRows(){
     }
 
     function refresh(){
-      var rows = [];
-      try{ rebuildFilterOptions(); }catch(e){}
-      try{ rows = getVisibleRows(); }catch(e){ rows = []; }
-      try{ renderTable(rows); }catch(e){}
-      try{ renderCards(rows); }catch(e){}
-      try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
-      try{ ensureActionButtonsVisible(); }catch(e){}
-    }
+      ensureActionButtonsVisible();
+      rebuildFilterOptions();
+      var rows = getVisibleRows();
+
+      renderTable(rows);
+      renderCards(rows);
+      refreshHintSafe();
+      ensureActionButtonsVisible();
+      }
 
     function selectRow(uid){
       uid = norm(uid);
@@ -2856,32 +2704,21 @@ function getPromptOptions(mode){
         cfg = cfg || await loadCloudCfg();
         const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-        const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/read";
-        const url = _joinUrl(apiBase, readPath);
+        const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/pull";
 
-        async function doFetch(){
-          return await fetch(url, {
-            method: "POST",
-            cache: "no-store",
-            credentials: getWorkerCredentialMode(cfg),
-            headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
-            body: JSON.stringify({ resourceKey: pageKey })
-          });
-        }
+        const url = _joinUrl(apiBase, readPath) + (readPath.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(pageKey);
 
-        let r = await doFetch();
-        if(r.status===401){
-          await ensureWorkerToken({ force:true });
-          r = await doFetch();
-        }
+        const r = await fetch(url, {
+          method: "GET",
+          cache: "no-store",
+          credentials: getWorkerCredentialMode(cfg),
+          headers: buildWorkerAuthHeaders({ "accept":"application/json" })
+        });
         if(!r.ok){
           const t = await r.text().catch(()=> "");
           throw new Error("cloud read failed: " + r.status + " " + t.slice(0,200));
         }
         const j = await r.json();
-        if(j && Array.isArray(j.rows)){
-          return { db: j.rows, counter: Number(j.counter||0)||0 };
-        }
         return _normalizePullResponse(j);
       }
 
@@ -2891,6 +2728,7 @@ function getPromptOptions(mode){
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
         const mergePath = (eps && eps.merge) ? String(eps.merge) : "/api/tasun/merge";
 
+        // Accept: {key,payload:{db,counter}} / {payload:{db,counter}} / raw {db,counter}
         let payload = payloadLike;
         if(payload && typeof payload === "object"){
           if(payload.payload && typeof payload.payload==="object") payload = payload.payload;
@@ -2899,36 +2737,25 @@ function getPromptOptions(mode){
         payload = payload || { db:[], counter:0 };
 
         const body = {
-          resourceKey: pageKey,
+          key: pageKey,
           payload: { db: Array.isArray(payload.db)? payload.db : [], counter: Number(payload.counter)||0 },
           client: clientInfo && typeof clientInfo==="object" ? clientInfo : {}
         };
 
         const url = _joinUrl(apiBase, mergePath);
 
-        async function doFetch(){
-          return await fetch(url, {
-            method: "POST",
-            cache: "no-store",
-            credentials: getWorkerCredentialMode(cfg),
-            headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
-            body: JSON.stringify(body)
-          });
-        }
-
-        let r = await doFetch();
-        if(r.status===401){
-          await ensureWorkerToken({ force:true });
-          r = await doFetch();
-        }
+        const r = await fetch(url, {
+          method: "POST",
+          cache: "no-store",
+          credentials: getWorkerCredentialMode(cfg),
+          headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
+          body: JSON.stringify(body)
+        });
         if(!r.ok){
           const t = await r.text().catch(()=> "");
           throw new Error("cloud merge failed: " + r.status + " " + t.slice(0,200));
         }
         const j = await r.json();
-        if(j && Array.isArray(j.rows)){
-          return { db: j.rows, counter: Number(j.counter||payload.counter||0)||0 };
-        }
         return _normalizePullResponse(j);
       }
     async function reconcileCloudOnOpen(opts){
@@ -3221,21 +3048,22 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
     function closeLogin(){ $("loginMask").style.display="none"; }
 
     function applyUser(u){
+      u = normalizeAuthUser(u) || { user:"—", role:"read", name:"—", at: nowISO() };
       state.user = u;
       state.role = u && u.role ? u.role : "read";
-      $("uName").textContent = u && (u.name||u.user) ? (u.name||u.user) : "—";
-      $("uRole").textContent = state.role || "—";
+      if($("uName")) $("uName").textContent = u && (u.name||u.user) ? (u.name||u.user) : "—";
+      if($("uRole")) $("uRole").textContent = state.role || "read";
 
       var canWrite = (state.role==="admin" || state.role==="write");
-      $("btnView").style.display = "";
-      $("btnAdd").style.display = canWrite ? "" : "none";
-      $("btnEdit").style.display = canWrite ? "" : "none";
-      $("btnToken").style.display = (state.role==="admin") ? "" : "none";
-      ensureActionButtonsVisible();
+      if($("btnView")) $("btnView").style.display = "";
+      if($("btnAdd")) $("btnAdd").style.display = canWrite ? "" : "none";
+      if($("btnEdit")) $("btnEdit").style.display = canWrite ? "" : "none";
+      if($("btnToken")) $("btnToken").style.display = (state.role==="admin") ? "" : "none";
+      ensureHeaderStateVisible();
       try{ refresh(); }catch(e){ try{ refreshHintSafe(); }catch(_e){} }
     }
 
-    async function doLogin(){
+    function doLogin(){
       var user = norm($("loginUser").value);
       var pass = norm($("loginPass").value);
       if(!user || !pass){
@@ -3253,9 +3081,9 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
       setCurrentUser(cur);
       applyUser(cur);
-      try{ await ensureWorkerToken({ username:user, password:pass, force:true }); }catch(e){}
       closeLogin();
       toast("登入成功");
+      // ✅ 登入後立即做一次「本端先 merge，再重抓雲端」
       setTimeout(function(){ reconcileCloudOnOpen({ silent:true }); }, 60);
     }
 
@@ -3458,8 +3286,6 @@ $("btnSave").addEventListener("click", async function(){
       // 這段只加防護，不改 UI/DOM/CSS。
       var cur = null;
       try{
-        try{ hydrateCrossPageAuth(); }catch(e){}
-        try{ await loadCloudCfg(); }catch(e){}
         try{ ensureActionButtonsVisible(); }catch(e){}
         try{ renderHintFallback(); }catch(e){}
         try{ await openIDB(); }catch(e){}
@@ -3485,13 +3311,15 @@ $("btnSave").addEventListener("click", async function(){
 
         try{ ensureAuthTable(); }catch(e){}
         try{ hydrateCrossPageAuth(); }catch(e){}
-        try{ cur = getCurrentUser(); }catch(e){ cur = null; }
+        try{ cur = await waitForGlobalAuthBridge(2200); }catch(e){ cur = null; }
+        try{ cur = cur || getCurrentUser(); }catch(e){ cur = cur || null; }
         try{
           if(cur) applyUser(cur);
           else applyUser({ user:"—", role:"read", name:"—" });
         }catch(e){}
 
         try{ wire(); }catch(e){}
+        try{ ensureHeaderStateVisible(); }catch(e){}
         try{ renderHintFallback(); }catch(e){}
         try{ refresh(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         try{ hydrateCrossPageAuth(); }catch(e){}
@@ -3502,7 +3330,7 @@ $("btnSave").addEventListener("click", async function(){
             await reconcileCloudOnOpen({ silent:true });
           }
         }catch(e){}
-        try{ if(cur){ await ensureWorkerToken({ force:false }); } }catch(e){}
+        try{ ensureHeaderStateVisible(); }catch(e){}
         try{ if(!cur) openLogin(); }catch(e){}
 
         try{
@@ -3525,7 +3353,10 @@ $("btnSave").addEventListener("click", async function(){
       }
     }
 
-    boot().catch(function(e){ console.error(e); });
+    boot().then(function(){
+      try{ startAuthHydrationWatch(); }catch(e){}
+      try{ ensureHeaderStateVisible(); }catch(e){}
+    }).catch(function(e){ console.error(e); });
   })();
   </script>
 
