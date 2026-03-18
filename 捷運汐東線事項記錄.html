@@ -251,6 +251,7 @@
     .right{
       display:flex; gap:10px; align-items:center; flex-wrap:nowrap; justify-content:flex-end;
       min-width:0; overflow:visible;
+      justify-self:end;
     }
     .pill{
       padding:9px 12px; border-radius:999px; border:1px solid var(--border);
@@ -866,6 +867,14 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     var AUTH_KEY = "tasunAuthTable_v1";
     var CURRENT_KEY = "tasunCurrentUser_v1";
+    var SESSION_KEY = "tasunSession_v1";
+    var INDEX_SESSION_KEY = "tasunIndexSession_v1";
+    var AUTH_BRIDGE_KEYS = [CURRENT_KEY, SESSION_KEY, INDEX_SESSION_KEY, "tasunSessionBridge_v1", "tasunSso_v2", "tasunSso_v1", "tasunAuthSession_v1", "tasunCurrentUser_v2"];
+    var TOKEN_BRIDGE_KEYS = [
+      "tasunCloudToken_v1", "tasunCloudToken_v1__sxdh-notes", "tasunCloudToken_v1__auth-table",
+      "tasunBearerToken_v1", "tasunAccessToken_v1", "tasunAuthToken_v1", "tasunSessionToken_v1",
+      "tasun_token", "tasunToken", "tasun_auth_token", "authToken", "access_token", "token", "x-api-key", "tasunApiKey_v1"
+    ];
 
     var DB_KEY = "tasunSxdhNotes_v1";
     var COUNTER_KEY = "tasunSxdhNotes_counter_v1";
@@ -1127,69 +1136,28 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     }
 
     function getCurrentUser(){
-      var cur = safeJSON(localStorage.getItem(CURRENT_KEY));
-      if(cur && (cur.user || cur.name) && (cur.role || cur.level)){
-        return { user: norm(cur.user || cur.name), name: norm(cur.name || cur.user), role: norm(cur.role || cur.level || "read") || "read", at: norm(cur.at || nowISO()) };
-      }
-
-      cur = safeJSON(sessionStorage.getItem(CURRENT_KEY) || "");
-      if(cur && (cur.user || cur.name) && (cur.role || cur.level)){
-        return { user: norm(cur.user || cur.name), name: norm(cur.name || cur.user), role: norm(cur.role || cur.level || "read") || "read", at: norm(cur.at || nowISO()) };
-      }
-
-      cur = safeJSON(sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY) || "");
-      if(cur && (cur.user || cur.name) && (cur.role || cur.level)){
-        return { user: norm(cur.user || cur.name), name: norm(cur.name || cur.user), role: norm(cur.role || cur.level || "read") || "read", at: nowISO() };
-      }
-
-      var sso = safeJSON(sessionStorage.getItem("tasunSso_v2") || sessionStorage.getItem("tasunSso_v1") || localStorage.getItem("tasunSso_v2") || localStorage.getItem("tasunSso_v1") || "");
-      if(sso && (sso.user || sso.name || sso.username)){
-        return {
-          user: norm(sso.user || sso.name || sso.username),
-          name: norm(sso.name || sso.user || sso.username),
-          role: norm(sso.role || sso.level || "read") || "read",
-          at: nowISO()
-        };
-      }
+      var cur = normalizeAuthUser(readJsonFromKeys(AUTH_BRIDGE_KEYS));
+      if(cur) return cur;
 
       try{
         var g = window.__TASUN_CURRENT_USER__ || window.TASUN_CURRENT_USER || window.tasunCurrentUser || null;
-        if(g && (g.user || g.name || g.username)){
-          return {
-            user: norm(g.user || g.name || g.username),
-            name: norm(g.name || g.user || g.username),
-            role: norm(g.role || g.level || "read") || "read",
-            at: norm(g.at || nowISO())
-          };
-        }
+        cur = normalizeAuthUser(g);
+        if(cur) return cur;
       }catch(e){}
 
       try{
         if(window.TasunAuthV4 && typeof window.TasunAuthV4.getCurrentUser === "function"){
-          var g2 = window.TasunAuthV4.getCurrentUser();
-          if(g2 && (g2.user || g2.name || g2.username)){
-            return {
-              user: norm(g2.user || g2.name || g2.username),
-              name: norm(g2.name || g2.user || g2.username),
-              role: norm(g2.role || g2.level || "read") || "read",
-              at: norm(g2.at || nowISO())
-            };
-          }
+          cur = normalizeAuthUser(window.TasunAuthV4.getCurrentUser());
+          if(cur) return cur;
         }
       }catch(e){}
 
       try{
-        var ga = window.TasunGlobalAuth || window.tasunGlobalAuth || null;
+        var ga = window.TasunGlobalAuth || window.tasunGlobalAuth || window.TASUN_AUTH || null;
         if(ga){
           var g3 = (typeof ga.getCurrentUser === "function") ? ga.getCurrentUser() : (ga.currentUser || ga.user || null);
-          if(g3 && (g3.user || g3.name || g3.username)){
-            return {
-              user: norm(g3.user || g3.name || g3.username),
-              name: norm(g3.name || g3.user || g3.username),
-              role: norm(g3.role || g3.level || "read") || "read",
-              at: norm(g3.at || nowISO())
-            };
-          }
+          cur = normalizeAuthUser(g3);
+          if(cur) return cur;
         }
       }catch(e){}
 
@@ -1215,6 +1183,63 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       }catch(e){ return ""; }
     }
 
+    function readStorageValue(key){
+      var v = "";
+      try{ v = sessionStorage.getItem(key) || ""; }catch(e){ v = ""; }
+      if(v) return v;
+      try{ v = localStorage.getItem(key) || ""; }catch(e){ v = ""; }
+      return v || "";
+    }
+
+    function readJsonFromKeys(keys){
+      keys = Array.isArray(keys) ? keys : [];
+      for(var i=0;i<keys.length;i++){
+        var raw = readStorageValue(keys[i]);
+        if(!raw) continue;
+        var js = safeJSON(raw);
+        if(js && typeof js === "object") return js;
+      }
+      return null;
+    }
+
+    function normalizeAuthUser(obj){
+      if(!obj || typeof obj !== "object") return null;
+      var user = norm(obj.user || obj.name || obj.username || obj.account || "");
+      if(!user) return null;
+      return {
+        user: user,
+        name: norm(obj.name || obj.user || obj.username || user) || user,
+        role: norm(obj.role || obj.level || obj.permission || "read") || "read",
+        at: norm(obj.at || obj.updatedAt || obj.loginAt || nowISO()) || nowISO()
+      };
+    }
+
+    async function waitForGlobalAuthBridge(timeoutMs){
+      timeoutMs = Number(timeoutMs);
+      if(!Number.isFinite(timeoutMs) || timeoutMs < 0) timeoutMs = 1800;
+      var start = Date.now();
+      while(Date.now() - start < timeoutMs){
+        var hit = normalizeAuthUser(readJsonFromKeys(AUTH_BRIDGE_KEYS));
+        if(hit) return hit;
+        try{
+          if(window.TasunAuthV4 && typeof window.TasunAuthV4.getCurrentUser === "function"){
+            var u1 = normalizeAuthUser(window.TasunAuthV4.getCurrentUser());
+            if(u1) return u1;
+          }
+        }catch(e){}
+        try{
+          var ga = window.TasunGlobalAuth || window.tasunGlobalAuth || window.TASUN_AUTH || null;
+          if(ga){
+            var gUser = (typeof ga.getCurrentUser === "function") ? ga.getCurrentUser() : (ga.currentUser || ga.user || null);
+            var u2 = normalizeAuthUser(gUser);
+            if(u2) return u2;
+          }
+        }catch(e){}
+        await new Promise(function(r){ setTimeout(r, 120); });
+      }
+      return normalizeAuthUser(readJsonFromKeys(AUTH_BRIDGE_KEYS));
+    }
+
     function readBridgeToken(){
       var keys = ["tasunSessionBridge_v1","tasunSso_v2","tasunSso_v1", CURRENT_KEY, SESSION_KEY];
       for(var i=0;i<keys.length;i++){
@@ -1235,26 +1260,8 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     }
 
     function getSharedWorkerToken(){
-      var keys = [
-        "tasunCloudToken_v1",
-        "tasunCloudToken_v1__sxdh-notes",
-        "tasunCloudToken_v1__auth-table",
-        "tasunBearerToken_v1",
-        "tasunAccessToken_v1",
-        "tasunAuthToken_v1",
-        "tasunSessionToken_v1",
-        "tasun_token",
-        "tasunToken",
-        "tasun_auth_token",
-        "authToken",
-        "access_token",
-        "token",
-        "x-api-key",
-        "tasunApiKey_v1"
-      ];
-      for(var i=0;i<keys.length;i++){
-        var key = keys[i], v="";
-        try{ v = norm(sessionStorage.getItem(key) || localStorage.getItem(key) || ""); }catch(e){ v = ""; }
+      for(var i=0;i<TOKEN_BRIDGE_KEYS.length;i++){
+        var v = norm(readStorageValue(TOKEN_BRIDGE_KEYS[i]));
         if(v) return v;
       }
       try{
@@ -1951,6 +1958,15 @@ function getVisibleRows(){
         try{ refresh(); }catch(_e){}
       }
       return state.cloud;
+    }
+
+    function ensureHeaderStateVisible(){
+      try{
+        if($("uName") && !norm($("uName").textContent)) $("uName").textContent = norm(state.user && (state.user.name || state.user.user)) || "—";
+        if($("uRole") && !norm($("uRole").textContent)) $("uRole").textContent = norm(state.role) || "read";
+        if($("btnView")) $("btnView").style.display = "";
+        if($("hint") && !norm($("hint").textContent)) renderHintFallback();
+      }catch(e){}
     }
 
     // load map once (kept in memory + persisted on change)
@@ -3000,17 +3016,18 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
     function closeLogin(){ $("loginMask").style.display="none"; }
 
     function applyUser(u){
+      u = normalizeAuthUser(u) || { user:"—", role:"read", name:"—", at: nowISO() };
       state.user = u;
       state.role = u && u.role ? u.role : "read";
-      $("uName").textContent = u && (u.name||u.user) ? (u.name||u.user) : "—";
-      $("uRole").textContent = state.role || "—";
+      if($("uName")) $("uName").textContent = u && (u.name||u.user) ? (u.name||u.user) : "—";
+      if($("uRole")) $("uRole").textContent = state.role || "read";
 
       var canWrite = (state.role==="admin" || state.role==="write");
-      $("btnView").style.display = "";
-      $("btnAdd").style.display = canWrite ? "" : "none";
-      $("btnEdit").style.display = canWrite ? "" : "none";
-      $("btnToken").style.display = (state.role==="admin") ? "" : "none";
-      ensureActionButtonsVisible();
+      if($("btnView")) $("btnView").style.display = "";
+      if($("btnAdd")) $("btnAdd").style.display = canWrite ? "" : "none";
+      if($("btnEdit")) $("btnEdit").style.display = canWrite ? "" : "none";
+      if($("btnToken")) $("btnToken").style.display = (state.role==="admin") ? "" : "none";
+      ensureHeaderStateVisible();
       try{ refresh(); }catch(e){ try{ refreshHintSafe(); }catch(_e){} }
     }
 
@@ -3262,13 +3279,15 @@ $("btnSave").addEventListener("click", async function(){
 
         try{ ensureAuthTable(); }catch(e){}
         try{ hydrateCrossPageAuth(); }catch(e){}
-        try{ cur = getCurrentUser(); }catch(e){ cur = null; }
+        try{ cur = await waitForGlobalAuthBridge(2200); }catch(e){ cur = null; }
+        try{ cur = cur || getCurrentUser(); }catch(e){ cur = cur || null; }
         try{
           if(cur) applyUser(cur);
           else applyUser({ user:"—", role:"read", name:"—" });
         }catch(e){}
 
         try{ wire(); }catch(e){}
+        try{ ensureHeaderStateVisible(); }catch(e){}
         try{ renderHintFallback(); }catch(e){}
         try{ refresh(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         try{ hydrateCrossPageAuth(); }catch(e){}
@@ -3279,6 +3298,7 @@ $("btnSave").addEventListener("click", async function(){
             await reconcileCloudOnOpen({ silent:true });
           }
         }catch(e){}
+        try{ ensureHeaderStateVisible(); }catch(e){}
         try{ if(!cur) openLogin(); }catch(e){}
 
         try{
@@ -3301,7 +3321,10 @@ $("btnSave").addEventListener("click", async function(){
       }
     }
 
-    boot().catch(function(e){ console.error(e); });
+    boot().then(function(){
+      try{ startAuthHydrationWatch(); }catch(e){}
+      try{ ensureHeaderStateVisible(); }catch(e){}
+    }).catch(function(e){ console.error(e); });
   })();
   </script>
 
