@@ -1207,6 +1207,113 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       return 1;
     }
 
+    function readCookie(name){
+      try{
+        var esc = String(name||"").replace(/[.*+?^${}()|[\]\]/g, "\$&");
+        var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
+        return m ? decodeURIComponent(m[1] || "") : "";
+      }catch(e){ return ""; }
+    }
+
+    function readBridgeToken(){
+      var keys = ["tasunSessionBridge_v1","tasunSso_v2","tasunSso_v1", CURRENT_KEY, SESSION_KEY];
+      for(var i=0;i<keys.length;i++){
+        var raw = "";
+        try{ raw = sessionStorage.getItem(keys[i]) || localStorage.getItem(keys[i]) || ""; }catch(e){ raw = ""; }
+        var js = safeJSON(raw);
+        if(!js || typeof js !== "object") continue;
+        var token = norm(
+          js.token || js.accessToken || js.authToken || js.bearer || js.workerToken || js.cloudToken || js.apiKey ||
+          (js.auth && (js.auth.token || js.auth.accessToken || js.auth.bearer || js.auth.apiKey)) ||
+          (js.session && (js.session.token || js.session.accessToken || js.session.bearer || js.session.apiKey)) ||
+          (js.headers && (js.headers.Authorization || js.headers.authorization || js.headers["x-api-key"] || js.headers["X-API-Key"])) ||
+          ""
+        );
+        if(token) return token;
+      }
+      return "";
+    }
+
+    function getSharedWorkerToken(){
+      var keys = [
+        "tasunCloudToken_v1",
+        "tasunCloudToken_v1__sxdh-notes",
+        "tasunCloudToken_v1__auth-table",
+        "tasunBearerToken_v1",
+        "tasunAccessToken_v1",
+        "tasunAuthToken_v1",
+        "tasunSessionToken_v1",
+        "tasun_token",
+        "tasunToken",
+        "tasun_auth_token",
+        "authToken",
+        "access_token",
+        "token",
+        "x-api-key",
+        "tasunApiKey_v1"
+      ];
+      for(var i=0;i<keys.length;i++){
+        var key = keys[i], v="";
+        try{ v = norm(sessionStorage.getItem(key) || localStorage.getItem(key) || ""); }catch(e){ v = ""; }
+        if(v) return v;
+      }
+      try{
+        if(window.TasunAuthV4 && typeof window.TasunAuthV4.getToken === "function"){
+          var t1 = norm(window.TasunAuthV4.getToken() || "");
+          if(t1) return t1;
+        }
+      }catch(e){}
+      try{
+        var ga = window.TasunGlobalAuth || window.tasunGlobalAuth || window.TASUN_AUTH || null;
+        if(ga){
+          var t2 = norm(ga.token || ga.accessToken || ga.authToken || ga.apiKey || (typeof ga.getToken === "function" ? ga.getToken() : "") || "");
+          if(t2) return t2;
+        }
+      }catch(e){}
+      var bridge = readBridgeToken();
+      if(bridge) return bridge;
+      var ck = norm(readCookie("tasun_bearer_token") || readCookie("tasun_token") || readCookie("token") || readCookie("tasun_auth_token") || "");
+      return ck || "";
+    }
+
+    function hydrateCrossPageAuth(){
+      try{
+        var cur = getCurrentUser();
+        if(cur && (cur.user || cur.name || cur.username)){
+          var row = {
+            user: norm(cur.user || cur.name || cur.username),
+            name: norm(cur.name || cur.user || cur.username),
+            role: norm(cur.role || cur.level || "read") || "read",
+            at: norm(cur.at || nowISO())
+          };
+          try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(e){}
+          try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(e){}
+          try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: row.user, role: row.role, t: Date.now() })); }catch(e){}
+          try{ sessionStorage.setItem(INDEX_SESSION_KEY, "1"); }catch(e){}
+        }
+        var token = getSharedWorkerToken();
+        if(token){
+          var normalized = /^Bearer\s+/i.test(token) ? token.replace(/^Bearer\s+/i, "") : token;
+          try{ sessionStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
+          try{ localStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
+        }
+      }catch(e){}
+    }
+
+    function buildWorkerAuthHeaders(extra){
+      var headers = Object.assign({}, extra || {});
+      var bearer = getSharedWorkerToken();
+      if(!bearer) return headers;
+      var raw = String(bearer || "").trim();
+      if(!headers.Authorization && !headers.authorization){
+        headers.Authorization = /^Bearer\s+/i.test(raw) ? raw : ("Bearer " + raw);
+      }
+      if(!headers["x-api-key"] && !headers["X-API-Key"]){
+        headers["x-api-key"] = raw.replace(/^Bearer\s+/i, "");
+      }
+      return headers;
+    }
+
     function ensureActionButtonsVisible(){
       try{
         var cur = null;
@@ -2510,7 +2617,7 @@ function getPromptOptions(mode){
           let reachable = false;
           for(const url of candidates){
             try{
-              const r = await fetch(url, { method:"GET", credentials: (cfg && cfg.credentials) ? "include" : "omit", cache:"no-store" });
+              const r = await fetch(url, { method:"GET", credentials: (cfg && cfg.credentials) ? "include" : "omit", cache:"no-store", headers: buildWorkerAuthHeaders({ accept:"application/json" }) });
               if(r.ok){ reachable = true; break; }
             }catch(_e){}
           }
@@ -2557,7 +2664,7 @@ function getPromptOptions(mode){
           method: "GET",
           cache: "no-store",
           credentials: (cfg && cfg.credentials) ? "include" : "omit",
-          headers: { "accept":"application/json" }
+          headers: buildWorkerAuthHeaders({ "accept":"application/json" })
         });
         if(!r.ok){
           const t = await r.text().catch(()=> "");
@@ -2593,7 +2700,7 @@ function getPromptOptions(mode){
           method: "POST",
           cache: "no-store",
           credentials: (cfg && cfg.credentials) ? "include" : "omit",
-          headers: { "content-type":"application/json", "accept":"application/json" },
+          headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
           body: JSON.stringify(body)
         });
         if(!r.ok){
@@ -2616,6 +2723,7 @@ function getPromptOptions(mode){
 
       try{
         // 1) 先確認 Worker 可達
+        try{ hydrateCrossPageAuth(); }catch(e){}
         await cloudHealth(cfg);
 
         // 2) 先檢查本端資料；若本端已有資料，先送雲端 merge，避免本端較新的資料被空雲端覆蓋
@@ -2623,6 +2731,7 @@ function getPromptOptions(mode){
         var remoteOrMerged = null;
 
         if(localRows.length>0){
+          try{ hydrateCrossPageAuth(); }catch(e){}
           remoteOrMerged = await cloudMerge(cfg, PAGE_KEY, { db: localRows, counter: state.counter }, {
             user: state.user || "",
             role: state.role || "",
@@ -2632,10 +2741,12 @@ function getPromptOptions(mode){
             reason: "boot-reconcile-local-first"
           });
         }else{
+          try{ hydrateCrossPageAuth(); }catch(e){}
           remoteOrMerged = await cloudRead(cfg, PAGE_KEY);
         }
 
         // 3) 再抓一次最新雲端資料，確保拿到 merge 後的最終狀態（多人/多設備一致）
+        try{ hydrateCrossPageAuth(); }catch(e){}
         var remoteFinal = await cloudRead(cfg, PAGE_KEY);
         var out = mergePayload(remoteFinal || remoteOrMerged, { db: state.db, counter: state.counter });
 
@@ -2675,6 +2786,7 @@ function getPromptOptions(mode){
       }
 
       try{
+        try{ hydrateCrossPageAuth(); }catch(e){}
         var remote = await cloudRead(cfg, PAGE_KEY);
 
         // If cloud is empty but local has data, offer to bootstrap to cloud (one-time)
@@ -2705,6 +2817,7 @@ function getPromptOptions(mode){
           sessionStorage.setItem(autoFillKey, "1");
           try{
             var reason = remoteEmpty ? "auto-bootstrap-cloud-empty" : "auto-fill-cloud-missing";
+            try{ hydrateCrossPageAuth(); }catch(e){}
             var merged = await cloudMerge({ payload: { db: localDb, counter: state.counter }, reason: reason });
             if(merged && merged.ok && merged.payload){
               remote = merged; // use merged payload as latest remote snapshot
@@ -2770,6 +2883,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       }
 
       try{
+        try{ hydrateCrossPageAuth(); }catch(e){}
         var merged = await cloudMerge(cfg, PAGE_KEY, { db: sendRows, counter: state.counter }, {
           user: state.user || "",
           role: state.role || "",
@@ -2981,6 +3095,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       _cloudCfgCache = null;
       toast("已儲存雲端設定");
       updateTokenHint();
+      try{ hydrateCrossPageAuth(); }catch(e){}
       cloudHealth();
     }
 
@@ -3146,6 +3261,7 @@ $("btnSave").addEventListener("click", async function(){
         }catch(e){ state.readMode = false; }
 
         try{ ensureAuthTable(); }catch(e){}
+        try{ hydrateCrossPageAuth(); }catch(e){}
         try{ cur = getCurrentUser(); }catch(e){ cur = null; }
         try{
           if(cur) applyUser(cur);
@@ -3155,6 +3271,7 @@ $("btnSave").addEventListener("click", async function(){
         try{ wire(); }catch(e){}
         try{ renderHintFallback(); }catch(e){}
         try{ refresh(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
+        try{ hydrateCrossPageAuth(); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
         // ✅ 開頁同步策略：先檢查本端，有資料先上傳 merge 去重；再下載雲端最新資料。
         try{
