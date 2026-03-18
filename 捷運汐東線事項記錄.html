@@ -863,6 +863,8 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     var AUTH_KEY = "tasunAuthTable_v1";
     var CURRENT_KEY = "tasunCurrentUser_v1";
+    var SESSION_KEY = "tasunSessionLogin_v2";
+    var INDEX_SESSION_KEY = "tasunIndexSession_v1";
 
     var DB_KEY = "tasunSxdhNotes_v1";
     var COUNTER_KEY = "tasunSxdhNotes_counter_v1";
@@ -1125,7 +1127,71 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     function getCurrentUser(){
       var cur = safeJSON(localStorage.getItem(CURRENT_KEY));
-      if(cur && cur.user && cur.role) return cur;
+      if(cur && (cur.user || cur.name) && (cur.role || cur.level)){
+        return { user: norm(cur.user || cur.name), name: norm(cur.name || cur.user), role: norm(cur.role || cur.level || "read") || "read", at: norm(cur.at || nowISO()) };
+      }
+
+      cur = safeJSON(sessionStorage.getItem(CURRENT_KEY) || "");
+      if(cur && (cur.user || cur.name) && (cur.role || cur.level)){
+        return { user: norm(cur.user || cur.name), name: norm(cur.name || cur.user), role: norm(cur.role || cur.level || "read") || "read", at: norm(cur.at || nowISO()) };
+      }
+
+      cur = safeJSON(sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY) || "");
+      if(cur && (cur.user || cur.name) && (cur.role || cur.level)){
+        return { user: norm(cur.user || cur.name), name: norm(cur.name || cur.user), role: norm(cur.role || cur.level || "read") || "read", at: nowISO() };
+      }
+
+      var sso = safeJSON(sessionStorage.getItem("tasunSso_v2") || sessionStorage.getItem("tasunSso_v1") || localStorage.getItem("tasunSso_v2") || localStorage.getItem("tasunSso_v1") || "");
+      if(sso && (sso.user || sso.name || sso.username)){
+        return {
+          user: norm(sso.user || sso.name || sso.username),
+          name: norm(sso.name || sso.user || sso.username),
+          role: norm(sso.role || sso.level || "read") || "read",
+          at: nowISO()
+        };
+      }
+
+      try{
+        var g = window.__TASUN_CURRENT_USER__ || window.TASUN_CURRENT_USER || window.tasunCurrentUser || null;
+        if(g && (g.user || g.name || g.username)){
+          return {
+            user: norm(g.user || g.name || g.username),
+            name: norm(g.name || g.user || g.username),
+            role: norm(g.role || g.level || "read") || "read",
+            at: norm(g.at || nowISO())
+          };
+        }
+      }catch(e){}
+
+      try{
+        if(window.TasunAuthV4 && typeof window.TasunAuthV4.getCurrentUser === "function"){
+          var g2 = window.TasunAuthV4.getCurrentUser();
+          if(g2 && (g2.user || g2.name || g2.username)){
+            return {
+              user: norm(g2.user || g2.name || g2.username),
+              name: norm(g2.name || g2.user || g2.username),
+              role: norm(g2.role || g2.level || "read") || "read",
+              at: norm(g2.at || nowISO())
+            };
+          }
+        }
+      }catch(e){}
+
+      try{
+        var ga = window.TasunGlobalAuth || window.tasunGlobalAuth || null;
+        if(ga){
+          var g3 = (typeof ga.getCurrentUser === "function") ? ga.getCurrentUser() : (ga.currentUser || ga.user || null);
+          if(g3 && (g3.user || g3.name || g3.username)){
+            return {
+              user: norm(g3.user || g3.name || g3.username),
+              name: norm(g3.name || g3.user || g3.username),
+              role: norm(g3.role || g3.level || "read") || "read",
+              at: norm(g3.at || nowISO())
+            };
+          }
+        }
+      }catch(e){}
+
       return null;
     }
 
@@ -1134,10 +1200,149 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       else localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
     }
 
+    function readCookie(name){
+      try{
+        var esc = String(name||"").replace(/[.*+?^${}()|[\]\]/g, "\$&");
+        var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
+        return m ? decodeURIComponent(m[1] || "") : "";
+      }catch(e){ return ""; }
+    }
+
+    function getSharedWorkerToken(){
+      var keys = [
+        "tasunCloudToken_v1",
+        "tasunCloudToken_v1__sxdh-notes",
+        "tasunCloudToken_v1__auth-table",
+        "tasunBearerToken_v1",
+        "tasunAccessToken_v1",
+        "tasun_token",
+        "tasunToken",
+        "tasun_auth_token",
+        "authToken",
+        "access_token",
+        "token"
+      ];
+      for(var i=0;i<keys.length;i++){
+        var key = keys[i];
+        try{
+          var v = norm(sessionStorage.getItem(key) || localStorage.getItem(key) || "");
+          if(v) return v;
+        }catch(e){}
+      }
+      try{
+        if(window.TasunAuthV4 && typeof window.TasunAuthV4.getToken === "function"){
+          var t1 = norm(window.TasunAuthV4.getToken() || "");
+          if(t1) return t1;
+        }
+      }catch(e){}
+      try{
+        if(window.TASUN_AUTH && typeof window.TASUN_AUTH === "object"){
+          var t2 = norm(window.TASUN_AUTH.token || window.TASUN_AUTH.accessToken || "");
+          if(t2) return t2;
+        }
+      }catch(e){}
+      var ck = norm(readCookie("tasun_bearer_token") || readCookie("tasun_token") || readCookie("token") || "");
+      return ck || "";
+    }
+
+    function hydrateCrossPageAuth(){
+      try{
+        var cur = getCurrentUser();
+        if(cur && (cur.user || cur.name || cur.username)){
+          var row = {
+            user: norm(cur.user || cur.name || cur.username),
+            name: norm(cur.name || cur.user || cur.username),
+            role: norm(cur.role || cur.level || "read") || "read",
+            at: norm(cur.at || nowISO())
+          };
+          try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(e){}
+          try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(e){}
+          try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: row.user, role: row.role, t: Date.now() })); }catch(e){}
+          try{ sessionStorage.setItem(INDEX_SESSION_KEY, "1"); }catch(e){}
+        }
+        var token = getSharedWorkerToken();
+        if(token){
+          var normalized = /^Bearer\s+/i.test(token) ? token.replace(/^Bearer\s+/i, "") : token;
+          try{ sessionStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
+          try{ localStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
+        }
+      }catch(e){}
+    }
+
+    function buildWorkerAuthHeaders(extra){
+      var headers = Object.assign({}, extra || {});
+      var bearer = getSharedWorkerToken();
+      if(bearer && !headers.Authorization && !headers.authorization){
+        headers.Authorization = /^Bearer\s+/i.test(bearer) ? bearer : ("Bearer " + bearer);
+      }
+      return headers;
+    }
+
     function roleRank(role){
       if(role==="admin") return 3;
       if(role==="write") return 2;
       return 1;
+    }
+
+    function refreshHintSafe(){
+      try{
+        var cloudTxt = state.cloud.ok ? "已同步" : (state.cloud.cfgOk ? "待同步" : "未設定");
+        var lastTxt = state.cloud.lastOkAt ? fmtClock(state.cloud.lastOkAt) : "—";
+        var rowsVisible = [];
+        var totalRows = 0;
+        try{
+          rowsVisible = getVisibleRows();
+          totalRows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
+        }catch(e){
+          rowsVisible = [];
+          totalRows = Array.isArray(state.db) ? state.db.length : 0;
+        }
+        var hint = $("hint");
+        if(!hint) return;
+        hint.innerHTML = "";
+        function hb(k,v,bad){
+          var s=document.createElement("span");
+          s.className="hb"+(bad?" bad":"");
+          s.innerHTML = '<span class="k">'+escHtml(k)+'</span><span class="v">'+escHtml(v)+'</span>';
+          return s;
+        }
+        hint.appendChild(hb("版本", APP_VER));
+        hint.appendChild(hb("筆數", String(rowsVisible.length) + " / " + String(totalRows)));
+        hint.appendChild(hb("選取", state.selectedUid ? "已選取" : "未選取", !state.selectedUid));
+        hint.appendChild(hb("雲端", cloudTxt, !state.cloud.ok));
+        hint.appendChild(hb("最後", lastTxt));
+      }catch(e){}
+    }
+
+    function resolveRuntimeUser(){
+      var cur = null;
+      try{ cur = getCurrentUser(); }catch(e){ cur = null; }
+      if(cur){
+        try{ setCurrentUser(cur); }catch(e){}
+        try{ applyUser(cur); }catch(e){}
+        return true;
+      }
+      try{ applyUser({ user:"—", role:"read", name:"—" }); }catch(e){}
+      return false;
+    }
+
+    function startAuthHydrationWatch(){
+      var tries = 0, maxTries = 18;
+      var tm = setInterval(function(){
+        tries++;
+        var ok = false;
+        try{ ok = resolveRuntimeUser(); }catch(e){ ok = false; }
+        try{ refreshHintSafe(); }catch(e){}
+        if(ok || tries >= maxTries) clearInterval(tm);
+      }, 250);
+      window.addEventListener("focus", function(){
+        try{ resolveRuntimeUser(); }catch(e){}
+        try{ refreshHintSafe(); }catch(e){}
+      });
+      window.addEventListener("pageshow", function(){
+        try{ resolveRuntimeUser(); }catch(e){}
+        try{ refreshHintSafe(); }catch(e){}
+      });
     }
 
     // ---------------------------
@@ -1661,9 +1866,18 @@ function getVisibleRows(){
       selectedUid: "",
       mode: "view",
       readMode: false,
-      cloud: { ok:false, cfgOk:false, apiBase:"", endpoints:null, lastSyncAt:"", lastOkAt:"" },
+      cloud: { ok:false, cfgOk:false, reachable:false, apiBase:"", endpoints:null, lastSyncAt:"", lastOkAt:"" },
       _legacyScan: null
     };
+
+    function setCloudState(patch, doRefresh){
+      patch = (patch && typeof patch === "object") ? patch : {};
+      state.cloud = Object.assign({}, state.cloud || {}, patch);
+      if(doRefresh){
+        try{ refresh(); }catch(_e){}
+      }
+      return state.cloud;
+    }
 
     // load map once (kept in memory + persisted on change)
     var TRADE_SYS_MAP = loadMap();
@@ -2057,17 +2271,13 @@ function getVisibleRows(){
     }
 
     function refresh(){
-      try{ rebuildFilterOptions(); }catch(e){}
-      var rows = [];
-      try{ rows = getVisibleRows(); }catch(e){ rows = []; }
+      rebuildFilterOptions();
+      var rows = getVisibleRows();
 
-      try{ renderTable(rows); }catch(e){}
-      try{ renderCards(rows); }catch(e){}
-
-      try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
-      try{ ensureActionButtonsVisible(); }catch(e){}
+      renderTable(rows);
+      renderCards(rows);
+      refreshHintSafe();
       }
-
 
     function selectRow(uid){
       uid = norm(uid);
@@ -2320,6 +2530,7 @@ function getPromptOptions(mode){
           cfg = cfg || await loadCloudCfg();
           const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
           const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
+          const cfgOk = !!(cfg && isValidApiBase(apiBase));
           const candidates = [];
           if(eps && eps.health) candidates.push(_joinUrl(apiBase, eps.health));
           // common fallbacks
@@ -2327,14 +2538,25 @@ function getPromptOptions(mode){
           candidates.push(_joinUrl(apiBase, "/api/tasun/ping"));
           candidates.push(_joinUrl(apiBase, "/api/ping"));
 
+          let reachable = false;
           for(const url of candidates){
             try{
-              const r = await fetch(url, { method:"GET", credentials: (cfg && cfg.credentials) ? "include" : "omit", cache:"no-store" });
-              if(r.ok) return true;
+              const r = await fetch(url, { method:"GET", credentials:"include", cache:"no-store", headers: buildWorkerAuthHeaders({ accept:"application/json" }) });
+              if(r.ok){ reachable = true; break; }
             }catch(_e){}
           }
-          return false;
+          // ✅ 健康檢查只代表 Worker 可達，不代表資料已完成同步。
+          setCloudState({
+            cfgOk: cfgOk,
+            reachable: reachable,
+            ok: !!(state.cloud && state.cloud.ok),
+            apiBase: apiBase,
+            endpoints: eps || null,
+            lastOkAt: reachable ? Date.now() : (state.cloud && state.cloud.lastOkAt ? state.cloud.lastOkAt : "")
+          }, true);
+          return reachable;
         }catch(_e){
+          setCloudState({ ok:false, reachable:false, cfgOk:false }, true);
           return false;
         }
       }
@@ -2365,8 +2587,8 @@ function getPromptOptions(mode){
         const r = await fetch(url, {
           method: "GET",
           cache: "no-store",
-          credentials: (cfg && cfg.credentials) ? "include" : "omit",
-          headers: { "accept":"application/json" }
+          credentials: "include",
+          headers: buildWorkerAuthHeaders({ "accept":"application/json" })
         });
         if(!r.ok){
           const t = await r.text().catch(()=> "");
@@ -2401,8 +2623,8 @@ function getPromptOptions(mode){
         const r = await fetch(url, {
           method: "POST",
           cache: "no-store",
-          credentials: (cfg && cfg.credentials) ? "include" : "omit",
-          headers: { "content-type":"application/json", "accept":"application/json" },
+          credentials: "include",
+          headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
           body: JSON.stringify(body)
         });
         if(!r.ok){
@@ -2412,6 +2634,67 @@ function getPromptOptions(mode){
         const j = await r.json();
         return _normalizePullResponse(j);
       }
+    async function reconcileCloudOnOpen(opts){
+      opts = (opts && typeof opts==="object") ? opts : {};
+      var silent = (opts.silent!==false);
+
+      var cfg = await loadCloudCfg();
+      if(!cfg || !isValidApiBase(cfg.apiBase)){
+        setCloudState({ ok:false, cfgOk:false, reachable:false }, true);
+        if(!silent) toast("雲端未設定/無效");
+        return false;
+      }
+
+      try{
+        // 1) 先確認 Worker 可達
+        await cloudHealth(cfg);
+
+        // 2) 先檢查本端資料；若本端已有資料，先送雲端 merge，避免本端較新的資料被空雲端覆蓋
+        var localRows = (state.db||[]).map(ensureRowV1).filter(Boolean);
+        var remoteOrMerged = null;
+
+        if(localRows.length>0){
+          remoteOrMerged = await cloudMerge(cfg, PAGE_KEY, { db: localRows, counter: state.counter }, {
+            user: state.user || "",
+            role: state.role || "",
+            appVer: APP_VER,
+            clientId: state.clientId || getClientId(),
+            at: nowISO(),
+            reason: "boot-reconcile-local-first"
+          });
+        }else{
+          remoteOrMerged = await cloudRead(cfg, PAGE_KEY);
+        }
+
+        // 3) 再抓一次最新雲端資料，確保拿到 merge 後的最終狀態（多人/多設備一致）
+        var remoteFinal = await cloudRead(cfg, PAGE_KEY);
+        var out = mergePayload(remoteFinal || remoteOrMerged, { db: state.db, counter: state.counter });
+
+        state.db = out.db;
+        state.counter = out.counter;
+        state.lastSyncAt = Date.now();
+
+        try{ await idbClearOps(PAGE_KEY); }catch(e){}
+        await saveLocal({ db: state.db, counter: state.counter });
+        buildDictsFromDb();
+
+        setCloudState({
+          ok:true,
+          cfgOk:true,
+          reachable:true,
+          lastOkAt: Date.now(),
+          lastSyncAt: nowISO()
+        }, false);
+        refresh();
+        if(!silent) toast("已完成開啟同步");
+        return true;
+      }catch(e){
+        setCloudState({ ok:false }, true);
+        if(!silent) toast("開啟同步失敗：" + (e && e.message ? e.message : String(e)));
+        return false;
+      }
+    }
+
     async function syncFromCloud(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
       var silent = !!opts.silent;
@@ -2474,9 +2757,11 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         await saveLocal({ db: state.db, counter: state.counter });
 
         buildDictsFromDb();
+        setCloudState({ ok:true, cfgOk:true, reachable:true, lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
         refresh();
         if(!silent) toast("已從雲端更新");
       }catch(e){
+        setCloudState({ ok:false }, true);
         if(!silent) toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
       }
     }
@@ -2534,9 +2819,11 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         await saveLocal({ db: state.db, counter: state.counter });
 
         buildDictsFromDb();
+        setCloudState({ ok:true, cfgOk:true, reachable:true, lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
         refresh();
         if(!silent) toast(fullUpload ? "雲端同步完成（全量）" : "雲端同步完成（增量）");
       }catch(e){
+        setCloudState({ ok:false }, true);
         if(!silent) toast("雲端同步失敗：" + (e && e.message ? e.message : String(e)));
       }
     }
@@ -2639,7 +2926,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       $("btnAdd").style.display = canWrite ? "" : "none";
       $("btnEdit").style.display = canWrite ? "" : "none";
       $("btnToken").style.display = (state.role==="admin") ? "" : "none";
-      refresh();
+      try{ refresh(); }catch(e){ try{ refreshHintSafe(); }catch(_e){} }
     }
 
     function doLogin(){
@@ -2662,6 +2949,8 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       applyUser(cur);
       closeLogin();
       toast("登入成功");
+      // ✅ 登入後立即做一次「本端先 merge，再重抓雲端」
+      setTimeout(function(){ reconcileCloudOnOpen({ silent:true }); }, 60);
     }
 
     // ---------------------------
@@ -2891,9 +3180,15 @@ $("btnSave").addEventListener("click", async function(){
         }catch(e){}
 
         try{ wire(); }catch(e){}
-        try{ startAuthHydrationWatch(); }catch(e){}
-        try{ refresh(); }catch(e){ try{ refreshHintSafe(); }catch(_e){} try{ ensureActionButtonsVisible(); }catch(_e){} }
-        try{ cloudHealth(); }catch(e){}
+        try{ refresh(); }catch(e){}
+        try{ hydrateCrossPageAuth(); }catch(e){}
+        try{ await cloudHealth(); }catch(e){}
+        // ✅ 開頁同步策略：先檢查本端，有資料先上傳 merge 去重；再下載雲端最新資料。
+        try{
+          if(cur){
+            await reconcileCloudOnOpen({ silent:true });
+          }
+        }catch(e){}
         try{ if(!cur) openLogin(); }catch(e){}
 
         try{
@@ -2908,8 +3203,7 @@ $("btnSave").addEventListener("click", async function(){
       }catch(e){
         // 任何未預期錯誤：仍然嘗試畫出狀態列，避免出現「空白資訊列」。
         try{ wire(); }catch(_e){}
-        try{ startAuthHydrationWatch(); }catch(_e){}
-        try{ refresh(); }catch(_e){ try{ refreshHintSafe(); }catch(__e){} try{ ensureActionButtonsVisible(); }catch(__e){} }
+        try{ refresh(); }catch(_e){}
         try{ if(!cur) openLogin(); }catch(_e){}
         console.error(e);
       }
