@@ -1638,6 +1638,29 @@
       if(zenImg) zenImg.addEventListener('load', () => { scheduleAll(); }, { once:false });
       requestAnimationFrame(() => { document.body.classList.remove('booting'); scheduleAll(); onFontsReady(() => scheduleAll()); });
 
+      async function verifyUserPassword(username, password){
+        const wanted = String(username || '').trim().toLowerCase();
+        const plain = String(password || '').trim();
+        if(!wanted || !plain) return null;
+        const pwHash = (await sha256Hex(plain)).toLowerCase();
+        const candidates = AUTH_TABLE.filter(r => String(r.username || '').trim().toLowerCase() === wanted);
+        for(const u of candidates){
+          const storedHash = String(u.passHash || '').trim().toLowerCase();
+          const storedPlain = String(u.password || u.pass || '').trim();
+          if((storedHash && pwHash === storedHash) || (!!storedPlain && plain === storedPlain)) return u;
+        }
+        const fallbackHash = String(DEFAULT_AUTH_HASH[wanted] || '').trim().toLowerCase();
+        if(fallbackHash && pwHash === fallbackHash){
+          const matched = candidates[0] || { username: username, level: inferRole(username, '') };
+          return Object.assign({}, matched, {
+            username: String(matched.username || username).trim(),
+            level: String(matched.level || matched.role || inferRole(username, '')).trim().toLowerCase() || 'read',
+            passHash: fallbackHash
+          });
+        }
+        return null;
+      }
+
       loginForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const username = (usernameSel && usernameSel.value ? String(usernameSel.value) : '').trim();
@@ -1648,13 +1671,12 @@
         try{
           repairKnownAuthSecrets();
           AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-          const u = AUTH_TABLE.find(r => String(r.username||'').trim() === username);
-          if(!u){ loginError.textContent = '查無此使用者（請到「系統 / 權限」新增）'; return; }
-          const pwHash = await sha256Hex(password);
-          const storedHash = String(u.passHash || '').trim().toLowerCase();
-          const storedPlain = String(u.password || u.pass || '').trim();
-          const ok = (storedHash && pwHash === storedHash) || (!!storedPlain && password === storedPlain);
-          if(!ok){ loginError.textContent = '密碼錯誤'; return; }
+          const u = await verifyUserPassword(username, password);
+          if(!u){
+            const exists = AUTH_TABLE.some(r => String(r.username||'').trim().toLowerCase() === String(username).trim().toLowerCase());
+            loginError.textContent = exists ? '密碼錯誤' : '查無此使用者（請到「系統 / 權限」新增）';
+            return;
+          }
           setSession({ username: u.username, level: u.level });
           applyUser(u, { skipBroadcast:true });
           if(passwordInput) passwordInput.value = '';
