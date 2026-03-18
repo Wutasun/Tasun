@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- TASUN_REBUILD_STAMP:index_v47 2026-03-13 00:00:00 (auto-version-hash-loader) -->
+<!-- TASUN_REBUILD_STAMP:index_v49 2026-03-13 00:00:00 (auto-version-hash-loader) -->
 <html lang="zh-Hant">
 <head>
   <!-- Tasun v5 FINAL：版本/快取由 tasun-version.json 控制；腳本改為動態帶 v 載入 -->
@@ -14,7 +14,7 @@
 
   <script>
   (function(){
-    console.log('[TASUN BUILD] index_v47_login_gate_cloud_sync_d1auth_selectfix 2026-03-13');
+    console.log('[TASUN BUILD] index_v49_login_secret_repair 2026-03-17');
     try{
       const dm = navigator.deviceMemory || 0;
       const conn = navigator.connection || {};
@@ -615,11 +615,9 @@
 
       function isTouchPickerPreferred(){
         try{
-          const ua = String((navigator && navigator.userAgent) || '').toLowerCase();
-          const mobileUA = /android|iphone|ipad|ipod|mobile|windows phone/.test(ua);
+          const hasTouch = ('ontouchstart' in window) || ((navigator.maxTouchPoints || 0) > 0) || ((navigator.msMaxTouchPoints || 0) > 0);
           const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
-          const narrow = Math.min(window.innerWidth || 9999, screen.width || 9999) <= 900;
-          return !!(mobileUA || (coarse && narrow));
+          return !!(hasTouch || coarse);
         }catch(e){ return false; }
       }
       function applyUsernamePickerMode(){
@@ -707,9 +705,14 @@
           next.username = user;
           if(!next.role && next.level) next.role = next.level;
           if(!next.level && next.role) next.level = next.role;
-          if(!next.passHash && (next.passwordHash || next.hash)) next.passHash = next.passwordHash || next.hash;
+          const incomingHash = String(row?.passHash || row?.passwordHash || row?.hash || '').trim();
+          const incomingPlain = String(row?.pass || row?.password || row?.pw || '').trim();
+          if(incomingHash) next.passHash = incomingHash;
+          else if(!String(next.passHash || '').trim()) next.passHash = String(prev.passHash || prev.passwordHash || prev.hash || '').trim();
+          if(incomingPlain) next.pass = incomingPlain;
+          else if(!String(next.pass || next.password || next.pw || '').trim()) next.pass = String(prev.pass || prev.password || prev.pw || '').trim();
           map.set(k, next);
-                  });
+        });
         const merged = Array.from(map.values());
         const oldText = JSON.stringify(Array.isArray(local) ? local : []);
         const newText = JSON.stringify(merged);
@@ -981,11 +984,75 @@
         const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
         if(Array.isArray(arr)){
           const mapped = arr.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
-          if(mapped.length) return mapped;
+          if(mapped.length){
+            const dedup = [];
+            const seen = new Set();
+            for(let i = mapped.length - 1; i >= 0; i--){
+              const row = mapped[i];
+              const key = String(row.username || '').trim().toLowerCase();
+              if(!key || seen.has(key)) continue;
+              seen.add(key);
+              dedup.unshift(row);
+            }
+            return dedup.length ? dedup : mapped;
+          }
         }
         const legacy = getDefaultAuthTableLegacy(btnCount);
         localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
         return legacy.map(r => normalizeRowFromStorage(r, btnCount));
+      }
+      const DEFAULT_AUTH_HASH = {
+        alex: '7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07',
+        joyce: 'd558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815',
+        tasun: 'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba',
+        wu: '8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92'
+      };
+      function findAuthCandidates(username){
+        const wanted = String(username || '').trim().toLowerCase();
+        if(!wanted) return [];
+        AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+        return AUTH_TABLE.filter(r => String(r.username || '').trim().toLowerCase() === wanted);
+      }
+      function pickLoginUserFromCandidates(candidates, passwordHash, passwordPlain){
+        const plain = String(passwordPlain || '').trim();
+        for(const u of candidates){
+          const storedHash = String(u.passHash || '').trim().toLowerCase();
+          const storedPlain = String(u.password || '').trim();
+          if((storedHash && passwordHash === storedHash) || (!!storedPlain && plain === storedPlain)) return u;
+        }
+        return null;
+      }
+      function repairKnownAuthSecrets(){
+        try{
+          const raw = localStorage.getItem(AUTH_KEY);
+          const parsed = safeJsonParse(raw, null);
+          const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
+          if(!Array.isArray(arr) || !arr.length) return;
+          const seedMap = new Map([
+            ['alex',  { user:'alex',  passHash:'7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07', role:'admin' }],
+            ['joyce', { user:'JOYCE', passHash:'d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815', role:'admin' }],
+            ['tasun', { user:'tasun', passHash:'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba', role:'write' }],
+            ['wu',    { user:'wu',    passHash:'8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92', role:'read' }]
+          ]);
+          let changed = false;
+          arr.forEach(r => {
+            if(!r || typeof r !== 'object') return;
+            const key = String(r.user || r.username || r.name || r.account || '').trim().toLowerCase();
+            const seed = seedMap.get(key);
+            if(!seed) return;
+            const hasHash = String(r.passHash || r.passwordHash || r.hash || '').trim();
+            const hasPlain = String(r.pass || r.password || r.pw || '').trim();
+            if(!hasHash && !hasPlain){
+              r.passHash = seed.passHash;
+              changed = true;
+            }
+            if(!String(r.role || r.level || '').trim()){
+              r.role = seed.role;
+              changed = true;
+            }
+          });
+          if(changed) localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
+        }catch(e){}
       }
       function migrateAuthToHashedIfNeeded(){
         try{
@@ -1108,6 +1175,18 @@
       let CURRENT_USER = null;
 
       function isRoleAllowed(cfg, level){ if(!cfg || !Array.isArray(cfg.roles)) return true; return cfg.roles.includes(level); }
+      function isAuthLikeButtonCfg(cfg){
+        try{
+          const id = String(cfg?.id || '').trim().toLowerCase();
+          const label = String(cfg?.label || '').trim();
+          const href = String(resolveHref(cfg, ROUTES) || '').trim();
+          if(id === 'systembtn' || id === 'auth' || id === 'xidong_auth') return true;
+          if(/權限表\.html$/i.test(href)) return true;
+          if(/系統\s*[\/／]\s*權限/.test(label)) return true;
+          if(/權限表/.test(label)) return true;
+        }catch(e){}
+        return false;
+      }
       function isAllowedByAuth(user, cfg){
         if(cfg && cfg.id === 'systemBtn') return true;
         try{
@@ -1129,13 +1208,14 @@
       function buildMainButtonsDOM(){
         ROUTES = loadRoutes();
         NAV_ARR = loadNavButtonsSeedIfMissing();
-        BTN_CONFIGS = NAV_ARR.map(x => {
+        const navConfigs = NAV_ARR.map(x => {
           const id = String(x?.id || '').trim();
           const label = String(x?.label || '').trim();
           const roles = ROLE_MAP[id] || ['admin','write','read'];
           const target = (id === 'btn3') ? '_blank' : '';
           return { id, label, roles, target };
-        }).concat([SYSTEM_BTN]);
+        }).filter(cfg => !isAuthLikeButtonCfg(cfg));
+        BTN_CONFIGS = navConfigs.concat([SYSTEM_BTN]);
         mainNavBtns = [];
         navArea.innerHTML = '';
         BTN_CONFIGS.forEach((cfg) => {
@@ -1497,18 +1577,7 @@
       function refreshUsernamePicker(){ if(!usernameSel) return; const opt = usernameSel.options[usernameSel.selectedIndex]; if(opt && opt.disabled){ const first = Array.from(usernameSel.options).find(o => !o.disabled && String(o.value||'').trim()); if(first) usernameSel.value = first.value; } syncUsernameDisplay(); buildUsernameMenu(); }
       if(usernameSel){ usernameSel.addEventListener('change', () => { syncUsernameDisplay(); closeUsernameMenu(); }); usernameSel.addEventListener('input', () => { syncUsernameDisplay(); closeUsernameMenu(); }); }
       if(usernameDisplay){
-        usernameDisplay.addEventListener('click', (e) => {
-          try{
-            if(usernameWrap && usernameWrap.classList.contains('native-touch') && usernameSel){
-              e.preventDefault();
-              if(typeof usernameSel.showPicker === 'function') { usernameSel.showPicker(); return; }
-              usernameSel.focus();
-              usernameSel.click();
-              return;
-            }
-          }catch(_e){}
-          toggleUsernameMenu();
-        });
+        usernameDisplay.addEventListener('click', toggleUsernameMenu);
         usernameDisplay.addEventListener('keydown', (e) => {
           if(usernameDisplay.disabled) return;
           const key = e.key;
@@ -1521,6 +1590,7 @@
       document.addEventListener('click', (e) => { if(!usernameWrap || !usernameMenu) return; if(isMenuOpen() && !usernameWrap.contains(e.target)) closeUsernameMenu(); });
       document.addEventListener('keydown', (e) => { if(e.key === 'Escape') closeUsernameMenu(); });
       function populateUserSelect(){
+        repairKnownAuthSecrets();
         AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
         usernameSel.innerHTML = '';
         if(!AUTH_TABLE.length){ const opt = document.createElement('option'); opt.value = ''; opt.textContent = '（尚無使用者，請先到「系統 / 權限」新增）'; opt.disabled = true; opt.selected = true; usernameSel.appendChild(opt); refreshUsernamePicker(); return; }
@@ -1557,7 +1627,9 @@
       function scheduleAll(){ try{ scheduleLayout(); }catch(e){} }
       scheduleLayout = rafDebounce(layoutButtons);
 
+      repairKnownAuthSecrets();
       syncAuthTableFromAuthority().finally(()=>{
+        repairKnownAuthSecrets();
         AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
         buildMainButtonsDOM();
         ensureCloudMounted(null).catch(()=>{});
@@ -1574,12 +1646,13 @@
         if(!password){ loginError.textContent = '請輸入密碼'; return; }
         loginError.textContent = '登入中…';
         try{
+          repairKnownAuthSecrets();
           AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
           const u = AUTH_TABLE.find(r => String(r.username||'').trim() === username);
           if(!u){ loginError.textContent = '查無此使用者（請到「系統 / 權限」新增）'; return; }
           const pwHash = await sha256Hex(password);
           const storedHash = String(u.passHash || '').trim().toLowerCase();
-          const storedPlain = String(u.password || '').trim();
+          const storedPlain = String(u.password || u.pass || '').trim();
           const ok = (storedHash && pwHash === storedHash) || (!!storedPlain && password === storedPlain);
           if(!ok){ loginError.textContent = '密碼錯誤'; return; }
           setSession({ username: u.username, level: u.level });
