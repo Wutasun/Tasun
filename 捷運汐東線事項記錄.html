@@ -2766,21 +2766,24 @@ function getPromptOptions(mode){
         cfg = cfg || await loadCloudCfg();
         const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-        const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/pull";
-
-        const url = _joinUrl(apiBase, readPath) + (readPath.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(pageKey);
+        const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/read";
+        const url = _joinUrl(apiBase, readPath);
 
         const r = await fetch(url, {
-          method: "GET",
+          method: "POST",
           cache: "no-store",
           credentials: getWorkerCredentialMode(cfg),
-          headers: buildWorkerAuthHeaders({ "accept":"application/json" })
+          headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
+          body: JSON.stringify({ resourceKey: pageKey })
         });
         if(!r.ok){
           const t = await r.text().catch(()=> "");
           throw new Error("cloud read failed: " + r.status + " " + t.slice(0,200));
         }
         const j = await r.json();
+        if(j && Array.isArray(j.rows)){
+          return { db: j.rows, counter: Number(j.counter||0)||0 };
+        }
         return _normalizePullResponse(j);
       }
 
@@ -2799,7 +2802,7 @@ function getPromptOptions(mode){
         payload = payload || { db:[], counter:0 };
 
         const body = {
-          key: pageKey,
+          resourceKey: pageKey,
           payload: { db: Array.isArray(payload.db)? payload.db : [], counter: Number(payload.counter)||0 },
           client: clientInfo && typeof clientInfo==="object" ? clientInfo : {}
         };
@@ -2818,6 +2821,9 @@ function getPromptOptions(mode){
           throw new Error("cloud merge failed: " + r.status + " " + t.slice(0,200));
         }
         const j = await r.json();
+        if(j && Array.isArray(j.rows)){
+          return { db: j.rows, counter: Number(j.counter||payload.counter||0)||0 };
+        }
         return _normalizePullResponse(j);
       }
     async function reconcileCloudOnOpen(opts){
