@@ -1375,6 +1375,96 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       return ck || "";
     }
 
+    function setSharedWorkerToken(token){
+      var raw = norm(token);
+      raw = raw.replace(/^Bearer\s+/i, "");
+      if(!raw) return "";
+      var keys = [
+        "tasunCloudToken_v1",
+        "tasunCloudToken_v1__" + PAGE_KEY,
+        "tasunBearerToken_v1",
+        "tasunAccessToken_v1",
+        "tasunAuthToken_v1",
+        "tasunSessionToken_v1"
+      ];
+      for(var i=0;i<keys.length;i++){
+        try{ sessionStorage.setItem(keys[i], raw); }catch(e){}
+        try{ localStorage.setItem(keys[i], raw); }catch(e){}
+      }
+      return raw;
+    }
+
+    function clearSharedWorkerToken(){
+      var keys = [
+        "tasunCloudToken_v1",
+        "tasunCloudToken_v1__" + PAGE_KEY,
+        "tasunBearerToken_v1",
+        "tasunAccessToken_v1",
+        "tasunAuthToken_v1",
+        "tasunSessionToken_v1"
+      ];
+      for(var i=0;i<keys.length;i++){
+        try{ sessionStorage.removeItem(keys[i]); }catch(e){}
+        try{ localStorage.removeItem(keys[i]); }catch(e){}
+      }
+    }
+
+    function getLocalPasswordForUser(username){
+      username = norm(username);
+      if(!username) return "";
+      try{
+        var auth = ensureAuthTable();
+        var hit = (auth.users||[]).find(function(u){ return norm(u.user)===username; });
+        return hit ? String(hit.pass||"") : "";
+      }catch(e){
+        return "";
+      }
+    }
+
+    async function workerLoginWithPassword(username, password){
+      username = norm(username);
+      password = String(password||"");
+      if(!username || !password) return null;
+      var cfg = await loadCloudCfg();
+      var apiBase = norm(cfg && cfg.apiBase);
+      if(!apiBase) return null;
+      var url = joinApiBase(apiBase, "/api/tasun/login");
+      var r = await fetch(url, {
+        method: "POST",
+        cache: "no-store",
+        credentials: getWorkerCredentialMode(cfg),
+        headers: { "content-type":"application/json", "accept":"application/json" },
+        body: JSON.stringify({ username: username, password: password })
+      });
+      if(!r.ok) return null;
+      var j = await r.json().catch(function(){ return null; });
+      var token = norm(j && (j.token || (j.data && j.data.token) || (j.payload && j.payload.token) || ""));
+      if(!token) return null;
+      setSharedWorkerToken(token);
+      return token;
+    }
+
+    async function ensureWorkerToken(opts){
+      opts = (opts && typeof opts==="object") ? opts : {};
+      var force = !!opts.force;
+      var existing = getSharedWorkerToken();
+      if(existing && !force) return existing;
+      var cur = null;
+      try{ cur = getCurrentUser(); }catch(e){ cur = null; }
+      var username = norm(opts.username || (cur && (cur.user || cur.name)) || state.user || "");
+      var password = String(opts.password || getLocalPasswordForUser(username) || "");
+      if(!username || !password){
+        if(force) clearSharedWorkerToken();
+        return "";
+      }
+      try{
+        return await workerLoginWithPassword(username, password) || "";
+      }catch(e){
+        if(force) clearSharedWorkerToken();
+        return "";
+      }
+    }
+
     function hydrateCrossPageAuth(){
       try{
         var cur = getCurrentUser();
@@ -2769,13 +2859,21 @@ function getPromptOptions(mode){
         const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/read";
         const url = _joinUrl(apiBase, readPath);
 
-        const r = await fetch(url, {
-          method: "POST",
-          cache: "no-store",
-          credentials: getWorkerCredentialMode(cfg),
-          headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
-          body: JSON.stringify({ resourceKey: pageKey })
-        });
+        async function doFetch(){
+          return await fetch(url, {
+            method: "POST",
+            cache: "no-store",
+            credentials: getWorkerCredentialMode(cfg),
+            headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
+            body: JSON.stringify({ resourceKey: pageKey })
+          });
+        }
+
+        let r = await doFetch();
+        if(r.status===401){
+          await ensureWorkerToken({ force:true });
+          r = await doFetch();
+        }
         if(!r.ok){
           const t = await r.text().catch(()=> "");
           throw new Error("cloud read failed: " + r.status + " " + t.slice(0,200));
@@ -2793,7 +2891,6 @@ function getPromptOptions(mode){
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
         const mergePath = (eps && eps.merge) ? String(eps.merge) : "/api/tasun/merge";
 
-        // Accept: {key,payload:{db,counter}} / {payload:{db,counter}} / raw {db,counter}
         let payload = payloadLike;
         if(payload && typeof payload === "object"){
           if(payload.payload && typeof payload.payload==="object") payload = payload.payload;
@@ -2809,13 +2906,21 @@ function getPromptOptions(mode){
 
         const url = _joinUrl(apiBase, mergePath);
 
-        const r = await fetch(url, {
-          method: "POST",
-          cache: "no-store",
-          credentials: getWorkerCredentialMode(cfg),
-          headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
-          body: JSON.stringify(body)
-        });
+        async function doFetch(){
+          return await fetch(url, {
+            method: "POST",
+            cache: "no-store",
+            credentials: getWorkerCredentialMode(cfg),
+            headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
+            body: JSON.stringify(body)
+          });
+        }
+
+        let r = await doFetch();
+        if(r.status===401){
+          await ensureWorkerToken({ force:true });
+          r = await doFetch();
+        }
         if(!r.ok){
           const t = await r.text().catch(()=> "");
           throw new Error("cloud merge failed: " + r.status + " " + t.slice(0,200));
@@ -3130,7 +3235,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       try{ refresh(); }catch(e){ try{ refreshHintSafe(); }catch(_e){} }
     }
 
-    function doLogin(){
+    async function doLogin(){
       var user = norm($("loginUser").value);
       var pass = norm($("loginPass").value);
       if(!user || !pass){
@@ -3148,9 +3253,9 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
       setCurrentUser(cur);
       applyUser(cur);
+      try{ await ensureWorkerToken({ username:user, password:pass, force:true }); }catch(e){}
       closeLogin();
       toast("登入成功");
-      // ✅ 登入後立即做一次「本端先 merge，再重抓雲端」
       setTimeout(function(){ reconcileCloudOnOpen({ silent:true }); }, 60);
     }
 
@@ -3397,6 +3502,7 @@ $("btnSave").addEventListener("click", async function(){
             await reconcileCloudOnOpen({ silent:true });
           }
         }catch(e){}
+        try{ if(cur){ await ensureWorkerToken({ force:false }); } }catch(e){}
         try{ if(!cur) openLogin(); }catch(e){}
 
         try{
