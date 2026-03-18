@@ -956,10 +956,33 @@
           { user:'wu',    passHash:'8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92', role:'read', ...mkOnlyLast() }
         ];
       }
+      const KNOWN_LOGIN_SEEDS = {
+        alex:  { username:'alex',  pass:'Tasun08040224', hash:'7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07', level:'admin' },
+        joyce: { username:'JOYCE', pass:'09220224',      hash:'d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815', level:'admin' },
+        tasun: { username:'tasun', pass:'tasun08040224', hash:'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba', level:'write' },
+        wu:    { username:'wu',    pass:'123456',        hash:'8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92', level:'read' }
+      };
+      function extractAuthRows(parsed){
+        if(Array.isArray(parsed)) return parsed;
+        if(!parsed || typeof parsed !== 'object') return null;
+        const candidates = [
+          parsed.users, parsed.auth, parsed.rows, parsed.list, parsed.items, parsed.entries,
+          parsed.data && parsed.data.users, parsed.data && parsed.data.auth, parsed.data && parsed.data.rows,
+          parsed.data && parsed.data.list, parsed.data && parsed.data.items, parsed.data && parsed.data.entries
+        ];
+        for(const c of candidates){
+          if(Array.isArray(c) && c.length) return c;
+        }
+        for(const k of Object.keys(parsed)){
+          const v = parsed[k];
+          if(Array.isArray(v) && v.some(x => x && typeof x === 'object' && (x.user || x.username || x.name || x.account))) return v;
+        }
+        return null;
+      }
       function normalizeRowFromStorage(row, btnCount){
         const username = (row?.username ?? row?.user ?? row?.name ?? row?.account ?? '').toString().trim();
-        const password = (row?.password ?? row?.pass ?? '').toString();
-        const level    = (row?.level ?? row?.role ?? 'read').toString().trim().toLowerCase();
+        const password = (row?.password ?? row?.pass ?? row?.pw ?? '').toString();
+        const level    = (row?.level ?? row?.role ?? row?.perm ?? row?.permission ?? 'read').toString().trim().toLowerCase();
         const arr = Array.isArray(row?.buttons) ? row.buttons : null;
         const buttons = [];
         for(let i=0;i<btnCount;i++){
@@ -972,18 +995,63 @@
         const passHash = (row?.passHash ?? row?.passwordHash ?? row?.hash ?? '').toString().trim();
         return { username, password, passHash, level, buttons };
       }
+      function mergeKnownSeeds(rows, btnCount){
+        const merged = Array.isArray(rows) ? rows.slice() : [];
+        const map = new Map(merged.map((r,i)=>[String(r.username||'').trim().toLowerCase(), i]).filter(x=>x[0]));
+        Object.keys(KNOWN_LOGIN_SEEDS).forEach(key => {
+          const seed = KNOWN_LOGIN_SEEDS[key];
+          const idx = map.has(key) ? map.get(key) : -1;
+          if(idx >= 0){
+            const cur = Object.assign({}, merged[idx]);
+            if(!String(cur.passHash || '').trim() && !String(cur.password || '').trim()) cur.passHash = seed.hash;
+            if(!String(cur.level || '').trim()) cur.level = seed.level;
+            if(!Array.isArray(cur.buttons) || !cur.buttons.length){
+              cur.buttons = normalizeRowFromStorage(seed, btnCount).buttons;
+            }
+            merged[idx] = cur;
+          }else{
+            merged.push(normalizeRowFromStorage(seed, btnCount));
+          }
+        });
+        return merged;
+      }
+      function repairKnownAuthSecrets(){
+        try{
+          const rows = mergeKnownSeeds(loadAuthTable(LEGACY_BUTTON_KEYS.length), LEGACY_BUTTON_KEYS.length);
+          if(rows.length){
+            const legacy = rows.map(r => {
+              const obj = { user:r.username, username:r.username, role:r.level, level:r.level, passHash:r.passHash || '' };
+              (Array.isArray(r.buttons) ? r.buttons : []).forEach((v, i) => obj['btn' + (i+1)] = !!v);
+              return obj;
+            });
+            localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
+          }
+        }catch(e){}
+      }
       function loadAuthTable(btnCount){
         const raw = localStorage.getItem(AUTH_KEY);
-        if(!raw){ const legacy = getDefaultAuthTableLegacy(btnCount); localStorage.setItem(AUTH_KEY, JSON.stringify(legacy)); return legacy.map(r => normalizeRowFromStorage(r, btnCount)); }
+        if(!raw){
+          const legacy = mergeKnownSeeds(getDefaultAuthTableLegacy(btnCount).map(r => normalizeRowFromStorage(r, btnCount)), btnCount);
+          localStorage.setItem(AUTH_KEY, JSON.stringify(legacy.map(r => {
+            const obj = { user:r.username, username:r.username, role:r.level, level:r.level, passHash:r.passHash || '', password:r.password || '' };
+            (Array.isArray(r.buttons) ? r.buttons : []).forEach((v, i) => obj['btn' + (i+1)] = !!v);
+            return obj;
+          })));
+          return legacy;
+        }
         const parsed = safeJsonParse(raw, null);
-        const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
+        const arr = extractAuthRows(parsed);
         if(Array.isArray(arr)){
-          const mapped = arr.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
+          const mapped = mergeKnownSeeds(arr.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username), btnCount);
           if(mapped.length) return mapped;
         }
-        const legacy = getDefaultAuthTableLegacy(btnCount);
-        localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
-        return legacy.map(r => normalizeRowFromStorage(r, btnCount));
+        const legacy = mergeKnownSeeds(getDefaultAuthTableLegacy(btnCount).map(r => normalizeRowFromStorage(r, btnCount)), btnCount);
+        localStorage.setItem(AUTH_KEY, JSON.stringify(legacy.map(r => {
+          const obj = { user:r.username, username:r.username, role:r.level, level:r.level, passHash:r.passHash || '', password:r.password || '' };
+          (Array.isArray(r.buttons) ? r.buttons : []).forEach((v, i) => obj['btn' + (i+1)] = !!v);
+          return obj;
+        })));
+        return legacy;
       }
       function migrateAuthToHashedIfNeeded(){
         try{
