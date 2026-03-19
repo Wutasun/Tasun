@@ -652,7 +652,7 @@
         <!-- ✅ 按鍵名稱設定 -->
         <div class="navPanel" id="navPanel">
           <div class="navPanelHead">
-            <strong id="navPanelTitle">按鍵名稱設定（btn1～btn5）</strong>
+            <strong>按鍵名稱設定（btn1～btn5）</strong>
             <button class="btn" id="navCloseBtn">關閉</button>
           </div>
           <div class="navGrid">
@@ -834,6 +834,9 @@
   const navCloseBtn= el('navCloseBtn');
   const navReloadBtn=el('navReloadBtn');
   const navSaveBtn = el('navSaveBtn');
+  const navPanelTitle = el('navPanelTitle');
+  const navGridRows = navPanel ? navPanel.querySelector('.navGrid') : null;
+  const navReadonlyNote = null;
   const navNameBtnD= el('navNameBtnD');
   const navNameBtnM= el('navNameBtnM');
   const navName1   = el('navName1');
@@ -1521,15 +1524,8 @@ function safeJsonParse(s, fallback){
     for(let i=1;i<=5;i++){
       const id = `btn${i}`;
       const hit = map.get(id);
-      const item = {
-        key:id,
-        name:String(hit?.label || id).trim() || id,
-        href:String(hit?.href || '').trim(),
-        target:String(hit?.target || '').trim(),
-        sourceId:String(hit?.sourceId || '').trim()
-      };
-      if(isSystemPermissionButton(item)) continue;
-      out.push(item);
+      const name = String(hit?.label || id).trim() || id;
+      out.push({ key:id, name });
     }
     return out;
   }
@@ -1625,14 +1621,6 @@ function safeJsonParse(s, fallback){
     return [1,2,3,4,5].map(i => ({ key:'btn'+i, name:'btn'+i, href:'', target:'' }));
   }
 
-
-  function isSystemPermissionButton(it){
-    const label = String(it?.label || it?.name || it?.key || '').trim();
-    const href = String(it?.href || '').trim();
-    const sid = String(it?.sourceId || '').trim();
-    return /系統\s*[\/／]\s*權限/.test(label) || label === '權限表' || href === '權限表.html' || sid === 'auth' || sid === 'xidong_auth';
-  }
-
   function rebuildCurrentEntryOptions(){
     const entry = resolveEntryValue();
     const items = Array.isArray(currentEntryButtons) && currentEntryButtons.length ? currentEntryButtons : buildFallbackButtons();
@@ -1642,7 +1630,7 @@ function safeJsonParse(s, fallback){
       href: String(it.href || '').trim(),
       target: String(it.target || '').trim(),
       roles: []
-    })).filter(it => !isSystemPermissionButton(it));
+    }));
     if(entry === 'index.html' && currentEntryButtonOptions.length >= 5){
       currentEntryButtonOptions = currentEntryButtonOptions.slice(0,5);
     }
@@ -1651,8 +1639,15 @@ function safeJsonParse(s, fallback){
   async function refreshEntryButtonsBySelection(){
     const entry = resolveEntryValue();
     if(entry === 'index.html'){
-      ensureBtnMetaByEntry();
-      currentEntryButtons = (Array.isArray(btnMeta) ? btnMeta : []).map(x => ({ ...x }));
+      const navButtons = readNavButtons().filter(it => !isSystemPermissionButton(it));
+      currentEntryButtons = navButtons.map((it, idx) => ({
+        key: `btn${idx+1}`,
+        name: String(it.label || it.sourceId || `btn${idx+1}`).trim() || `btn${idx+1}`,
+        href: String(it.href || '').trim(),
+        target: String(it.target || '').trim(),
+        sourceId: String(it.sourceId || '').trim() || `btn${idx+1}`
+      }));
+      btnMeta = currentEntryButtons.map(x => ({ ...x }));
       rebuildCurrentEntryOptions();
       renderHeaders();
       renderTable();
@@ -1698,7 +1693,7 @@ function safeJsonParse(s, fallback){
       return `
       <tr data-idx="${idx}">
         <td><input class="field" data-k="user" value="${escapeHtml(u.user||'')}" ${isAdmin?'':'disabled'}></td>
-        <td><input class="field" data-k="pass" value="" placeholder="（已加密）輸入新密碼才會更新" ${isAdmin?'':'disabled'}></td>
+        <td><input class="field" data-k="pass" value="" placeholder="此處可直接輸入新密碼；完成後才會更新並加密儲存" ${isAdmin?'':'disabled'}></td>
         <td>
           <select class="field" data-k="role" ${isAdmin?'':'disabled'}>
             ${roleOptions.map(r => `<option value="${r}" ${r===role?'selected':''}>${r}</option>`).join('')}
@@ -1741,7 +1736,7 @@ function safeJsonParse(s, fallback){
             </div>
             <div>
               <div class="rowLabel">密碼</div>
-              <input class="field" data-k="pass" value="" placeholder="（已加密）輸入新密碼才會更新" ${isAdmin?'':'disabled'}>
+              <input class="field" data-k="pass" value="" placeholder="此處可直接輸入新密碼；完成後才會更新並加密儲存" ${isAdmin?'':'disabled'}>
             </div>
             <div>
               <div class="rowLabel">權限</div>
@@ -1820,13 +1815,6 @@ function safeJsonParse(s, fallback){
 
   function renderAll(){
     updateWho();
-    ensureBtnMetaByEntry();
-    currentEntryButtons = (Array.isArray(btnMeta) ? btnMeta : []).map(x => ({ ...x }));
-    rebuildCurrentEntryOptions();
-    renderHeaders();
-    renderTable();
-    renderCards();
-    renderEntryPreview();
 
     addBtn.disabled = !isAdmin;
     navNameBtnD.disabled = !isAdmin;
@@ -1874,6 +1862,7 @@ function safeJsonParse(s, fallback){
 
     // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
     if(k === "pass"){
+      if(e.type === 'input') return;
       const plain = String(e.target.value || "");
       if(plain.trim()){
         try{
@@ -1885,7 +1874,7 @@ function safeJsonParse(s, fallback){
           setMsg("密碼更新失敗：瀏覽器不支援加密（crypto.subtle）。", true);
         }
         normalizeAuth();
-        saveLocal();
+        await saveLocal();
         scheduleCloudPush("pwd-updated");
       }
       return;
@@ -1946,6 +1935,7 @@ function safeJsonParse(s, fallback){
 
     // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
     if(k === "pass"){
+      if(e.type === 'input') return;
       const plain = String(e.target.value || "");
       if(plain.trim()){
         try{
@@ -1957,7 +1947,7 @@ function safeJsonParse(s, fallback){
           setMsg("密碼更新失敗：瀏覽器不支援加密（crypto.subtle）。", true);
         }
         normalizeAuth();
-        saveLocal();
+        await saveLocal();
         scheduleCloudPush("pwd-updated");
       }
       return;
@@ -2449,43 +2439,30 @@ function safeJsonParse(s, fallback){
 
   function readNavButtons(){
     const arr = safeJsonParse(localStorage.getItem(NAV_KEY) || '[]', []);
-    const library = getHomeButtonLibrary().filter(it => !isSystemPermissionButton(it));
+    const library = getHomeButtonLibrary();
 
     if(Array.isArray(arr) && arr.length){
-      const ordered = arr
-        .map((x, idx) => ({ raw:x, idx }))
-        .sort((a,b) => {
-          const ai = Number(String(a.raw?.id || '').replace(/^btn/i,'')) || (a.idx + 1);
-          const bi = Number(String(b.raw?.id || '').replace(/^btn/i,'')) || (b.idx + 1);
-          return ai - bi;
-        });
+      const map = new Map(arr.map(x => [String(x.id||'').toLowerCase(), x]));
       const out = [];
-      for(const row of ordered){
-        const hit = row.raw || {};
-        const sourceId = inferNavSourceId(hit, hit.id || `btn${out.length+1}`);
+      for(let i=1;i<=5;i++){
+        const id = `btn${i}`;
+        const hit = map.get(id) || {};
+        const sourceId = inferNavSourceId(hit, id);
         const lib = getLibraryItemBySourceId(sourceId);
-        const item = {
-          id: `btn${out.length+1}`,
+
+        out.push({
+          id,
           sourceId,
-          label: String(lib?.label || hit?.label || `btn${out.length+1}`).trim() || `btn${out.length+1}`,
+          label: String(lib?.label || hit?.label || id).trim() || id,
           href: String(lib?.href || hit?.href || '').trim(),
           target: String(lib?.target || hit?.target || '').trim(),
           roles: Array.isArray(lib?.roles) ? lib.roles.slice() : (Array.isArray(hit?.roles) ? hit.roles.slice() : [])
-        };
-        if(isSystemPermissionButton(item)) continue;
-        out.push(item);
+        });
       }
-      return out.length ? out : library.map((it, idx) => ({
-        id: `btn${idx+1}`,
-        sourceId: it.sourceId,
-        label: it.label,
-        href: it.href,
-        target: it.target,
-        roles: it.roles.slice()
-      }));
+      return out;
     }
 
-    return library.map((it, idx) => ({
+    return library.slice(0,5).map((it, idx) => ({
       id: `btn${idx+1}`,
       sourceId: it.sourceId,
       label: it.label,
@@ -2497,9 +2474,13 @@ function safeJsonParse(s, fallback){
 
   function getNavSourceList(){
     const entry = resolveEntryValue();
-    if(entry === 'index.html') return getHomeButtonLibrary().filter(it => !isSystemPermissionButton(it));
-    const list = Array.isArray(currentEntryButtonOptions) && currentEntryButtonOptions.length ? currentEntryButtonOptions.slice() : getHomeButtonLibrary();
-    return list.filter(it => !isSystemPermissionButton(it));
+    if(entry === 'index.html'){
+      const list = Array.isArray(currentEntryButtonOptions) && currentEntryButtonOptions.length
+        ? currentEntryButtonOptions.slice()
+        : readNavButtons().filter(it => !isSystemPermissionButton(it));
+      return list.filter(it => !isSystemPermissionButton(it));
+    }
+    return Array.isArray(currentEntryButtonOptions) && currentEntryButtonOptions.length ? currentEntryButtonOptions.slice() : getHomeButtonLibrary().filter(it => !isSystemPermissionButton(it));
   }
 
   function navOptionText(it){
@@ -2513,11 +2494,8 @@ function safeJsonParse(s, fallback){
   }
 
   function refreshNavSelectOptions(){
-    const list = getNavSourceList().filter(it => !isSystemPermissionButton(it));
+    const list = getNavSourceList();
     const selects = getNavSelectControls();
-    if(navPanelTitle){
-      navPanelTitle.textContent = `按鍵名稱設定（${resolveEntryValue()}／共 ${list.length} 顆）`;
-    }
 
     selects.forEach((sel, idx) => {
       if(!sel) return;
@@ -2526,21 +2504,18 @@ function safeJsonParse(s, fallback){
       const visible = !!rowItem;
       if(labelNode && labelNode.classList.contains('navLabel')) labelNode.style.display = visible ? '' : 'none';
       sel.style.display = visible ? '' : 'none';
-      sel.disabled = !visible;
       if(!visible){
         sel.innerHTML = '';
         sel.dataset.prevValue = '';
-        sel.value = '';
         return;
       }
 
       const fallback = rowItem.sourceId || '';
       const currentVal = String(sel.value || sel.dataset.prevValue || fallback).trim() || fallback;
-      const optionsHtml = list.map(item => {
+      sel.innerHTML = list.map(item => {
         const selected = item.sourceId === currentVal ? 'selected' : '';
         return `<option value="${escapeHtml(item.sourceId)}" ${selected}>${escapeHtml(navOptionText(item))}</option>`;
       }).join('');
-      sel.innerHTML = optionsHtml;
 
       if(!list.some(item => item.sourceId === sel.value) && fallback){
         sel.value = fallback;
@@ -2640,10 +2615,10 @@ function safeJsonParse(s, fallback){
       if(!sel) return;
       if(entry === 'index.html'){
         const item = nav[idx] || {};
-        const sourceId = String(item.sourceId || getHomeButtonLibrary()[idx]?.sourceId || `btn${idx+1}`).trim();
+        const sourceId = String(item.sourceId || list[idx]?.sourceId || `btn${idx+1}`).trim();
         sel.value = sourceId;
         if(String(sel.value || '').trim() !== sourceId){
-          const fallback = getHomeButtonLibrary()[idx];
+          const fallback = list[idx];
           sel.value = fallback ? fallback.sourceId : sourceId;
         }
       }else{
@@ -2663,9 +2638,9 @@ function safeJsonParse(s, fallback){
       return;
     }
 
-    const sourceList = getNavSourceList().filter(it => !isSystemPermissionButton(it));
+    const sourceList = getNavSourceList();
     const sourceMap = new Map(sourceList.map(it => [String(it.sourceId || '').trim(), it]));
-    const selects = getNavSelectControls().filter((sel, idx) => !!sourceList[idx]);
+    const selects = getNavSelectControls();
 
     const updated = selects.map((sel, idx) => {
       const sourceId = String(sel?.value || '').trim() || (sourceList[idx]?.sourceId || `btn${idx+1}`);
