@@ -1202,7 +1202,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     function readCookie(name){
       try{
-        var esc = String(name||"").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        var esc = String(name||"").replace(/[.*+?^${}()|[\]\]/g, "\$&");
         var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
         return m ? decodeURIComponent(m[1] || "") : "";
       }catch(e){ return ""; }
@@ -3002,48 +3002,26 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       refresh();
     }
 
-    // ---------------------------
-    // Nav / menus
-    // ---------------------------
-    function preserveLoginForNav(){
+    function persistAuthBridge(){
       try{
-        var cur = normalizeAuthUser(getCurrentUser()) || normalizeAuthUser(readJsonFromKeys(AUTH_BRIDGE_KEYS));
-        if(!cur) return;
-        var name = norm(cur.name || cur.user || cur.username || cur.account || '');
-        var role = norm(cur.role || 'read').toLowerCase() || 'read';
-        if(!name) return;
-        var now = Date.now();
-        var tabId = '';
-        try{
-          tabId = sessionStorage.getItem('tasunTabId_v1') || '';
-          if(!tabId){
-            tabId = 'tab_' + Math.random().toString(36).slice(2) + '_' + now.toString(36);
-            sessionStorage.setItem('tasunTabId_v1', tabId);
-          }
-        }catch(_e){}
-        var payload = { name:name, user:name, role:role, at:now, exp:now + 1000 * 60 * 60 * 12, v:(window.__CACHE_V || ''), tabId:tabId };
+        var u = normalizeAuthUser(state.user || getCurrentUser() || readJsonFromKeys(AUTH_BRIDGE_KEYS)) || null;
+        if(!u || !u.user) return;
+        var payload = { user:u.user, name:u.name||u.user, role:u.role||'read', at: nowISO() };
         try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
         try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
-        try{ localStorage.setItem('tasunSharedLogin_v1', JSON.stringify(payload)); }catch(_e){}
-        try{ sessionStorage.setItem('tasunSharedLogin_v1', JSON.stringify(payload)); }catch(_e){}
-        try{ localStorage.setItem('tasunSso_v1', JSON.stringify(payload)); }catch(_e){}
-        try{ sessionStorage.setItem('tasunSso_v1', JSON.stringify(payload)); }catch(_e){}
-        try{ sessionStorage.setItem('tasunSsoTab_v1','1'); }catch(_e){}
-        try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user:name, role:role, t:now, tabId:tabId })); }catch(_e){}
-        try{ sessionStorage.setItem(INDEX_SESSION_KEY, '1'); }catch(_e){}
-        try{ sessionStorage.setItem('tasunSessionLogin_v2', JSON.stringify({ user:name, role:role, t:now, tabId:tabId })); }catch(_e){}
+        try{ sessionStorage.setItem('tasunSessionLogin_v2', JSON.stringify({ user: payload.user, role: payload.role, t: Date.now() })); }catch(_e){}
         try{ sessionStorage.setItem('tasunIndexSessionAuthed_v2', '1'); }catch(_e){}
-        try{
-          var cookiePayload = encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify({ u:name, r:role, exp:now + 1000 * 60 * 60 * 12, v:(window.__CACHE_V || '') })) )));
-          document.cookie = 'tasun_session_v4=' + cookiePayload + '; Path=/; SameSite=Lax' + (location.protocol === 'https:' ? '; Secure' : '');
-        }catch(_e){}
+        try{ localStorage.setItem('tasunSso_v2', JSON.stringify({ name: payload.user, role: payload.role, exp: Date.now() + 12*60*60*1000 })); }catch(_e){}
       }catch(_e){}
     }
 
+    // ---------------------------
+    // Nav / menus
+    // ---------------------------
     function navTo(href){
       href = norm(href);
       if(!href) return;
-      preserveLoginForNav();
+      persistAuthBridge();
       location.href = addV(href);
     }
 
@@ -3099,15 +3077,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       try{ refresh(); }catch(e){ try{ refreshHintSafe(); }catch(_e){} }
     }
 
-    async function sha256Hex(str){
-      var s = String(str===undefined||str===null ? '' : str);
-      if(!(window.crypto && window.crypto.subtle && window.TextEncoder)) return '';
-      var data = new TextEncoder().encode(s);
-      var buf = await window.crypto.subtle.digest('SHA-256', data);
-      return Array.from(new Uint8Array(buf)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
-    }
-
-    async function doLogin(){
+    function doLogin(){
       var user = norm($("loginUser").value);
       var pass = norm($("loginPass").value);
       if(!user || !pass){
@@ -3116,26 +3086,58 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         return;
       }
       var auth = ensureAuthTable();
-      var hit = auth.users.find(function(u){ return u.user===user; });
-      var ok = false;
-      if(hit){
-        var rawPass = norm(hit.pass || hit.password || '');
-        var savedHash = norm(hit.passHash || hit.passwordHash || hit.hash || '');
-        if(rawPass){
-          ok = (rawPass === pass);
-        }else if(savedHash){
-          try{ ok = ((await sha256Hex(pass)) === savedHash); }catch(_e){ ok = false; }
+      var hit = auth.users.find(function(u){
+        if(u.user!==user) return false;
+        var plain = String(u.pass || u.password || '');
+        var ph = String(u.passHash || u.passwordHash || u.hash || '').trim().toLowerCase();
+        return (!!plain && plain===pass);
+      });
+      if(!hit){
+        var userRec = auth.users.find(function(u){ return u.user===user; });
+        if(userRec){
+          var ph = String(userRec.passHash || userRec.passwordHash || userRec.hash || '').trim().toLowerCase();
+          if(ph){
+            try{
+              var nowHash = '';
+              if(window.crypto && window.crypto.subtle && window.TextEncoder){
+                // 同步區塊外由 async IIFE 處理
+              }
+            }catch(_e){}
+          }
         }
       }
-      if(!hit || !ok){
-        $("loginErr").style.display="block";
-        $("loginErr").textContent="帳號或密碼錯誤";
+      if(!hit){
+        (async function(){
+          try{
+            var userRec2 = auth.users.find(function(u){ return u.user===user; });
+            var ph2 = String((userRec2 && (userRec2.passHash || userRec2.passwordHash || userRec2.hash)) || '').trim().toLowerCase();
+            if(!ph2){
+              $("loginErr").style.display="block";
+              $("loginErr").textContent="帳號或密碼錯誤";
+              return;
+            }
+            var buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pass));
+            var hash = Array.from(new Uint8Array(buf)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+            if(hash !== ph2){
+              $("loginErr").style.display="block";
+              $("loginErr").textContent="帳號或密碼錯誤";
+              return;
+            }
+            var cur = { user: userRec2.user, role: userRec2.role||"read", name: userRec2.name||userRec2.user, at: nowISO() };
+            setCurrentUser(cur);
+            applyUser(cur);
+            closeLogin();
+            toast("登入成功");
+            setTimeout(function(){ reconcileCloudOnOpen({ silent:true }); }, 60);
+          }catch(_e){
+            $("loginErr").style.display="block";
+            $("loginErr").textContent="帳號或密碼錯誤";
+          }
+        })();
         return;
       }
       var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
       setCurrentUser(cur);
-      try{ hydrateCrossPageAuth(); }catch(e){}
-      preserveLoginForNav();
       applyUser(cur);
       closeLogin();
       toast("登入成功");
