@@ -652,7 +652,7 @@
         <!-- ✅ 按鍵名稱設定 -->
         <div class="navPanel" id="navPanel">
           <div class="navPanelHead">
-            <strong>按鍵名稱設定（btn1～btn5）</strong>
+            <strong id="navPanelTitle">按鍵名稱設定（btn1～btn5）</strong>
             <button class="btn" id="navCloseBtn">關閉</button>
           </div>
           <div class="navGrid">
@@ -710,7 +710,6 @@
   const ROUTE_KEY    = 'tasunRoutes_v1';
   const LEGACY_ROUTE_KEY = 'tasunNavRoutes_v1';
   const BTN_META_KEY = 'tasunButtonMeta_v1';
-  const ENTRY_BUTTON_ORDER_KEY = 'tasunEntryButtonOrder_v1';
 
   const ENTRY_SELECTED_KEY = 'tasunEntrySelected_v1';
   const PERM_MATRIX_KEY    = 'tasunPermMatrix_v1';
@@ -1522,8 +1521,15 @@ function safeJsonParse(s, fallback){
     for(let i=1;i<=5;i++){
       const id = `btn${i}`;
       const hit = map.get(id);
-      const name = String(hit?.label || id).trim() || id;
-      out.push({ key:id, name });
+      const item = {
+        key:id,
+        name:String(hit?.label || id).trim() || id,
+        href:String(hit?.href || '').trim(),
+        target:String(hit?.target || '').trim(),
+        sourceId:String(hit?.sourceId || '').trim()
+      };
+      if(isSystemPermissionButton(item)) continue;
+      out.push(item);
     }
     return out;
   }
@@ -2443,30 +2449,43 @@ function safeJsonParse(s, fallback){
 
   function readNavButtons(){
     const arr = safeJsonParse(localStorage.getItem(NAV_KEY) || '[]', []);
-    const library = getHomeButtonLibrary();
+    const library = getHomeButtonLibrary().filter(it => !isSystemPermissionButton(it));
 
     if(Array.isArray(arr) && arr.length){
-      const map = new Map(arr.map(x => [String(x.id||'').toLowerCase(), x]));
+      const ordered = arr
+        .map((x, idx) => ({ raw:x, idx }))
+        .sort((a,b) => {
+          const ai = Number(String(a.raw?.id || '').replace(/^btn/i,'')) || (a.idx + 1);
+          const bi = Number(String(b.raw?.id || '').replace(/^btn/i,'')) || (b.idx + 1);
+          return ai - bi;
+        });
       const out = [];
-      for(let i=1;i<=5;i++){
-        const id = `btn${i}`;
-        const hit = map.get(id) || {};
-        const sourceId = inferNavSourceId(hit, id);
+      for(const row of ordered){
+        const hit = row.raw || {};
+        const sourceId = inferNavSourceId(hit, hit.id || `btn${out.length+1}`);
         const lib = getLibraryItemBySourceId(sourceId);
-
-        out.push({
-          id,
+        const item = {
+          id: `btn${out.length+1}`,
           sourceId,
-          label: String(lib?.label || hit?.label || id).trim() || id,
+          label: String(lib?.label || hit?.label || `btn${out.length+1}`).trim() || `btn${out.length+1}`,
           href: String(lib?.href || hit?.href || '').trim(),
           target: String(lib?.target || hit?.target || '').trim(),
           roles: Array.isArray(lib?.roles) ? lib.roles.slice() : (Array.isArray(hit?.roles) ? hit.roles.slice() : [])
-        });
+        };
+        if(isSystemPermissionButton(item)) continue;
+        out.push(item);
       }
-      return out;
+      return out.length ? out : library.map((it, idx) => ({
+        id: `btn${idx+1}`,
+        sourceId: it.sourceId,
+        label: it.label,
+        href: it.href,
+        target: it.target,
+        roles: it.roles.slice()
+      }));
     }
 
-    return library.slice(0,5).map((it, idx) => ({
+    return library.map((it, idx) => ({
       id: `btn${idx+1}`,
       sourceId: it.sourceId,
       label: it.label,
@@ -2484,15 +2503,49 @@ function safeJsonParse(s, fallback){
   }
 
   function navOptionText(it){
-    return String(it?.label || it?.id || '').trim() || '未命名按鍵';
+    const label = String(it?.label || it?.id || '').trim() || '未命名按鍵';
+    const href = String(it?.href || '').trim();
+    return href ? `${label} ｜ ${href}` : label;
   }
 
   function getNavSelectControls(){
-    return [navName1, navName2, navName3, navName4, navName5];
+    const dynamic = Array.from((navPanel || document).querySelectorAll('select[id^="navName"], select[data-nav-select="1"]'));
+    if(dynamic.length) return dynamic;
+    return [navName1, navName2, navName3, navName4, navName5].filter(Boolean);
+  }
+
+  function getNavFallbackSourceList(){
+    const entry = resolveEntryValue();
+    if(entry === 'index.html'){
+      const home = getHomeButtonLibrary().filter(it => !isSystemPermissionButton(it));
+      if(home.length) return home;
+    }
+    const fromCurrent = (Array.isArray(currentEntryButtons) ? currentEntryButtons : [])
+      .map((it, idx) => ({
+        sourceId: String(it?.sourceId || it?.key || ('btn'+(idx+1))).trim() || ('btn'+(idx+1)),
+        label: String(it?.label || it?.name || it?.key || ('btn'+(idx+1))).trim() || ('btn'+(idx+1)),
+        href: String(it?.href || '').trim(),
+        target: String(it?.target || '').trim(),
+        roles: []
+      }))
+      .filter(it => !isSystemPermissionButton(it));
+    if(fromCurrent.length) return fromCurrent;
+    const fromDefaults = (getEntryButtonsFromDefaults(entry) || [])
+      .map((it, idx) => ({
+        sourceId: String(it?.sourceId || it?.key || ('btn'+(idx+1))).trim() || ('btn'+(idx+1)),
+        label: String(it?.label || it?.name || it?.key || ('btn'+(idx+1))).trim() || ('btn'+(idx+1)),
+        href: String(it?.href || '').trim(),
+        target: String(it?.target || '').trim(),
+        roles: []
+      }))
+      .filter(it => !isSystemPermissionButton(it));
+    if(fromDefaults.length) return fromDefaults;
+    return [];
   }
 
   function refreshNavSelectOptions(){
-    const list = getNavSourceList();
+    let list = getNavSourceList().filter(it => !isSystemPermissionButton(it));
+    if(!list.length) list = getNavFallbackSourceList();
     const selects = getNavSelectControls();
     if(navPanelTitle){
       navPanelTitle.textContent = `按鍵名稱設定（${resolveEntryValue()}／共 ${list.length} 顆）`;
@@ -2505,18 +2558,21 @@ function safeJsonParse(s, fallback){
       const visible = !!rowItem;
       if(labelNode && labelNode.classList.contains('navLabel')) labelNode.style.display = visible ? '' : 'none';
       sel.style.display = visible ? '' : 'none';
+      sel.disabled = !visible;
       if(!visible){
         sel.innerHTML = '';
         sel.dataset.prevValue = '';
+        sel.value = '';
         return;
       }
 
       const fallback = rowItem.sourceId || '';
       const currentVal = String(sel.value || sel.dataset.prevValue || fallback).trim() || fallback;
-      sel.innerHTML = list.map(item => {
+      const optionsHtml = list.map(item => {
         const selected = item.sourceId === currentVal ? 'selected' : '';
         return `<option value="${escapeHtml(item.sourceId)}" ${selected}>${escapeHtml(navOptionText(item))}</option>`;
       }).join('');
+      sel.innerHTML = optionsHtml;
 
       if(!list.some(item => item.sourceId === sel.value) && fallback){
         sel.value = fallback;
@@ -2524,7 +2580,7 @@ function safeJsonParse(s, fallback){
       sel.dataset.prevValue = sel.value;
     });
 
-    if(navSaveBtn) navSaveBtn.disabled = false;
+    if(navSaveBtn) navSaveBtn.disabled = (resolveEntryValue() !== 'index.html');
   }
 
   function bindNavSelectSwap(sel){
@@ -2546,7 +2602,6 @@ function safeJsonParse(s, fallback){
 
       sel.dataset.prevValue = sel.value;
       refreshNavSelectOptions();
-      syncNavPreviewFromSelects();
     });
   }
 
@@ -2599,7 +2654,9 @@ function safeJsonParse(s, fallback){
     navPanel.classList.add('show');
     Promise.resolve(refreshEntryButtonsBySelection()).then(() => {
       loadNavNamesIntoInputs();
-      setMsg('可直接調整目前入口網頁的按鍵排序；儲存後會同步更新按鍵名稱與對應連結。');
+      if(resolveEntryValue() !== 'index.html'){
+        setMsg('目前入口不是 index.html；下方顯示的是該入口頁實際按鍵名稱與連結，僅供檢視，不會改動首頁排序。');
+      }
     });
   }
   function closeNavPanel(){ navPanel.classList.remove('show'); }
@@ -2633,11 +2690,14 @@ function safeJsonParse(s, fallback){
 
   function saveNavNamesFromInputs(){
     if(!isAdmin){ setMsg('你不是 admin，不能儲存按鍵名稱。', true); return; }
+    if(resolveEntryValue() !== 'index.html'){
+      setMsg('目前入口不是 index.html；這裡僅顯示該入口頁按鍵名稱與連結，不寫回首頁排序。');
+      return;
+    }
 
-    const entry = resolveEntryValue();
-    const sourceList = getNavSourceList();
+    const sourceList = getNavSourceList().filter(it => !isSystemPermissionButton(it));
     const sourceMap = new Map(sourceList.map(it => [String(it.sourceId || '').trim(), it]));
-    const selects = getNavSelectControls();
+    const selects = getNavSelectControls().filter((sel, idx) => !!sourceList[idx]);
 
     const updated = selects.map((sel, idx) => {
       const sourceId = String(sel?.value || '').trim() || (sourceList[idx]?.sourceId || `btn${idx+1}`);
@@ -2646,28 +2706,15 @@ function safeJsonParse(s, fallback){
         id: `btn${idx+1}`,
         sourceId: String(src?.sourceId || sourceId).trim(),
         label: String(src?.label || `btn${idx+1}`).trim(),
-        name: String(src?.label || `btn${idx+1}`).trim(),
         href: String(src?.href || '').trim(),
         target: String(src?.target || '').trim(),
         roles: Array.isArray(src?.roles) ? src.roles.slice() : []
       };
-    }).filter(it => !isSystemPermissionButton(it));
+    });
 
-    if(entry === 'index.html'){
-      writeNavButtons(updated);
-    }else{
-      persistEntryOrder(entry, updated);
-      currentEntryButtons = updated.map((it, idx) => ({ ...it, key:'btn' + (idx + 1) }));
-      btnMeta = currentEntryButtons.map((it, idx) => ({ ...it, key:'btn' + (idx + 1), name: it.label || ('btn' + (idx + 1)) }));
-      rebuildCurrentEntryOptions();
-      renderHeaders();
-      renderTable();
-      renderCards();
-      renderEntryPreview();
-      scheduleCloudPush('entry-nav-reorder');
-    }
+    writeNavButtons(updated);
 
-    setMsg('✅ 已儲存目前入口網頁按鍵排序並同步（名稱、連結網址、target 會一起移動）。');
+    setMsg('✅ 已儲存按鍵排序並同步（名稱、連結網址、target 會一起移動）。\n其他分頁（例如首頁）會自動更新。');
   }
 
   getNavSelectControls().forEach(bindNavSelectSwap);
@@ -2730,7 +2777,7 @@ function safeJsonParse(s, fallback){
   }
 
   window.addEventListener('storage', async (e) => {
-    if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY || e.key === ENTRY_BUTTON_ORDER_KEY){
+    if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY){
       // routes/registry 變動 → 入口頁清單可更新
       buildEntrySelect();
       renderAll();
@@ -2783,8 +2830,7 @@ function safeJsonParse(s, fallback){
     'tasunNavButtons_v1',
     'tasunRoutes_v1',
     'tasunEntrySelected_v1',
-    'tasunEntryRegistry_v1',
-    'tasunEntryButtonOrder_v1'
+    'tasunEntryRegistry_v1'
   ];
 
   function getLocal(){
