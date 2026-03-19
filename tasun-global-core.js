@@ -34,10 +34,6 @@
       var s = sessionStorage.getItem(key);
       if(s) return s;
     }catch(_e){}
-    try{
-      var l = localStorage.getItem(key);
-      if(l) return l;
-    }catch(_e){}
     return '';
   }
 
@@ -66,15 +62,16 @@
       at: nowISO()
     });
     try{ sessionStorage.setItem(CURRENT_KEY, row); }catch(_e){}
-    try{ localStorage.setItem(CURRENT_KEY, row); }catch(_e){}
     try{ sessionStorage.setItem(SESSION_KEY, row); }catch(_e){}
     try{ sessionStorage.setItem(INDEX_SESSION_KEY, '1'); }catch(_e){}
+    try{ localStorage.removeItem(CURRENT_KEY); }catch(_e){}
     return true;
   }
 
   function clearSessionLogin(){
     [CURRENT_KEY, SESSION_KEY, INDEX_SESSION_KEY].forEach(function(k){
       try{ sessionStorage.removeItem(k); }catch(_e){}
+      try{ localStorage.removeItem(k); }catch(_e){}
     });
   }
 

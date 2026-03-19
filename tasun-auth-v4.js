@@ -1,22 +1,25 @@
-/* TasunAuthV4 (v4 FINAL)
- * - 先嘗試 Worker login（若你的 Worker 有 /api/tasun/login）
- * - 失敗則使用本地固定帳號（alex-admin / tasun-write / wu-read）
- * - 與 tasun-global-auth-v65.js 共用 CURRENT_KEY
- */
 (function(global){
   'use strict';
 
   var CURRENT_KEY = 'tasunCurrentUser_v1';
+  var SESSION_KEY = 'tasunSession_v1';
+  var INDEX_SESSION_KEY = 'tasunIndexSession_v1';
+  var TOKEN_KEYS = ['tasunCloudToken_v1','tasunBearerToken_v1','tasunAccessToken_v1'];
+
+  function writeSession(key, value){ try{ sessionStorage.setItem(key, value); }catch(e){} }
+  function readSession(key){ try{ return sessionStorage.getItem(key)||''; }catch(e){ return ''; } }
+  function removeEverywhere(key){ try{ sessionStorage.removeItem(key); }catch(e){} try{ localStorage.removeItem(key); }catch(e){} }
 
   function setCurrent(user){
-    try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(user||null)); }catch(e){}
-    if(global.TasunAuth && global.TasunAuth.setCurrent) {
-      try{ global.TasunAuth.setCurrent(user||null); }catch(e){}
-    }
+    var row = JSON.stringify(user||null);
+    writeSession(CURRENT_KEY, row);
+    writeSession(SESSION_KEY, row);
+    writeSession(INDEX_SESSION_KEY, '1');
+    try{ if(global.TasunAuth && global.TasunAuth.setCurrent) global.TasunAuth.setCurrent(user||null); }catch(e){}
   }
 
   function getCurrent(){
-    try{ return JSON.parse(localStorage.getItem(CURRENT_KEY)||'null'); }catch(e){ return null; }
+    try{ return JSON.parse(readSession(CURRENT_KEY)||readSession(SESSION_KEY)||'null'); }catch(e){ return null; }
   }
 
   function normalizeRole(role){
@@ -25,69 +28,43 @@
     return 'read';
   }
 
-  // 本地固定帳號
-  var LOCAL_USERS = [
-    { username:'alex',  password:'alex-admin',  role:'admin' },
-    { username:'tasun', password:'tasun-write', role:'write' },
-    { username:'wu',    password:'wu-read',    role:'read' }
-  ];
-
   async function tryWorkerLogin(apiBase, username, password){
     if(!apiBase) throw new Error('no apiBase');
     var url = apiBase.replace(/\/$/,'') + '/api/tasun/login';
     var res = await fetch(url, {
       method:'POST',
-      headers:{'Content-Type':'application/json'},
+      credentials:'include',
+      headers:{'Content-Type':'application/json','Accept':'application/json'},
       body: JSON.stringify({ username: username, password: password })
     });
     if(!res.ok) throw new Error('login http '+res.status);
     var data = await res.json();
-    // 允許多種回傳格式
-    var u = data.user || data.data || data;
-    if(!u || !u.username) throw new Error('bad login response');
-    return {
-      username: String(u.username),
-      role: normalizeRole(u.role || u.permission || u.perm),
-      token: u.token || data.token || null,
-      updatedAt: Date.now()
-    };
-  }
-
-  function localLogin(username, password){
-    var u = LOCAL_USERS.find(x=>x.username===username && x.password===password);
-    if(!u) return null;
-    return { username:u.username, role:u.role, token:null, updatedAt:Date.now() };
+    var usernameOut = String(data.username || data.user || (data.data && data.data.username) || '').trim();
+    var roleOut = normalizeRole(data.role || (data.user && data.user.role) || (data.data && data.data.role));
+    var token = String(data.token || (data.user && data.user.token) || '').trim();
+    if(!usernameOut || !token) throw new Error('bad login response');
+    var u = { username:usernameOut, user:usernameOut, name:usernameOut, role:roleOut, token:token, updatedAt:Date.now() };
+    TOKEN_KEYS.forEach(function(k){ writeSession(k, token); });
+    setCurrent(u);
+    return u;
   }
 
   async function login(opts){
     opts = opts||{};
     var username = String(opts.username||'').trim();
     var password = String(opts.password||'');
-    var apiBase = String(opts.apiBase||global.TASUN_API_BASE||'');
-
+    var apiBase = String(opts.apiBase||global.TASUN_API_BASE||'').trim();
     if(!username || !password) throw new Error('missing credentials');
-
-    // 1) Worker
-    try{
-      var u1 = await tryWorkerLogin(apiBase, username, password);
-      setCurrent(u1);
-      return u1;
-    }catch(e){
-      // 2) local
-      var u2 = localLogin(username, password);
-      if(!u2) throw e;
-      setCurrent(u2);
-      return u2;
-    }
+    return tryWorkerLogin(apiBase, username, password);
   }
 
   function logout(){
-    setCurrent(null);
+    removeEverywhere(CURRENT_KEY);
+    removeEverywhere(SESSION_KEY);
+    removeEverywhere(INDEX_SESSION_KEY);
+    TOKEN_KEYS.forEach(removeEverywhere);
+    try{ if(global.TasunAuth && global.TasunAuth.setCurrent) global.TasunAuth.setCurrent(null); }catch(e){}
   }
 
-  global.TasunAuthV4 = {
-    login: login,
-    logout: logout,
-    getCurrent: getCurrent
-  };
+  global.TasunAuthV4 = { login: login, logout: logout, getCurrent: getCurrent };
 })(window);
