@@ -1202,7 +1202,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     function readCookie(name){
       try{
-        var esc = String(name||"").replace(/[.*+?^${}()|[\]\]/g, "\$&");
+        var esc = String(name||"").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
         return m ? decodeURIComponent(m[1] || "") : "";
       }catch(e){ return ""; }
@@ -3005,9 +3005,45 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
     // ---------------------------
     // Nav / menus
     // ---------------------------
+    function preserveLoginForNav(){
+      try{
+        var cur = normalizeAuthUser(getCurrentUser()) || normalizeAuthUser(readJsonFromKeys(AUTH_BRIDGE_KEYS));
+        if(!cur) return;
+        var name = norm(cur.name || cur.user || cur.username || cur.account || '');
+        var role = norm(cur.role || 'read').toLowerCase() || 'read';
+        if(!name) return;
+        var now = Date.now();
+        var tabId = '';
+        try{
+          tabId = sessionStorage.getItem('tasunTabId_v1') || '';
+          if(!tabId){
+            tabId = 'tab_' + Math.random().toString(36).slice(2) + '_' + now.toString(36);
+            sessionStorage.setItem('tasunTabId_v1', tabId);
+          }
+        }catch(_e){}
+        var payload = { name:name, user:name, role:role, at:now, exp:now + 1000 * 60 * 60 * 12, v:(window.__CACHE_V || ''), tabId:tabId };
+        try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+        try{ localStorage.setItem('tasunSharedLogin_v1', JSON.stringify(payload)); }catch(_e){}
+        try{ sessionStorage.setItem('tasunSharedLogin_v1', JSON.stringify(payload)); }catch(_e){}
+        try{ localStorage.setItem('tasunSso_v1', JSON.stringify(payload)); }catch(_e){}
+        try{ sessionStorage.setItem('tasunSso_v1', JSON.stringify(payload)); }catch(_e){}
+        try{ sessionStorage.setItem('tasunSsoTab_v1','1'); }catch(_e){}
+        try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user:name, role:role, t:now, tabId:tabId })); }catch(_e){}
+        try{ sessionStorage.setItem(INDEX_SESSION_KEY, '1'); }catch(_e){}
+        try{ sessionStorage.setItem('tasunSessionLogin_v2', JSON.stringify({ user:name, role:role, t:now, tabId:tabId })); }catch(_e){}
+        try{ sessionStorage.setItem('tasunIndexSessionAuthed_v2', '1'); }catch(_e){}
+        try{
+          var cookiePayload = encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify({ u:name, r:role, exp:now + 1000 * 60 * 60 * 12, v:(window.__CACHE_V || '') })) )));
+          document.cookie = 'tasun_session_v4=' + cookiePayload + '; Path=/; SameSite=Lax' + (location.protocol === 'https:' ? '; Secure' : '');
+        }catch(_e){}
+      }catch(_e){}
+    }
+
     function navTo(href){
       href = norm(href);
       if(!href) return;
+      preserveLoginForNav();
       location.href = addV(href);
     }
 
@@ -3063,7 +3099,15 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       try{ refresh(); }catch(e){ try{ refreshHintSafe(); }catch(_e){} }
     }
 
-    function doLogin(){
+    async function sha256Hex(str){
+      var s = String(str===undefined||str===null ? '' : str);
+      if(!(window.crypto && window.crypto.subtle && window.TextEncoder)) return '';
+      var data = new TextEncoder().encode(s);
+      var buf = await window.crypto.subtle.digest('SHA-256', data);
+      return Array.from(new Uint8Array(buf)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+    }
+
+    async function doLogin(){
       var user = norm($("loginUser").value);
       var pass = norm($("loginPass").value);
       if(!user || !pass){
@@ -3072,14 +3116,26 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         return;
       }
       var auth = ensureAuthTable();
-      var hit = auth.users.find(function(u){ return u.user===user && u.pass===pass; });
-      if(!hit){
+      var hit = auth.users.find(function(u){ return u.user===user; });
+      var ok = false;
+      if(hit){
+        var rawPass = norm(hit.pass || hit.password || '');
+        var savedHash = norm(hit.passHash || hit.passwordHash || hit.hash || '');
+        if(rawPass){
+          ok = (rawPass === pass);
+        }else if(savedHash){
+          try{ ok = ((await sha256Hex(pass)) === savedHash); }catch(_e){ ok = false; }
+        }
+      }
+      if(!hit || !ok){
         $("loginErr").style.display="block";
         $("loginErr").textContent="帳號或密碼錯誤";
         return;
       }
       var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
       setCurrentUser(cur);
+      try{ hydrateCrossPageAuth(); }catch(e){}
+      preserveLoginForNav();
       applyUser(cur);
       closeLogin();
       toast("登入成功");
