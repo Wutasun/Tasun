@@ -652,7 +652,7 @@
         <!-- ✅ 按鍵名稱設定 -->
         <div class="navPanel" id="navPanel">
           <div class="navPanelHead">
-            <strong>按鍵名稱設定（btn1～btn5）</strong>
+            <strong id="navPanelTitle">按鍵名稱設定（btn1～btn5）</strong>
             <button class="btn" id="navCloseBtn">關閉</button>
           </div>
           <div class="navGrid">
@@ -734,7 +734,8 @@
     { sourceId:'metro',    label:'捷運汐止東湖線',     href:'汐東工程管理表.html', target:'',       roles:[] },
     { sourceId:'zhending', label:'臻鼎時代大廈管理表', href:'臻鼎管理表.html',     target:'',       roles:[] },
     { sourceId:'engdb',    label:'工程資料庫',         href:'工程資料庫.html',     target:'',       roles:[] },
-    { sourceId:'cloud',    label:'雲端檔案',           href:'https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88', target:'_blank', roles:[] }
+    { sourceId:'auth',     label:'系統/權限',         href:'權限表.html',         target:'',       roles:[] },
+    { sourceId:'cloud',    label:'雲端檔案',           href:'https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88', target:'_blank', roles:[] }
   ];
   const roleOptions = ['admin','write','read'];
 
@@ -1520,8 +1521,15 @@ function safeJsonParse(s, fallback){
     for(let i=1;i<=5;i++){
       const id = `btn${i}`;
       const hit = map.get(id);
-      const name = String(hit?.label || id).trim() || id;
-      out.push({ key:id, name });
+      const item = {
+        key:id,
+        name:String(hit?.label || id).trim() || id,
+        href:String(hit?.href || '').trim(),
+        target:String(hit?.target || '').trim(),
+        sourceId:String(hit?.sourceId || '').trim()
+      };
+      if(isSystemPermissionButton(item)) continue;
+      out.push(item);
     }
     return out;
   }
@@ -1866,9 +1874,6 @@ function safeJsonParse(s, fallback){
 
     // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
     if(k === "pass"){
-      if(e.type === 'input'){
-        return;
-      }
       const plain = String(e.target.value || "");
       if(plain.trim()){
         try{
@@ -1941,9 +1946,6 @@ function safeJsonParse(s, fallback){
 
     // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
     if(k === "pass"){
-      if(e.type === 'input'){
-        return;
-      }
       const plain = String(e.target.value || "");
       if(plain.trim()){
         try{
@@ -2447,27 +2449,40 @@ function safeJsonParse(s, fallback){
 
   function readNavButtons(){
     const arr = safeJsonParse(localStorage.getItem(NAV_KEY) || '[]', []);
-    const library = getHomeButtonLibrary();
+    const library = getHomeButtonLibrary().filter(it => !isSystemPermissionButton(it));
 
     if(Array.isArray(arr) && arr.length){
-      const map = new Map(arr.map(x => [String(x.id||'').toLowerCase(), x]));
+      const ordered = arr
+        .map((x, idx) => ({ raw:x, idx }))
+        .sort((a,b) => {
+          const ai = Number(String(a.raw?.id || '').replace(/^btn/i,'')) || (a.idx + 1);
+          const bi = Number(String(b.raw?.id || '').replace(/^btn/i,'')) || (b.idx + 1);
+          return ai - bi;
+        });
       const out = [];
-      for(let i=1;i<=library.length;i++){
-        const id = `btn${i}`;
-        const hit = map.get(id) || {};
-        const sourceId = inferNavSourceId(hit, id);
-        const lib = getLibraryItemBySourceId(sourceId) || library[i - 1] || null;
-
-        out.push({
-          id,
+      for(const row of ordered){
+        const hit = row.raw || {};
+        const sourceId = inferNavSourceId(hit, hit.id || `btn${out.length+1}`);
+        const lib = getLibraryItemBySourceId(sourceId);
+        const item = {
+          id: `btn${out.length+1}`,
           sourceId,
-          label: String(lib?.label || hit?.label || id).trim() || id,
+          label: String(lib?.label || hit?.label || `btn${out.length+1}`).trim() || `btn${out.length+1}`,
           href: String(lib?.href || hit?.href || '').trim(),
           target: String(lib?.target || hit?.target || '').trim(),
           roles: Array.isArray(lib?.roles) ? lib.roles.slice() : (Array.isArray(hit?.roles) ? hit.roles.slice() : [])
-        });
+        };
+        if(isSystemPermissionButton(item)) continue;
+        out.push(item);
       }
-      return out;
+      return out.length ? out : library.map((it, idx) => ({
+        id: `btn${idx+1}`,
+        sourceId: it.sourceId,
+        label: it.label,
+        href: it.href,
+        target: it.target,
+        roles: it.roles.slice()
+      }));
     }
 
     return library.map((it, idx) => ({
@@ -2498,7 +2513,7 @@ function safeJsonParse(s, fallback){
   }
 
   function refreshNavSelectOptions(){
-    const list = getNavSourceList();
+    const list = getNavSourceList().filter(it => !isSystemPermissionButton(it));
     const selects = getNavSelectControls();
     if(navPanelTitle){
       navPanelTitle.textContent = `按鍵名稱設定（${resolveEntryValue()}／共 ${list.length} 顆）`;
@@ -2511,18 +2526,21 @@ function safeJsonParse(s, fallback){
       const visible = !!rowItem;
       if(labelNode && labelNode.classList.contains('navLabel')) labelNode.style.display = visible ? '' : 'none';
       sel.style.display = visible ? '' : 'none';
+      sel.disabled = !visible;
       if(!visible){
         sel.innerHTML = '';
         sel.dataset.prevValue = '';
+        sel.value = '';
         return;
       }
 
       const fallback = rowItem.sourceId || '';
       const currentVal = String(sel.value || sel.dataset.prevValue || fallback).trim() || fallback;
-      sel.innerHTML = list.map(item => {
+      const optionsHtml = list.map(item => {
         const selected = item.sourceId === currentVal ? 'selected' : '';
         return `<option value="${escapeHtml(item.sourceId)}" ${selected}>${escapeHtml(navOptionText(item))}</option>`;
       }).join('');
+      sel.innerHTML = optionsHtml;
 
       if(!list.some(item => item.sourceId === sel.value) && fallback){
         sel.value = fallback;
@@ -2645,9 +2663,9 @@ function safeJsonParse(s, fallback){
       return;
     }
 
-    const sourceList = getNavSourceList();
+    const sourceList = getNavSourceList().filter(it => !isSystemPermissionButton(it));
     const sourceMap = new Map(sourceList.map(it => [String(it.sourceId || '').trim(), it]));
-    const selects = getNavSelectControls();
+    const selects = getNavSelectControls().filter((sel, idx) => !!sourceList[idx]);
 
     const updated = selects.map((sel, idx) => {
       const sourceId = String(sel?.value || '').trim() || (sourceList[idx]?.sourceId || `btn${idx+1}`);
