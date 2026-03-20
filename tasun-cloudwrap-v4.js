@@ -18,6 +18,7 @@
   }
   function getApiBase(){ return _apiBase || String(global.TASUN_API_BASE || ''); }
   async function authFetch(path, init){ var apiBase = await load(); var url = /^https?:/i.test(path||'') ? path : String(apiBase||'').replace(/\/$/,'') + String(path||''); init = init || {}; var headers = Object.assign({'Accept':'application/json'}, init.headers || {}); var tk = token(); if(tk) headers['Authorization'] = 'Bearer ' + tk; return fetch(url, Object.assign({ credentials:'include' }, init, { headers: headers })); }
+  global.TASUN_API_BASE = global.TASUN_API_BASE || _apiBase || '';
   global.TasunCloudWrapV4 = { load:load, getApiBase:getApiBase, authFetch:authFetch };
   try{ load(); }catch(e){}
 })(window);

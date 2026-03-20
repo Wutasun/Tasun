@@ -1,6 +1,6 @@
 /* TasunAuthV4 (v5 unified)
  * - Worker token login only
- * - sessionStorage/session cookie based bridge
+ * - sessionStorage / session-cookie bridge
  * - no local fake login fallback
  */
 (function(global){
@@ -19,13 +19,12 @@
     writeSession(SESSION_KEY,row||null);
     writeSession(INDEX_SESSION_KEY,'1');
     TOKEN_KEYS.forEach(function(k){ if(row&&row.token) writeSession(k,row.token); else removeEverywhere(k); });
-    try{ if(global.TasunAuth&&global.TasunAuth.setCurrent) global.TasunAuth.setCurrent(row); }catch(e){}
+    try{ if(global.TasunAuth && global.TasunAuth.setCurrent) global.TasunAuth.setCurrent(row); }catch(e){}
     return row;
   }
-  function getCurrent(){
-    try{ var s=readSession(CURRENT_KEY)||readSession(SESSION_KEY); if(s) return JSON.parse(s); }catch(e){}
-    return null;
-  }
+  function getCurrent(){ try{ var s=readSession(CURRENT_KEY)||readSession(SESSION_KEY); if(s) return JSON.parse(s); }catch(e){} return null; }
+  function getToken(){ var cur=getCurrent(); return String((cur&&cur.token)||readSession('tasunBearerToken_v1')||readSession('tasunCloudToken_v1')||''); }
+  function isLoggedIn(){ var cur=getCurrent(); return !!(cur && cur.username && getToken()); }
   async function tryWorkerLogin(apiBase, username, password){
     if(!apiBase) throw new Error('no apiBase');
     var url=apiBase.replace(/\/$/,'')+'/api/tasun/login';
@@ -39,6 +38,8 @@
     return { username:usernameOut, role:roleOut, token:token, updatedAt:Date.now() };
   }
   async function login(opts){ opts=opts||{}; var username=String(opts.username||'').trim(); var password=String(opts.password||''); var apiBase=String(opts.apiBase||global.TASUN_API_BASE||''); if(!username||!password) throw new Error('missing credentials'); var u=await tryWorkerLogin(apiBase,username,password); setCurrent(u); return u; }
-  function logout(){ setCurrent(null); try{ fetch(String(global.TASUN_API_BASE||'').replace(/\/$/,'')+'/api/tasun/logout',{method:'POST',credentials:'include'}).catch(function(){}); }catch(e){} }
-  global.TasunAuthV4={ login:login, logout:logout, getCurrent:getCurrent, setCurrent:setCurrent };
+  function logout(){ setCurrent(null); try{ var apiBase=String(global.TASUN_API_BASE||''); if(apiBase){ fetch(apiBase.replace(/\/$/,'')+'/api/tasun/logout',{method:'POST',credentials:'include'}).catch(function(){}); } }catch(e){} }
+  global.__TASUN_IS_LOGGED_IN__ = isLoggedIn;
+  global.__TASUN_GET_TOKEN__ = getToken;
+  global.TasunAuthV4={ login:login, logout:logout, getCurrent:getCurrent, setCurrent:setCurrent, getToken:getToken, isLoggedIn:isLoggedIn };
 })(window);

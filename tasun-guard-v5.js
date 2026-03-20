@@ -49,7 +49,7 @@
   // Optional auto-enforce (compatible shim)
   try {
     const require = !!window.__TASUN_REQUIRE_LOGIN__;
-    const isLoggedIn = (typeof window.__TASUN_IS_LOGGED_IN__ === "function") ? !!window.__TASUN_IS_LOGGED_IN__() : true;
+    const isLoggedIn = (typeof window.__TASUN_IS_LOGGED_IN__ === "function") ? !!window.__TASUN_IS_LOGGED_IN__() : !!(window.TasunAuthV4 && window.TasunAuthV4.isLoggedIn && window.TasunAuthV4.isLoggedIn());
     if (require && !isLoggedIn) {
       window.TASUN_GUARD_V5.redirectToEntry(sameOriginPath(location.href));
     }
