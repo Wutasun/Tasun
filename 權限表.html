@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- TASUN_V5_SYNC_MARK:20260320_03 -->
   <meta charset="UTF-8" />
   <title>Tasun 權限表</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -582,7 +581,7 @@
         <p>
           只有 <b>admin</b> 可以編輯；其他權限只能查看。<br>
           ✅ 入口網頁下拉選單：會自動合併三個來源（內建清單 + resources.json(auth-table.entries/entryButtons) + routes/registry）。<br>
-          ✅ btn1～btn5 欄位標題仍會自動抓取首頁按鍵名稱（localStorage：<b>tasunNavButtons_v1</b>）。<br>
+          ✅ btn 欄位數量會依目前入口網頁實際按鍵數自動展開，並自動抓取按鍵名稱（localStorage：<b>tasunNavButtons_v1</b>）。<br>
           ✅ admin 也可在本頁「按鍵名稱設定」直接改名，並同步到首頁。<br>
           ✅ 永遠自動上雲端：本頁任何變更都會觸發 TasunCloudKit 自動同步（若已設定 Token）。<br>
           雲端模式（App folder）：<b>/權限表.json</b>
@@ -765,7 +764,7 @@
     '臻鼎管理表.html'
   ];
 
-  // 入口頁 → 按鍵定義（沒有定義的入口頁，會用 btn1~btn5 通用欄位顯示）
+  // 入口頁 → 按鍵定義（會依目前入口頁實際按鍵數動態顯示，不固定 5 顆）
   const DEFAULT_ENTRY_BUTTONS = {
     '汐東工程管理表.html': [
       { key:'xidong_record', name:'捷運汐東線事項記錄' },
@@ -1541,34 +1540,29 @@ function safeJsonParse(s, fallback){
     if(entry === 'index.html'){
       const fromNav = buildBtnMetaFromNavKey();
       if(fromNav && fromNav.length){
-        btnMeta = fromNav;
+        btnMeta = fromNav.filter(it => !isSystemPermissionButton(it));
         localStorage.setItem(BTN_META_KEY, JSON.stringify(btnMeta));
         return;
       }
-      btnMeta = [
-        { key:'btn1', name:'btn1' },
-        { key:'btn2', name:'btn2' },
-        { key:'btn3', name:'btn3' },
-        { key:'btn4', name:'btn4' },
-        { key:'btn5', name:'btn5' },
-      ];
+      const fallback = buildFallbackButtons(entry);
+      btnMeta = Array.isArray(fallback) && fallback.length ? fallback : [];
       return;
     }
 
     // dynEntryButtons（resources/registry 可覆蓋）
     const list = dynEntryButtons[entry];
     if(Array.isArray(list) && list.length){
-      btnMeta = list.map(x => ({ key:String(x.key||'').trim(), name:String(x.name||x.key||'').trim() }));
+      btnMeta = list
+        .filter(x => !isSystemPermissionButton(x))
+        .map((x, idx) => ({
+          key:String(x.key||('btn'+(idx+1))).trim(),
+          name:String(x.name||x.key||('btn'+(idx+1))).trim()
+        }));
       return;
     }
 
-    btnMeta = [
-      { key:'btn1', name:'btn1' },
-      { key:'btn2', name:'btn2' },
-      { key:'btn3', name:'btn3' },
-      { key:'btn4', name:'btn4' },
-      { key:'btn5', name:'btn5' },
-    ];
+    const fallback = buildFallbackButtons(entry);
+    btnMeta = Array.isArray(fallback) && fallback.length ? fallback.map(x => ({ key:x.key, name:x.name })) : [];
   }
 
   function renderEntryPreview(){
@@ -1622,8 +1616,20 @@ function safeJsonParse(s, fallback){
     return null;
   }
 
-  function buildFallbackButtons(){
-    return [1,2,3,4,5].map(i => ({ key:'btn'+i, name:'btn'+i, href:'', target:'' }));
+  function buildFallbackButtons(entry){
+    const targetEntry = String(entry || resolveEntryValue() || '').trim();
+    const fallbackList = getEntryButtonsFromDefaults(targetEntry);
+    if(Array.isArray(fallbackList) && fallbackList.length){
+      return fallbackList
+        .filter(it => !isSystemPermissionButton(it))
+        .map((it, idx) => ({
+          key: String(it.key || ('btn'+(idx+1))).trim() || ('btn'+(idx+1)),
+          name: String(it.name || it.key || ('btn'+(idx+1))).trim() || ('btn'+(idx+1)),
+          href: String(it.href || '').trim(),
+          target: String(it.target || '').trim()
+        }));
+    }
+    return [];
   }
 
 
@@ -2504,17 +2510,47 @@ function safeJsonParse(s, fallback){
   }
 
   function navOptionText(it){
-    const label = String(it?.label || it?.id || '').trim() || '未命名按鍵';
-    const href = String(it?.href || '').trim();
-    return href ? `${label} ｜ ${href}` : label;
+    return String(it?.label || it?.id || '').trim() || '未命名按鍵';
   }
 
   function getNavSelectControls(){
-    return [navName1, navName2, navName3, navName4, navName5];
+    const dynamic = Array.from((navPanel || document).querySelectorAll('select[id^="navName"], select[data-nav-select="1"]'));
+    if(dynamic.length) return dynamic;
+    return [navName1, navName2, navName3, navName4, navName5].filter(Boolean);
+  }
+
+  function getNavFallbackSourceList(){
+    const entry = resolveEntryValue();
+    if(entry === 'index.html'){
+      const home = getHomeButtonLibrary().filter(it => !isSystemPermissionButton(it));
+      if(home.length) return home;
+    }
+    const fromCurrent = (Array.isArray(currentEntryButtons) ? currentEntryButtons : [])
+      .map((it, idx) => ({
+        sourceId: String(it?.sourceId || it?.key || ('btn'+(idx+1))).trim() || ('btn'+(idx+1)),
+        label: String(it?.label || it?.name || it?.key || ('btn'+(idx+1))).trim() || ('btn'+(idx+1)),
+        href: String(it?.href || '').trim(),
+        target: String(it?.target || '').trim(),
+        roles: []
+      }))
+      .filter(it => !isSystemPermissionButton(it));
+    if(fromCurrent.length) return fromCurrent;
+    const fromDefaults = (getEntryButtonsFromDefaults(entry) || [])
+      .map((it, idx) => ({
+        sourceId: String(it?.sourceId || it?.key || ('btn'+(idx+1))).trim() || ('btn'+(idx+1)),
+        label: String(it?.label || it?.name || it?.key || ('btn'+(idx+1))).trim() || ('btn'+(idx+1)),
+        href: String(it?.href || '').trim(),
+        target: String(it?.target || '').trim(),
+        roles: []
+      }))
+      .filter(it => !isSystemPermissionButton(it));
+    if(fromDefaults.length) return fromDefaults;
+    return [];
   }
 
   function refreshNavSelectOptions(){
-    const list = getNavSourceList().filter(it => !isSystemPermissionButton(it));
+    let list = getNavSourceList().filter(it => !isSystemPermissionButton(it));
+    if(!list.length) list = getNavFallbackSourceList();
     const selects = getNavSelectControls();
     if(navPanelTitle){
       navPanelTitle.textContent = `按鍵名稱設定（${resolveEntryValue()}／共 ${list.length} 顆）`;
@@ -2892,6 +2928,6 @@ function safeJsonParse(s, fallback){
 </script>
 
 
-<script src="tasun-global-core.js"></script>
+<script src="tasun-global-auth-v65.js"></script>
 </body>
 </html>
