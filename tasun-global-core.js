@@ -16,7 +16,7 @@
   function addV(url){
     url = norm(url);
     if(!url) return url;
-    var v = norm(global.TASUN_APP_VER || global.__CACHE_V || '');
+    var v = norm(global.TASUN_APP_VER || global.__CACHE_V || global.APP_VER || '');
     if(!v) return url;
     try{
       var abs = /^(https?:)?\/\//i.test(url);

@@ -6,17 +6,17 @@
  *  - Redirect to entry.html#next=<encoded> (hash not sent to server)
  *  - entry.html then redirects to index.html with short URL
  */
-(function(){
+(function(global){
   "use strict";
 
   const NEXT_KEY = "tasun_next_path_v1";
 
-  const ENTRY_PATH = (function(){
+  const ENTRY_PATH = (function(global){
     const p = location.pathname;
     const i = p.indexOf("/Tasun/");
     const base = (i >= 0) ? p.slice(0, i + "/Tasun/".length) : "/";
-    return base + "entry.html";
-  })();
+    return global.__withV ? global.__withV(base + "entry.html") : (base + "entry.html");
+  })(window);
 
   function safeEncode(s){ try { return encodeURIComponent(s); } catch(e){ return ""; } }
 
@@ -56,4 +56,4 @@
   } catch(e){
     // fail-open
   }
-})();
+})(window);
