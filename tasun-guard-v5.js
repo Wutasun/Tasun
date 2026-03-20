@@ -57,17 +57,3 @@
     // fail-open
   }
 })();
-
-(function(){
-  try{
-    function isLoggedIn(){
-      try{ return !!(sessionStorage.getItem('tasunCurrentUser_v1') || sessionStorage.getItem('tasunSession_v1')); }catch(e){ return false; }
-    }
-    window.TasunGuardV4 = {
-      boot: function(){
-        if(!isLoggedIn() && window.TASUN_GUARD_V5){ window.TASUN_GUARD_V5.redirectToEntry(); }
-      },
-      redirectToEntry: function(next){ if(window.TASUN_GUARD_V5) window.TASUN_GUARD_V5.redirectToEntry(next); }
-    };
-  }catch(e){}
-})();
