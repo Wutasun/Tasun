@@ -12,7 +12,7 @@
   <script>document.write('<script src="tasun-version-loader.js?_=' + Date.now() + '"><\/script>');</script>
   <script>
   (function(){
-    const FALLBACK_VER = '20260319_15';
+    const FALLBACK_VER = '20260319_08';
     function normVer(v){ return (v === undefined || v === null) ? '' : String(v).trim(); }
     function addVer(url, ver){
       const vv = normVer(ver);
@@ -561,27 +561,6 @@
       }
     }
   </style>
-
-  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-guard-v4.js")) || "tasun-guard-v4.js") + '"><\/script>');</script>
-  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-cloudwrap-v4.js")) || "tasun-cloudwrap-v4.js") + '"><\/script>');</script>
-  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-auth-v4.js")) || "tasun-auth-v4.js") + '"><\/script>');</script>
-  <script src="tasun-global-core.js"></script>
-  <script>
-  (function(){
-    function run(){
-      try{
-        if(!window.TasunGlobalCore) return;
-        var core = window.TasunGlobalCore;
-        var cur = core.getCurrentUser && core.getCurrentUser();
-        if(cur && cur.user){ try{ core.setCurrentUser(cur); }catch(_e){} }
-        try{ core.requireLoginOnColdStart && core.requireLoginOnColdStart(); }catch(_e){}
-      }catch(_e){}
-    }
-    if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run, { once:true });
-    else run();
-  })();
-  </script>
-
 </head>
 
 <body>
@@ -747,7 +726,6 @@
 
   const ENTRY_SELECTED_KEY = 'tasunEntrySelected_v1';
   const PERM_MATRIX_KEY    = 'tasunPermMatrix_v1';
-  const ENTRY_BUTTON_MAP_KEY = 'tasunEntryButtonMap_v1';
 
   // ✅ 新增：入口頁註冊表（未來新頁面可自動加入權限表）
   const ENTRY_REGISTRY_KEY = 'tasunEntryRegistry_v1';
@@ -1664,28 +1642,32 @@ function safeJsonParse(s, fallback){
 
   async function refreshEntryButtonsBySelection(){
     const entry = resolveEntryValue();
+    let items = [];
+
     if(entry === 'index.html'){
       const navButtons = readNavButtons().filter(it => !isSystemPermissionButton(it));
-      currentEntryButtons = navButtons.map((it, idx) => ({
+      items = navButtons.map((it, idx) => ({
         key: `btn${idx+1}`,
         name: String(it.label || it.sourceId || `btn${idx+1}`).trim() || `btn${idx+1}`,
         href: String(it.href || '').trim(),
         target: String(it.target || '').trim(),
         sourceId: String(it.sourceId || '').trim() || `btn${idx+1}`
       }));
-      btnMeta = currentEntryButtons.map(x => ({ ...x }));
     }else{
-      const extracted = await extractEntryButtonsFromPage(entry);
-      if(Array.isArray(extracted) && extracted.length){
-        btnMeta = extracted.map(x => ({ ...x }));
-      }else{
-        const fallback = getEntryButtonsFromDefaults(entry);
-        btnMeta = Array.isArray(fallback) && fallback.length ? fallback : buildFallbackButtons(5);
-      }
-      currentEntryButtons = (Array.isArray(btnMeta) ? btnMeta : []).map(x => ({ ...x }));
+      const fallback = getEntryButtonsFromDefaults(entry);
+      const extracted = (!fallback || !fallback.length) ? await extractEntryButtonsFromPage(entry) : null;
+      items = (Array.isArray(fallback) && fallback.length ? fallback : (Array.isArray(extracted) && extracted.length ? extracted : buildFallbackButtons(5))).map((x, idx) => ({
+        key: String(x.key || `btn${idx+1}`).trim() || `btn${idx+1}`,
+        name: String(x.name || x.label || x.key || `btn${idx+1}`).trim() || `btn${idx+1}`,
+        href: String(x.href || '').trim(),
+        target: String(x.target || '').trim(),
+        sourceId: String(x.sourceId || x.key || `btn${idx+1}`).trim() || `btn${idx+1}`
+      }));
     }
-    btnMeta = (Array.isArray(btnMeta) ? btnMeta : []).filter(it => !isSystemPermissionButton(it));
-    currentEntryButtons = (Array.isArray(currentEntryButtons) ? currentEntryButtons : []).filter(it => !isSystemPermissionButton(it));
+
+    items = items.filter(it => !isSystemPermissionButton(it));
+    currentEntryButtons = orderButtonsByEntry(entry, items).map(x => ({ ...x }));
+    btnMeta = currentEntryButtons.map(x => ({ ...x }));
     rebuildCurrentEntryOptions();
     renderNavRows(currentEntryButtonOptions.length || btnMeta.length || 0);
     renderHeaders();
@@ -1700,7 +1682,7 @@ function safeJsonParse(s, fallback){
       <th>使用者</th>
       <th>密碼</th>
       <th>權限</th>
-      ${btnMeta.filter(b => !isSystemPermissionButton(b)).map(b => `<th>${escapeHtml(b.name || b.key)}</th>`).join('')}
+      ${btnMeta.map(b => `<th>${escapeHtml(b.name || b.key)}</th>`).join('')}
       <th class="sysCol">系統/權限</th>
       <th>刪除</th>
     `;
@@ -1716,14 +1698,14 @@ function safeJsonParse(s, fallback){
       return `
       <tr data-idx="${idx}">
         <td><input class="field" data-k="user" value="${escapeHtml(u.user||'')}" ${isAdmin?'':'disabled'}></td>
-        <td><input class="field" data-k="pass" value="${escapeHtml(u.__pendingPass || '')}" placeholder="此處可直接輸入新密碼；儲存後才會更新並加密儲存" ${isAdmin?'':'disabled'}></td>
+        <td><input class="field" data-k="pass" value="" placeholder="此處可直接輸入新密碼；完成後才會更新並加密儲存" ${isAdmin?'':'disabled'}></td>
         <td>
           <select class="field" data-k="role" ${isAdmin?'':'disabled'}>
             ${roleOptions.map(r => `<option value="${r}" ${r===role?'selected':''}>${r}</option>`).join('')}
           </select>
         </td>
 
-        ${btnMeta.filter(b => !isSystemPermissionButton(b)).map(b => {
+        ${btnMeta.map(b => {
           const checked = getPerm(u.user, entry, b.key) ? 'checked' : '';
           return `<td><input class="chk" type="checkbox" data-k="${escapeHtml(b.key)}" ${checked} ${isAdmin?'':'disabled'}></td>`;
         }).join('')}
@@ -1759,7 +1741,7 @@ function safeJsonParse(s, fallback){
             </div>
             <div>
               <div class="rowLabel">密碼</div>
-              <input class="field" data-k="pass" value="${escapeHtml(u.__pendingPass || '')}" placeholder="此處可直接輸入新密碼；儲存後才會更新並加密儲存" ${isAdmin?'':'disabled'}>
+              <input class="field" data-k="pass" value="" placeholder="此處可直接輸入新密碼；完成後才會更新並加密儲存" ${isAdmin?'':'disabled'}>
             </div>
             <div>
               <div class="rowLabel">權限</div>
@@ -1771,7 +1753,7 @@ function safeJsonParse(s, fallback){
             <div class="rowLabel">按鍵顯示權限（入口：${escapeHtml(entry)}，可左右滑動）</div>
             <div class="permScroll">
               <div class="permRow">
-                ${btnMeta.filter(b => !isSystemPermissionButton(b)).map(b => {
+                ${btnMeta.map(b => {
                   const checked = getPerm(u.user, entry, b.key) ? 'checked' : '';
                   return `
                   <label class="permItem">
@@ -1791,27 +1773,8 @@ function safeJsonParse(s, fallback){
     }).join('');
   }
 
-  async function flushPendingPasswords(){
-    for(const u of (Array.isArray(auth) ? auth : [])){
-      if(!u || typeof u !== 'object') continue;
-      const plain = String(u.__pendingPass || '').trim();
-      if(!plain) continue;
-      try{
-        u.passHash = await sha256Hex(plain);
-        u.pass = '';
-        delete u.__pendingPass;
-      }catch(_){ }
-    }
-  }
-
-  async function saveLocal(){
-    await flushPendingPasswords();
-    const sanitized = (Array.isArray(auth) ? auth : []).map(u => {
-      const row = { ...u };
-      delete row.__pendingPass;
-      return row;
-    });
-    localStorage.setItem(AUTH_KEY, JSON.stringify(sanitized));
+  function saveLocal(){
+    localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
     savePermMatrix();
     localState.textContent = '本機：已儲存';
   }
@@ -1886,7 +1849,7 @@ function safeJsonParse(s, fallback){
 
     auth.splice(idx, 1);
     renderAll();
-    saveLocal().then(()=>{});
+    saveLocal();
     setMsg('已刪除一列並儲存本機。');
     scheduleCloudPush('remove-row');
   }
@@ -1902,10 +1865,23 @@ function safeJsonParse(s, fallback){
 
     const entry = resolveEntryValue();
 
+    // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
     if(k === "pass"){
-      auth[idx].__pendingPass = String(e.target.value || '');
-      localState.textContent = auth[idx].__pendingPass.trim() ? '本機：有未儲存密碼' : '本機：未儲存';
-      if(e.type === 'change') setMsg('已輸入新密碼；按「儲存（同步雲端）」後才會更新並加密儲存。');
+      if(e.type === 'input') return;
+      const plain = String(e.target.value || "");
+      if(plain.trim()){
+        try{
+          auth[idx].passHash = await sha256Hex(plain);
+          auth[idx].pass = "";
+          e.target.value = "";
+          setMsg("✅ 已更新密碼（SHA-256 加密儲存）。");
+        }catch(_){
+          setMsg("密碼更新失敗：瀏覽器不支援加密（crypto.subtle）。", true);
+        }
+        normalizeAuth();
+        await saveLocal();
+        scheduleCloudPush("pwd-updated");
+      }
       return;
     }
 
@@ -1962,10 +1938,23 @@ function safeJsonParse(s, fallback){
 
     const entry = resolveEntryValue();
 
+    // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
     if(k === "pass"){
-      auth[idx].__pendingPass = String(e.target.value || '');
-      localState.textContent = auth[idx].__pendingPass.trim() ? '本機：有未儲存密碼' : '本機：未儲存';
-      if(e.type === 'change') setMsg('已輸入新密碼；按「儲存（同步雲端）」後才會更新並加密儲存。');
+      if(e.type === 'input') return;
+      const plain = String(e.target.value || "");
+      if(plain.trim()){
+        try{
+          auth[idx].passHash = await sha256Hex(plain);
+          auth[idx].pass = "";
+          e.target.value = "";
+          setMsg("✅ 已更新密碼（SHA-256 加密儲存）。");
+        }catch(_){
+          setMsg("密碼更新失敗：瀏覽器不支援加密（crypto.subtle）。", true);
+        }
+        normalizeAuth();
+        await saveLocal();
+        scheduleCloudPush("pwd-updated");
+      }
       return;
     }
 
@@ -1978,7 +1967,7 @@ function safeJsonParse(s, fallback){
     }
 
     normalizeAuth();
-    await saveLocal();
+    saveLocal();
 
     if(k === 'user'){ load(); return; }
     renderEntryPreview();
@@ -2142,9 +2131,9 @@ function safeJsonParse(s, fallback){
     saveAndUpload(t);
   });
 
-  saveLocalBtn.addEventListener('click', async () => {
+  saveLocalBtn.addEventListener('click', () => {
     normalizeAuth();
-    await saveLocal();
+    saveLocal();
     updateStates('已儲存本機（localStorage）。\n並已排程同步雲端（若 Token OK）。');
     // ✅ 一鍵寫入 D1（以權限表為主，需 admin + Session Cookie）
     d1PushAuthTable('save-btn');
@@ -2271,7 +2260,7 @@ function safeJsonParse(s, fallback){
       if(!permMatrix.users || typeof permMatrix.users !== 'object') permMatrix.users = {};
 
       normalizeAuth();
-      await saveLocal();
+      saveLocal();
 
       current.role = getEffectiveRole();
       isAdmin = (getEffectiveRole() === 'admin');
@@ -2341,7 +2330,7 @@ function safeJsonParse(s, fallback){
     }
 
     normalizeAuth();
-    await saveLocal();
+    saveLocal();
 
     // ✅ 先保留本機快照（若遇到雲端已更新 → 下載後合併再上傳）
     const localSnap = {
@@ -2366,7 +2355,7 @@ function safeJsonParse(s, fallback){
         mergeAuthByUser(localSnap.auth);
         mergePermMatrix(localSnap.permMatrix);
         normalizeAuth();
-        saveLocal();
+        await saveLocal();
         setMsg('合併完成，重試上傳中…');
         r = await doUploadOnce(token);
         if(!r.ok && !r.retry){
@@ -2386,9 +2375,10 @@ function safeJsonParse(s, fallback){
 
   function isSystemPermissionButton(it){
     const sourceId = String(it?.sourceId || it?.id || '').trim().toLowerCase();
-    const label = String(it?.label || '').trim();
+    const labelRaw = String(it?.label || it?.name || '').trim();
+    const label = labelRaw.replace(/[／∕⁄]/g, '/').replace(/\s+/g, '');
     const href = String(it?.href || '').trim();
-    return sourceId === 'auth' || /權限表\.html$/i.test(href) || /系統\s*[\/／]\s*權限/.test(label) || /權限表/.test(label);
+    return sourceId === 'auth' || sourceId === 'xidong_auth' || /權限表\.html$/i.test(href) || label === '系統/權限' || /權限表/.test(labelRaw);
   }
 
   function renderNavRows(count){
@@ -2398,6 +2388,49 @@ function safeJsonParse(s, fallback){
       const n = idx + 1;
       return `<div class="navLabel" data-nav-row-label="${n}">btn${n}</div><select class="field nav-dyn-select" data-nav-slot="${n}"></select>`;
     }).join('');
+  }
+
+
+  function getEntryButtonMapStore(){
+    const raw = safeJsonParse(localStorage.getItem(ENTRY_BUTTON_MAP_KEY) || '{}', {});
+    return (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+  }
+
+  function getEntryButtonOrder(entry){
+    const file = stripInvisibles(entry) || 'index.html';
+    const store = getEntryButtonMapStore();
+    const list = Array.isArray(store[file]) ? store[file] : [];
+    return list.map(v => String(v || '').trim()).filter(Boolean);
+  }
+
+  function setEntryButtonOrder(entry, order){
+    const file = stripInvisibles(entry) || 'index.html';
+    const store = getEntryButtonMapStore();
+    store[file] = (Array.isArray(order) ? order : []).map(v => String(v || '').trim()).filter(Boolean);
+    localStorage.setItem(ENTRY_BUTTON_MAP_KEY, JSON.stringify(store));
+    return store[file];
+  }
+
+  function orderButtonsByEntry(entry, list){
+    const src = Array.isArray(list) ? list.slice() : [];
+    const saved = getEntryButtonOrder(entry);
+    if(!saved.length) return src;
+    const map = new Map(src.map(it => [String(it?.sourceId || it?.key || '').trim(), it]));
+    const out = [];
+    saved.forEach(id => {
+      const key = String(id || '').trim();
+      if(!key || !map.has(key)) return;
+      out.push(map.get(key));
+      map.delete(key);
+    });
+    src.forEach(it => {
+      const key = String(it?.sourceId || it?.key || '').trim();
+      if(key && map.has(key)){
+        out.push(it);
+        map.delete(key);
+      }
+    });
+    return out;
   }
 
   function getHomeButtonLibrary(){
@@ -2553,8 +2586,8 @@ function safeJsonParse(s, fallback){
         return;
       }
 
-      const fallback = String(sel.dataset.prevValue || rowItem.sourceId || '').trim() || String(rowItem.sourceId || '').trim();
-      const currentVal = String(sel.value || fallback).trim() || fallback;
+      const fallback = rowItem.sourceId || '';
+      const currentVal = String(sel.value || sel.dataset.prevValue || fallback).trim() || fallback;
       sel.innerHTML = list.map(item => {
         const selected = item.sourceId === currentVal ? 'selected' : '';
         return `<option value="${escapeHtml(item.sourceId)}" ${selected}>${escapeHtml(navOptionText(item))}</option>`;
@@ -2693,9 +2726,9 @@ function safeJsonParse(s, fallback){
     if(!isAdmin){ setMsg('你不是 admin，不能儲存按鍵名稱。', true); return; }
 
     const entry = resolveEntryValue();
-    const sourceList = getNavSourceList();
+    const sourceList = getNavSourceList().filter(it => !isSystemPermissionButton(it));
     const sourceMap = new Map(sourceList.map(it => [String(it.sourceId || '').trim(), it]));
-    const selects = getNavSelectControls();
+    const selects = getNavSelectControls().filter((sel, idx) => !!sourceList[idx]);
     const order = selects.map((sel, idx) => String(sel?.value || sourceList[idx]?.sourceId || `btn${idx+1}`).trim()).filter(Boolean);
     setEntryButtonOrder(entry, order);
 
@@ -2712,7 +2745,8 @@ function safeJsonParse(s, fallback){
         };
       });
       writeNavButtons(updated);
-      setMsg('✅ 已儲存按鍵排序並同步（名稱、連結網址、target 會一起移動）。\n其他分頁（例如首頁）會自動更新。');
+      setMsg('✅ 已儲存按鍵排序並同步（名稱、連結網址、target 會一起移動）。
+其他分頁（例如首頁）會自動更新。');
       return;
     }
 
@@ -2781,7 +2815,7 @@ function safeJsonParse(s, fallback){
   }
 
   window.addEventListener('storage', async (e) => {
-    if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY || e.key === ENTRY_BUTTON_MAP_KEY){
+    if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY){
       // routes/registry 變動 → 入口頁清單可更新
       buildEntrySelect();
       renderAll();
