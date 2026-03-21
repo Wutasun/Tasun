@@ -12,7 +12,7 @@
   <script>document.write('<script src="tasun-version-loader.js?_=' + Date.now() + '"><\/script>');</script>
   <script>
   (function(){
-    const FALLBACK_VER = '20260319_15';
+    const FALLBACK_VER = '20260319_08';
     function normVer(v){ return (v === undefined || v === null) ? '' : String(v).trim(); }
     function addVer(url, ver){
       const vv = normVer(ver);
@@ -561,27 +561,6 @@
       }
     }
   </style>
-
-  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-guard-v4.js")) || "tasun-guard-v4.js") + '"><\/script>');</script>
-  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-cloudwrap-v4.js")) || "tasun-cloudwrap-v4.js") + '"><\/script>');</script>
-  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-auth-v4.js")) || "tasun-auth-v4.js") + '"><\/script>');</script>
-  <script src="tasun-global-core.js"></script>
-  <script>
-  (function(){
-    function run(){
-      try{
-        if(!window.TasunGlobalCore) return;
-        var core = window.TasunGlobalCore;
-        var cur = core.getCurrentUser && core.getCurrentUser();
-        if(cur && cur.user){ try{ core.setCurrentUser(cur); }catch(_e){} }
-        try{ core.requireLoginOnColdStart && core.requireLoginOnColdStart(); }catch(_e){}
-      }catch(_e){}
-    }
-    if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run, { once:true });
-    else run();
-  })();
-  </script>
-
 </head>
 
 <body>
@@ -969,7 +948,7 @@
   function snapshotAuthTableForCloud(){
     const navButtons = safeJsonParse(localStorage.getItem(NAV_KEY) || "[]", []);
     const routes     = safeJsonParse(localStorage.getItem(ROUTE_KEY) || "{}", {});
-    const entrySel   = safeJsonParse(localStorage.getItem(ENTRY_SELECTED_KEY) || JSON.stringify("index.html"), "index.html");
+    const entrySel   = stripInvisibles(safeJsonParse(localStorage.getItem(ENTRY_SELECTED_KEY) || JSON.stringify('index.html'), 'index.html') || 'index.html');
     const entryReg   = safeJsonParse(localStorage.getItem(ENTRY_REGISTRY_KEY) || "[]", []);
     const btnMetaLs  = safeJsonParse(localStorage.getItem(BTN_META_KEY) || "[]", []);
     const permMat    = safeJsonParse(localStorage.getItem(PERM_MATRIX_KEY) || "{}", { users:{} });
@@ -1030,7 +1009,7 @@
     }
     if(Array.isArray(d.btnMeta))    localStorage.setItem(BTN_META_KEY, JSON.stringify(d.btnMeta));
     if(d.permMatrix && typeof d.permMatrix==="object") localStorage.setItem(PERM_MATRIX_KEY, JSON.stringify(d.permMatrix));
-    if(typeof d.entrySelected === "string") localStorage.setItem(ENTRY_SELECTED_KEY, JSON.stringify(d.entrySelected));
+    if(typeof d.entrySelected === "string") localStorage.setItem(ENTRY_SELECTED_KEY, stripInvisibles(d.entrySelected));
     if(Array.isArray(d.entryRegistry)) localStorage.setItem(ENTRY_REGISTRY_KEY, JSON.stringify(d.entryRegistry));
 
     localState.textContent = "本機：已更新";
@@ -1469,7 +1448,7 @@ function safeJsonParse(s, fallback){
 
   function readCookie(name){
     try{
-      const m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.$?*|{}()\[\]\/+^]/g,'\\$&') + '=([^;]*)'));
+      const m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.$?*|{}()\[\]\/+^]/g,'\$&') + '=([^;]*)'));
       return m ? decodeURIComponent(m[1]) : '';
     }catch(_){ return ''; }
   }
@@ -1482,38 +1461,36 @@ function safeJsonParse(s, fallback){
   }
   function normalizeCurrentLike(obj){
     if(!obj || typeof obj !== 'object') return null;
-    const user = String(obj.user || obj.username || obj.name || '').trim();
-    const role = String(obj.role || obj.level || '').trim().toLowerCase() || 'read';
+    const user = String(obj.user || obj.username || obj.name || obj.u || '').trim();
+    const role = String(obj.role || obj.level || obj.r || '').trim().toLowerCase() || 'read';
     if(!user || user === '—') return null;
     return { user, role };
   }
   function restoreCurrentFromAllSources(){
     const candidates = [];
-    const pull = (store,key,asJson=True) => {
+    const pushCandidate = (value) => {
+      const hit = normalizeCurrentLike(value);
+      if(hit) candidates.push(hit);
+    };
+    const pull = (store, key) => {
       try{
         const raw = store.getItem(key);
         if(!raw) return;
-        candidates.append(normalizeCurrentLike(safeJsonParse(raw, null) if asJson else {'user':raw,'role':'read'}));
+        pushCandidate(safeJsonParse(raw, null));
       }catch(_){ }
     };
-    // local/session primary
-    try{ candidates.append(normalizeCurrentLike(safeJsonParse(localStorage.getItem(CURRENT_KEY)||'null', null))); }catch(_){ }
-    try{ candidates.append(normalizeCurrentLike(safeJsonParse(sessionStorage.getItem(CURRENT_KEY)||'null', null))); }catch(_){ }
-    // legacy / shared session keys
-    const sharedKeys = ['tasunSso_v2','tasunSso_v1','tasunSessionLogin_v2'];
-    for(const k of sharedKeys){
-      try{ candidates.append(normalizeCurrentLike(safeJsonParse(sessionStorage.getItem(k)||'null', null))); }catch(_){ }
-      try{ candidates.append(normalizeCurrentLike(safeJsonParse(localStorage.getItem(k)||'null', null))); }catch(_){ }
-    }
-    // cookie session from worker login
-    try{
-      const ck = readCookie('tasun_session_v4');
-      const obj = safeB64Json(ck);
-      candidates.append(normalizeCurrentLike(obj));
-    }catch(_){ }
-    // auth helper globals if present
-    try{ if(window.TasunAuth && typeof window.TasunAuth.getCurrent==='function') candidates.append(normalizeCurrentLike(window.TasunAuth.getCurrent())); }catch(_){ }
-    try{ if(window.__tasunCurrentUser) candidates.append(normalizeCurrentLike(window.__tasunCurrentUser)); }catch(_){ }
+
+    pull(localStorage, CURRENT_KEY);
+    pull(sessionStorage, CURRENT_KEY);
+
+    ['tasunSso_v2','tasunSso_v1','tasunSessionLogin_v2','tasunCurrentUser_v1'].forEach((k) => {
+      pull(sessionStorage, k);
+      pull(localStorage, k);
+    });
+
+    try{ pushCandidate(safeB64Json(readCookie('tasun_session_v4'))); }catch(_){ }
+    try{ if(window.TasunAuth && typeof window.TasunAuth.getCurrent === 'function') pushCandidate(window.TasunAuth.getCurrent()); }catch(_){ }
+    try{ if(window.__tasunCurrentUser) pushCandidate(window.__tasunCurrentUser); }catch(_){ }
 
     const hit = candidates.find(v => v && v.user);
     if(hit){
@@ -1561,7 +1538,7 @@ function safeJsonParse(s, fallback){
   }
 
   function loadSelectedEntry(){
-    const s = stripInvisibles(localStorage.getItem(ENTRY_SELECTED_KEY) || '') || 'index.html';
+    const s = stripInvisibles((safeJsonParse(localStorage.getItem(ENTRY_SELECTED_KEY) || '""', '') || localStorage.getItem(ENTRY_SELECTED_KEY) || '')) || 'index.html';
     currentEntry = s;
   }
   function saveSelectedEntry(v){
@@ -2589,7 +2566,7 @@ function safeJsonParse(s, fallback){
   function navOptionText(it){
     const label = String(it?.label || it?.id || '').trim() || '未命名按鍵';
     const href = String(it?.href || '').trim();
-    return href ? `${label} ｜ ${href}` : label;
+    return label;
   }
 
   function getNavSelectControls(){
