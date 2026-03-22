@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- TASUN_V5_SYNC_MARK:20260320_03 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>汐東工程管理表 · Tasun</title>
@@ -14,22 +13,6 @@
   <meta http-equiv="Expires" content="0">
   <!-- ✅ 自動版本控版：改成 tasun-version.json + tasun-version-loader.js 自動雜湊 -->
   <script>document.write('<script src="tasun-version-loader.js?_=' + Date.now() + '"><\/script>');</script>
-  <script>
-  // ✅SSO（免重複登入）：若 index 已登入，子頁直接沿用（不改 UI）
-  (function(){
-    const SSO_KEY="tasunSso_v1", CURRENT_KEY="tasunCurrentUser_v1";
-    function jparse(s,f){ try{return JSON.parse(s);}catch(_){return f;} }
-    function inferRole(n,r){ if(r) return r; if(n==="alex") return "admin"; if(n==="tasun") return "write"; return "read"; }
-    const sso = jparse(localStorage.getItem(SSO_KEY)||"", null);
-    if(sso && sso.name && (!sso.exp || Date.now() <= Number(sso.exp))){
-      try{
-        localStorage.setItem(CURRENT_KEY, JSON.stringify({ name:sso.name, user:sso.name, role: inferRole(sso.name, sso.role) }));
-      }catch(_e){}
-      try{ sessionStorage.setItem("tasunSsoTab_v1","1"); }catch(_e2){}
-      window.__TASUN_SSO_OK__=true;
-    }
-  })();
-  </script>
 
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -518,10 +501,11 @@
       .mistFlow{ animation:none; }
     }
   </style>
-  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-guard-v5.js")) || "tasun-guard-v5.js") + '"><\/script>');</script>
+  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-guard-v4.js")) || "tasun-guard-v4.js") + '"><\/script>');</script>
+  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-cloudwrap-v4.js")) || "tasun-cloudwrap-v4.js") + '"><\/script>');</script>
   <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-auth-v4.js")) || "tasun-auth-v4.js") + '"><\/script>');</script>
 <!-- Tasun Global Core bridge -->
-<script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-global-core.js")) || "tasun-global-core.js") + '"><\/script>');</script>
+<script src="tasun-global-core.js"></script>
 <script>
 (function(){
   'use strict';
@@ -621,21 +605,77 @@
       { name:"wu",    role:"read"  },
     ];
     const CURRENT_KEY = "tasunCurrentUser_v1";
+    const CURRENT_ALIASES = [CURRENT_KEY, "tasunCurrentUser_v2", "tasunSession_v1", "tasunIndexSession_v1", "tasunSessionBridge_v1", "tasunAuthSession_v1"];
+    const SSO_KEYS = ["tasunSso_v1", "tasunSso_v2", "tasunSessionLogin_v2"];
     const $ = (id) => document.getElementById(id);
 
     function safeParse(s, fallback){ try{ return JSON.parse(s); }catch(_){ return fallback; } }
-
-    function getCurrent(){
-      const raw = localStorage.getItem(CURRENT_KEY);
-      if(!raw) return USERS[0];
-      const obj = safeParse(raw, null);
-      const name = obj?.name || obj?.user || obj?.username || obj?.account;
+    function normRole(role){ role = String(role||'').toLowerCase(); return role==='admin' || role==='write' ? role : 'read'; }
+    function normalizeUser(obj){
+      if(!obj) return null;
+      const name = String(obj.name || obj.user || obj.username || obj.account || '').trim();
+      if(!name) return null;
       const hit = USERS.find(u => u.name === name);
-      return hit || USERS[0];
+      return { name: hit ? hit.name : name, user: hit ? hit.name : name, role: normRole(obj.role || (hit && hit.role) || '') };
+    }
+    function readStorage(key){
+      let v='';
+      try{ v = sessionStorage.getItem(key) || ''; }catch(_e){}
+      if(v) return v;
+      try{ v = localStorage.getItem(key) || ''; }catch(_e){}
+      return v || '';
+    }
+    function readFromKeys(keys){
+      for(const key of keys){
+        const raw = readStorage(key);
+        if(!raw) continue;
+        const obj = safeParse(raw, null);
+        const cur = normalizeUser(obj || raw);
+        if(cur) return cur;
+      }
+      return null;
+    }
+    function readFromGlobals(){
+      try{
+        if(window.TasunGlobalCore && typeof window.TasunGlobalCore.getCurrentUser === 'function'){
+          const cur = normalizeUser(window.TasunGlobalCore.getCurrentUser());
+          if(cur) return cur;
+        }
+      }catch(_e){}
+      try{
+        if(window.TasunAuth && typeof window.TasunAuth.getCurrent === 'function'){
+          const cur = normalizeUser(window.TasunAuth.getCurrent());
+          if(cur) return cur;
+        }
+      }catch(_e){}
+      try{
+        if(window.TasunAuthV4 && typeof window.TasunAuthV4.getCurrentUser === 'function'){
+          const cur = normalizeUser(window.TasunAuthV4.getCurrentUser());
+          if(cur) return cur;
+        }
+      }catch(_e){}
+      return null;
+    }
+    function getCurrent(){
+      const cur = readFromGlobals() || readFromKeys(CURRENT_ALIASES) || readFromKeys(SSO_KEYS) || USERS[0];
+      return normalizeUser(cur) || USERS[0];
     }
 
     function setCurrent(u){
-      localStorage.setItem(CURRENT_KEY, JSON.stringify({ name:u.name, user:u.name, role:u.role }));
+      const cur = normalizeUser(u) || USERS[0];
+      const payload = JSON.stringify({ name:cur.name, user:cur.name, role:cur.role, ts:Date.now() });
+      CURRENT_ALIASES.forEach((key)=>{
+        try{ sessionStorage.setItem(key, payload); }catch(_e){}
+        try{ localStorage.setItem(key, payload); }catch(_e){}
+      });
+      SSO_KEYS.forEach((key)=>{
+        try{ localStorage.setItem(key, JSON.stringify({ name:cur.name, user:cur.name, role:cur.role, exp: Date.now() + 8*60*60*1000 })); }catch(_e){}
+        try{ sessionStorage.setItem(key, JSON.stringify({ name:cur.name, user:cur.name, role:cur.role, exp: Date.now() + 8*60*60*1000 })); }catch(_e){}
+      });
+      try{ window.__TASUN_SSO_OK__ = true; }catch(_e){}
+      try{ if(window.TasunGlobalCore && typeof window.TasunGlobalCore.setCurrentUser === 'function') window.TasunGlobalCore.setCurrentUser(cur); }catch(_e){}
+      try{ if(window.TasunAuth && typeof window.TasunAuth.setCurrent === 'function') window.TasunAuth.setCurrent(cur); }catch(_e){}
+      return cur;
     }
 
 
@@ -720,6 +760,7 @@
     }
 
     window.__go = function(href){
+      try{ setCurrent(getCurrent()); }catch(_e){}
       const target = (typeof window.__withV === "function") ? window.__withV(href) : href;
       location.href = target;
     };
@@ -757,15 +798,19 @@
       window.__go("index.html");
     });
 
+    try{ setCurrent(getCurrent()); }catch(_e){}
     applyWithV();
     applyVehicleBg();
     enableStableNavigate();
     window.addEventListener('storage', (e) => {
       if(!e || !e.key) return;
-      if(e.key === AUTH_ENTRY_BUTTONS_KEY || e.key === ROUTE_KEY || e.key === CURRENT_KEY){
+      if(e.key === AUTH_ENTRY_BUTTONS_KEY || e.key === ROUTE_KEY || CURRENT_ALIASES.includes(e.key) || SSO_KEYS.includes(e.key)){
+        try{ setCurrent(getCurrent()); }catch(_e){}
         renderUser();
       }
     });
+    window.addEventListener('focus', () => { try{ setCurrent(getCurrent()); }catch(_e){} renderUser(); });
+    window.addEventListener('pageshow', () => { try{ setCurrent(getCurrent()); }catch(_e){} renderUser(); });
     renderUser();
   })();
   </script>
@@ -791,7 +836,7 @@
   })();
   </script>
 
-<script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-global-core.js")) || "tasun-global-core.js") + '"><\/script>');</script>
+<script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-global-auth-v65.js")) || "tasun-global-auth-v65.js") + '"><\/script>');</script>
 <script>window.TasunGuardV4 && window.TasunGuardV4.boot({ pageKey: "汐東工程管理表.html" });</script>
 </body>
 </html>
