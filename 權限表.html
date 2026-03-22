@@ -563,7 +563,7 @@
   </style>
 </head>
 
-<body>
+<body data-build="20260321_07">
   <div class="frame">
     <div class="shell">
 
@@ -1110,6 +1110,121 @@ function safeJsonParse(s, fallback){
     msg.textContent = text || '';
   }
   function userKey(name){ return String(name||'').trim().toLowerCase(); }
+
+  function readJsonStorage(key, area){
+    try{
+      const raw = area.getItem(key);
+      return raw ? safeJsonParse(raw, null) : null;
+    }catch(_){ return null; }
+  }
+  function parseSessionCookie(){
+    try{
+      const m = document.cookie.match(/(?:^|; )tasun_session_v4=([^;]+)/);
+      if(!m) return null;
+      const raw = decodeURIComponent(m[1] || '');
+      const json = decodeURIComponent(escape(atob(raw)));
+      const obj = safeJsonParse(json, null);
+      if(!obj || typeof obj !== 'object') return null;
+      if(obj.exp && Number(obj.exp) < Date.now()) return null;
+      return obj;
+    }catch(_){ return null; }
+  }
+  function restoreCurrentUserFromEverywhere(){
+    const candidates = [];
+    const push = (obj) => { if(obj && typeof obj === 'object') candidates.push(obj); };
+
+    push(readJsonStorage(CURRENT_KEY, localStorage));
+    push(readJsonStorage(CURRENT_KEY, sessionStorage));
+    push(readJsonStorage('tasunSso_v1', sessionStorage));
+    push(readJsonStorage('tasunSso_v2', sessionStorage));
+    push(readJsonStorage('tasunSessionLogin_v2', sessionStorage));
+    if(window.TasunAuth && typeof window.TasunAuth.getCurrent === 'function'){
+      try{ push(window.TasunAuth.getCurrent()); }catch(_){ }
+    }
+    push(parseSessionCookie());
+
+    for(const obj of candidates){
+      const user = String(obj.user || obj.username || obj.name || obj.u || '').trim();
+      const role = String(obj.role || obj.r || obj.level || 'read').trim().toLowerCase() || 'read';
+      if(!user) continue;
+      const cur = { user, name:user, role };
+      try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(cur)); }catch(_){ }
+      try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(cur)); }catch(_){ }
+      return cur;
+    }
+    return null;
+  }
+  function maybeRedirectToLoginWhenAnonymous(){
+    try{
+      const hasSessionCookie = /(?:^|; )tasun_session_v4=/.test(document.cookie || '');
+      const hasAny = !!restoreCurrentUserFromEverywhere();
+      if(hasAny || hasSessionCookie) return false;
+      const next = encodeURIComponent('權限表.html');
+      const href = (window.__withV ? window.__withV('index.html?next=' + next) : ('index.html?next=' + next));
+      location.replace(href);
+      return true;
+    }catch(_){ return false; }
+  }
+  function ensureAuthSeedAfterCloud(){
+    if(Array.isArray(auth) && auth.length) return;
+    seedAuthIfMissing();
+    auth = safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []);
+    if(!Array.isArray(auth)) auth = [];
+    normalizeAuth();
+  }
+  function ensureEntrySelectionVisible(){
+    if(!entrySelect) return;
+    if(entrySelect.options && entrySelect.options.length && !entrySelect.value){
+      entrySelect.value = currentEntry || 'index.html';
+    }
+  }
+  function userDisplayText(){
+    const u = String(current?.user || '').trim();
+    const r = String(current?.role || '').trim();
+    return u && u !== '—' ? `目前使用者：${u}${r ? ' ('+r+')' : ''}` : '目前使用者：—';
+  }
+  function refreshSessionBadges(){
+    const txt = userDisplayText();
+    whoDesk.textContent = txt;
+    whoMobile.textContent = txt;
+  }
+  function forceHydrateVisibleState(){
+    ensureEntrySelectionVisible();
+    refreshSessionBadges();
+    if(auth.length && tbody && !tbody.children.length) renderTable();
+    if(auth.length && cards && !cards.children.length) renderCards();
+  }
+  function syncStatusByCurrent(){
+    if(current && current.user && current.user !== '—'){
+      localState.textContent = '本機：已載入';
+      if(getToken() && !tokenExpired && !tokenInvalid) cloudState.textContent = '雲端：已就緒';
+    }
+  }
+  function bindImmediatePwdPersistence(root){
+    if(!root) return;
+    root.addEventListener('blur', async (e) => {
+      const input = e.target;
+      if(!input || !input.matches('input[data-k="pass"]')) return;
+      const plain = String(input.value || '').trim();
+      if(!plain) return;
+      const holder = input.closest('tr,[data-idx],.card');
+      if(!holder) return;
+      const idx = Number(holder.dataset.idx);
+      if(Number.isNaN(idx) || !auth[idx]) return;
+      try{
+        auth[idx].passHash = await sha256Hex(plain);
+        auth[idx].pass = '';
+        input.value = '';
+        normalizeAuth();
+        saveLocal();
+        scheduleCloudPush('pwd-blur-save');
+        setMsg('✅ 已更新密碼（離開欄位後已自動保存）。');
+      }catch(_){ }
+    }, true);
+  }
+  function headerKeysForEntry(){
+    return (Array.isArray(btnMeta) ? btnMeta : []).map(b => String(b.name || b.key || '').trim()).filter(Boolean);
+  }
 
   function setCloudState(text, isError=false){
     if(!cloudState) return;
@@ -2145,10 +2260,12 @@ function safeJsonParse(s, fallback){
   tbody.addEventListener('input', onTableInput);
   tbody.addEventListener('change', onTableInput);
   tbody.addEventListener('click', onTableClick);
+  bindImmediatePwdPersistence(tbody);
 
   cards.addEventListener('click', onCardClick);
   cards.addEventListener('input', onCardInput);
   cards.addEventListener('change', onCardInput);
+  bindImmediatePwdPersistence(cards);
 
   // 入口頁切換
   function onEntryChanged(){
@@ -2775,16 +2892,14 @@ function safeJsonParse(s, fallback){
     auth = safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []);
     if(!Array.isArray(auth)) auth = [];
     normalizeAuth();
+    ensureAuthSeedAfterCloud();
 
-    current = safeJsonParse(localStorage.getItem(CURRENT_KEY) || 'null', null);
-    if(!current || typeof current !== 'object'){
-      current = safeJsonParse(sessionStorage.getItem(CURRENT_KEY) || 'null', null);
-    }
+    current = restoreCurrentUserFromEverywhere() || safeJsonParse(localStorage.getItem(CURRENT_KEY) || 'null', null) || safeJsonParse(sessionStorage.getItem(CURRENT_KEY) || 'null', null);
     if(!current || typeof current !== 'object'){
       current = { user:'—', role:'read' };
     }else{
-      current.user = String(current.user || current.name || '—');
-      current.role = String(current.role || current.level || 'read');
+      current.user = String(current.user || current.name || current.username || '—').trim() || '—';
+      current.role = String(current.role || current.level || current.r || 'read').trim().toLowerCase() || 'read';
     }
 
     loadPermMatrix();
@@ -2808,10 +2923,16 @@ function safeJsonParse(s, fallback){
     applyEntrySelectionUI();
 
     renderAll();
+    forceHydrateVisibleState();
+    syncStatusByCurrent();
     updateStates(current && current.user && current.user !== '—' ? ('已載入本機資料，目前使用者：' + current.user + '。') : '已載入本機資料。');
 
     // 可見時仍保留舊 Dropbox pull（相容）；D1 已在上方優先拉取
     scheduleCloudPull('page-load');
+
+    if(current.user === '—'){
+      maybeRedirectToLoginWhenAnonymous();
+    }
   }
 
   window.addEventListener('storage', async (e) => {
