@@ -597,8 +597,13 @@
     </div>
   </div>
 
+
   <script>
   (() => {
+    'use strict';
+    const PAGE_KEY = "xidong-entry";
+    const ENTRY_FILE = "汐東工程管理表.html";
+    const DB_KEY = `tasun_db_v1__${PAGE_KEY}`;
     const USERS = [
       { name:"alex",  role:"admin" },
       { name:"tasun", role:"write" },
@@ -610,6 +615,8 @@
     const $ = (id) => document.getElementById(id);
 
     function safeParse(s, fallback){ try{ return JSON.parse(s); }catch(_){ return fallback; } }
+    function nowIso(){ return new Date().toISOString(); }
+    function mkRev(){ return `${Date.now()}_${Math.random().toString(36).slice(2,8)}`; }
     function normRole(role){ role = String(role||'').toLowerCase(); return role==='admin' || role==='write' ? role : 'read'; }
     function normalizeUser(obj){
       if(!obj) return null;
@@ -625,6 +632,13 @@
       try{ v = localStorage.getItem(key) || ''; }catch(_e){}
       return v || '';
     }
+    function readCookie(name){
+      try{
+        const all = document.cookie || '';
+        const hit = all.split('; ').find(x => x.startsWith(name + '='));
+        return hit ? decodeURIComponent(hit.split('=').slice(1).join('=')) : '';
+      }catch(_e){ return ''; }
+    }
     function readFromKeys(keys){
       for(const key of keys){
         const raw = readStorage(key);
@@ -635,53 +649,78 @@
       }
       return null;
     }
+    function loadDb(){
+      const raw = safeParse(readStorage(DB_KEY), null);
+      if(raw && Array.isArray(raw.items)){
+        return {
+          items: raw.items.slice(),
+          counter: Number(raw.counter || raw.items.length || 0),
+          rev: String(raw.rev || mkRev()),
+          updatedAt: String(raw.updatedAt || nowIso())
+        };
+      }
+      return { items:[], counter:0, rev:mkRev(), updatedAt:nowIso() };
+    }
+    function saveDb(db){
+      const out = {
+        items: Array.isArray(db?.items) ? db.items : [],
+        counter: Number(db?.counter || 0),
+        rev: String(db?.rev || mkRev()),
+        updatedAt: String(db?.updatedAt || nowIso())
+      };
+      const raw = JSON.stringify(out);
+      try{ localStorage.setItem(DB_KEY, raw); }catch(_e){}
+      try{ sessionStorage.setItem(DB_KEY, raw); }catch(_e){}
+      return out;
+    }
+    function readFromDb(){
+      const db = loadDb();
+      const hit = db.items.find(x => x && x.type === 'xidong_entry_state' && x.current);
+      return hit ? normalizeUser(hit.current) : null;
+    }
     function readFromGlobals(){
-      try{
-        if(window.TasunGlobalCore && typeof window.TasunGlobalCore.getCurrentUser === 'function'){
-          const cur = normalizeUser(window.TasunGlobalCore.getCurrentUser());
-          if(cur) return cur;
-        }
-      }catch(_e){}
-      try{
-        if(window.TasunAuth && typeof window.TasunAuth.getCurrent === 'function'){
-          const cur = normalizeUser(window.TasunAuth.getCurrent());
-          if(cur) return cur;
-        }
-      }catch(_e){}
-      try{
-        if(window.TasunAuthV4 && typeof window.TasunAuthV4.getCurrentUser === 'function'){
-          const cur = normalizeUser(window.TasunAuthV4.getCurrentUser());
-          if(cur) return cur;
-        }
-      }catch(_e){}
+      try{ if(window.TasunGlobalCore && typeof window.TasunGlobalCore.getCurrentUser === 'function'){ const cur = normalizeUser(window.TasunGlobalCore.getCurrentUser()); if(cur) return cur; } }catch(_e){}
+      try{ if(window.TasunAuth && typeof window.TasunAuth.getCurrent === 'function'){ const cur = normalizeUser(window.TasunAuth.getCurrent()); if(cur) return cur; } }catch(_e){}
+      try{ if(window.TasunAuthV4 && typeof window.TasunAuthV4.getCurrentUser === 'function'){ const cur = normalizeUser(window.TasunAuthV4.getCurrentUser()); if(cur) return cur; } }catch(_e){}
       return null;
     }
     function getCurrent(){
-      const cur = readFromGlobals() || readFromKeys(CURRENT_ALIASES) || readFromKeys(SSO_KEYS) || USERS[0];
+      let cur = readFromGlobals() || readFromKeys(CURRENT_ALIASES) || readFromKeys(SSO_KEYS) || readFromDb();
+      if(!cur){
+        const ck = readCookie('tasun_session_v4');
+        if(ck) cur = normalizeUser(safeParse(ck, null));
+      }
       return normalizeUser(cur) || USERS[0];
     }
-
+    function upsertStateItem(cur){
+      const db = loadDb();
+      const uid = 'xidong-entry-state';
+      const row = { uid, id:'xidong-entry-state', type:'xidong_entry_state', current:{ name:cur.name, role:cur.role }, deleted:false, rev:mkRev(), updatedAt:nowIso() };
+      const idx = db.items.findIndex(x => x && x.uid === uid);
+      if(idx >= 0) db.items[idx] = Object.assign({}, db.items[idx], row); else db.items.push(row);
+      db.counter = Math.max(db.counter, db.items.length);
+      db.rev = mkRev();
+      db.updatedAt = nowIso();
+      saveDb(db);
+    }
     function setCurrent(u){
       const cur = normalizeUser(u) || USERS[0];
       const payload = JSON.stringify({ name:cur.name, user:cur.name, role:cur.role, ts:Date.now() });
-      CURRENT_ALIASES.forEach((key)=>{
-        try{ sessionStorage.setItem(key, payload); }catch(_e){}
-        try{ localStorage.setItem(key, payload); }catch(_e){}
-      });
+      CURRENT_ALIASES.forEach((key)=>{ try{ sessionStorage.setItem(key, payload); }catch(_e){} try{ localStorage.setItem(key, payload); }catch(_e){} });
       SSO_KEYS.forEach((key)=>{
-        try{ localStorage.setItem(key, JSON.stringify({ name:cur.name, user:cur.name, role:cur.role, exp: Date.now() + 8*60*60*1000 })); }catch(_e){}
-        try{ sessionStorage.setItem(key, JSON.stringify({ name:cur.name, user:cur.name, role:cur.role, exp: Date.now() + 8*60*60*1000 })); }catch(_e){}
+        const sso = JSON.stringify({ name:cur.name, user:cur.name, role:cur.role, exp: Date.now() + 8*60*60*1000 });
+        try{ localStorage.setItem(key, sso); }catch(_e){}
+        try{ sessionStorage.setItem(key, sso); }catch(_e){}
       });
+      upsertStateItem(cur);
       try{ window.__TASUN_SSO_OK__ = true; }catch(_e){}
       try{ if(window.TasunGlobalCore && typeof window.TasunGlobalCore.setCurrentUser === 'function') window.TasunGlobalCore.setCurrentUser(cur); }catch(_e){}
       try{ if(window.TasunAuth && typeof window.TasunAuth.setCurrent === 'function') window.TasunAuth.setCurrent(cur); }catch(_e){}
       return cur;
     }
 
-
     const AUTH_ENTRY_BUTTONS_KEY = "tasunAuthEntryButtons_v1";
     const ROUTE_KEY = "tasunRoutes_v1";
-    const ENTRY_FILE = "汐東工程管理表.html";
     const DEFAULT_ENTRY_BUTTONS = [
       { key:"xidong_record", name:"捷運汐東線事項記錄", href:"捷運汐東線事項記錄.html", target:"", roles:["admin","write","read"] },
       { key:"xidong_duty", name:"權責分工精簡版", href:"捷運汐東線權責分工精簡版.html", target:"", roles:["admin","write","read"] },
@@ -689,7 +728,6 @@
       { key:"xidong_auth", name:"系統／權限", href:"權限表.html", target:"", roles:["admin"] },
       { key:"xidong_cloud", name:"雲端檔案", href:"https://www.dropbox.com/scl/fo/glb4s65934h195bxuyuqm/AH5ClZ2u4MtPMvmgtfOUAa4?rlkey=tfxkpbpw8k9bctshx5xvuge8h&st=127vsul4&dl=0", target:"_blank", roles:["admin","write","read"] }
     ];
-    function sParse(s,f){ try{return JSON.parse(s);}catch(_){ return f; } }
     function normBtn(x, fallback){
       const f = fallback || {};
       return {
@@ -701,8 +739,8 @@
       };
     }
     function resolveEntryButtons(){
-      const store = sParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || '{}', {});
-      const routes = sParse(localStorage.getItem(ROUTE_KEY) || '{}', {});
+      const store = safeParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || '{}', {});
+      const routes = safeParse(localStorage.getItem(ROUTE_KEY) || '{}', {});
       const raw = Array.isArray(store[ENTRY_FILE]) && store[ENTRY_FILE].length ? store[ENTRY_FILE] : DEFAULT_ENTRY_BUTTONS;
       return raw.map((x, i) => {
         const fallback = DEFAULT_ENTRY_BUTTONS[i] || DEFAULT_ENTRY_BUTTONS.find(d => d.key === x?.key) || { key: 'btn' + (i+1), name: 'btn' + (i+1), href:'', target:'', roles:["admin","write","read"] };
@@ -734,58 +772,38 @@
         else { a.removeAttribute('target'); a.removeAttribute('rel'); }
       });
     }
-
     function renderUser(){
-      const u = getCurrent();
-      $("who").textContent  = u.name;
+      const u = setCurrent(getCurrent());
+      $("who").textContent = u.name;
       $("role").textContent = u.role;
       applyEntryButtons();
     }
-
     function applyWithV(){
       if(typeof window.__withV !== "function") return;
       document.querySelectorAll('a[href]').forEach(a=>{
         const href = a.getAttribute('href') || '';
-        if(!href) return;
-        if(/^https?:\/\//i.test(href)) return;
+        if(!href || /^https?:\/\//i.test(href)) return;
         a.setAttribute('href', window.__withV(href));
       });
     }
-
-    /* ✅底圖(捷運車輛.png) 帶 cache v */
     function applyVehicleBg(){
       const file = "捷運車輛.png";
       const url = (typeof window.__withV === "function") ? window.__withV(file) : file;
       document.documentElement.style.setProperty("--vehicle-bg", `url("${url}")`);
     }
-
-    window.__go = function(href){
-      try{ setCurrent(getCurrent()); }catch(_e){}
-      const target = (typeof window.__withV === "function") ? window.__withV(href) : href;
-      location.href = target;
-    };
-
+    window.__go = function(href){ try{ setCurrent(getCurrent()); }catch(_e){} const target = (typeof window.__withV === "function") ? window.__withV(href) : href; location.href = target; };
     function enableStableNavigate(){
       document.addEventListener("click", (e) => {
         const a = e.target.closest("a[href]");
         if(!a) return;
-
         if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
         if (typeof e.button === "number" && e.button !== 0) return;
-
         const href = a.getAttribute("href") || "";
-        if(!href) return;
-
-        if(/^https?:\/\//i.test(href)) return;
-        if(/^mailto:/i.test(href)) return;
-        if(/^tel:/i.test(href)) return;
-        if(href.startsWith("#")) return;
-
+        if(!href || /^https?:\/\//i.test(href) || /^mailto:/i.test(href) || /^tel:/i.test(href) || href.startsWith("#")) return;
         e.preventDefault();
         window.__go(href);
       }, { capture:true });
     }
-
     $("btnSwitch").addEventListener("click", () => {
       const cur = getCurrent();
       const idx = USERS.findIndex(u => u.name === cur.name);
@@ -793,50 +811,101 @@
       setCurrent(next);
       renderUser();
     });
-
-    $("btnBack").addEventListener("click", () => {
-      window.__go("index.html");
-    });
-
+    $("btnBack").addEventListener("click", () => window.__go("index.html"));
     try{ setCurrent(getCurrent()); }catch(_e){}
     applyWithV();
     applyVehicleBg();
     enableStableNavigate();
-    window.addEventListener('storage', (e) => {
-      if(!e || !e.key) return;
-      if(e.key === AUTH_ENTRY_BUTTONS_KEY || e.key === ROUTE_KEY || CURRENT_ALIASES.includes(e.key) || SSO_KEYS.includes(e.key)){
-        try{ setCurrent(getCurrent()); }catch(_e){}
-        renderUser();
-      }
-    });
-    window.addEventListener('focus', () => { try{ setCurrent(getCurrent()); }catch(_e){} renderUser(); });
-    window.addEventListener('pageshow', () => { try{ setCurrent(getCurrent()); }catch(_e){} renderUser(); });
+    window.addEventListener('storage', (e) => { if(!e || !e.key) return; if(e.key === AUTH_ENTRY_BUTTONS_KEY || e.key === ROUTE_KEY || CURRENT_ALIASES.includes(e.key) || SSO_KEYS.includes(e.key) || e.key === DB_KEY) renderUser(); });
+    window.addEventListener('focus', renderUser);
+    window.addEventListener('pageshow', renderUser);
     renderUser();
   })();
   </script>
 
-  <!-- ✅【允許新增段 1/2】：載入雲端套件（固定樣式，不動 UI/CSS/結構） -->
   <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-cloud-kit.js")) || "tasun-cloud-kit.js") + '"><\/script>');</script>
 
-  <!-- ✅【允許新增段 2/2】：最穩兼容版（10 行接雲端） -->
   <script>
   (function(){
+    'use strict';
     var APP_VER = (window.__CACHE_V || window.TASUN_APP_VER || "");
-    var RESOURCE_KEY = "tasun-index-db", PK = "id", RES_URL = "tasun-resources.json";
-    var CURRENT_KEY = "tasunCurrentUser_v1"; /* 本頁本機資料來源：localStorage[tasunCurrentUser_v1] */
+    var PAGE_KEY = "xidong-entry";
+    var DB_KEY = "tasun_db_v1__" + PAGE_KEY;
+    var RESOURCE_KEY = PAGE_KEY, PK = "uid", RES_URL = "tasun-resources.json";
     function jparse(s,f){ try{ return JSON.parse(s); }catch(_){ return f; } }
+    function nowIso(){ return new Date().toISOString(); }
+    function mkRev(){ return Date.now() + "_" + Math.random().toString(36).slice(2,8); }
     function inferRole(name, role){ if(role) return role; if(name==="alex") return "admin"; if(name==="tasun") return "write"; return "read"; }
-    function refreshUI(){ try{ var o=jparse(localStorage.getItem(CURRENT_KEY)||"",null)||{}; var n=o.name||o.user||o.username||o.account||"alex"; var r=inferRole(n,o.role); var w=document.getElementById("who"); if(w) w.textContent=n; var re=document.getElementById("role"); if(re) re.textContent=r; var la=document.getElementById("linkAuth"); if(la) la.style.display=(r==="read")?"none":""; }catch(_e){} if(typeof window.__xidongIndexAfterApply==="function"){ try{ window.__xidongIndexAfterApply(); }catch(_e2){} } else { console.log("[cloud] applied / refresh point ready"); } }
-    function getLocal(){ var o=jparse(localStorage.getItem(CURRENT_KEY)||"",null)||{}; var n=o.name||o.user||o.username||o.account||"alex"; var r=inferRole(n,o.role); return [{ id:"xidong-index-state", type:"xidong_index_state", current:{ name:n, role:r }, updatedAt:(new Date()).toISOString(), appVer:APP_VER }]; }
-    function apply(remote){ try{ var a=remote||[]; for(var i=0;i<a.length;i++){ var x=a[i]; if(x && x.id==="xidong-index-state" && x.current && x.current.name){ localStorage.setItem(CURRENT_KEY, JSON.stringify({ name:x.current.name, user:x.current.name, role:inferRole(x.current.name, x.current.role) })); break; } } }catch(e){ console.warn("[cloud] apply failed", e); } refreshUI(); }
+    function loadDb(){
+      var raw = jparse(localStorage.getItem(DB_KEY) || sessionStorage.getItem(DB_KEY) || "", null);
+      if(raw && Array.isArray(raw.items)) return raw;
+      return { items:[], counter:0, rev:mkRev(), updatedAt:nowIso() };
+    }
+    function saveDb(db){
+      db = db || { items:[], counter:0, rev:mkRev(), updatedAt:nowIso() };
+      db.counter = Number(db.counter || db.items.length || 0);
+      db.rev = String(db.rev || mkRev());
+      db.updatedAt = String(db.updatedAt || nowIso());
+      var raw = JSON.stringify(db);
+      try{ localStorage.setItem(DB_KEY, raw); }catch(_e){}
+      try{ sessionStorage.setItem(DB_KEY, raw); }catch(_e){}
+      return db;
+    }
+    function refreshUI(){
+      try{
+        var who = document.getElementById("who");
+        var role = document.getElementById("role");
+        var cur = (window.TasunGlobalCore && window.TasunGlobalCore.getCurrentUser && window.TasunGlobalCore.getCurrentUser()) || jparse(localStorage.getItem("tasunCurrentUser_v1")||"", null) || {};
+        var n = cur.name||cur.user||"alex";
+        var r = inferRole(n, cur.role);
+        if(who) who.textContent=n;
+        if(role) role.textContent=r;
+        var la=document.getElementById("linkAuth");
+        if(la) la.style.display=(r==="read")?"none":"";
+      }catch(_e){}
+    }
+    function getLocal(){
+      var db = loadDb();
+      var items = Array.isArray(db.items) ? db.items.slice() : [];
+      if(!items.some(function(x){ return x && x.uid === "xidong-entry-state"; })){
+        var cur = jparse(localStorage.getItem("tasunCurrentUser_v1") || "", null) || {};
+        var n = cur.name||cur.user||"alex";
+        var r = inferRole(n, cur.role);
+        items.push({ uid:"xidong-entry-state", id:"xidong-entry-state", type:"xidong_entry_state", current:{ name:n, role:r }, deleted:false, rev:mkRev(), updatedAt:nowIso() });
+      }
+      return items;
+    }
+    function apply(remote){
+      try{
+        var arr = Array.isArray(remote) ? remote : (Array.isArray(remote && remote.items) ? remote.items : (Array.isArray(remote && remote.db && remote.db.items) ? remote.db.items : []));
+        var db = loadDb();
+        db.items = Array.isArray(arr) ? arr.slice() : [];
+        db.counter = Math.max(db.counter||0, db.items.length);
+        db.rev = mkRev();
+        db.updatedAt = nowIso();
+        saveDb(db);
+        for(var i=0;i<db.items.length;i++){
+          var x=db.items[i];
+          if(x && x.uid==="xidong-entry-state" && x.current && x.current.name){
+            var payload = JSON.stringify({ name:x.current.name, user:x.current.name, role:inferRole(x.current.name, x.current.role), ts:Date.now() });
+            try{ localStorage.setItem("tasunCurrentUser_v1", payload); }catch(_e){}
+            try{ sessionStorage.setItem("tasunCurrentUser_v1", payload); }catch(_e){}
+            break;
+          }
+        }
+      }catch(e){ console.warn("[cloud] apply failed", e); }
+      refreshUI();
+    }
     if(!window.TasunCloudKit || !window.TasunCloudKit.init || !window.TasunCloudKit.mount){ console.warn("[cloud] TasunCloudKit missing"); return; }
-    if(!window.TasunCloudKit.__forceKey){ var _m=window.TasunCloudKit.mount; window.TasunCloudKit.mount=function(opt){ opt=opt||{}; opt.resourceKey=RESOURCE_KEY; return _m.call(window.TasunCloudKit, opt); }; window.TasunCloudKit.__forceKey=1; }
+    if(!window.TasunCloudKit.__forceKey){ var _m = window.TasunCloudKit.mount; window.TasunCloudKit.mount = function(opt){ opt=opt||{}; opt.resourceKey=RESOURCE_KEY; return _m.call(window.TasunCloudKit, opt); }; window.TasunCloudKit.__forceKey = 1; }
     window.TasunCloudKit.init({ appVer:APP_VER, resourcesUrl:RES_URL, resourceKey:RESOURCE_KEY, pk:PK, ui:{ enabled:false }, getLocal:getLocal, apply:apply });
-    var ctrl = window.TasunCloudKit.mount({ resourceKey:RESOURCE_KEY }); try{ var b=document.getElementById("btnSwitch"); if(b && ctrl && ctrl.saveMerged){ b.addEventListener("click", function(){ try{ ctrl.saveMerged(); }catch(_e){} }, { passive:true }); } }catch(_e3){} try{ if(ctrl && ctrl.pullNow) ctrl.pullNow(); }catch(_e4){}
+    var ctrl = window.TasunCloudKit.mount({ resourceKey:RESOURCE_KEY });
+    try{ var b=document.getElementById("btnSwitch"); if(b && ctrl && ctrl.saveMerged){ b.addEventListener("click", function(){ try{ ctrl.saveMerged(); }catch(_e){} }, { passive:true }); } }catch(_e3){}
+    try{ if(ctrl && ctrl.pullNow) ctrl.pullNow(); }catch(_e4){}
   })();
   </script>
 
 <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-global-auth-v65.js")) || "tasun-global-auth-v65.js") + '"><\/script>');</script>
-<script>window.TasunGuardV4 && window.TasunGuardV4.boot({ pageKey: "汐東工程管理表.html" });</script>
+<script>window.TasunGuardV4 && window.TasunGuardV4.boot({ pageKey: "xidong-entry", pageFile: "汐東工程管理表.html" });</script>
 </body>
 </html>
