@@ -1172,6 +1172,13 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       }catch(e){}
 
       try{
+        if(window.TasunGlobalCore && typeof window.TasunGlobalCore.getCurrentUser === "function"){
+          cur = normalizeAuthUser(window.TasunGlobalCore.getCurrentUser());
+          if(cur) return cur;
+        }
+      }catch(e){}
+
+      try{
         if(window.TasunAuthV4 && typeof window.TasunAuthV4.getCurrentUser === "function"){
           cur = normalizeAuthUser(window.TasunAuthV4.getCurrentUser());
           if(cur) return cur;
@@ -1187,12 +1194,36 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
         }
       }catch(e){}
 
+      try{
+        cur = findUserInStorageBag(sessionStorage) || findUserInStorageBag(localStorage);
+        if(cur) return cur;
+      }catch(e){}
+
+      try{
+        var last = normalizeAuthUser(safeJSON(localStorage.getItem("tasunLastLoginUser_v1")||""));
+        if(last) return last;
+      }catch(e){}
+
       return null;
     }
 
     function setCurrentUser(u){
-      if(!u){ try{ localStorage.removeItem(CURRENT_KEY); }catch(e){} try{ sessionStorage.removeItem(CURRENT_KEY);}catch(e){} }
-      else { try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(u)); }catch(e){} try{ localStorage.removeItem(CURRENT_KEY);}catch(e){} }
+      if(!u){
+        try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
+        try{ sessionStorage.removeItem(CURRENT_KEY);}catch(e){}
+        try{ localStorage.removeItem("tasunLastLoginUser_v1"); }catch(e){}
+        try{ sessionStorage.removeItem("tasunLastLoginUser_v1"); }catch(e){}
+        return;
+      }
+      var row = normalizeAuthUser(u) || u;
+      try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(e){}
+      try{ localStorage.removeItem(CURRENT_KEY);}catch(e){}
+      try{ localStorage.setItem("tasunLastLoginUser_v1", JSON.stringify(row)); }catch(e){}
+      try{ sessionStorage.setItem("tasunLastLoginUser_v1", JSON.stringify(row)); }catch(e){}
+      try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: row.user, role: row.role, t: Date.now() })); }catch(e){}
+      try{ sessionStorage.setItem(INDEX_SESSION_KEY, "1"); }catch(e){}
+      try{ sessionStorage.setItem("tasunSessionBridge_v1", JSON.stringify(row)); }catch(e){}
+      try{ localStorage.setItem("tasunSessionBridge_v1", JSON.stringify(row)); }catch(e){}
     }
 
     function roleRank(role){
@@ -1457,25 +1488,30 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     }
 
     function startAuthHydrationWatch(){
-      var tries = 0, maxTries = 18;
-      var tm = setInterval(function(){
-        tries++;
+      var tries = 0, maxTries = 28;
+      var syncedOnce = false;
+      async function settle(){
         var ok = false;
         try{ ok = resolveRuntimeUser(); }catch(e){ ok = false; }
         try{ ensureActionButtonsVisible(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
-        if(ok || tries >= maxTries) clearInterval(tm);
+        if(!syncedOnce){
+          try{
+            await reconcileCloudOnOpen({ silent:true });
+            syncedOnce = true;
+          }catch(e){}
+        }
+        return ok;
+      }
+      var tm = setInterval(function(){
+        tries++;
+        settle().then(function(ok){ if(ok || tries >= maxTries) clearInterval(tm); });
       }, 250);
-      window.addEventListener("focus", function(){
-        try{ resolveRuntimeUser(); }catch(e){}
-        try{ ensureActionButtonsVisible(); }catch(e){}
-        try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
+      ["focus","pageshow","load"].forEach(function(evt){
+        window.addEventListener(evt, function(){ settle(); });
       });
-      window.addEventListener("pageshow", function(){
-        try{ resolveRuntimeUser(); }catch(e){}
-        try{ ensureActionButtonsVisible(); }catch(e){}
-        try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
-      });
+      document.addEventListener("visibilitychange", function(){ if(!document.hidden) settle(); });
+      window.addEventListener("storage", function(){ settle(); });
     }
 
     // ---------------------------
@@ -2695,7 +2731,7 @@ function getPromptOptions(mode){
           setCloudState({
             cfgOk: cfgOk,
             reachable: reachable,
-            ok: !!(state.cloud && state.cloud.ok),
+            ok: reachable ? true : !!(state.cloud && state.cloud.ok),
             apiBase: apiBase,
             endpoints: eps || null,
             lastOkAt: reachable ? Date.now() : (state.cloud && state.cloud.lastOkAt ? state.cloud.lastOkAt : "")
@@ -3348,15 +3384,13 @@ $("btnSave").addEventListener("click", async function(){
         try{ hydrateCrossPageAuth(); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
-        // ✅ 開頁同步策略：先檢查本端，有資料先上傳 merge 去重；再下載雲端最新資料。
+        // ✅ 開頁同步策略：不再被登入顯示狀態阻斷，先同步資料，再由後續 bridge 回填使用者/權限。
         try{
-          if(cur){
-            await reconcileCloudOnOpen({ silent:true });
-            try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
-          }
+          await reconcileCloudOnOpen({ silent:true });
+          try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         }catch(e){}
         try{ ensureHeaderStateVisible(); }catch(e){}
-        try{ if(!cur) openLogin(); }catch(e){}
+        try{ if(!cur && !state.db.length) openLogin(); }catch(e){}
 
         try{
           await idbPutMeta({
