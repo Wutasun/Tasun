@@ -12,7 +12,7 @@
   <script>document.write('<script src="tasun-version-loader.js?_=' + Date.now() + '"><\/script>');</script>
   <script>
   (function(){
-    const FALLBACK_VER = '20260319_08';
+    const FALLBACK_VER = '20260319_15';
     function normVer(v){ return (v === undefined || v === null) ? '' : String(v).trim(); }
     function addVer(url, ver){
       const vv = normVer(ver);
@@ -561,6 +561,27 @@
       }
     }
   </style>
+
+  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-guard-v4.js")) || "tasun-guard-v4.js") + '"><\/script>');</script>
+  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-cloudwrap-v4.js")) || "tasun-cloudwrap-v4.js") + '"><\/script>');</script>
+  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-auth-v4.js")) || "tasun-auth-v4.js") + '"><\/script>');</script>
+  <script src="tasun-global-core.js"></script>
+  <script>
+  (function(){
+    function run(){
+      try{
+        if(!window.TasunGlobalCore) return;
+        var core = window.TasunGlobalCore;
+        var cur = core.getCurrentUser && core.getCurrentUser();
+        if(cur && cur.user){ try{ core.setCurrentUser(cur); }catch(_e){} }
+        try{ core.requireLoginOnColdStart && core.requireLoginOnColdStart(); }catch(_e){}
+      }catch(_e){}
+    }
+    if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run, { once:true });
+    else run();
+  })();
+  </script>
+
 </head>
 
 <body>
@@ -726,7 +747,6 @@
 
   const ENTRY_SELECTED_KEY = 'tasunEntrySelected_v1';
   const PERM_MATRIX_KEY    = 'tasunPermMatrix_v1';
-  const ENTRY_BUTTON_MAP_KEY = 'tasunEntryButtonMap_v1';
 
   // ✅ 新增：入口頁註冊表（未來新頁面可自動加入權限表）
   const ENTRY_REGISTRY_KEY = 'tasunEntryRegistry_v1';
@@ -1425,13 +1445,11 @@ function safeJsonParse(s, fallback){
       const role = String(raw?.role ?? raw?.level ?? 'read').toLowerCase().trim();
       const passHash = String(raw?.passHash ?? raw?.passwordHash ?? raw?.hash ?? '').trim();
       const pass = String(raw?.pass ?? raw?.password ?? raw?.pw ?? '').trim();
-      const pendingPass = String(raw?._pendingPass ?? raw?.pendingPass ?? '').trim();
       return {
         user,
         role: roleOptions.includes(role) ? role : 'read',
         passHash,
         pass,
-        _pendingPass: pendingPass,
         name: String(raw?.name ?? user).trim()
       };
     }).filter(u => u.user);
@@ -1449,6 +1467,57 @@ function safeJsonParse(s, fallback){
     whoMobile.textContent = t;
   }
 
+  function readCookie(name){
+    try{
+      const m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.$?*|{}()\[\]\/+^]/g,'\$&') + '=([^;]*)'));
+      return m ? decodeURIComponent(m[1]) : '';
+    }catch(_){ return ''; }
+  }
+  function safeB64Json(raw){
+    try{
+      if(!raw) return null;
+      const txt = decodeURIComponent(escape(atob(String(raw))));
+      return safeJsonParse(txt, null);
+    }catch(_){ return null; }
+  }
+  function normalizeCurrentLike(obj){
+    if(!obj || typeof obj !== 'object') return null;
+    const user = String(obj.user || obj.username || obj.name || obj.account || obj.u || '').trim();
+    const role = String(obj.role || obj.level || obj.r || '').trim().toLowerCase() || 'read';
+    if(!user || user === '—') return null;
+    return { user, role };
+  }
+  function restoreCurrentFromAllSources(){
+    const candidates = [];
+    const push = (value) => {
+      const hit = normalizeCurrentLike(value);
+      if(hit) candidates.push(hit);
+    };
+    const pull = (store, key) => {
+      try{
+        const raw = store.getItem(key);
+        if(!raw) return;
+        push(safeJsonParse(raw, null));
+      }catch(_){ }
+    };
+    pull(localStorage, CURRENT_KEY);
+    pull(sessionStorage, CURRENT_KEY);
+    ['tasunSso_v2','tasunSso_v1','tasunSessionLogin_v2','tasunCurrentUser_v1','tasunSession_v1'].forEach((k)=>{
+      pull(sessionStorage, k);
+      pull(localStorage, k);
+    });
+    try{ push(safeB64Json(readCookie('tasun_session_v4'))); }catch(_){ }
+    try{ if(window.TasunAuth && typeof window.TasunAuth.getCurrent === 'function') push(window.TasunAuth.getCurrent()); }catch(_){ }
+    try{ if(window.TasunGlobalCore && typeof window.TasunGlobalCore.getCurrentUser === 'function') push(window.TasunGlobalCore.getCurrentUser()); }catch(_){ }
+    const hit = candidates.find(v => v && v.user);
+    if(hit){
+      try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(hit)); }catch(_){ }
+      try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(hit)); }catch(_){ }
+      return hit;
+    }
+    return { user:'—', role:'read' };
+  }
+
   function loadPermMatrix(){
     const raw = safeJsonParse(localStorage.getItem(PERM_MATRIX_KEY) || 'null', null);
     if(raw && typeof raw === 'object'){
@@ -1461,23 +1530,6 @@ function safeJsonParse(s, fallback){
   function savePermMatrix(){
     localStorage.setItem(PERM_MATRIX_KEY, JSON.stringify(permMatrix));
   }
-
-  async function finalizePendingPasswords(){
-    let changed = false;
-    for(const u of (Array.isArray(auth) ? auth : [])){
-      if(!u || typeof u !== 'object') continue;
-      const pending = String(u._pendingPass || '').trim();
-      if(!pending) continue;
-      try{
-        u.passHash = await sha256Hex(pending);
-        u.pass = '';
-        u._pendingPass = '';
-        changed = true;
-      }catch(_){}
-    }
-    return changed;
-  }
-
   function ensureUserEntry(uName){
     const k = userKey(uName);
     if(!k) return null;
@@ -1662,32 +1714,28 @@ function safeJsonParse(s, fallback){
 
   async function refreshEntryButtonsBySelection(){
     const entry = resolveEntryValue();
-    let items = [];
-
     if(entry === 'index.html'){
       const navButtons = readNavButtons().filter(it => !isSystemPermissionButton(it));
-      items = navButtons.map((it, idx) => ({
+      currentEntryButtons = navButtons.map((it, idx) => ({
         key: `btn${idx+1}`,
         name: String(it.label || it.sourceId || `btn${idx+1}`).trim() || `btn${idx+1}`,
         href: String(it.href || '').trim(),
         target: String(it.target || '').trim(),
         sourceId: String(it.sourceId || '').trim() || `btn${idx+1}`
       }));
+      btnMeta = currentEntryButtons.map(x => ({ ...x }));
     }else{
-      const fallback = getEntryButtonsFromDefaults(entry);
-      const extracted = (!fallback || !fallback.length) ? await extractEntryButtonsFromPage(entry) : null;
-      items = (Array.isArray(fallback) && fallback.length ? fallback : (Array.isArray(extracted) && extracted.length ? extracted : buildFallbackButtons(5))).map((x, idx) => ({
-        key: String(x.key || `btn${idx+1}`).trim() || `btn${idx+1}`,
-        name: String(x.name || x.label || x.key || `btn${idx+1}`).trim() || `btn${idx+1}`,
-        href: String(x.href || '').trim(),
-        target: String(x.target || '').trim(),
-        sourceId: String(x.sourceId || x.key || `btn${idx+1}`).trim() || `btn${idx+1}`
-      }));
+      const extracted = await extractEntryButtonsFromPage(entry);
+      if(Array.isArray(extracted) && extracted.length){
+        btnMeta = extracted.map(x => ({ ...x }));
+      }else{
+        const fallback = getEntryButtonsFromDefaults(entry);
+        btnMeta = Array.isArray(fallback) && fallback.length ? fallback : buildFallbackButtons(5);
+      }
+      currentEntryButtons = (Array.isArray(btnMeta) ? btnMeta : []).map(x => ({ ...x }));
     }
-
-    items = items.filter(it => !isSystemPermissionButton(it));
-    currentEntryButtons = orderButtonsByEntry(entry, items).map(x => ({ ...x }));
-    btnMeta = currentEntryButtons.map(x => ({ ...x }));
+    btnMeta = (Array.isArray(btnMeta) ? btnMeta : []).filter(it => !isSystemPermissionButton(it));
+    currentEntryButtons = (Array.isArray(currentEntryButtons) ? currentEntryButtons : []).filter(it => !isSystemPermissionButton(it));
     rebuildCurrentEntryOptions();
     renderNavRows(currentEntryButtonOptions.length || btnMeta.length || 0);
     renderHeaders();
@@ -1702,7 +1750,7 @@ function safeJsonParse(s, fallback){
       <th>使用者</th>
       <th>密碼</th>
       <th>權限</th>
-      ${btnMeta.map(b => `<th>${escapeHtml(b.name || b.key)}</th>`).join('')}
+      ${btnMeta.filter(b => !isSystemPermissionButton(b)).map(b => `<th>${escapeHtml(b.name || b.key)}</th>`).join('')}
       <th class="sysCol">系統/權限</th>
       <th>刪除</th>
     `;
@@ -1718,14 +1766,14 @@ function safeJsonParse(s, fallback){
       return `
       <tr data-idx="${idx}">
         <td><input class="field" data-k="user" value="${escapeHtml(u.user||'')}" ${isAdmin?'':'disabled'}></td>
-        <td><input class="field" data-k="pass" value="${escapeHtml(u._pendingPass || '')}" placeholder="此處可直接輸入新密碼；按儲存後才會更新並加密儲存" ${isAdmin?'':'disabled'}></td>
+        <td><input class="field" data-k="pass" value="${escapeHtml(u.__pendingPass || '')}" placeholder="此處可直接輸入新密碼；儲存後才會更新並加密儲存" ${isAdmin?'':'disabled'}></td>
         <td>
           <select class="field" data-k="role" ${isAdmin?'':'disabled'}>
             ${roleOptions.map(r => `<option value="${r}" ${r===role?'selected':''}>${r}</option>`).join('')}
           </select>
         </td>
 
-        ${btnMeta.map(b => {
+        ${btnMeta.filter(b => !isSystemPermissionButton(b)).map(b => {
           const checked = getPerm(u.user, entry, b.key) ? 'checked' : '';
           return `<td><input class="chk" type="checkbox" data-k="${escapeHtml(b.key)}" ${checked} ${isAdmin?'':'disabled'}></td>`;
         }).join('')}
@@ -1761,7 +1809,7 @@ function safeJsonParse(s, fallback){
             </div>
             <div>
               <div class="rowLabel">密碼</div>
-              <input class="field" data-k="pass" value="${escapeHtml(u._pendingPass || '')}" placeholder="此處可直接輸入新密碼；按儲存後才會更新並加密儲存" ${isAdmin?'':'disabled'}>
+              <input class="field" data-k="pass" value="${escapeHtml(u.__pendingPass || '')}" placeholder="此處可直接輸入新密碼；儲存後才會更新並加密儲存" ${isAdmin?'':'disabled'}>
             </div>
             <div>
               <div class="rowLabel">權限</div>
@@ -1773,7 +1821,7 @@ function safeJsonParse(s, fallback){
             <div class="rowLabel">按鍵顯示權限（入口：${escapeHtml(entry)}，可左右滑動）</div>
             <div class="permScroll">
               <div class="permRow">
-                ${btnMeta.map(b => {
+                ${btnMeta.filter(b => !isSystemPermissionButton(b)).map(b => {
                   const checked = getPerm(u.user, entry, b.key) ? 'checked' : '';
                   return `
                   <label class="permItem">
@@ -1793,12 +1841,29 @@ function safeJsonParse(s, fallback){
     }).join('');
   }
 
+  async function flushPendingPasswords(){
+    for(const u of (Array.isArray(auth) ? auth : [])){
+      if(!u || typeof u !== 'object') continue;
+      const plain = String(u.__pendingPass || '').trim();
+      if(!plain) continue;
+      try{
+        u.passHash = await sha256Hex(plain);
+        u.pass = '';
+        delete u.__pendingPass;
+      }catch(_){ }
+    }
+  }
+
   async function saveLocal(){
-    await finalizePendingPasswords();
-    localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
+    await flushPendingPasswords();
+    const sanitized = (Array.isArray(auth) ? auth : []).map(u => {
+      const row = { ...u };
+      delete row.__pendingPass;
+      return row;
+    });
+    localStorage.setItem(AUTH_KEY, JSON.stringify(sanitized));
     savePermMatrix();
     localState.textContent = '本機：已儲存';
-    return Promise.resolve();
   }
 
   function updateStates(text){
@@ -1859,7 +1924,7 @@ function safeJsonParse(s, fallback){
     scheduleCloudPush('add-row');
   }
 
-  function removeRow(idx){
+  async function removeRow(idx){
     if(idx < 0 || idx >= auth.length) return;
     const u = auth[idx];
     if(String(u.user||'').toLowerCase() === 'alex'){
@@ -1871,7 +1936,7 @@ function safeJsonParse(s, fallback){
 
     auth.splice(idx, 1);
     renderAll();
-    saveLocal();
+    await saveLocal();
     setMsg('已刪除一列並儲存本機。');
     scheduleCloudPush('remove-row');
   }
@@ -1887,10 +1952,11 @@ function safeJsonParse(s, fallback){
 
     const entry = resolveEntryValue();
 
-    // ✅ 密碼欄：可直接停留輸入，按「儲存（同步雲端）」後才會更新並加密儲存
+    // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
     if(k === "pass"){
-      auth[idx]._pendingPass = String(e.target.value || "");
-      localState.textContent = auth[idx]._pendingPass.trim() ? '本機：密碼待儲存' : '本機：未儲存';
+      auth[idx].__pendingPass = String(e.target.value || '');
+      localState.textContent = auth[idx].__pendingPass.trim() ? '本機：有未儲存密碼' : '本機：未儲存';
+      if(e.type === 'change') setMsg('已輸入新密碼；按「儲存（同步雲端）」後才會更新並加密儲存。');
       return;
     }
 
@@ -1912,15 +1978,15 @@ function safeJsonParse(s, fallback){
     scheduleCloudPush('table-edit');
   }
 
-  function onTableClick(e){
+  async function onTableClick(e){
     const tr = e.target.closest('tr');
     if(!tr) return;
     const idx = Number(tr.dataset.idx);
     if(Number.isNaN(idx)) return;
-    if(e.target.dataset.act === 'del') removeRow(idx);
+    if(e.target.dataset.act === 'del') await removeRow(idx);
   }
 
-  function onCardClick(e){
+  async function onCardClick(e){
     const card = e.target.closest('.card');
     if(!card) return;
     const idx = Number(card.dataset.idx);
@@ -1933,7 +1999,7 @@ function safeJsonParse(s, fallback){
       if(chev) chev.textContent = card.classList.contains('open') ? '▴' : '▾';
       return;
     }
-    if(act === 'del'){ removeRow(idx); return; }
+    if(act === 'del'){ await removeRow(idx); return; }
   }
 
   async function onCardInput(e){
@@ -1947,10 +2013,23 @@ function safeJsonParse(s, fallback){
 
     const entry = resolveEntryValue();
 
-    // ✅ 密碼欄：可直接停留輸入，按「儲存（同步雲端）」後才會更新並加密儲存
+    // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
     if(k === "pass"){
-      auth[idx]._pendingPass = String(e.target.value || "");
-      localState.textContent = auth[idx]._pendingPass.trim() ? '本機：密碼待儲存' : '本機：未儲存';
+      if(e.type === 'input') return;
+      const plain = String(e.target.value || "");
+      if(plain.trim()){
+        try{
+          auth[idx].passHash = await sha256Hex(plain);
+          auth[idx].pass = "";
+          e.target.value = "";
+          setMsg("✅ 已更新密碼（SHA-256 加密儲存）。");
+        }catch(_){
+          setMsg("密碼更新失敗：瀏覽器不支援加密（crypto.subtle）。", true);
+        }
+        normalizeAuth();
+        await saveLocal();
+        scheduleCloudPush("pwd-updated");
+      }
       return;
     }
 
@@ -2127,9 +2206,9 @@ function safeJsonParse(s, fallback){
     saveAndUpload(t);
   });
 
-  saveLocalBtn.addEventListener('click', () => {
+  saveLocalBtn.addEventListener('click', async () => {
     normalizeAuth();
-    saveLocal();
+    await saveLocal();
     updateStates('已儲存本機（localStorage）。\n並已排程同步雲端（若 Token OK）。');
     // ✅ 一鍵寫入 D1（以權限表為主，需 admin + Session Cookie）
     d1PushAuthTable('save-btn');
@@ -2256,7 +2335,7 @@ function safeJsonParse(s, fallback){
       if(!permMatrix.users || typeof permMatrix.users !== 'object') permMatrix.users = {};
 
       normalizeAuth();
-      saveLocal();
+      await saveLocal();
 
       current.role = getEffectiveRole();
       isAdmin = (getEffectiveRole() === 'admin');
@@ -2326,7 +2405,7 @@ function safeJsonParse(s, fallback){
     }
 
     normalizeAuth();
-    saveLocal();
+    await saveLocal();
 
     // ✅ 先保留本機快照（若遇到雲端已更新 → 下載後合併再上傳）
     const localSnap = {
@@ -2371,10 +2450,9 @@ function safeJsonParse(s, fallback){
 
   function isSystemPermissionButton(it){
     const sourceId = String(it?.sourceId || it?.id || '').trim().toLowerCase();
-    const labelRaw = String(it?.label || it?.name || '').trim();
-    const label = labelRaw.replace(/[／∕⁄]/g, '/').replace(/\s+/g, '');
+    const label = String(it?.label || '').trim();
     const href = String(it?.href || '').trim();
-    return sourceId === 'auth' || sourceId === 'xidong_auth' || /權限表\.html$/i.test(href) || label === '系統/權限' || /權限表/.test(labelRaw);
+    return sourceId === 'auth' || /權限表\.html$/i.test(href) || /系統\s*[\/／]\s*權限/.test(label) || /權限表/.test(label);
   }
 
   function renderNavRows(count){
@@ -2384,91 +2462,6 @@ function safeJsonParse(s, fallback){
       const n = idx + 1;
       return `<div class="navLabel" data-nav-row-label="${n}">btn${n}</div><select class="field nav-dyn-select" data-nav-slot="${n}"></select>`;
     }).join('');
-  }
-
-
-
-  function normalizeEntryButtons(list){
-    return (Array.isArray(list) ? list : []).map((it, idx) => {
-      const sourceId = String(it?.sourceId || it?.id || it?.key || `btn${idx+1}`).trim() || `btn${idx+1}`;
-      const key = String(it?.key || it?.id || `btn${idx+1}`).trim() || `btn${idx+1}`;
-      const label = String(it?.label || it?.name || it?.title || it?.text || sourceId || key).trim() || key;
-      return {
-        id: String(it?.id || key).trim() || key,
-        key,
-        sourceId,
-        label,
-        name: label,
-        href: String(it?.href || '').trim(),
-        target: String(it?.target || '').trim(),
-        roles: Array.isArray(it?.roles) ? it.roles.slice() : []
-      };
-    }).filter(it => !!String(it.sourceId || it.key || '').trim());
-  }
-
-  function hydrateIndexButtons(list){
-    const norm = normalizeEntryButtons(list).filter(it => !isSystemPermissionButton(it));
-    if(!norm.length) return getHomeButtonLibrary().filter(it => !isSystemPermissionButton(it));
-    return norm.map((it, idx) => {
-      const lib = getLibraryItemBySourceId(it.sourceId) || getLibraryItemBySourceId(inferNavSourceId(it, `btn${idx+1}`));
-      return {
-        id: String(it.id || `btn${idx+1}`).trim() || `btn${idx+1}`,
-        key: String(it.key || `btn${idx+1}`).trim() || `btn${idx+1}`,
-        sourceId: String(it.sourceId || lib?.sourceId || `btn${idx+1}`).trim() || `btn${idx+1}`,
-        label: String(it.label || lib?.label || it.name || `btn${idx+1}`).trim() || `btn${idx+1}`,
-        name: String(it.name || it.label || lib?.label || `btn${idx+1}`).trim() || `btn${idx+1}`,
-        href: String(it.href || lib?.href || '').trim(),
-        target: String(it.target || lib?.target || '').trim(),
-        roles: Array.isArray(it.roles) ? it.roles.slice() : (Array.isArray(lib?.roles) ? lib.roles.slice() : [])
-      };
-    });
-  }
-
-  function orderEntryButtons(entry, list){
-    const ordered = orderButtonsByEntry(entry, normalizeEntryButtons(list));
-    return normalizeEntryButtons(ordered);
-  }
-
-  function getEntryButtonMapStore(){
-    const raw = safeJsonParse(localStorage.getItem(ENTRY_BUTTON_MAP_KEY) || '{}', {});
-    return (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
-  }
-
-  function getEntryButtonOrder(entry){
-    const file = stripInvisibles(entry) || 'index.html';
-    const store = getEntryButtonMapStore();
-    const list = Array.isArray(store[file]) ? store[file] : [];
-    return list.map(v => String(v || '').trim()).filter(Boolean);
-  }
-
-  function setEntryButtonOrder(entry, order){
-    const file = stripInvisibles(entry) || 'index.html';
-    const store = getEntryButtonMapStore();
-    store[file] = (Array.isArray(order) ? order : []).map(v => String(v || '').trim()).filter(Boolean);
-    localStorage.setItem(ENTRY_BUTTON_MAP_KEY, JSON.stringify(store));
-    return store[file];
-  }
-
-  function orderButtonsByEntry(entry, list){
-    const src = Array.isArray(list) ? list.slice() : [];
-    const saved = getEntryButtonOrder(entry);
-    if(!saved.length) return src;
-    const map = new Map(src.map(it => [String(it?.sourceId || it?.key || '').trim(), it]));
-    const out = [];
-    saved.forEach(id => {
-      const key = String(id || '').trim();
-      if(!key || !map.has(key)) return;
-      out.push(map.get(key));
-      map.delete(key);
-    });
-    src.forEach(it => {
-      const key = String(it?.sourceId || it?.key || '').trim();
-      if(key && map.has(key)){
-        out.push(it);
-        map.delete(key);
-      }
-    });
-    return out;
   }
 
   function getHomeButtonLibrary(){
@@ -2595,8 +2588,9 @@ function safeJsonParse(s, fallback){
   }
 
   function navOptionText(it){
-    const label = String(it?.label || it?.name || it?.id || '').trim() || '未命名按鍵';
-    return label;
+    const label = String(it?.label || it?.id || '').trim() || '未命名按鍵';
+    const href = String(it?.href || '').trim();
+    return href ? `${label} ｜ ${href}` : label;
   }
 
   function getNavSelectControls(){
@@ -2604,14 +2598,16 @@ function safeJsonParse(s, fallback){
   }
 
   function refreshNavSelectOptions(){
-    const list = getNavSourceList();
-    renderNavRows(list.length);
-    const selects = getNavSelectControls();
+    const list = getNavSourceList().filter(it => !isSystemPermissionButton(it));
     const entry = resolveEntryValue();
+    const prevValues = getNavSelectControls().map((sel, idx) => String(sel.value || sel.dataset.prevValue || list[idx]?.sourceId || '').trim());
+    if(getNavSelectControls().length !== list.length){
+      renderNavRows(list.length);
+    }
+    const selects = getNavSelectControls();
     if(navPanelTitle) navPanelTitle.textContent = `按鍵名稱設定（${entry}／共 ${list.length} 顆）`;
 
     selects.forEach((sel, idx) => {
-      if(!sel) return;
       const labelNode = sel.previousElementSibling;
       const rowItem = list[idx];
       const visible = !!rowItem;
@@ -2623,15 +2619,15 @@ function safeJsonParse(s, fallback){
         return;
       }
 
-      const fallback = rowItem.sourceId || '';
-      const currentVal = String(sel.value || sel.dataset.prevValue || fallback).trim() || fallback;
+      const fallback = String(prevValues[idx] || sel.dataset.prevValue || rowItem.sourceId || '').trim() || String(rowItem.sourceId || '').trim();
+      const currentVal = fallback;
       sel.innerHTML = list.map(item => {
         const selected = item.sourceId === currentVal ? 'selected' : '';
         return `<option value="${escapeHtml(item.sourceId)}" ${selected}>${escapeHtml(navOptionText(item))}</option>`;
       }).join('');
 
-      if(!list.some(item => item.sourceId === sel.value) && fallback){
-        sel.value = fallback;
+      if(!list.some(item => item.sourceId === sel.value)){
+        sel.value = rowItem.sourceId;
       }
       sel.dataset.prevValue = sel.value;
     });
@@ -2732,7 +2728,7 @@ function safeJsonParse(s, fallback){
     Promise.resolve(refreshEntryButtonsBySelection()).then(() => {
       loadNavNamesIntoInputs();
       if(resolveEntryValue() !== 'index.html'){
-        setMsg('目前顯示的是該入口頁的按鍵排序設定；調整後會同步更新上方權限矩陣、下方按鍵名稱設定與入口頁預覽。');
+        setMsg('目前入口不是 index.html；下方顯示的是該入口頁實際按鍵名稱與連結，僅供檢視，不會改動首頁排序。');
       }
     });
   }
@@ -2740,18 +2736,24 @@ function safeJsonParse(s, fallback){
 
   function loadNavNamesIntoInputs(){
     const entry = resolveEntryValue();
+    const nav = readNavButtons();
     const list = getNavSourceList();
-    const ordered = getEntryButtonOrder(entry);
     refreshNavSelectOptions();
 
     const selects = getNavSelectControls();
     selects.forEach((sel, idx) => {
       if(!sel) return;
-      const fallback = String(ordered[idx] || list[idx]?.sourceId || `btn${idx+1}`).trim();
-      sel.value = fallback;
-      if(String(sel.value || '').trim() !== fallback){
-        const rowItem = list[idx] || list.find(item => item.sourceId === fallback) || null;
-        sel.value = rowItem ? rowItem.sourceId : fallback;
+      if(entry === 'index.html'){
+        const item = nav[idx] || {};
+        const sourceId = String(item.sourceId || list[idx]?.sourceId || `btn${idx+1}`).trim();
+        sel.value = sourceId;
+        if(String(sel.value || '').trim() !== sourceId){
+          const fallback = list[idx];
+          sel.value = fallback ? fallback.sourceId : sourceId;
+        }
+      }else{
+        const item = list[idx] || {};
+        sel.value = String(item.sourceId || '').trim();
       }
       sel.dataset.prevValue = sel.value;
     });
@@ -2761,36 +2763,31 @@ function safeJsonParse(s, fallback){
 
   function saveNavNamesFromInputs(){
     if(!isAdmin){ setMsg('你不是 admin，不能儲存按鍵名稱。', true); return; }
-
-    const entry = resolveEntryValue();
-    const sourceList = getNavSourceList().filter(it => !isSystemPermissionButton(it));
-    const sourceMap = new Map(sourceList.map(it => [String(it.sourceId || '').trim(), it]));
-    const selects = getNavSelectControls().filter((sel, idx) => !!sourceList[idx]);
-    const order = selects.map((sel, idx) => String(sel?.value || sourceList[idx]?.sourceId || `btn${idx+1}`).trim()).filter(Boolean);
-    setEntryButtonOrder(entry, order);
-
-    if(entry === 'index.html'){
-      const updated = order.map((sourceId, idx) => {
-        const src = sourceMap.get(sourceId) || sourceList[idx] || null;
-        return {
-          id: `btn${idx+1}`,
-          sourceId: String(src?.sourceId || sourceId).trim(),
-          label: String(src?.label || `btn${idx+1}`).trim(),
-          href: String(src?.href || '').trim(),
-          target: String(src?.target || '').trim(),
-          roles: Array.isArray(src?.roles) ? src.roles.slice() : []
-        };
-      });
-      writeNavButtons(updated);
-      setMsg('✅ 已儲存按鍵排序並同步（名稱、連結網址、target 會一起移動）。
-其他分頁（例如首頁）會自動更新。');
+    if(resolveEntryValue() !== 'index.html'){
+      setMsg('目前入口不是 index.html；這裡僅顯示該入口頁按鍵名稱與連結，不寫回首頁排序。');
       return;
     }
 
-    refreshEntryButtonsBySelection();
-    saveLocal().then(()=>{});
-    scheduleCloudPush('entry-nav-order');
-    setMsg('✅ 已儲存目前入口頁的按鍵排序；上方權限矩陣、下方按鍵名稱設定、入口頁預覽已同步。');
+    const sourceList = getNavSourceList();
+    const sourceMap = new Map(sourceList.map(it => [String(it.sourceId || '').trim(), it]));
+    const selects = getNavSelectControls();
+
+    const updated = selects.map((sel, idx) => {
+      const sourceId = String(sel?.value || '').trim() || (sourceList[idx]?.sourceId || `btn${idx+1}`);
+      const src = sourceMap.get(sourceId) || sourceList[idx] || null;
+      return {
+        id: `btn${idx+1}`,
+        sourceId: String(src?.sourceId || sourceId).trim(),
+        label: String(src?.label || `btn${idx+1}`).trim(),
+        href: String(src?.href || '').trim(),
+        target: String(src?.target || '').trim(),
+        roles: Array.isArray(src?.roles) ? src.roles.slice() : []
+      };
+    });
+
+    writeNavButtons(updated);
+
+    setMsg('✅ 已儲存按鍵排序並同步（名稱、連結網址、target 會一起移動）。\n其他分頁（例如首頁）會自動更新。');
   }
 
 
@@ -2813,13 +2810,9 @@ function safeJsonParse(s, fallback){
     if(!Array.isArray(auth)) auth = [];
     normalizeAuth();
 
-    current = getCurrentFromStores() || safeJsonParse(localStorage.getItem(CURRENT_KEY) || 'null', null);
-    if(!current || typeof current !== 'object'){
-      current = { user:'—', role:'read' };
-    }else{
-      current.user = String(current.user || current.name || '—');
-      current.role = String(current.role || current.level || 'read');
-    }
+    current = restoreCurrentFromAllSources();
+    current.user = String(current.user || current.name || '—');
+    current.role = String(current.role || current.level || 'read');
 
     loadPermMatrix();
 
@@ -2868,46 +2861,12 @@ function safeJsonParse(s, fallback){
     }
   });
 
-
-  function getCurrentFromStores(){
-    const candidates = [
-      safeJsonParse(localStorage.getItem(CURRENT_KEY) || 'null', null),
-      safeJsonParse(sessionStorage.getItem(CURRENT_KEY) || 'null', null),
-      safeJsonParse(localStorage.getItem('tasunCurrentUser_v2') || 'null', null),
-      safeJsonParse(sessionStorage.getItem('tasunCurrentUser_v2') || 'null', null),
-      safeJsonParse(sessionStorage.getItem('tasunSessionLogin_v2') || 'null', null),
-      safeJsonParse(sessionStorage.getItem('tasunSso_v2') || 'null', null),
-      safeJsonParse(sessionStorage.getItem('tasunSso_v1') || 'null', null)
-    ];
-    for(const cur of candidates){
-      if(cur && typeof cur === 'object'){
-        const user = String(cur.user || cur.name || cur.username || cur.account || '').trim();
-        const role = String(cur.role || cur.level || '').trim();
-        if(user) return { user, role: role || 'read' };
-      }
-    }
-    return null;
-  }
-
-  function ensureCurrentRecovered(){
-    const found = getCurrentFromStores();
-    if(found){
-      current = found;
-      try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(found)); }catch(_){ }
-      return true;
-    }
-    return false;
-  }
-
   // ✅ 先載入 resources → 再 load（確保 DROPBOX_PATH & entries/entryButtons 可取得）
   (async () => {
     await loadResourcesForAuthTable();
     // resources 可能提供 entries/buttons → 先融合一次
     rebuildDynEntryData();
-    await load();
-    setTimeout(async () => {
-      if(ensureCurrentRecovered()) await load();
-    }, 600);
+    load();
   })();
 
   // ======（可選）未來新頁面自動註冊範例（貼到新頁 JS 即可）======
