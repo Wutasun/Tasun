@@ -1434,23 +1434,45 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       return false;
     }
 
+    function ensureBootCloudReconcile(reason){
+      if(_bootReconcileDone) return Promise.resolve(true);
+      if(_bootReconcilePromise) return _bootReconcilePromise;
+      _bootReconcilePromise = (async function(){
+        try{
+          await reconcileCloudOnOpen({ silent:true, reason: reason || 'boot-hydrate' });
+          _bootReconcileDone = true;
+          return true;
+        }catch(e){
+          return false;
+        }finally{
+          _bootReconcilePromise = null;
+        }
+      })();
+      return _bootReconcilePromise;
+    }
+
     function startAuthHydrationWatch(){
       var tries = 0, maxTries = 18;
       var tm = setInterval(function(){
         tries++;
         var ok = false;
         try{ ok = resolveRuntimeUser(); }catch(e){ ok = false; }
+        if(ok){ try{ ensureBootCloudReconcile('hydrate-watch'); }catch(e){} }
         try{ ensureActionButtonsVisible(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         if(ok || tries >= maxTries) clearInterval(tm);
       }, 250);
       window.addEventListener("focus", function(){
-        try{ resolveRuntimeUser(); }catch(e){}
+        var ok = false;
+        try{ ok = resolveRuntimeUser(); }catch(e){}
+        try{ if(ok || (state.cloud && state.cloud.cfgOk && !state.cloud.ok)) ensureBootCloudReconcile('focus'); }catch(e){}
         try{ ensureActionButtonsVisible(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
       });
       window.addEventListener("pageshow", function(){
-        try{ resolveRuntimeUser(); }catch(e){}
+        var ok = false;
+        try{ ok = resolveRuntimeUser(); }catch(e){}
+        try{ if(ok || (state.cloud && state.cloud.cfgOk && !state.cloud.ok)) ensureBootCloudReconcile('pageshow'); }catch(e){}
         try{ ensureActionButtonsVisible(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
       });
@@ -1982,6 +2004,8 @@ function getVisibleRows(){
       cloud: { ok:false, cfgOk:false, reachable:false, apiBase:"", endpoints:null, lastSyncAt:"", lastOkAt:"" },
       _legacyScan: null
     };
+    var _bootReconcileDone = false;
+    var _bootReconcilePromise = null;
 
     function setCloudState(patch, doRefresh){
       patch = (patch && typeof patch === "object") ? patch : {};
@@ -3324,11 +3348,11 @@ $("btnSave").addEventListener("click", async function(){
         try{ refresh(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         try{ hydrateCrossPageAuth(); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
-        // ✅ 開頁同步策略：先檢查本端，有資料先上傳 merge 去重；再下載雲端最新資料。
+        // ✅ 開頁同步策略：不再被目前使用者顯示狀態卡住。
+        // 只要 Worker 設定存在，就先做一次 reconcile；
+        // 若登入橋接較慢，後續 hydration watch 也會再補一次。
         try{
-          if(cur){
-            await reconcileCloudOnOpen({ silent:true });
-          }
+          await reconcileCloudOnOpen({ silent:true });
         }catch(e){}
         try{ ensureHeaderStateVisible(); }catch(e){}
         try{ if(!cur) openLogin(); }catch(e){}
