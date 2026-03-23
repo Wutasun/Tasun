@@ -4,9 +4,9 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>捷運汐東線事項記錄｜雲端逐步測試（20260323 修正版）</title>
-<script>document.write('<script src="tasun-version-loader.js?_=' + Date.now() + '"></script>');</script>
-<script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-auth-v4.js")) || "tasun-auth-v4.js") + '"></script>');</script>
-<script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-cloudwrap-v4.js")) || "tasun-cloudwrap-v4.js") + '"></script>');</script>
+<script>document.write('<script src="tasun-version-loader.js?_=' + Date.now() + '"><\/script>');</script>
+<script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-auth-v4.js")) || "tasun-auth-v4.js") + '"><\/script>');</script>
+<script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-cloudwrap-v4.js")) || "tasun-cloudwrap-v4.js") + '"><\/script>');</script>
 <script src="tasun-global-core.js"></script>
 <style>
 :root{--bg:#edf2f1;--panel:#ffffff;--border:#d6d6d6;--ink:#1d1d1f;--muted:#667085;--accent:#8a5b16;--ok:#067647;--warn:#b54708;--bad:#b42318;--info:#175cd3}
@@ -148,7 +148,22 @@
     if(!js) log('[Step 2] resources 無法解析 JSON，改用預設與手動覆蓋值。');
     return cfg;
   }
-  function findAuthRow(){ const cur = getCurrentUser(); state.currentUser = cur; const auth = safeJSON(localStorage.getItem(AUTH_KEY)); const users = auth && Array.isArray(auth.users) ? auth.users : []; if(!cur) return null; const uname = norm(cur.user || cur.name).toLowerCase(); const row = users.find(u => norm(u.user || u.username || u.name).toLowerCase() === uname) || null; state.authRow = row; return row; }
+  function getAuthUsers(){
+    const auth = safeJSON(localStorage.getItem(AUTH_KEY));
+    if(Array.isArray(auth)) return auth;
+    if(auth && Array.isArray(auth.users)) return auth.users;
+    return [];
+  }
+  function findAuthRow(){
+    const cur = getCurrentUser();
+    state.currentUser = cur;
+    const users = getAuthUsers();
+    if(!cur) return null;
+    const uname = norm(cur.user || cur.name).toLowerCase();
+    const row = users.find(u => norm(u.user || u.username || u.name).toLowerCase() === uname) || null;
+    state.authRow = row;
+    return row;
+  }
   function tokenFromAuthRow(row){ if(!row || typeof row!=='object') return ''; const keys=['token','apiKey','xApiKey','cloudToken','workerToken','accessToken','authToken','bearer','workerApiKey']; for(const k of keys){ const v = norm(row[k]); if(v) return v; } return ''; }
   function passwordCandidates(row){ if(!row || typeof row!=='object') return []; const keys=['pass','password','pw','secret','workerPass','workerPassword']; const arr=[]; for(const k of keys){ const v = norm(row[k]); if(v) arr.push(v); } return [...new Set(arr)]; }
   async function tryWorkerLogin(cfg){
@@ -179,7 +194,7 @@
   }
   async function ensureAuth(cfg, force){ if(force) clearTokens(); const existing = norm(getSharedToken()); if(existing && !force) return { ok:true, why:'沿用現有 token', token:existing }; return await tryWorkerLogin(cfg); }
   async function doBoot(){
-    const cur = getCurrentUser(); const auth = safeJSON(localStorage.getItem(AUTH_KEY)); const row = findAuthRow();
+    const cur = getCurrentUser(); const auth = safeJSON(localStorage.getItem(AUTH_KEY)); const authUsers = getAuthUsers(); const row = findAuthRow();
     runtimeMeta.textContent = [
       '目前檔名：' + fileName(),
       'APP_VER：' + norm(window.TASUN_APP_VER || ''),
@@ -189,6 +204,7 @@
     ].join('\n');
     authMeta.textContent = [
       'tasunAuthTable_v1：' + (auth ? '存在' : '不存在'),
+      'auth rows：' + authUsers.length,
       '對應 auth row：' + (row ? '找到 ' + (row.user || row.name || '') : '未找到'),
       'auth row 內 token：' + (tokenFromAuthRow(row) ? '有' : '無'),
       'auth row 密碼候選：' + passwordCandidates(row).length
@@ -200,7 +216,7 @@
   }
   async function doResources(){ const cfg = await loadResources(); setSummary('已讀到 resources / apiBase。若後續 HTTP 401，代表主機可達但授權失敗。', 'info'); return cfg; }
   async function doHealth(){ const cfg = state.cfg || await loadResources(); const url = joinUrl(cfg.apiBase, cfg.endpoints.health); const resp = await fetchText(url, { method:'GET', cache:'no-store', credentials:credentialsMode(), headers:authHeaders() }); setPayload(resp.text); log('[Step 3] health:', url, 'HTTP=' + resp.status, explainHttp(resp.status)); if(resp.ok) setSummary('Health 正常，代表 worker 主機與 health endpoint 可達。', 'ok'); else setSummary('Health 失敗：' + explainHttp(resp.status), resp.status===401?'warn':'bad'); return resp; }
-  async function doAuth(){ const cfg = state.cfg || await loadResources(); const ret = await ensureAuth(cfg, true); log('[Step 4] 補授權結果:', JSON.stringify({ ok:ret.ok, why:ret.why || '', hasToken:!!norm(ret.token || getSharedToken()) })); setPayload(ret); if(ret.ok) setSummary('已完成 Worker 授權補強，後續可直接測 read / merge。', 'ok'); else setSummary('補 Worker 授權失敗：' + (ret.why || '未知原因'), 'bad'); return ret; }
+  async function doAuth(){ const cfg = state.cfg || await loadResources(); const ret = await ensureAuth(cfg, true); log('[Step 4] 補授權結果:', JSON.stringify({ ok:ret.ok, why:ret.why || '', hasToken:!!norm(ret.token || getSharedToken()) })); setPayload(ret); if(ret.ok) setSummary('已完成 Worker 授權補強，後續可直接測 read / merge。', 'ok'); else setSummary('補 Worker 授權失敗：' + (ret.why || '未知原因') + '。若權限表使用陣列格式，本版已支援直接讀取；請再重跑 Step 1～6。', 'bad'); return ret; }
   async function requestRead(cfg, mode){
     const key = norm($('resourceKey').value) || PAGE_KEY_DEFAULT;
     if(mode==='GET'){
