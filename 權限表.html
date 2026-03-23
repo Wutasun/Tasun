@@ -12,7 +12,7 @@
   <script>document.write('<script src="tasun-version-loader.js?_=' + Date.now() + '"><\/script>');</script>
   <script>
   (function(){
-    const FALLBACK_VER = '20260319_15';
+    const FALLBACK_VER = '20260319_08';
     function normVer(v){ return (v === undefined || v === null) ? '' : String(v).trim(); }
     function addVer(url, ver){
       const vv = normVer(ver);
@@ -428,6 +428,13 @@
       flex-wrap:wrap;
       justify-content:flex-end;
     }
+    .navRowsHost{
+      grid-column: 1 / -1;
+      display:grid;
+      grid-template-columns: 90px 1fr;
+      gap:10px 12px;
+      align-items:center;
+    }
 
     /* ✅ 按鍵名稱設定下拉選單放大，讓完整按鍵名稱更容易看見 */
     .navRowsMount{
@@ -561,27 +568,6 @@
       }
     }
   </style>
-
-  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-guard-v4.js")) || "tasun-guard-v4.js") + '"><\/script>');</script>
-  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-cloudwrap-v4.js")) || "tasun-cloudwrap-v4.js") + '"><\/script>');</script>
-  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-auth-v4.js")) || "tasun-auth-v4.js") + '"><\/script>');</script>
-  <script src="tasun-global-core.js"></script>
-  <script>
-  (function(){
-    function run(){
-      try{
-        if(!window.TasunGlobalCore) return;
-        var core = window.TasunGlobalCore;
-        var cur = core.getCurrentUser && core.getCurrentUser();
-        if(cur && cur.user){ try{ core.setCurrentUser(cur); }catch(_e){} }
-        try{ core.requireLoginOnColdStart && core.requireLoginOnColdStart(); }catch(_e){}
-      }catch(_e){}
-    }
-    if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run, { once:true });
-    else run();
-  })();
-  </script>
-
 </head>
 
 <body>
@@ -747,7 +733,6 @@
 
   const ENTRY_SELECTED_KEY = 'tasunEntrySelected_v1';
   const PERM_MATRIX_KEY    = 'tasunPermMatrix_v1';
-  const ENTRY_BUTTON_MAP_KEY = 'tasunEntryButtonMap_v1';
 
   // ✅ 新增：入口頁註冊表（未來新頁面可自動加入權限表）
   const ENTRY_REGISTRY_KEY = 'tasunEntryRegistry_v1';
@@ -804,7 +789,6 @@
     '汐東工程管理表.html': [
       { key:'xidong_record', name:'捷運汐東線事項記錄' },
       { key:'xidong_db',     name:'工程資料庫' },
-      { key:'xidong_auth',   name:'系統／權限' },
       { key:'xidong_cloud',  name:'雲端檔案' }
     ],
     '工程資料庫.html': [
@@ -970,7 +954,7 @@
   function snapshotAuthTableForCloud(){
     const navButtons = safeJsonParse(localStorage.getItem(NAV_KEY) || "[]", []);
     const routes     = safeJsonParse(localStorage.getItem(ROUTE_KEY) || "{}", {});
-    const entrySel   = safeJsonParse(localStorage.getItem(ENTRY_SELECTED_KEY) || JSON.stringify("index.html"), "index.html");
+    const entrySel   = stripInvisibles(safeJsonParse(localStorage.getItem(ENTRY_SELECTED_KEY) || JSON.stringify('index.html'), 'index.html') || 'index.html');
     const entryReg   = safeJsonParse(localStorage.getItem(ENTRY_REGISTRY_KEY) || "[]", []);
     const btnMetaLs  = safeJsonParse(localStorage.getItem(BTN_META_KEY) || "[]", []);
     const permMat    = safeJsonParse(localStorage.getItem(PERM_MATRIX_KEY) || "{}", { users:{} });
@@ -1031,7 +1015,7 @@
     }
     if(Array.isArray(d.btnMeta))    localStorage.setItem(BTN_META_KEY, JSON.stringify(d.btnMeta));
     if(d.permMatrix && typeof d.permMatrix==="object") localStorage.setItem(PERM_MATRIX_KEY, JSON.stringify(d.permMatrix));
-    if(typeof d.entrySelected === "string") localStorage.setItem(ENTRY_SELECTED_KEY, JSON.stringify(d.entrySelected));
+    if(typeof d.entrySelected === "string") localStorage.setItem(ENTRY_SELECTED_KEY, stripInvisibles(d.entrySelected));
     if(Array.isArray(d.entryRegistry)) localStorage.setItem(ENTRY_REGISTRY_KEY, JSON.stringify(d.entryRegistry));
 
     localState.textContent = "本機：已更新";
@@ -1446,71 +1430,15 @@ function safeJsonParse(s, fallback){
       const role = String(raw?.role ?? raw?.level ?? 'read').toLowerCase().trim();
       const passHash = String(raw?.passHash ?? raw?.passwordHash ?? raw?.hash ?? '').trim();
       const pass = String(raw?.pass ?? raw?.password ?? raw?.pw ?? '').trim();
-      const pending = String(raw?.__pendingPass ?? '').trim();
       return {
         user,
         role: roleOptions.includes(role) ? role : 'read',
         passHash,
         pass,
-        __pendingPass: pending,
         name: String(raw?.name ?? user).trim()
       };
     }).filter(u => u.user);
   }
-
-  function exportAuthForStorage(){
-    return (Array.isArray(auth) ? auth : []).map(u => ({
-      user: String(u?.user || '').trim(),
-      role: String(u?.role || 'read').trim().toLowerCase(),
-      passHash: String(u?.passHash || '').trim(),
-      pass: String(u?.pass || '').trim(),
-      name: String(u?.name || u?.user || '').trim()
-    })).filter(u => u.user);
-  }
-
-  async function commitPendingPasswords(){
-    let changed = false;
-    for(const u of (Array.isArray(auth) ? auth : [])){
-      const pending = String(u?.__pendingPass || '');
-      if(!pending.trim()) continue;
-      try{
-        u.passHash = await sha256Hex(pending);
-        u.pass = '';
-        u.__pendingPass = '';
-        changed = true;
-      }catch(_){}
-    }
-    if(changed){
-      normalizeAuth();
-      setMsg('✅ 已更新密碼（SHA-256 加密儲存）。');
-    }
-    return changed;
-  }
-
-  function normalizePermissionButtons(list){
-    return (Array.isArray(list) ? list : [])
-      .map((x, idx) => ({
-        key: String(x?.key || x?.sourceId || ('btn' + (idx + 1))).trim() || ('btn' + (idx + 1)),
-        name: String(x?.name || x?.label || x?.key || ('btn' + (idx + 1))).trim() || ('btn' + (idx + 1)),
-        href: String(x?.href || '').trim(),
-        target: String(x?.target || '').trim(),
-        sourceId: String(x?.sourceId || x?.key || ('btn' + (idx + 1))).trim() || ('btn' + (idx + 1))
-      }))
-      .filter(it => !isSystemPermissionButton(it));
-  }
-
-  function getHomePermissionButtons(){
-    return getHomeButtonLibrary()
-      .filter(it => !isSystemPermissionButton(it))
-      .map((it, idx) => ({
-        key: 'btn' + (idx + 1),
-        name: String(it.label || '').trim() || ('btn' + (idx + 1)),
-        href: String(it.href || '').trim(),
-        target: String(it.target || '').trim(),
-        sourceId: String(it.sourceId || ('btn' + (idx + 1))).trim()
-      }));
-  }
-
 
   function getEffectiveRole(){
     const cu = String(current?.user || '').toLowerCase();
@@ -1522,6 +1450,61 @@ function safeJsonParse(s, fallback){
     const t = `目前使用者：${current.user} (${current.role})`;
     whoDesk.textContent = t;
     whoMobile.textContent = t;
+  }
+
+  function readCookie(name){
+    try{
+      const m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.$?*|{}()\[\]\/+^]/g,'\$&') + '=([^;]*)'));
+      return m ? decodeURIComponent(m[1]) : '';
+    }catch(_){ return ''; }
+  }
+  function safeB64Json(raw){
+    try{
+      if(!raw) return null;
+      const txt = decodeURIComponent(escape(atob(String(raw))));
+      return safeJsonParse(txt, null);
+    }catch(_){ return null; }
+  }
+  function normalizeCurrentLike(obj){
+    if(!obj || typeof obj !== 'object') return null;
+    const user = String(obj.user || obj.username || obj.name || obj.u || '').trim();
+    const role = String(obj.role || obj.level || obj.r || '').trim().toLowerCase() || 'read';
+    if(!user || user === '—') return null;
+    return { user, role };
+  }
+  function restoreCurrentFromAllSources(){
+    const candidates = [];
+    const pushCandidate = (value) => {
+      const hit = normalizeCurrentLike(value);
+      if(hit) candidates.push(hit);
+    };
+    const pull = (store, key) => {
+      try{
+        const raw = store.getItem(key);
+        if(!raw) return;
+        pushCandidate(safeJsonParse(raw, null));
+      }catch(_){ }
+    };
+
+    pull(localStorage, CURRENT_KEY);
+    pull(sessionStorage, CURRENT_KEY);
+
+    ['tasunSso_v2','tasunSso_v1','tasunSessionLogin_v2','tasunCurrentUser_v1'].forEach((k) => {
+      pull(sessionStorage, k);
+      pull(localStorage, k);
+    });
+
+    try{ pushCandidate(safeB64Json(readCookie('tasun_session_v4'))); }catch(_){ }
+    try{ if(window.TasunAuth && typeof window.TasunAuth.getCurrent === 'function') pushCandidate(window.TasunAuth.getCurrent()); }catch(_){ }
+    try{ if(window.__tasunCurrentUser) pushCandidate(window.__tasunCurrentUser); }catch(_){ }
+
+    const hit = candidates.find(v => v && v.user);
+    if(hit){
+      try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(hit)); }catch(_){ }
+      try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(hit)); }catch(_){ }
+      return hit;
+    }
+    return { user:'—', role:'read' };
   }
 
   function loadPermMatrix(){
@@ -1561,7 +1544,7 @@ function safeJsonParse(s, fallback){
   }
 
   function loadSelectedEntry(){
-    const s = stripInvisibles(localStorage.getItem(ENTRY_SELECTED_KEY) || '') || 'index.html';
+    const s = stripInvisibles((safeJsonParse(localStorage.getItem(ENTRY_SELECTED_KEY) || '""', '') || localStorage.getItem(ENTRY_SELECTED_KEY) || '')) || 'index.html';
     currentEntry = s;
   }
   function saveSelectedEntry(v){
@@ -1617,20 +1600,25 @@ function safeJsonParse(s, fallback){
     const entry = resolveEntryValue();
 
     if(entry === 'index.html'){
-      const fromNav = normalizePermissionButtons(buildBtnMetaFromNavKey() || []);
-      if(fromNav.length){
+      const fromNav = readNavButtons().filter(it => !isSystemPermissionButton(it)).map((it, idx) => ({
+        key: String(it.id || ('btn'+(idx+1))).trim() || ('btn'+(idx+1)),
+        name: normalizeButtonLabel(it.label, getLibraryItemBySourceId(it.sourceId)?.label || ('btn'+(idx+1))),
+        href: String(it.href || '').trim(),
+        target: String(it.target || '').trim(),
+        sourceId: String(it.sourceId || '').trim()
+      }));
+      if(fromNav && fromNav.length){
         btnMeta = fromNav;
         localStorage.setItem(BTN_META_KEY, JSON.stringify(btnMeta));
         return;
       }
-      btnMeta = getHomePermissionButtons();
-      localStorage.setItem(BTN_META_KEY, JSON.stringify(btnMeta));
+      btnMeta = getHomeButtonLibrary().filter(it => !isSystemPermissionButton(it)).map((it, idx) => ({ key:'btn'+(idx+1), name:it.label, href:it.href, target:it.target, sourceId:it.sourceId }));
       return;
     }
 
-    const list = normalizePermissionButtons(dynEntryButtons[entry] || []);
-    if(list.length){
-      btnMeta = list;
+    const list = dynEntryButtons[entry];
+    if(Array.isArray(list) && list.length){
+      btnMeta = list.filter(x => !isSystemPermissionButton(x)).map((x, idx) => ({ key:String(x.key||('btn'+(idx+1))).trim(), name:normalizeButtonLabel(x.name||x.key, x.key||('btn'+(idx+1))), href:String(x.href||'').trim(), target:String(x.target||'').trim(), sourceId:String(x.sourceId||x.key||('btn'+(idx+1))).trim() }));
       return;
     }
 
@@ -1643,7 +1631,7 @@ function safeJsonParse(s, fallback){
     const uName = String(current?.user || '—');
     previewUserTag.textContent = uName;
 
-    const items = (Array.isArray(btnMeta) ? btnMeta : []);
+    const items = getEffectiveButtonList(entry);
     if(!items.length){ previewGrid.innerHTML = ''; return; }
 
     previewGrid.innerHTML = items.map(b => {
@@ -1695,7 +1683,7 @@ function safeJsonParse(s, fallback){
 
   function rebuildCurrentEntryOptions(){
     const items = Array.isArray(currentEntryButtons) && currentEntryButtons.length ? currentEntryButtons : buildFallbackButtons(Array.isArray(btnMeta) ? btnMeta.length : 5);
-    currentEntryButtonOptions = items
+    let list = items
       .filter(it => !isSystemPermissionButton(it))
       .map((it, idx) => ({
         sourceId: String(it.sourceId || it.key || ('btn'+(idx+1))).trim() || ('btn'+(idx+1)),
@@ -1704,33 +1692,44 @@ function safeJsonParse(s, fallback){
         target: String(it.target || '').trim(),
         roles: Array.isArray(it.roles) ? it.roles.slice() : []
       }));
+
+    const order = getEntryButtonOrder(resolveEntryValue());
+    if(order.length){
+      const map = new Map(list.map(it => [it.sourceId, it]));
+      const arranged = [];
+      order.forEach(id => { if(map.has(id)) arranged.push(map.get(id)); });
+      list.forEach(it => { if(!order.includes(it.sourceId)) arranged.push(it); });
+      list = arranged;
+    }
+    currentEntryButtonOptions = list;
   }
 
-  async async function refreshEntryButtonsBySelection(){
+  async function refreshEntryButtonsBySelection(){
     const entry = resolveEntryValue();
-
     if(entry === 'index.html'){
-      ensureBtnMetaByEntry();
-      currentEntryButtons = (Array.isArray(btnMeta) ? btnMeta : []).map(x => ({ ...x }));
-      rebuildCurrentEntryOptions();
-      renderHeaders();
-      renderTable();
-      renderCards();
-      renderEntryPreview();
-      refreshNavSelectOptions();
-      return;
-    }
-
-    const extracted = await extractEntryButtonsFromPage(entry);
-    if(Array.isArray(extracted) && extracted.length){
-      btnMeta = normalizePermissionButtons(extracted);
+      const navButtons = readNavButtons().filter(it => !isSystemPermissionButton(it));
+      currentEntryButtons = navButtons.map((it, idx) => ({
+        key: `btn${idx+1}`,
+        name: String(it.label || it.sourceId || `btn${idx+1}`).trim() || `btn${idx+1}`,
+        href: String(it.href || '').trim(),
+        target: String(it.target || '').trim(),
+        sourceId: String(it.sourceId || '').trim() || `btn${idx+1}`
+      }));
+      btnMeta = currentEntryButtons.map(x => ({ ...x }));
     }else{
-      const fallback = getEntryButtonsFromDefaults(entry);
-      btnMeta = normalizePermissionButtons(Array.isArray(fallback) && fallback.length ? fallback : buildFallbackButtons());
+      const extracted = await extractEntryButtonsFromPage(entry);
+      if(Array.isArray(extracted) && extracted.length){
+        btnMeta = extracted.map(x => ({ ...x }));
+      }else{
+        const fallback = getEntryButtonsFromDefaults(entry);
+        btnMeta = Array.isArray(fallback) && fallback.length ? fallback : buildFallbackButtons(5);
+      }
+      currentEntryButtons = (Array.isArray(btnMeta) ? btnMeta : []).map(x => ({ ...x }));
     }
-
-    currentEntryButtons = (Array.isArray(btnMeta) ? btnMeta : []).map(x => ({ ...x }));
+    btnMeta = (Array.isArray(btnMeta) ? btnMeta : []).filter(it => !isSystemPermissionButton(it));
+    currentEntryButtons = (Array.isArray(currentEntryButtons) ? currentEntryButtons : []).filter(it => !isSystemPermissionButton(it));
     rebuildCurrentEntryOptions();
+    renderNavRows(currentEntryButtonOptions.length || btnMeta.length || 0);
     renderHeaders();
     renderTable();
     renderCards();
@@ -1751,6 +1750,7 @@ function safeJsonParse(s, fallback){
 
   function renderTable(){
     const entry = resolveEntryValue();
+    const displayButtons = getEffectiveButtonList(entry);
 
     tbody.innerHTML = auth.map((u, idx) => {
       const role = String(u.role||'read').toLowerCase();
@@ -1766,7 +1766,7 @@ function safeJsonParse(s, fallback){
           </select>
         </td>
 
-        ${btnMeta.filter(b => !isSystemPermissionButton(b)).map(b => {
+        ${displayButtons.map(b => {
           const checked = getPerm(u.user, entry, b.key) ? 'checked' : '';
           return `<td><input class="chk" type="checkbox" data-k="${escapeHtml(b.key)}" ${checked} ${isAdmin?'':'disabled'}></td>`;
         }).join('')}
@@ -1779,6 +1779,7 @@ function safeJsonParse(s, fallback){
 
   function renderCards(){
     const entry = resolveEntryValue();
+    const displayButtons = getEffectiveButtonList(entry);
 
     cards.innerHTML = auth.map((u, idx) => {
       const role = String(u.role||'read').toLowerCase();
@@ -1814,7 +1815,7 @@ function safeJsonParse(s, fallback){
             <div class="rowLabel">按鍵顯示權限（入口：${escapeHtml(entry)}，可左右滑動）</div>
             <div class="permScroll">
               <div class="permRow">
-                ${btnMeta.filter(b => !isSystemPermissionButton(b)).map(b => {
+                ${displayButtons.map(b => {
                   const checked = getPerm(u.user, entry, b.key) ? 'checked' : '';
                   return `
                   <label class="permItem">
@@ -1834,27 +1835,8 @@ function safeJsonParse(s, fallback){
     }).join('');
   }
 
-  async function flushPendingPasswords(){
-    for(const u of (Array.isArray(auth) ? auth : [])){
-      if(!u || typeof u !== 'object') continue;
-      const plain = String(u.__pendingPass || '').trim();
-      if(!plain) continue;
-      try{
-        u.passHash = await sha256Hex(plain);
-        u.pass = '';
-        delete u.__pendingPass;
-      }catch(_){ }
-    }
-  }
-
-  async function saveLocal(){
-    await flushPendingPasswords();
-    const sanitized = (Array.isArray(auth) ? auth : []).map(u => {
-      const row = { ...u };
-      delete row.__pendingPass;
-      return row;
-    });
-    localStorage.setItem(AUTH_KEY, JSON.stringify(sanitized));
+  function saveLocal(){
+    localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
     savePermMatrix();
     localState.textContent = '本機：已儲存';
   }
@@ -1929,7 +1911,7 @@ function safeJsonParse(s, fallback){
 
     auth.splice(idx, 1);
     renderAll();
-    saveLocal().then(()=>{});
+    saveLocal();
     setMsg('已刪除一列並儲存本機。');
     scheduleCloudPush('remove-row');
   }
@@ -1945,10 +1927,23 @@ function safeJsonParse(s, fallback){
 
     const entry = resolveEntryValue();
 
+    // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
     if(k === "pass"){
-      auth[idx].__pendingPass = String(e.target.value || '');
-      localState.textContent = auth[idx].__pendingPass.trim() ? '本機：有未儲存密碼' : '本機：未儲存';
-      if(e.type === 'change') setMsg('已輸入新密碼；按「儲存（同步雲端）」後才會更新並加密儲存。');
+      if(e.type === 'input') return;
+      const plain = String(e.target.value || "");
+      if(plain.trim()){
+        try{
+          auth[idx].passHash = await sha256Hex(plain);
+          auth[idx].pass = "";
+          e.target.value = "";
+          setMsg("✅ 已更新密碼（SHA-256 加密儲存）。");
+        }catch(_){
+          setMsg("密碼更新失敗：瀏覽器不支援加密（crypto.subtle）。", true);
+        }
+        normalizeAuth();
+        await saveLocal();
+        scheduleCloudPush("pwd-updated");
+      }
       return;
     }
 
@@ -1961,7 +1956,7 @@ function safeJsonParse(s, fallback){
     }
 
     normalizeAuth();
-    await saveLocal();
+    saveLocal();
 
     if(k === 'user'){ load(); return; }
     renderEntryPreview();
@@ -2005,10 +2000,23 @@ function safeJsonParse(s, fallback){
 
     const entry = resolveEntryValue();
 
+    // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
     if(k === "pass"){
-      auth[idx].__pendingPass = String(e.target.value || '');
-      localState.textContent = auth[idx].__pendingPass.trim() ? '本機：有未儲存密碼' : '本機：未儲存';
-      if(e.type === 'change') setMsg('已輸入新密碼；按「儲存（同步雲端）」後才會更新並加密儲存。');
+      if(e.type === 'input') return;
+      const plain = String(e.target.value || "");
+      if(plain.trim()){
+        try{
+          auth[idx].passHash = await sha256Hex(plain);
+          auth[idx].pass = "";
+          e.target.value = "";
+          setMsg("✅ 已更新密碼（SHA-256 加密儲存）。");
+        }catch(_){
+          setMsg("密碼更新失敗：瀏覽器不支援加密（crypto.subtle）。", true);
+        }
+        normalizeAuth();
+        await saveLocal();
+        scheduleCloudPush("pwd-updated");
+      }
       return;
     }
 
@@ -2021,7 +2029,7 @@ function safeJsonParse(s, fallback){
     }
 
     normalizeAuth();
-    await saveLocal();
+    saveLocal();
 
     if(k === 'user'){ load(); return; }
     renderEntryPreview();
@@ -2185,8 +2193,7 @@ function safeJsonParse(s, fallback){
     saveAndUpload(t);
   });
 
-  saveLocalBtn.addEventListener('click', async () => {
-    await commitPendingPasswords();
+  saveLocalBtn.addEventListener('click', () => {
     normalizeAuth();
     saveLocal();
     updateStates('已儲存本機（localStorage）。\n並已排程同步雲端（若 Token OK）。');
@@ -2315,7 +2322,7 @@ function safeJsonParse(s, fallback){
       if(!permMatrix.users || typeof permMatrix.users !== 'object') permMatrix.users = {};
 
       normalizeAuth();
-      await saveLocal();
+      saveLocal();
 
       current.role = getEffectiveRole();
       isAdmin = (getEffectiveRole() === 'admin');
@@ -2385,7 +2392,7 @@ function safeJsonParse(s, fallback){
     }
 
     normalizeAuth();
-    await saveLocal();
+    saveLocal();
 
     // ✅ 先保留本機快照（若遇到雲端已更新 → 下載後合併再上傳）
     const localSnap = {
@@ -2485,47 +2492,6 @@ function safeJsonParse(s, fallback){
     const sid = String(sourceId || '').trim();
     return getHomeButtonLibrary().find(x => x.sourceId === sid) || null;
   }
-  function isGenericBtnName(v){
-    return /^btn\d+$/i.test(String(v || '').trim());
-  }
-
-  function hydrateIndexButtons(list){
-    const raw = Array.isArray(list) ? list : [];
-    const stored = safeJsonParse(localStorage.getItem(NAV_KEY) || '[]', []);
-    const storedRows = Array.isArray(stored) ? stored : [];
-    const lib = getHomeButtonLibrary();
-    return raw.map((it, idx) => {
-      const key = String(it?.key || `btn${idx+1}`).trim() || `btn${idx+1}`;
-      const href = String(it?.href || '').trim();
-      const name0 = String(it?.name || it?.label || '').trim();
-      const storedRow = storedRows[idx] || null;
-      let sourceId = String(it?.sourceId || '').trim();
-      let libRow = null;
-      if(href){
-        libRow = lib.find(x => String(x.href || '').trim() === href) || null;
-      }
-      if(!libRow && name0 && !isGenericBtnName(name0)){
-        const nn = normNavText(name0);
-        libRow = lib.find(x => normNavText(x.label) === nn) || null;
-      }
-      if(!sourceId) sourceId = String(storedRow?.sourceId || '').trim();
-      if(!sourceId && libRow) sourceId = String(libRow.sourceId || '').trim();
-      if(!sourceId) sourceId = key;
-      let label = name0;
-      if(!label || isGenericBtnName(label)) label = String(storedRow?.label || '').trim();
-      if((!label || isGenericBtnName(label)) && libRow) label = String(libRow.label || '').trim();
-      if(!label || isGenericBtnName(label)) label = key;
-      return {
-        key,
-        sourceId,
-        name: label,
-        label,
-        href: href || String(storedRow?.href || libRow?.href || '').trim(),
-        target: String(it?.target || storedRow?.target || libRow?.target || '').trim(),
-        roles: Array.isArray(it?.roles) ? it.roles.slice() : (Array.isArray(storedRow?.roles) ? storedRow.roles.slice() : (Array.isArray(libRow?.roles) ? libRow.roles.slice() : []))
-      };
-    }).filter(it => !isSystemPermissionButton(it));
-  }
 
   function buildRoutesObject(raw){
     if(raw && typeof raw === 'object' && !Array.isArray(raw)) return { ...raw };
@@ -2556,7 +2522,7 @@ function safeJsonParse(s, fallback){
 
   function readNavButtons(){
     const arr = safeJsonParse(localStorage.getItem(NAV_KEY) || '[]', []);
-    const library = getHomeButtonLibrary().filter(it => !isSystemPermissionButton(it));
+    const library = getHomeButtonLibrary();
 
     if(Array.isArray(arr) && arr.length){
       const rows = arr
@@ -2566,16 +2532,13 @@ function safeJsonParse(s, fallback){
           const order = idMatch ? Number(idMatch[1]) : (idx + 1);
           const sourceId = inferNavSourceId(hit, rawId || `btn${idx+1}`);
           const lib = getLibraryItemBySourceId(sourceId);
-          let label = String(hit?.label || '').trim();
-          if(!label || isGenericBtnName(label)) label = String(lib?.label || '').trim();
-          if((!label || isGenericBtnName(label)) && library[idx]) label = String(library[idx].label || '').trim();
           const row = {
             id: rawId || `btn${idx+1}`,
             order,
             sourceId: String(sourceId || rawId || `btn${idx+1}`).trim(),
-            label: label || `btn${idx+1}`,
-            href: String(hit?.href || lib?.href || library[idx]?.href || '').trim(),
-            target: String(hit?.target || lib?.target || library[idx]?.target || '').trim(),
+            label: String(hit?.label || lib?.label || rawId || `btn${idx+1}`).trim() || `btn${idx+1}`,
+            href: String(hit?.href || lib?.href || '').trim(),
+            target: String(hit?.target || lib?.target || '').trim(),
             roles: Array.isArray(hit?.roles) ? hit.roles.slice() : (Array.isArray(lib?.roles) ? lib.roles.slice() : [])
           };
           return isSystemPermissionButton(row) ? null : row;
@@ -2585,15 +2548,17 @@ function safeJsonParse(s, fallback){
       if(rows.length) return rows;
     }
 
-    return library.map((it, idx) => ({
-      id: `btn${idx+1}`,
-      order: idx + 1,
-      sourceId: it.sourceId,
-      label: it.label,
-      href: it.href,
-      target: it.target,
-      roles: Array.isArray(it.roles) ? it.roles.slice() : []
-    }));
+    return library
+      .filter(it => !isSystemPermissionButton(it))
+      .map((it, idx) => ({
+        id: `btn${idx+1}`,
+        order: idx + 1,
+        sourceId: it.sourceId,
+        label: it.label,
+        href: it.href,
+        target: it.target,
+        roles: Array.isArray(it.roles) ? it.roles.slice() : []
+      }));
   }
 
   function getNavSourceList(){
@@ -2610,65 +2575,28 @@ function safeJsonParse(s, fallback){
   }
 
   function navOptionText(it){
-    const label = String(it?.label || it?.name || it?.id || '').trim() || '未命名按鍵';
+    const label = String(it?.label || it?.id || '').trim() || '未命名按鍵';
     const href = String(it?.href || '').trim();
-    return href ? `${label} ｜ ${href}` : label;
-  }
-
-    
-  function ensureNavRows(count){
-    if(!navGrid) return [];
-    if(!navGrid.dataset.dynamicBuilt){
-      navGrid.querySelectorAll('.navLabel, select[id^="navName"]').forEach(node => node.remove());
-      navGrid.dataset.dynamicBuilt = '1';
-    }
-    const safeCount = Math.max(0, Number(count) || 0);
-    let rows = Array.from(navGrid.querySelectorAll('[data-nav-row="1"]'));
-    while(rows.length > safeCount){
-      const node = rows.pop();
-      node.remove();
-    }
-    while(rows.length < safeCount){
-      const idx = rows.length + 1;
-      const label = document.createElement('div');
-      label.className = 'navLabel';
-      label.dataset.navRow = '1';
-      label.textContent = 'btn' + idx;
-      const select = document.createElement('select');
-      select.className = 'field';
-      select.dataset.navRow = '1';
-      select.dataset.navSelect = '1';
-      select.id = 'navNameDyn' + idx;
-      bindNavSelectSwap(select);
-      navGrid.appendChild(label);
-      navGrid.appendChild(select);
-      rows = Array.from(navGrid.querySelectorAll('[data-nav-row="1"]'));
-    }
-    rows = Array.from(navGrid.querySelectorAll('[data-nav-row="1"]'));
-    for(let i=0;i<rows.length;i+=2){
-      const label = rows[i];
-      const select = rows[i+1];
-      const idx = (i/2)+1;
-      if(label) label.textContent = 'btn' + idx;
-      if(select) select.id = 'navNameDyn' + idx;
-    }
-    return Array.from(navGrid.querySelectorAll('select[data-nav-select="1"]'));
+    return label;
   }
 
   function getNavSelectControls(){
-    const count = Array.isArray(currentEntryButtonOptions) && currentEntryButtonOptions.length
-      ? currentEntryButtonOptions.length
-      : getNavFallbackSourceList().length;
-    return ensureNavRows(count);
+    return Array.from(navRowsMount ? navRowsMount.querySelectorAll('.nav-dyn-select') : []);
   }
 
   function refreshNavSelectOptions(){
-    let list = getNavSourceList().filter(it => !isSystemPermissionButton(it));
-    if(!list.length) list = getNavFallbackSourceList();
+    const list = getNavSourceList();
+    const entry = resolveEntryValue();
+    const oldValues = {};
+    getNavSelectControls().forEach((sel, idx) => {
+      oldValues[idx + 1] = String(sel?.value || sel?.dataset?.prevValue || '').trim();
+    });
+
+    renderNavRows(list.length);
     const selects = getNavSelectControls();
-    if(navPanelTitle){
-      navPanelTitle.textContent = `按鍵名稱設定（${resolveEntryValue()}／共 ${list.length} 顆）`;
-    }
+    if(navPanelTitle) navPanelTitle.textContent = `按鍵名稱設定（${entry}／共 ${list.length} 顆）`;
+
+    const ordered = getEntryButtonOrder(entry);
 
     selects.forEach((sel, idx) => {
       if(!sel) return;
@@ -2677,29 +2605,25 @@ function safeJsonParse(s, fallback){
       const visible = !!rowItem;
       if(labelNode && labelNode.classList.contains('navLabel')) labelNode.style.display = visible ? '' : 'none';
       sel.style.display = visible ? '' : 'none';
-      sel.disabled = !visible;
       if(!visible){
         sel.innerHTML = '';
         sel.dataset.prevValue = '';
-        sel.value = '';
         return;
       }
 
-      const fallback = rowItem.sourceId || '';
-      const currentVal = String(sel.value || sel.dataset.prevValue || fallback).trim() || fallback;
-      const optionsHtml = list.map(item => {
-        const selected = item.sourceId === currentVal ? 'selected' : '';
+      const fallback = String(oldValues[idx + 1] || ordered[idx] || rowItem.sourceId || '').trim() || String(rowItem.sourceId || '').trim();
+      sel.innerHTML = list.map(item => {
+        const selected = item.sourceId === fallback ? 'selected' : '';
         return `<option value="${escapeHtml(item.sourceId)}" ${selected}>${escapeHtml(navOptionText(item))}</option>`;
       }).join('');
-      sel.innerHTML = optionsHtml;
 
-      if(!list.some(item => item.sourceId === sel.value) && fallback){
-        sel.value = fallback;
+      if(!list.some(item => item.sourceId === sel.value)){
+        sel.value = String(rowItem.sourceId || '').trim();
       }
       sel.dataset.prevValue = sel.value;
     });
 
-    if(navSaveBtn) navSaveBtn.disabled = (resolveEntryValue() !== 'index.html');
+    if(navSaveBtn) navSaveBtn.disabled = !list.length;
   }
 
   function bindNavSelectSwap(sel){
@@ -2795,7 +2719,7 @@ function safeJsonParse(s, fallback){
     Promise.resolve(refreshEntryButtonsBySelection()).then(() => {
       loadNavNamesIntoInputs();
       if(resolveEntryValue() !== 'index.html'){
-        setMsg('目前顯示的是該入口頁的按鍵排序設定；調整後會同步更新上方權限矩陣、下方按鍵名稱設定與入口頁預覽。');
+        setMsg('目前入口不是 index.html；下方顯示的是該入口頁實際按鍵名稱與連結，僅供檢視，不會改動首頁排序。');
       }
     });
   }
@@ -2803,18 +2727,24 @@ function safeJsonParse(s, fallback){
 
   function loadNavNamesIntoInputs(){
     const entry = resolveEntryValue();
+    const nav = readNavButtons();
     const list = getNavSourceList();
-    const ordered = getEntryButtonOrder(entry);
     refreshNavSelectOptions();
 
     const selects = getNavSelectControls();
     selects.forEach((sel, idx) => {
       if(!sel) return;
-      const fallback = String(ordered[idx] || list[idx]?.sourceId || `btn${idx+1}`).trim();
-      sel.value = fallback;
-      if(String(sel.value || '').trim() !== fallback){
-        const rowItem = list[idx] || list.find(item => item.sourceId === fallback) || null;
-        sel.value = rowItem ? rowItem.sourceId : fallback;
+      if(entry === 'index.html'){
+        const item = nav[idx] || {};
+        const sourceId = String(item.sourceId || list[idx]?.sourceId || `btn${idx+1}`).trim();
+        sel.value = sourceId;
+        if(String(sel.value || '').trim() !== sourceId){
+          const fallback = list[idx];
+          sel.value = fallback ? fallback.sourceId : sourceId;
+        }
+      }else{
+        const item = list[idx] || {};
+        sel.value = String(item.sourceId || '').trim();
       }
       sel.dataset.prevValue = sel.value;
     });
@@ -2829,7 +2759,8 @@ function safeJsonParse(s, fallback){
     const sourceList = getNavSourceList();
     const sourceMap = new Map(sourceList.map(it => [String(it.sourceId || '').trim(), it]));
     const selects = getNavSelectControls();
-    const order = selects.map((sel, idx) => String(sel?.value || sourceList[idx]?.sourceId || `btn${idx+1}`).trim()).filter(Boolean);
+    const order = selects.map((sel, idx) => String(sel?.value || '').trim() || (sourceList[idx]?.sourceId || `btn${idx+1}`)).filter(Boolean);
+
     setEntryButtonOrder(entry, order);
 
     if(entry === 'index.html'){
@@ -2844,14 +2775,18 @@ function safeJsonParse(s, fallback){
           roles: Array.isArray(src?.roles) ? src.roles.slice() : []
         };
       });
+
       writeNavButtons(updated);
-      setMsg('✅ 已儲存按鍵排序並同步（名稱、連結網址、target 會一起移動）。\n其他分頁（例如首頁）會自動更新。');
+      loadNavNamesIntoInputs();
+      setMsg('✅ 已儲存按鍵排序並同步（名稱、連結網址、target 會一起移動）。
+其他分頁（例如首頁）會自動更新。');
       return;
     }
 
     refreshEntryButtonsBySelection();
-    saveLocal().then(()=>{});
+    saveLocal();
     scheduleCloudPush('entry-nav-order');
+    loadNavNamesIntoInputs();
     setMsg('✅ 已儲存目前入口頁的按鍵排序；上方權限矩陣、下方按鍵名稱設定、入口頁預覽已同步。');
   }
 
@@ -2875,16 +2810,9 @@ function safeJsonParse(s, fallback){
     if(!Array.isArray(auth)) auth = [];
     normalizeAuth();
 
-    current = safeJsonParse(localStorage.getItem(CURRENT_KEY) || 'null', null);
-    if(!current || typeof current !== 'object'){
-      current = safeJsonParse(sessionStorage.getItem(CURRENT_KEY) || 'null', null);
-    }
-    if(!current || typeof current !== 'object'){
-      current = { user:'—', role:'read' };
-    }else{
-      current.user = String(current.user || current.name || '—');
-      current.role = String(current.role || current.level || 'read');
-    }
+    current = restoreCurrentFromAllSources();
+    current.user = String(current.user || current.name || '—');
+    current.role = String(current.role || current.level || 'read');
 
     loadPermMatrix();
 
@@ -2914,7 +2842,7 @@ function safeJsonParse(s, fallback){
   }
 
   window.addEventListener('storage', async (e) => {
-    if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY || e.key === ENTRY_BUTTON_MAP_KEY){
+    if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY){
       // routes/registry 變動 → 入口頁清單可更新
       buildEntrySelect();
       renderAll();
