@@ -726,6 +726,7 @@
 
   const ENTRY_SELECTED_KEY = 'tasunEntrySelected_v1';
   const PERM_MATRIX_KEY    = 'tasunPermMatrix_v1';
+  const ENTRY_BUTTON_MAP_KEY = 'tasunEntryButtonMap_v1';
 
   // ✅ 新增：入口頁註冊表（未來新頁面可自動加入權限表）
   const ENTRY_REGISTRY_KEY = 'tasunEntryRegistry_v1';
@@ -1642,39 +1643,32 @@ function safeJsonParse(s, fallback){
 
   async function refreshEntryButtonsBySelection(){
     const entry = resolveEntryValue();
+    let items = [];
+
     if(entry === 'index.html'){
-      const navButtons = normalizeEntryButtons(readNavButtons()).filter(it => !isSystemPermissionButton(it));
-      const extracted = await extractEntryButtonsFromPage(entry);
-      let base = Array.isArray(extracted) && extracted.length ? hydrateIndexButtons(extracted) : navButtons;
-      if(!Array.isArray(base) || !base.length) base = hydrateIndexButtons(navButtons);
-      const ordered = orderEntryButtons(entry, normalizeEntryButtons(base)).filter(it => !isSystemPermissionButton(it));
-      currentEntryButtons = ordered.map((it, idx) => ({
+      const navButtons = readNavButtons().filter(it => !isSystemPermissionButton(it));
+      items = navButtons.map((it, idx) => ({
         key: `btn${idx+1}`,
-        sourceId: String(it.sourceId || it.key || `btn${idx+1}`).trim() || `btn${idx+1}`,
-        name: String(it.label || it.name || it.sourceId || `btn${idx+1}`).trim() || `btn${idx+1}`,
+        name: String(it.label || it.sourceId || `btn${idx+1}`).trim() || `btn${idx+1}`,
         href: String(it.href || '').trim(),
         target: String(it.target || '').trim(),
-        roles: Array.isArray(it.roles) ? it.roles.slice() : []
+        sourceId: String(it.sourceId || '').trim() || `btn${idx+1}`
       }));
-      btnMeta = currentEntryButtons.map(x => ({ ...x }));
     }else{
-      const extracted = await extractEntryButtonsFromPage(entry);
-      let base = Array.isArray(extracted) && extracted.length ? extracted : getEntryButtonsFromDefaults(entry);
-      if(!Array.isArray(base) || !base.length) base = buildFallbackButtons(5);
-      base = orderEntryButtons(entry, normalizeEntryButtons(base)).filter(it => !isSystemPermissionButton(it));
-      btnMeta = base.map((it, idx) => ({
-        key: String(it.key || `btn${idx+1}`).trim() || `btn${idx+1}`,
-        sourceId: String(it.sourceId || it.key || `btn${idx+1}`).trim() || `btn${idx+1}`,
-        name: String(it.name || it.label || it.sourceId || `btn${idx+1}`).trim() || `btn${idx+1}`,
-        href: String(it.href || '').trim(),
-        target: String(it.target || '').trim(),
-        roles: Array.isArray(it.roles) ? it.roles.slice() : []
+      const fallback = getEntryButtonsFromDefaults(entry);
+      const extracted = (!fallback || !fallback.length) ? await extractEntryButtonsFromPage(entry) : null;
+      items = (Array.isArray(fallback) && fallback.length ? fallback : (Array.isArray(extracted) && extracted.length ? extracted : buildFallbackButtons(5))).map((x, idx) => ({
+        key: String(x.key || `btn${idx+1}`).trim() || `btn${idx+1}`,
+        name: String(x.name || x.label || x.key || `btn${idx+1}`).trim() || `btn${idx+1}`,
+        href: String(x.href || '').trim(),
+        target: String(x.target || '').trim(),
+        sourceId: String(x.sourceId || x.key || `btn${idx+1}`).trim() || `btn${idx+1}`
       }));
-      currentEntryButtons = btnMeta.map(x => ({ ...x }));
     }
 
-    btnMeta = normalizeEntryButtons(btnMeta).filter(it => !isSystemPermissionButton(it));
-    currentEntryButtons = normalizeEntryButtons(currentEntryButtons).filter(it => !isSystemPermissionButton(it));
+    items = items.filter(it => !isSystemPermissionButton(it));
+    currentEntryButtons = orderButtonsByEntry(entry, items).map(x => ({ ...x }));
+    btnMeta = currentEntryButtons.map(x => ({ ...x }));
     rebuildCurrentEntryOptions();
     renderNavRows(currentEntryButtonOptions.length || btnMeta.length || 0);
     renderHeaders();
@@ -1685,12 +1679,11 @@ function safeJsonParse(s, fallback){
   }
 
   function renderHeaders(){
-    const visibleBtns = (Array.isArray(btnMeta) ? btnMeta : []).filter(b => !isSystemPermissionButton(b));
     theadRow.innerHTML = `
       <th>使用者</th>
       <th>密碼</th>
       <th>權限</th>
-      ${visibleBtns.map(b => `<th>${escapeHtml(b.name || b.label || b.key)}</th>`).join('')}
+      ${btnMeta.map(b => `<th>${escapeHtml(b.name || b.key)}</th>`).join('')}
       <th class="sysCol">系統/權限</th>
       <th>刪除</th>
     `;
@@ -1713,7 +1706,7 @@ function safeJsonParse(s, fallback){
           </select>
         </td>
 
-        ${btnMeta.filter(b => !isSystemPermissionButton(b)).map(b => {
+        ${btnMeta.map(b => {
           const checked = getPerm(u.user, entry, b.key) ? 'checked' : '';
           return `<td><input class="chk" type="checkbox" data-k="${escapeHtml(b.key)}" ${checked} ${isAdmin?'':'disabled'}></td>`;
         }).join('')}
@@ -1761,7 +1754,7 @@ function safeJsonParse(s, fallback){
             <div class="rowLabel">按鍵顯示權限（入口：${escapeHtml(entry)}，可左右滑動）</div>
             <div class="permScroll">
               <div class="permRow">
-                ${btnMeta.filter(b => !isSystemPermissionButton(b)).map(b => {
+                ${btnMeta.map(b => {
                   const checked = getPerm(u.user, entry, b.key) ? 'checked' : '';
                   return `
                   <label class="permItem">
@@ -1785,6 +1778,7 @@ function safeJsonParse(s, fallback){
     localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
     savePermMatrix();
     localState.textContent = '本機：已儲存';
+    return Promise.resolve();
   }
 
   function updateStates(text){
@@ -2382,15 +2376,11 @@ function safeJsonParse(s, fallback){
   }
 
   function isSystemPermissionButton(it){
-    const sourceId = String(it?.sourceId || it?.id || it?.key || '').trim().toLowerCase();
-    const label = String(it?.label || it?.name || it?.title || it?.text || '').trim();
+    const sourceId = String(it?.sourceId || it?.id || '').trim().toLowerCase();
+    const labelRaw = String(it?.label || it?.name || '').trim();
+    const label = labelRaw.replace(/[／∕⁄]/g, '/').replace(/\s+/g, '');
     const href = String(it?.href || '').trim();
-    return sourceId === 'auth'
-      || sourceId === 'xidong_auth'
-      || sourceId.endsWith('_auth')
-      || /權限表\.html$/i.test(href)
-      || /系統\s*[\/／]\s*權限/.test(label)
-      || /權限表/.test(label);
+    return sourceId === 'auth' || sourceId === 'xidong_auth' || /權限表\.html$/i.test(href) || label === '系統/權限' || /權限表/.test(labelRaw);
   }
 
   function renderNavRows(count){
@@ -2402,6 +2392,48 @@ function safeJsonParse(s, fallback){
     }).join('');
   }
 
+
+
+  function normalizeEntryButtons(list){
+    return (Array.isArray(list) ? list : []).map((it, idx) => {
+      const sourceId = String(it?.sourceId || it?.id || it?.key || `btn${idx+1}`).trim() || `btn${idx+1}`;
+      const key = String(it?.key || it?.id || `btn${idx+1}`).trim() || `btn${idx+1}`;
+      const label = String(it?.label || it?.name || it?.title || it?.text || sourceId || key).trim() || key;
+      return {
+        id: String(it?.id || key).trim() || key,
+        key,
+        sourceId,
+        label,
+        name: label,
+        href: String(it?.href || '').trim(),
+        target: String(it?.target || '').trim(),
+        roles: Array.isArray(it?.roles) ? it.roles.slice() : []
+      };
+    }).filter(it => !!String(it.sourceId || it.key || '').trim());
+  }
+
+  function hydrateIndexButtons(list){
+    const norm = normalizeEntryButtons(list).filter(it => !isSystemPermissionButton(it));
+    if(!norm.length) return getHomeButtonLibrary().filter(it => !isSystemPermissionButton(it));
+    return norm.map((it, idx) => {
+      const lib = getLibraryItemBySourceId(it.sourceId) || getLibraryItemBySourceId(inferNavSourceId(it, `btn${idx+1}`));
+      return {
+        id: String(it.id || `btn${idx+1}`).trim() || `btn${idx+1}`,
+        key: String(it.key || `btn${idx+1}`).trim() || `btn${idx+1}`,
+        sourceId: String(it.sourceId || lib?.sourceId || `btn${idx+1}`).trim() || `btn${idx+1}`,
+        label: String(it.label || lib?.label || it.name || `btn${idx+1}`).trim() || `btn${idx+1}`,
+        name: String(it.name || it.label || lib?.label || `btn${idx+1}`).trim() || `btn${idx+1}`,
+        href: String(it.href || lib?.href || '').trim(),
+        target: String(it.target || lib?.target || '').trim(),
+        roles: Array.isArray(it.roles) ? it.roles.slice() : (Array.isArray(lib?.roles) ? lib.roles.slice() : [])
+      };
+    });
+  }
+
+  function orderEntryButtons(entry, list){
+    const ordered = orderButtonsByEntry(entry, normalizeEntryButtons(list));
+    return normalizeEntryButtons(ordered);
+  }
 
   function getEntryButtonMapStore(){
     const raw = safeJsonParse(localStorage.getItem(ENTRY_BUTTON_MAP_KEY) || '{}', {});
@@ -2788,10 +2820,7 @@ function safeJsonParse(s, fallback){
     if(!Array.isArray(auth)) auth = [];
     normalizeAuth();
 
-    current = safeJsonParse(localStorage.getItem(CURRENT_KEY) || 'null', null);
-    if(!current || typeof current !== 'object'){
-      current = safeJsonParse(sessionStorage.getItem(CURRENT_KEY) || 'null', null);
-    }
+    current = getCurrentFromStores() || safeJsonParse(localStorage.getItem(CURRENT_KEY) || 'null', null);
     if(!current || typeof current !== 'object'){
       current = { user:'—', role:'read' };
     }else{
@@ -2846,12 +2875,46 @@ function safeJsonParse(s, fallback){
     }
   });
 
+
+  function getCurrentFromStores(){
+    const candidates = [
+      safeJsonParse(localStorage.getItem(CURRENT_KEY) || 'null', null),
+      safeJsonParse(sessionStorage.getItem(CURRENT_KEY) || 'null', null),
+      safeJsonParse(localStorage.getItem('tasunCurrentUser_v2') || 'null', null),
+      safeJsonParse(sessionStorage.getItem('tasunCurrentUser_v2') || 'null', null),
+      safeJsonParse(sessionStorage.getItem('tasunSessionLogin_v2') || 'null', null),
+      safeJsonParse(sessionStorage.getItem('tasunSso_v2') || 'null', null),
+      safeJsonParse(sessionStorage.getItem('tasunSso_v1') || 'null', null)
+    ];
+    for(const cur of candidates){
+      if(cur && typeof cur === 'object'){
+        const user = String(cur.user || cur.name || cur.username || cur.account || '').trim();
+        const role = String(cur.role || cur.level || '').trim();
+        if(user) return { user, role: role || 'read' };
+      }
+    }
+    return null;
+  }
+
+  function ensureCurrentRecovered(){
+    const found = getCurrentFromStores();
+    if(found){
+      current = found;
+      try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(found)); }catch(_){ }
+      return true;
+    }
+    return false;
+  }
+
   // ✅ 先載入 resources → 再 load（確保 DROPBOX_PATH & entries/entryButtons 可取得）
   (async () => {
     await loadResourcesForAuthTable();
     // resources 可能提供 entries/buttons → 先融合一次
     rebuildDynEntryData();
-    load();
+    await load();
+    setTimeout(async () => {
+      if(ensureCurrentRecovered()) await load();
+    }, 600);
   })();
 
   // ======（可選）未來新頁面自動註冊範例（貼到新頁 JS 即可）======
