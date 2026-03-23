@@ -1332,6 +1332,38 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       }catch(e){}
     }
 
+    async function ensureWorkerSessionForCurrentUser(){
+      try{
+        var cur = getCurrentUser();
+        if(!cur || !(cur.user || cur.username || cur.name)) return false;
+        var hasToken = !!norm(getSharedWorkerToken());
+        if(hasToken) return true;
+        if(!(window.TasunAuthV4 && typeof window.TasunAuthV4.login === "function")) return false;
+
+        var auth = ensureAuthTable();
+        var uname = norm(cur.user || cur.username || cur.name);
+        var row = (auth.users||[]).find(function(u){
+          return norm(u.user || u.username || u.name).toLowerCase() === uname.toLowerCase();
+        });
+        var pass = norm(row && (row.pass || row.password || row.pw));
+        if(!pass) return false;
+
+        var cfg = await loadCloudCfg();
+        if(!cfg || !isValidApiBase(cfg.apiBase)) return false;
+
+        var logged = await window.TasunAuthV4.login({ username: uname, password: pass, apiBase: cfg.apiBase });
+        var normalized = normalizeAuthUser(logged || { user: uname, role: cur.role || 'read', name: uname });
+        if(normalized){
+          try{ setCurrentUser(normalized); }catch(e){}
+          try{ applyUser(normalized); }catch(e){}
+        }
+        try{ hydrateCrossPageAuth(); }catch(e){}
+        return !!norm(getSharedWorkerToken());
+      }catch(e){
+        return false;
+      }
+    }
+
     function getWorkerCredentialMode(cfg){
       // 穩定版：跨頁登入憑證 / Cloudflare Access cookie 一律沿用
       // 只有明確設定 omit 時才不帶 cookie。
@@ -1457,7 +1489,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
         tries++;
         var ok = false;
         try{ ok = resolveRuntimeUser(); }catch(e){ ok = false; }
-        if(ok){ try{ ensureBootCloudReconcile('hydrate-watch'); }catch(e){} }
+        if(ok){ try{ ensureWorkerSessionForCurrentUser(); }catch(e){} try{ ensureBootCloudReconcile('hydrate-watch'); }catch(e){} }
         try{ ensureActionButtonsVisible(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         if(ok || tries >= maxTries) clearInterval(tm);
@@ -1465,6 +1497,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       window.addEventListener("focus", function(){
         var ok = false;
         try{ ok = resolveRuntimeUser(); }catch(e){}
+        try{ if(ok) ensureWorkerSessionForCurrentUser(); }catch(e){}
         try{ if(ok || (state.cloud && state.cloud.cfgOk && !state.cloud.ok)) ensureBootCloudReconcile('focus'); }catch(e){}
         try{ ensureActionButtonsVisible(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
@@ -1472,6 +1505,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       window.addEventListener("pageshow", function(){
         var ok = false;
         try{ ok = resolveRuntimeUser(); }catch(e){}
+        try{ if(ok) ensureWorkerSessionForCurrentUser(); }catch(e){}
         try{ if(ok || (state.cloud && state.cloud.cfgOk && !state.cloud.ok)) ensureBootCloudReconcile('pageshow'); }catch(e){}
         try{ ensureActionButtonsVisible(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
@@ -3087,7 +3121,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       try{ refresh(); }catch(e){ try{ refreshHintSafe(); }catch(_e){} }
     }
 
-    function doLogin(){
+    async function doLogin(){
       var user = norm($("loginUser").value);
       var pass = norm($("loginPass").value);
       if(!user || !pass){
@@ -3102,12 +3136,34 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         $("loginErr").textContent="帳號或密碼錯誤";
         return;
       }
-      var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
-      setCurrentUser(cur);
-      applyUser(cur);
+      try{
+        var cfg = await loadCloudCfg();
+        if(window.TasunAuthV4 && typeof window.TasunAuthV4.login === 'function' && cfg && isValidApiBase(cfg.apiBase)){
+          try{
+            var u = await window.TasunAuthV4.login({ username:user, password:pass, apiBase: cfg.apiBase });
+            var n = normalizeAuthUser(u || { user: hit.user, role: hit.role||'read', name: hit.name||hit.user, at: nowISO() });
+            if(n){
+              setCurrentUser(n);
+              applyUser(n);
+            }
+          }catch(_e){
+            var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
+            setCurrentUser(cur);
+            applyUser(cur);
+          }
+        }else{
+          var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
+          setCurrentUser(cur);
+          applyUser(cur);
+        }
+      }catch(e){
+        var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
+        setCurrentUser(cur);
+        applyUser(cur);
+      }
+      try{ hydrateCrossPageAuth(); }catch(e){}
       closeLogin();
       toast("登入成功");
-      // ✅ 登入後立即做一次「本端先 merge，再重抓雲端」
       setTimeout(function(){ reconcileCloudOnOpen({ silent:true }); }, 60);
     }
 
@@ -3347,6 +3403,7 @@ $("btnSave").addEventListener("click", async function(){
         try{ renderHintFallback(); }catch(e){}
         try{ refresh(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         try{ hydrateCrossPageAuth(); }catch(e){}
+        try{ await ensureWorkerSessionForCurrentUser(); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
         // ✅ 開頁同步策略：不再被目前使用者顯示狀態卡住。
         // 只要 Worker 設定存在，就先做一次 reconcile；
