@@ -543,7 +543,7 @@
   <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-guard-v4.js")) || "tasun-guard-v4.js") + '"><\/script>');</script>
   <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-auth-v4.js")) || "tasun-auth-v4.js") + '"><\/script>');</script>
 <!-- Tasun Global Core bridge -->
-<script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-global-core.js")) || "tasun-global-core.js") + '"><\/script>');</script>
+<script src="tasun-global-core.js"></script>
 <script>
 (function(){
   'use strict';
@@ -567,8 +567,6 @@
   }
 })();
 </script>
-
-  <script src="tasun-v5-single-rule-guard.js"></script>
 </head>
 
 <body>
@@ -875,7 +873,7 @@ window.TASUN_RESOURCE_KEY = window.TASUN_RESOURCE_KEY || PAGE_KEY;
 window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
 window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
-    var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || (function(){try{var u=new URL(location.href);return (u.searchParams.get("v")||"").trim();}catch(e){return ""}})() || "20260320_02";
+    var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || (function(){try{var u=new URL(location.href);return (u.searchParams.get("v")||"").trim();}catch(e){return ""}})() || "20260312_43";
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
@@ -1145,20 +1143,38 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     // Auth
     // ---------------------------
     function ensureAuthTable(){
-      var t = safeJSON(localStorage.getItem(AUTH_KEY));
-      if(!t || typeof t !== "object"){
-        t = {
-          users: [
-            { user:"alex", pass:"alex", role:"admin", name:"alex" },
-            { user:"tasun", pass:"tasun", role:"write", name:"tasun" },
-            { user:"wu", pass:"wu", role:"read", name:"wu" }
-          ],
-          updatedAt: nowISO(),
-          rev: "seed"
-        };
-        localStorage.setItem(AUTH_KEY, JSON.stringify(t));
+      var raw = safeJSON(localStorage.getItem(AUTH_KEY));
+      var users = [];
+      if(Array.isArray(raw)){
+        users = raw;
+      }else if(raw && typeof raw === "object"){
+        if(Array.isArray(raw.users)) users = raw.users;
+        else if(Array.isArray(raw.rows)) users = raw.rows;
       }
-      if(!Array.isArray(t.users)) t.users = [];
+      users = (Array.isArray(users) ? users : []).map(function(u){
+        if(!u || typeof u !== "object") return null;
+        var user = norm(u.user || u.username || u.account || u.name || "");
+        if(!user) return null;
+        return {
+          user: user,
+          name: norm(u.name || u.user || u.username || u.account || user) || user,
+          role: norm(u.role || u.level || "read") || "read",
+          pass: norm(u.pass || u.password || u.pw || ""),
+          password: norm(u.password || u.pass || u.pw || ""),
+          passHash: norm(u.passHash || u.passwordHash || u.hash || ""),
+          token: norm(u.token || u.accessToken || u.authToken || u.bearer || u.workerToken || u.cloudToken || u.apiKey || "")
+        };
+      }).filter(Boolean);
+      if(!users.length){
+        users = [
+          { user:"alex",  name:"alex",  pass:"Tasun08040224", password:"Tasun08040224", role:"admin" },
+          { user:"JOYCE", name:"JOYCE", pass:"09220224",      password:"09220224",      role:"admin" },
+          { user:"tasun", name:"tasun", pass:"tasun08040224", password:"tasun08040224", role:"write" },
+          { user:"wu",    name:"wu",    pass:"123456",        password:"123456",        role:"read" }
+        ];
+      }
+      var t = { users: users, updatedAt: nowISO(), rev: "compat" };
+      try{ localStorage.setItem(AUTH_KEY, JSON.stringify(t)); }catch(e){}
       return t;
     }
 
@@ -1204,7 +1220,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     function readCookie(name){
       try{
-        var esc = String(name||"").replace(/[.*+?^${}()|[\]\\]/g, "\$&");
+        var esc = String(name||"").replace(/[.*+?^${}()|[\]\]/g, "\$&");
         var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
         return m ? decodeURIComponent(m[1] || "") : "";
       }catch(e){ return ""; }
@@ -1286,6 +1302,21 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       return "";
     }
 
+    function findAuthRowForCurrentUser(){
+      try{
+        var auth = ensureAuthTable();
+        var cur = getCurrentUser();
+        var who = norm((cur && (cur.user || cur.name || cur.username)) || "").toLowerCase();
+        if(!who || !auth || !Array.isArray(auth.users)) return null;
+        for(var i=0;i<auth.users.length;i++){
+          var u = auth.users[i] || {};
+          var uu = norm(u.user || u.username || u.account || u.name || "").toLowerCase();
+          if(uu && uu===who) return u;
+        }
+      }catch(e){}
+      return null;
+    }
+
     function getSharedWorkerToken(){
       for(var i=0;i<TOKEN_BRIDGE_KEYS.length;i++){
         var v = norm(readStorageValue(TOKEN_BRIDGE_KEYS[i]));
@@ -1306,6 +1337,11 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       }catch(e){}
       var bridge = readBridgeToken();
       if(bridge) return bridge;
+      try{
+        var row = findAuthRowForCurrentUser();
+        var t3 = norm(row && (row.token || row.accessToken || row.authToken || row.bearer || row.workerToken || row.cloudToken || row.apiKey || ""));
+        if(t3) return t3;
+      }catch(e){}
       var ck = norm(readCookie("tasun_bearer_token") || readCookie("tasun_token") || readCookie("token") || readCookie("tasun_auth_token") || "");
       return ck || "";
     }
@@ -3004,12 +3040,26 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       refresh();
     }
 
+    function persistAuthBridge(){
+      try{
+        var u = normalizeAuthUser(state.user || getCurrentUser() || readJsonFromKeys(AUTH_BRIDGE_KEYS)) || null;
+        if(!u || !u.user) return;
+        var payload = { user:u.user, name:u.name||u.user, role:u.role||'read', at: nowISO() };
+        try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+        try{ sessionStorage.setItem('tasunSessionLogin_v2', JSON.stringify({ user: payload.user, role: payload.role, t: Date.now() })); }catch(_e){}
+        try{ sessionStorage.setItem('tasunIndexSessionAuthed_v2', '1'); }catch(_e){}
+        try{ localStorage.setItem('tasunSso_v2', JSON.stringify({ name: payload.user, role: payload.role, exp: Date.now() + 12*60*60*1000 })); }catch(_e){}
+      }catch(_e){}
+    }
+
     // ---------------------------
     // Nav / menus
     // ---------------------------
     function navTo(href){
       href = norm(href);
       if(!href) return;
+      persistAuthBridge();
       location.href = addV(href);
     }
 
@@ -3074,10 +3124,54 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         return;
       }
       var auth = ensureAuthTable();
-      var hit = auth.users.find(function(u){ return u.user===user && u.pass===pass; });
+      var hit = auth.users.find(function(u){
+        if(u.user!==user) return false;
+        var plain = String(u.pass || u.password || '');
+        var ph = String(u.passHash || u.passwordHash || u.hash || '').trim().toLowerCase();
+        return (!!plain && plain===pass);
+      });
       if(!hit){
-        $("loginErr").style.display="block";
-        $("loginErr").textContent="帳號或密碼錯誤";
+        var userRec = auth.users.find(function(u){ return u.user===user; });
+        if(userRec){
+          var ph = String(userRec.passHash || userRec.passwordHash || userRec.hash || '').trim().toLowerCase();
+          if(ph){
+            try{
+              var nowHash = '';
+              if(window.crypto && window.crypto.subtle && window.TextEncoder){
+                // 同步區塊外由 async IIFE 處理
+              }
+            }catch(_e){}
+          }
+        }
+      }
+      if(!hit){
+        (async function(){
+          try{
+            var userRec2 = auth.users.find(function(u){ return u.user===user; });
+            var ph2 = String((userRec2 && (userRec2.passHash || userRec2.passwordHash || userRec2.hash)) || '').trim().toLowerCase();
+            if(!ph2){
+              $("loginErr").style.display="block";
+              $("loginErr").textContent="帳號或密碼錯誤";
+              return;
+            }
+            var buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pass));
+            var hash = Array.from(new Uint8Array(buf)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+            if(hash !== ph2){
+              $("loginErr").style.display="block";
+              $("loginErr").textContent="帳號或密碼錯誤";
+              return;
+            }
+            var cur = { user: userRec2.user, role: userRec2.role||"read", name: userRec2.name||userRec2.user, at: nowISO() };
+            setCurrentUser(cur);
+            applyUser(cur);
+            closeLogin();
+            toast("登入成功");
+            setTimeout(function(){ reconcileCloudOnOpen({ silent:true }); }, 60);
+          }catch(_e){
+            $("loginErr").style.display="block";
+            $("loginErr").textContent="帳號或密碼錯誤";
+          }
+        })();
         return;
       }
       var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
