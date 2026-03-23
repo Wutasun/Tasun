@@ -541,9 +541,10 @@
 </script>
 
   <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-guard-v4.js")) || "tasun-guard-v4.js") + '"><\/script>');</script>
+  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-cloudwrap-v4.js")) || "tasun-cloudwrap-v4.js") + '"><\/script>');</script>
   <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-auth-v4.js")) || "tasun-auth-v4.js") + '"><\/script>');</script>
 <!-- Tasun Global Core bridge -->
-<script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-global-core.js")) || "tasun-global-core.js") + '"><\/script>');</script>
+<script src="tasun-global-core.js"></script>
 <script>
 (function(){
   'use strict';
@@ -873,7 +874,7 @@ window.TASUN_RESOURCE_KEY = window.TASUN_RESOURCE_KEY || PAGE_KEY;
 window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
 window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
-    var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || (function(){try{var u=new URL(location.href);return (u.searchParams.get("v")||"").trim();}catch(e){return ""}})() || "20260320_02";
+    var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || (function(){try{var u=new URL(location.href);return (u.searchParams.get("v")||"").trim();}catch(e){return ""}})() || "20260312_43";
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
@@ -1202,7 +1203,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     function readCookie(name){
       try{
-        var esc = String(name||"").replace(/[.*+?^${}()|[\]\\]/g, "\$&");
+        var esc = String(name||"").replace(/[.*+?^${}()|[\]\]/g, "\$&");
         var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
         return m ? decodeURIComponent(m[1] || "") : "";
       }catch(e){ return ""; }
@@ -1308,6 +1309,50 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       return ck || "";
     }
 
+    function hydrateCrossPageAuth(){
+      try{
+        var cur = getCurrentUser();
+        if(cur && (cur.user || cur.name || cur.username)){
+          var row = {
+            user: norm(cur.user || cur.name || cur.username),
+            name: norm(cur.name || cur.user || cur.username),
+            role: norm(cur.role || cur.level || "read") || "read",
+            at: norm(cur.at || nowISO())
+          };
+          try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(e){}
+          try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(e){}
+          try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: row.user, role: row.role, t: Date.now() })); }catch(e){}
+          try{ sessionStorage.setItem(INDEX_SESSION_KEY, "1"); }catch(e){}
+        }
+        var token = getSharedWorkerToken();
+        if(token){
+          var normalized = /^Bearer\s+/i.test(token) ? token.replace(/^Bearer\s+/i, "") : token;
+          try{ sessionStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
+          try{ localStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
+        }
+      }catch(e){}
+    }
+
+    function getWorkerCredentialMode(cfg){
+      // 穩定版：跨頁登入憑證 / Cloudflare Access cookie 一律沿用
+      // 只有明確設定 omit 時才不帶 cookie。
+      if(cfg && String(cfg.credentials||"").trim().toLowerCase()==="omit") return "omit";
+      return "include";
+    }
+
+    function clearWorkerTokens(){
+      try{
+        TOKEN_BRIDGE_KEYS.forEach(function(k){
+          try{ sessionStorage.removeItem(k); }catch(e){}
+          try{ localStorage.removeItem(k); }catch(e){}
+        });
+      }catch(e){}
+      try{ sessionStorage.removeItem("tasunWorkerToken_v1"); }catch(e){}
+      try{ localStorage.removeItem("tasunWorkerToken_v1"); }catch(e){}
+      try{ sessionStorage.removeItem("tasunCloudToken_v1"); }catch(e){}
+      try{ localStorage.removeItem("tasunCloudToken_v1"); }catch(e){}
+    }
+
     function findAuthRowForUser(userName){
       try{
         var auth = ensureAuthTable();
@@ -1342,17 +1387,21 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       });
       try{ sessionStorage.setItem("tasunWorkerToken_v1", plain); }catch(e){}
       try{ localStorage.setItem("tasunWorkerToken_v1", plain); }catch(e){}
+      try{ sessionStorage.setItem("tasunCloudToken_v1", plain); }catch(e){}
+      try{ localStorage.setItem("tasunCloudToken_v1", plain); }catch(e){}
       return plain;
     }
 
-    async function ensureWorkerAuthReady(cfg){
+    async function ensureWorkerAuthReady(cfg, forceRefresh){
+      if(forceRefresh) clearWorkerTokens();
       try{ hydrateCrossPageAuth(); }catch(e){}
       var cur = null;
       try{ cur = getCurrentUser(); }catch(e){ cur = null; }
-      if(!cur || !(cur.user || cur.name)) return !!norm(getSharedWorkerToken());
 
-      var token = norm(getSharedWorkerToken());
-      if(token) return true;
+      var existing = norm(getSharedWorkerToken());
+      if(existing && !forceRefresh) return true;
+
+      if(!cur || !(cur.user || cur.name)) return !!norm(getSharedWorkerToken());
 
       var row = findAuthRowForUser(cur.user || cur.name || "");
       var rowToken = extractTokenFromAuthRow(row);
@@ -1380,37 +1429,6 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       return !!norm(getSharedWorkerToken());
     }
 
-    function hydrateCrossPageAuth(){
-      try{
-        var cur = getCurrentUser();
-        if(cur && (cur.user || cur.name || cur.username)){
-          var row = {
-            user: norm(cur.user || cur.name || cur.username),
-            name: norm(cur.name || cur.user || cur.username),
-            role: norm(cur.role || cur.level || "read") || "read",
-            at: norm(cur.at || nowISO())
-          };
-          try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(e){}
-          try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(row)); }catch(e){}
-          try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: row.user, role: row.role, t: Date.now() })); }catch(e){}
-          try{ sessionStorage.setItem(INDEX_SESSION_KEY, "1"); }catch(e){}
-        }
-        var token = getSharedWorkerToken();
-        if(token){
-          var normalized = /^Bearer\s+/i.test(token) ? token.replace(/^Bearer\s+/i, "") : token;
-          try{ sessionStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
-          try{ localStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
-        }
-      }catch(e){}
-    }
-
-    function getWorkerCredentialMode(cfg){
-      // 穩定版：跨頁登入憑證 / Cloudflare Access cookie 一律沿用
-      // 只有明確設定 omit 時才不帶 cookie。
-      if(cfg && String(cfg.credentials||"").trim().toLowerCase()==="omit") return "omit";
-      return "include";
-    }
-
     function buildWorkerAuthHeaders(extra){
       var headers = Object.assign({}, extra || {});
       var bearer = getSharedWorkerToken();
@@ -1426,7 +1444,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       return headers;
     }
 
-    function ensureActionButtonsVisible(){
+        function ensureActionButtonsVisible(){
       try{
         var cur = null;
         try{ cur = getCurrentUser(); }catch(e){ cur = null; }
@@ -2778,9 +2796,11 @@ function getPromptOptions(mode){
 
       async function cloudRead(cfg, pageKey){
         cfg = cfg || await loadCloudCfg();
+        try{ await ensureWorkerAuthReady(cfg); }catch(e){}
         const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
         const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/pull";
+
         const url = _joinUrl(apiBase, readPath) + (readPath.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(pageKey);
 
         async function doFetch(){
@@ -2794,7 +2814,8 @@ function getPromptOptions(mode){
 
         let r = await doFetch();
         if(r.status===401){
-          try{ await ensureWorkerAuthReady(cfg); }catch(e){}
+          clearWorkerTokens();
+          try{ await ensureWorkerAuthReady(cfg, true); }catch(e){}
           r = await doFetch();
         }
         if(!r.ok){
@@ -2807,6 +2828,7 @@ function getPromptOptions(mode){
 
       async function cloudMerge(cfg, pageKey, payloadLike, clientInfo){
         cfg = cfg || await loadCloudCfg();
+        try{ await ensureWorkerAuthReady(cfg); }catch(e){}
         const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
         const mergePath = (eps && eps.merge) ? String(eps.merge) : "/api/tasun/merge";
@@ -2834,10 +2856,10 @@ function getPromptOptions(mode){
             body: JSON.stringify(body)
           });
         }
-
         let r = await doFetch();
         if(r.status===401){
-          try{ await ensureWorkerAuthReady(cfg); }catch(e){}
+          clearWorkerTokens();
+          try{ await ensureWorkerAuthReady(cfg, true); }catch(e){}
           r = await doFetch();
         }
         if(!r.ok){
