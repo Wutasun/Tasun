@@ -42,6 +42,7 @@
       <button id="btnAll">全部測試</button>
       <button id="btnStep13">Step 1~3：讀取 resources / apiBase</button>
       <button id="btnHealth">Step 4：測 Health</button>
+      <button id="btnAuth">Step 4.5：補 Worker 授權</button>
       <button id="btnRead">Step 5~6：測 Read</button>
       <button id="btnMerge">Step 7~8：測 Merge + 再 Read</button>
       <button id="btnLocal">Step 9：檢查本機 localStorage / IDB</button>
@@ -150,7 +151,7 @@
     return out;
   }
   function readAnySessionToken(){ const list = tokenCandidates(); return list.length ? list[0].value : ''; }
-  function authHeaders(extra){ const headers = Object.assign({}, extra||{}); const token = readAnySessionToken(); if(token && !headers.Authorization && !headers.authorization){ headers.Authorization = /^Bearer\s+/i.test(token) ? token : ('Bearer ' + token); } return headers; }
+  function authHeaders(extra){ const headers = Object.assign({}, extra||{}); const token = readAnySessionToken(); if(token){ const raw=String(token).trim(); const plain=/^Bearer\s+/i.test(raw)?raw.replace(/^Bearer\s+/i,""):raw; if(!headers.Authorization && !headers.authorization){ headers.Authorization = /^Bearer\s+/i.test(raw) ? raw : ("Bearer " + plain); } if(!headers["x-api-key"] && !headers["X-API-Key"] && plain){ headers["x-api-key"] = plain; } } return headers; }
   function parseJsonLenient(raw){ raw = String(raw||''); try{return JSON.parse(raw);}catch(e){} try{return JSON.parse(raw.replace(/\/\*[\s\S]*?\*\//g,'').replace(/,\s*([}\]])/g,'$1'));}catch(e){} return null; }
   async function fetchTextNoStore(url){ const res = await fetch(url, { cache:'no-store', credentials:'omit' }); const text = await res.text(); return { ok:res.ok, status:res.status, text, url:res.url||url }; }
   function joinUrl(base, path){ base = norm(base).replace(/\/+$/,''); path = norm(path); if(!path) return base; if(/^https?:\/\//i.test(path)) return path; if(path.charAt(0) !== '/') path = '/' + path; return base + path; }
@@ -177,6 +178,83 @@
     ].join('\n');
   }
 
+
+  function clearWorkerTokens(){
+    const keys = [
+      "tasunCloudToken_v1","tasunCloudToken_v1__sxdh-notes","tasunCloudToken_v1__auth-table",
+      "tasunBearerToken_v1","tasunAccessToken_v1","tasunAuthToken_v1","tasunSessionToken_v1",
+      "tasun_token","tasunToken","tasun_auth_token","authToken","access_token","token","x-api-key","tasunApiKey_v1",
+      "tasunWorkerToken_v1"
+    ];
+    keys.forEach(k=>{
+      try{ sessionStorage.removeItem(k); }catch(e){}
+      try{ localStorage.removeItem(k); }catch(e){}
+    });
+  }
+  function ensureAuthTable(){
+    const raw = safeJSON(localStorage.getItem("tasunAuthTable_v1"));
+    return raw && typeof raw==="object" && Array.isArray(raw.users) ? raw : { users:[] };
+  }
+  function currentUserName(){
+    const cur = safeJSON(sessionStorage.getItem("tasunCurrentUser_v1") || localStorage.getItem("tasunCurrentUser_v1") || "") || {};
+    return norm(cur.user || cur.name || cur.username || "");
+  }
+  function findAuthRowForUser(userName){
+    const uname = norm(userName).toLowerCase();
+    return (ensureAuthTable().users||[]).find(u => norm(u.user || u.name || u.username).toLowerCase()===uname) || null;
+  }
+  function extractTokenFromAuthRow(row){
+    if(!row || typeof row!=="object") return "";
+    const cands = [row.token,row.apiKey,row.xApiKey,row.cloudToken,row.workerToken,row.accessToken,row.authToken,row.bearer,row.workerApiKey,row.sessionToken,row.cloudApiKey];
+    for(const v of cands){ const s = norm(v); if(s) return s; }
+    return "";
+  }
+  function bridgeTokenEverywhere(token){
+    const raw = norm(token); if(!raw) return "";
+    const plain = /^Bearer\s+/i.test(raw) ? raw.replace(/^Bearer\s+/i, "") : raw;
+    [
+      "tasunCloudToken_v1","tasunCloudToken_v1__sxdh-notes","tasunCloudToken_v1__auth-table",
+      "tasunBearerToken_v1","tasunAccessToken_v1","tasunAuthToken_v1","tasunSessionToken_v1",
+      "tasun_token","tasunToken","tasun_auth_token","authToken","access_token","token","x-api-key","tasunApiKey_v1",
+      "tasunWorkerToken_v1"
+    ].forEach(k=>{
+      try{ sessionStorage.setItem(k, plain); }catch(e){}
+      try{ localStorage.setItem(k, plain); }catch(e){}
+    });
+    return plain;
+  }
+  async function ensureWorkerAuthReady(cfg, forceRefresh){
+    if(forceRefresh) clearWorkerTokens();
+    const existing = readAnySessionToken();
+    if(existing && !forceRefresh) return { ok:true, via:"existing-token", tokenPreview:String(existing).slice(0,18) };
+
+    const user = currentUserName();
+    const row = findAuthRowForUser(user);
+    if(row){
+      const rowToken = extractTokenFromAuthRow(row);
+      if(rowToken){
+        bridgeTokenEverywhere(rowToken);
+        return { ok:true, via:"auth-row-token", tokenPreview:String(rowToken).slice(0,18) };
+      }
+    }
+
+    if(window.TasunAuthV4 && typeof window.TasunAuthV4.login === "function" && cfg && cfg.apiBase && row){
+      const pwCandidates = [row.pass,row.password,row.pw,row.secret,row.workerPass,row.workerPassword];
+      for(const p0 of pwCandidates){
+        const pw = norm(p0);
+        if(!pw) continue;
+        try{
+          const logged = await window.TasunAuthV4.login({ username: norm(user), password: pw, apiBase: cfg.apiBase });
+          const tk = norm((logged && (logged.token || logged.accessToken || logged.authToken || logged.bearer || logged.apiKey)) || readAnySessionToken());
+          if(tk){
+            bridgeTokenEverywhere(tk);
+            return { ok:true, via:"worker-login", tokenPreview:String(tk).slice(0,18) };
+          }
+        }catch(err){}
+      }
+    }
+    return { ok: !!readAnySessionToken(), via: readAnySessionToken() ? "existing-after-retry" : "none", tokenPreview:String(readAnySessionToken()||"").slice(0,18) };
+  }
   async function resolveConfig(){
     refreshMeta();
     const resourceKey = norm($('resourceKey').value) || 'sxdh-notes';
@@ -243,6 +321,19 @@
     return cfg;
   }
 
+
+  async function stepAuth(forceRefresh){
+    const cfg = state.resolved || await resolveConfig();
+    log('\n===== Step 4.5：補 Worker 授權 =====');
+    const rs = await ensureWorkerAuthReady(cfg, !!forceRefresh);
+    log('目前使用者:', currentUserName() || '(空)');
+    log('授權結果:', JSON.stringify(rs));
+    log('目前 token:', readAnySessionToken() ? '已找到' : '未找到');
+    setSummaryText(['Step 4.5：' + (rs.ok ? '完成' : '失敗'),'via=' + (rs.via || 'none'),'token=' + (rs.tokenPreview || '(空)')].join('\n'), rs.ok ? 'ok' : 'warn');
+    refreshMeta();
+    return rs;
+  }
+
   async function stepHealth(){
     const cfg = state.resolved || await resolveConfig();
     log('\n===== Step 4：測 Health =====');
@@ -263,42 +354,97 @@
   async function stepRead(opts){
     opts = opts || {};
     const cfg = state.resolved || await resolveConfig();
-    log('\n===== Step 5~6：測 Read =====');
-    if(!cfg.apiBase){ log('apiBase 為空，無法測試'); if(!opts.silentSummary) setSummaryText('Step 5~6：失敗\napiBase 為空，無法測試', 'bad'); return null; }
-    const url = joinUrl(cfg.apiBase, cfg.endpoints.read);
-    const body = { resourceKey: cfg.resourceKey };
-    log('Read URL:', url);
+    log('
+===== Step 5~6：測 Read =====');
+    if(!cfg.apiBase){ log('apiBase 為空，無法測試'); if(!opts.silentSummary) setSummaryText('Step 5~6：失敗
+apiBase 為空，無法測試', 'bad'); return null; }
+    const baseUrl = joinUrl(cfg.apiBase, cfg.endpoints.read);
+    const body = { resourceKey: cfg.resourceKey, key: cfg.resourceKey };
+    log('Read base URL:', baseUrl);
     log('Read body:', JSON.stringify(body));
     log('Authorization:', readAnySessionToken() ? '有帶 token' : '未帶 token');
-    try{
-      const res = await fetch(url, { method:'POST', cache:'no-store', headers: authHeaders({ 'content-type':'application/json', accept:'application/json' }), body: JSON.stringify(body) });
+
+    async function attemptGet(){
+      const url = baseUrl + (baseUrl.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(cfg.resourceKey);
+      const res = await fetch(url, { method:'GET', cache:'no-store', headers: authHeaders({ accept:'application/json' }), credentials:'include' });
       const text = await res.text();
-      log('HTTP:', String(res.status));
-      log('Body:', text.slice(0, 800));
-      const json = parseJsonLenient(text) || { raw: text };
+      return { mode:'GET', res, text };
+    }
+    async function attemptPost(){
+      const res = await fetch(baseUrl, { method:'POST', cache:'no-store', headers: authHeaders({ 'content-type':'application/json', accept:'application/json' }), credentials:'include', body: JSON.stringify(body) });
+      const text = await res.text();
+      return { mode:'POST', res, text };
+    }
+
+    try{
+      let first = await attemptGet();
+      log('GET HTTP:', String(first.res.status));
+      log('GET Body:', first.text.slice(0, 400));
+      if(first.res.status===401){
+        log('GET 401：清除舊 token，重做 Worker 授權後再試');
+        clearWorkerTokens();
+        await stepAuth(true);
+        first = await attemptGet();
+        log('GET retry HTTP:', String(first.res.status));
+        log('GET retry Body:', first.text.slice(0, 400));
+      }
+      let final = first;
+      if(!final.res.ok){
+        log('改測 POST read 相容模式');
+        let second = await attemptPost();
+        log('POST HTTP:', String(second.res.status));
+        log('POST Body:', second.text.slice(0, 400));
+        if(second.res.status===401){
+          log('POST 401：再次清除舊 token，重做 Worker 授權後再試');
+          clearWorkerTokens();
+          await stepAuth(true);
+          second = await attemptPost();
+          log('POST retry HTTP:', String(second.res.status));
+          log('POST retry Body:', second.text.slice(0, 400));
+        }
+        final = second;
+      }
+
+      const json = parseJsonLenient(final.text) || { raw: final.text };
       state.lastRead = json;
       setPayload(json);
-      const rows = Array.isArray(json.rows) ? json.rows.length : Array.isArray(json.db) ? json.db.length : 0;
-      if(!opts.silentSummary){ setSummaryText(['Step 5~6：' + (res.ok ? '完成' : '異常'),'HTTP ' + res.status,'rows=' + rows, explainHttp(res.status)].join('\n'), res.ok ? 'ok' : (res.status===401 ? 'warn' : 'bad')); }
-      return { status: res.status, json, rows };
-    }catch(err){ log('Read 例外：', String(err && err.message || err)); if(!opts.silentSummary) setSummaryText('Step 5~6：例外\n' + String(err && err.message || err), 'bad'); return null; }
+      const rows = Array.isArray(json.rows) ? json.rows.length : Array.isArray(json.db) ? json.db.length : (json.payload && Array.isArray(json.payload.db) ? json.payload.db.length : 0);
+      if(!opts.silentSummary){ setSummaryText(['Step 5~6：' + (final.res.ok ? '完成' : '異常'),'模式=' + final.mode,'HTTP ' + final.res.status,'rows=' + rows, explainHttp(final.res.status)].join('
+'), final.res.ok ? 'ok' : (final.res.status===401 ? 'warn' : 'bad')); }
+      return { status: final.res.status, json, rows, mode: final.mode };
+    }catch(err){ log('Read 例外：', String(err && err.message || err)); if(!opts.silentSummary) setSummaryText('Step 5~6：例外
+' + String(err && err.message || err), 'bad'); return null; }
   }
 
   async function stepMergeProbe(){
     const cfg = state.resolved || await resolveConfig();
-    log('\n===== Step 7~8：測 Merge + 再 Read =====');
-    if(!cfg.apiBase){ log('apiBase 為空，無法測試'); setSummaryText('Step 7~8：失敗\napiBase 為空，無法測試', 'bad'); return null; }
+    log('
+===== Step 7~8：測 Merge + 再 Read =====');
+    if(!cfg.apiBase){ log('apiBase 為空，無法測試'); setSummaryText('Step 7~8：失敗
+apiBase 為空，無法測試', 'bad'); return null; }
     const mergeUrl = joinUrl(cfg.apiBase, cfg.endpoints.merge);
     const probe = { uid:'probe_' + Date.now(), id:0, text:'cloud-probe', trade:'PROBE', sys:'PROBE', source:'tester', attach:'', remark:'probe', date:new Date().toISOString().slice(0,10), updatedAt:Date.now(), rev:Date.now(), deleted:true };
-    const body = { resourceKey: cfg.resourceKey, payload: { db:[probe] } };
+    const body = { resourceKey: cfg.resourceKey, key: cfg.resourceKey, payload: { db:[probe] } };
     log('Merge URL:', mergeUrl);
     log('Merge body:', JSON.stringify(body));
     log('Authorization:', readAnySessionToken() ? '有帶 token' : '未帶 token');
     try{
-      const res = await fetch(mergeUrl, { method:'POST', cache:'no-store', headers: authHeaders({ 'content-type':'application/json', accept:'application/json' }), body: JSON.stringify(body) });
-      const text = await res.text();
+      async function doPost(){
+        return fetch(mergeUrl, { method:'POST', cache:'no-store', headers: authHeaders({ 'content-type':'application/json', accept:'application/json' }), credentials:'include', body: JSON.stringify(body) });
+      }
+      let res = await doPost();
+      let text = await res.text();
       log('HTTP:', String(res.status));
       log('Body:', text.slice(0, 800));
+      if(res.status===401){
+        log('Merge 401：清除舊 token，重做 Worker 授權後再試');
+        clearWorkerTokens();
+        await stepAuth(true);
+        res = await doPost();
+        text = await res.text();
+        log('Retry HTTP:', String(res.status));
+        log('Retry Body:', text.slice(0, 800));
+      }
       const json = parseJsonLenient(text) || { raw:text };
       state.lastMerge = json;
       setPayload(json);
@@ -306,9 +452,11 @@
       const rows = readBack && typeof readBack.rows === 'number' ? readBack.rows : 0;
       const readStatus = readBack ? readBack.status : 0;
       const kind = (res.ok && readBack && readBack.status===200) ? 'ok' : ((res.status===401 || readStatus===401) ? 'warn' : 'bad');
-      setSummaryText(['Step 7~8：' + (kind==='ok' ? '完成' : '異常'),'Merge HTTP ' + res.status,'再 Read HTTP ' + (readBack ? readBack.status : '(未執行)'),'rows=' + rows,'Merge 判讀：' + explainHttp(res.status),'Read 判讀：' + explainHttp(readStatus)].join('\n'), kind);
+      setSummaryText(['Step 7~8：' + (kind==='ok' ? '完成' : '異常'),'Merge HTTP ' + res.status,'再 Read HTTP ' + (readBack ? readBack.status : '(未執行)'),'rows=' + rows,'Merge 判讀：' + explainHttp(res.status),'Read 判讀：' + explainHttp(readStatus)].join('
+'), kind);
       return { status: res.status, json, readBack };
-    }catch(err){ log('Merge 例外：', String(err && err.message || err)); setSummaryText('Step 7~8：例外\n' + String(err && err.message || err), 'bad'); return null; }
+    }catch(err){ log('Merge 例外：', String(err && err.message || err)); setSummaryText('Step 7~8：例外
+' + String(err && err.message || err), 'bad'); return null; }
   }
 
   async function openIDB(){
@@ -385,7 +533,7 @@
     }catch(err){ log('上傳例外：', String(err && err.message || err)); setSummaryText('Step 10：例外\n' + String(err && err.message || err), 'bad'); return null; }
   }
 
-  async function runAll(){ clearAll(); await resolveConfig(); await stepHealth(); await stepRead(); await stepMergeProbe(); await stepLocal(); }
+  async function runAll(){ clearAll(); await resolveConfig(); await stepHealth(); await stepAuth(false); await stepRead(); await stepMergeProbe(); await stepLocal(); }
   function buildReport(){ const cfg = state.resolved || {}; return { exportedAt: now(), page: location.href, fileName: fname(), resourceKey: cfg.resourceKey || norm($('resourceKey').value), apiBase: cfg.apiBase || norm($('apiBase').value), endpoints: cfg.endpoints || { health:norm($('healthEp').value), read:norm($('readEp').value), merge:norm($('mergeEp').value) }, tokenState: readAnySessionToken() ? '已找到登入憑證' : '未找到登入憑證', summary: state.lastSummaryText || summary.textContent || '', logs: logs.textContent || '', payload: payloadView.value || '' }; }
   function downloadText(name, text){ const blob = new Blob([text], {type:'application/json;charset=utf-8'}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 0); }
   async function copyText(text){ try{ await navigator.clipboard.writeText(text); return true; }catch(e){ return false; } }
@@ -393,6 +541,7 @@
   $('btnAll').onclick = runAll;
   $('btnStep13').onclick = async ()=>{ clearAll(); await resolveConfig(); };
   $('btnHealth').onclick = async ()=>{ await stepHealth(); };
+  $('btnAuth').onclick = async ()=>{ await stepAuth(true); };
   $('btnRead').onclick = async ()=>{ await stepRead(); };
   $('btnMerge').onclick = async ()=>{ await stepMergeProbe(); };
   $('btnLocal').onclick = async ()=>{ await stepLocal(); };
