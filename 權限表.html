@@ -726,6 +726,7 @@
 
   const ENTRY_SELECTED_KEY = 'tasunEntrySelected_v1';
   const PERM_MATRIX_KEY    = 'tasunPermMatrix_v1';
+  const ENTRY_BUTTON_MAP_KEY = 'tasunEntryButtonMap_v1';
 
   // ✅ 新增：入口頁註冊表（未來新頁面可自動加入權限表）
   const ENTRY_REGISTRY_KEY = 'tasunEntryRegistry_v1';
@@ -1424,11 +1425,13 @@ function safeJsonParse(s, fallback){
       const role = String(raw?.role ?? raw?.level ?? 'read').toLowerCase().trim();
       const passHash = String(raw?.passHash ?? raw?.passwordHash ?? raw?.hash ?? '').trim();
       const pass = String(raw?.pass ?? raw?.password ?? raw?.pw ?? '').trim();
+      const pendingPass = String(raw?._pendingPass ?? raw?.pendingPass ?? '').trim();
       return {
         user,
         role: roleOptions.includes(role) ? role : 'read',
         passHash,
         pass,
+        _pendingPass: pendingPass,
         name: String(raw?.name ?? user).trim()
       };
     }).filter(u => u.user);
@@ -1441,13 +1444,9 @@ function safeJsonParse(s, fallback){
   }
 
   function updateWho(){
-    const safeCur = (current && typeof current === 'object') ? current : getCurrentUserFallback();
-    current = safeCur;
-    const who = String(safeCur.user || '—').trim() || '—';
-    const role = String(safeCur.role || 'read').trim() || 'read';
-    const t = `目前使用者：${who} (${role})`;
-    if(whoDesk) whoDesk.textContent = t;
-    if(whoMobile) whoMobile.textContent = t;
+    const t = `目前使用者：${current.user} (${current.role})`;
+    whoDesk.textContent = t;
+    whoMobile.textContent = t;
   }
 
   function loadPermMatrix(){
@@ -1462,6 +1461,23 @@ function safeJsonParse(s, fallback){
   function savePermMatrix(){
     localStorage.setItem(PERM_MATRIX_KEY, JSON.stringify(permMatrix));
   }
+
+  async function finalizePendingPasswords(){
+    let changed = false;
+    for(const u of (Array.isArray(auth) ? auth : [])){
+      if(!u || typeof u !== 'object') continue;
+      const pending = String(u._pendingPass || '').trim();
+      if(!pending) continue;
+      try{
+        u.passHash = await sha256Hex(pending);
+        u.pass = '';
+        u._pendingPass = '';
+        changed = true;
+      }catch(_){}
+    }
+    return changed;
+  }
+
   function ensureUserEntry(uName){
     const k = userKey(uName);
     if(!k) return null;
@@ -1702,7 +1718,7 @@ function safeJsonParse(s, fallback){
       return `
       <tr data-idx="${idx}">
         <td><input class="field" data-k="user" value="${escapeHtml(u.user||'')}" ${isAdmin?'':'disabled'}></td>
-        <td><input class="field" data-k="pass" value="" placeholder="此處可直接輸入新密碼；完成後才會更新並加密儲存" ${isAdmin?'':'disabled'}></td>
+        <td><input class="field" data-k="pass" value="${escapeHtml(u._pendingPass || '')}" placeholder="此處可直接輸入新密碼；按儲存後才會更新並加密儲存" ${isAdmin?'':'disabled'}></td>
         <td>
           <select class="field" data-k="role" ${isAdmin?'':'disabled'}>
             ${roleOptions.map(r => `<option value="${r}" ${r===role?'selected':''}>${r}</option>`).join('')}
@@ -1745,7 +1761,7 @@ function safeJsonParse(s, fallback){
             </div>
             <div>
               <div class="rowLabel">密碼</div>
-              <input class="field" data-k="pass" value="" placeholder="此處可直接輸入新密碼；完成後才會更新並加密儲存" ${isAdmin?'':'disabled'}>
+              <input class="field" data-k="pass" value="${escapeHtml(u._pendingPass || '')}" placeholder="此處可直接輸入新密碼；按儲存後才會更新並加密儲存" ${isAdmin?'':'disabled'}>
             </div>
             <div>
               <div class="rowLabel">權限</div>
@@ -1777,10 +1793,12 @@ function safeJsonParse(s, fallback){
     }).join('');
   }
 
-  function saveLocal(){
+  async function saveLocal(){
+    await finalizePendingPasswords();
     localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
     savePermMatrix();
     localState.textContent = '本機：已儲存';
+    return Promise.resolve();
   }
 
   function updateStates(text){
@@ -1831,7 +1849,17 @@ function safeJsonParse(s, fallback){
 
     setCloudButtonsEnabled();
     if(!isAdmin) setMsg('（僅可查看）你目前不是 admin，無法編輯。', false);
-    Promise.resolve(refreshEntryButtonsBySelection()).catch(err => { console.error(err); });
+    Promise.resolve(refreshEntryButtonsBySelection()).catch(err => {
+      console.error('[權限表] refreshEntryButtonsBySelection failed:', err);
+      btnMeta = (Array.isArray(btnMeta) && btnMeta.length ? btnMeta : buildFallbackButtons(4)).filter(it => !isSystemPermissionButton(it));
+      currentEntryButtons = btnMeta.map(x => ({ ...x }));
+      rebuildCurrentEntryOptions();
+      renderHeaders();
+      renderTable();
+      renderCards();
+      renderEntryPreview();
+      setMsg('已以保底模式載入本機資料。', false);
+    });
   }
 
   function addRow(){
@@ -1869,23 +1897,10 @@ function safeJsonParse(s, fallback){
 
     const entry = resolveEntryValue();
 
-    // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
+    // ✅ 密碼欄：可直接停留輸入，按「儲存（同步雲端）」後才會更新並加密儲存
     if(k === "pass"){
-      if(e.type === 'input') return;
-      const plain = String(e.target.value || "");
-      if(plain.trim()){
-        try{
-          auth[idx].passHash = await sha256Hex(plain);
-          auth[idx].pass = "";
-          e.target.value = "";
-          setMsg("✅ 已更新密碼（SHA-256 加密儲存）。");
-        }catch(_){
-          setMsg("密碼更新失敗：瀏覽器不支援加密（crypto.subtle）。", true);
-        }
-        normalizeAuth();
-        await saveLocal();
-        scheduleCloudPush("pwd-updated");
-      }
+      auth[idx]._pendingPass = String(e.target.value || "");
+      localState.textContent = auth[idx]._pendingPass.trim() ? '本機：密碼待儲存' : '本機：未儲存';
       return;
     }
 
@@ -1942,23 +1957,10 @@ function safeJsonParse(s, fallback){
 
     const entry = resolveEntryValue();
 
-    // ✅密碼欄：只接受「新密碼」，立刻 SHA-256，並清空輸入，不存明碼
+    // ✅ 密碼欄：可直接停留輸入，按「儲存（同步雲端）」後才會更新並加密儲存
     if(k === "pass"){
-      if(e.type === 'input') return;
-      const plain = String(e.target.value || "");
-      if(plain.trim()){
-        try{
-          auth[idx].passHash = await sha256Hex(plain);
-          auth[idx].pass = "";
-          e.target.value = "";
-          setMsg("✅ 已更新密碼（SHA-256 加密儲存）。");
-        }catch(_){
-          setMsg("密碼更新失敗：瀏覽器不支援加密（crypto.subtle）。", true);
-        }
-        normalizeAuth();
-        await saveLocal();
-        scheduleCloudPush("pwd-updated");
-      }
+      auth[idx]._pendingPass = String(e.target.value || "");
+      localState.textContent = auth[idx]._pendingPass.trim() ? '本機：密碼待儲存' : '本機：未儲存';
       return;
     }
 
@@ -1971,7 +1973,7 @@ function safeJsonParse(s, fallback){
     }
 
     normalizeAuth();
-    saveLocal();
+    await saveLocal();
 
     if(k === 'user'){ load(); return; }
     renderEntryPreview();
@@ -2395,6 +2397,48 @@ function safeJsonParse(s, fallback){
   }
 
 
+
+  function normalizeEntryButtons(list){
+    return (Array.isArray(list) ? list : []).map((it, idx) => {
+      const sourceId = String(it?.sourceId || it?.id || it?.key || `btn${idx+1}`).trim() || `btn${idx+1}`;
+      const key = String(it?.key || it?.id || `btn${idx+1}`).trim() || `btn${idx+1}`;
+      const label = String(it?.label || it?.name || it?.title || it?.text || sourceId || key).trim() || key;
+      return {
+        id: String(it?.id || key).trim() || key,
+        key,
+        sourceId,
+        label,
+        name: label,
+        href: String(it?.href || '').trim(),
+        target: String(it?.target || '').trim(),
+        roles: Array.isArray(it?.roles) ? it.roles.slice() : []
+      };
+    }).filter(it => !!String(it.sourceId || it.key || '').trim());
+  }
+
+  function hydrateIndexButtons(list){
+    const norm = normalizeEntryButtons(list).filter(it => !isSystemPermissionButton(it));
+    if(!norm.length) return getHomeButtonLibrary().filter(it => !isSystemPermissionButton(it));
+    return norm.map((it, idx) => {
+      const lib = getLibraryItemBySourceId(it.sourceId) || getLibraryItemBySourceId(inferNavSourceId(it, `btn${idx+1}`));
+      return {
+        id: String(it.id || `btn${idx+1}`).trim() || `btn${idx+1}`,
+        key: String(it.key || `btn${idx+1}`).trim() || `btn${idx+1}`,
+        sourceId: String(it.sourceId || lib?.sourceId || `btn${idx+1}`).trim() || `btn${idx+1}`,
+        label: String(it.label || lib?.label || it.name || `btn${idx+1}`).trim() || `btn${idx+1}`,
+        name: String(it.name || it.label || lib?.label || `btn${idx+1}`).trim() || `btn${idx+1}`,
+        href: String(it.href || lib?.href || '').trim(),
+        target: String(it.target || lib?.target || '').trim(),
+        roles: Array.isArray(it.roles) ? it.roles.slice() : (Array.isArray(lib?.roles) ? lib.roles.slice() : [])
+      };
+    });
+  }
+
+  function orderEntryButtons(entry, list){
+    const ordered = orderButtonsByEntry(entry, normalizeEntryButtons(list));
+    return normalizeEntryButtons(ordered);
+  }
+
   function getEntryButtonMapStore(){
     const raw = safeJsonParse(localStorage.getItem(ENTRY_BUTTON_MAP_KEY) || '{}', {});
     return (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
@@ -2561,9 +2605,8 @@ function safeJsonParse(s, fallback){
   }
 
   function navOptionText(it){
-    const label = String(it?.label || it?.id || '').trim() || '未命名按鍵';
-    const href = String(it?.href || '').trim();
-    return href ? `${label} ｜ ${href}` : label;
+    const label = String(it?.label || it?.name || it?.id || '').trim() || '未命名按鍵';
+    return label;
   }
 
   function getNavSelectControls(){
@@ -2754,7 +2797,7 @@ function safeJsonParse(s, fallback){
       return;
     }
 
-    Promise.resolve(refreshEntryButtonsBySelection()).catch(err => { console.error(err); });
+    refreshEntryButtonsBySelection();
     saveLocal().then(()=>{});
     scheduleCloudPush('entry-nav-order');
     setMsg('✅ 已儲存目前入口頁的按鍵排序；上方權限矩陣、下方按鍵名稱設定、入口頁預覽已同步。');
@@ -2780,16 +2823,12 @@ function safeJsonParse(s, fallback){
     if(!Array.isArray(auth)) auth = [];
     normalizeAuth();
 
-    current = safeJsonParse(localStorage.getItem(CURRENT_KEY) || 'null', null);
+    current = getCurrentFromStores() || safeJsonParse(localStorage.getItem(CURRENT_KEY) || 'null', null) || getFallbackCurrentFromAuth();
     if(!current || typeof current !== 'object'){
-      current = safeJsonParse(sessionStorage.getItem(CURRENT_KEY) || 'null', null);
-    }
-    if(!current || typeof current !== 'object'){
-      current = getCurrentUserFallback();
+      current = { user:'alex', role:'admin' };
     }else{
-      current.user = String(current.user || current.name || current.username || '—');
-      current.role = String(current.role || current.level || 'read');
-      if(!String(current.user || '').trim()) current = getCurrentUserFallback();
+      current.user = String(current.user || current.name || 'alex').trim() || 'alex';
+      current.role = String(current.role || current.level || 'read').trim() || 'read';
     }
 
     loadPermMatrix();
@@ -2820,7 +2859,7 @@ function safeJsonParse(s, fallback){
   }
 
   window.addEventListener('storage', async (e) => {
-    if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY){
+    if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY || e.key === ENTRY_BUTTON_MAP_KEY){
       // routes/registry 變動 → 入口頁清單可更新
       buildEntrySelect();
       renderAll();
@@ -2839,12 +2878,55 @@ function safeJsonParse(s, fallback){
     }
   });
 
+
+  function getCurrentFromStores(){
+    const candidates = [
+      safeJsonParse(localStorage.getItem(CURRENT_KEY) || 'null', null),
+      safeJsonParse(sessionStorage.getItem(CURRENT_KEY) || 'null', null),
+      safeJsonParse(localStorage.getItem('tasunCurrentUser_v2') || 'null', null),
+      safeJsonParse(sessionStorage.getItem('tasunCurrentUser_v2') || 'null', null),
+      safeJsonParse(sessionStorage.getItem('tasunSessionLogin_v2') || 'null', null),
+      safeJsonParse(sessionStorage.getItem('tasunSso_v2') || 'null', null),
+      safeJsonParse(sessionStorage.getItem('tasunSso_v1') || 'null', null)
+    ];
+    for(const cur of candidates){
+      if(cur && typeof cur === 'object'){
+        const user = String(cur.user || cur.name || cur.username || cur.account || '').trim();
+        const role = String(cur.role || cur.level || '').trim();
+        if(user) return { user, role: role || 'read' };
+      }
+    }
+    return null;
+  }
+
+  function getFallbackCurrentFromAuth(){
+    const list = Array.isArray(auth) ? auth : [];
+    const admin = list.find(x => String(x?.role || '').toLowerCase() === 'admin' && String(x?.user || '').trim());
+    if(admin) return { user:String(admin.user).trim(), role:'admin' };
+    const first = list.find(x => String(x?.user || '').trim());
+    if(first) return { user:String(first.user).trim(), role:String(first.role || 'read').trim() || 'read' };
+    return null;
+  }
+
+  function ensureCurrentRecovered(){
+    const found = getCurrentFromStores();
+    if(found){
+      current = found;
+      try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(found)); }catch(_){ }
+      return true;
+    }
+    return false;
+  }
+
   // ✅ 先載入 resources → 再 load（確保 DROPBOX_PATH & entries/entryButtons 可取得）
   (async () => {
     await loadResourcesForAuthTable();
     // resources 可能提供 entries/buttons → 先融合一次
     rebuildDynEntryData();
-    load();
+    await load();
+    setTimeout(async () => {
+      if(ensureCurrentRecovered()) await load();
+    }, 600);
   })();
 
   // ======（可選）未來新頁面自動註冊範例（貼到新頁 JS 即可）======
@@ -2856,116 +2938,75 @@ function safeJsonParse(s, fallback){
 })();
 </script>
 
-<!-- ✅✅✅ [段落 #1] tasun-cloud-kit.js（版本需與本頁 APP_VER 一致） -->
-<script>document.write('<script src="' + ((window.__withV ? window.__withV("tasun-cloud-kit.js") : "tasun-cloud-kit.js")) + ""><\/script>');</script>
-
-<!-- ✅✅✅ [段落 #2] 永遠自動上雲端（TasunCloudKit）
-     - 同步本頁關鍵 localStorage keys
-     - pullNow：進站/回前景自動拉
-     - saveMerged：偵測變更自動推
--->
 <script>
 (function(){
-  var APP_VER = (window.__CACHE_V || (new URL(location.href)).searchParams.get('v') || '').trim();
-  var KEYS = [
-    'tasunAuthTable_v1',
-    'tasunPermMatrix_v1',
-    'tasunNavButtons_v1',
-    'tasunRoutes_v1',
-    'tasunEntrySelected_v1',
-    'tasunEntryRegistry_v1'
-  ];
-
-  function getLocal(){
-    var out=[];
-    for(var i=0;i<KEYS.length;i++){
-      var k=KEYS[i], v=localStorage.getItem(k);
-      if(v==null) continue;
-      out.push({ id:'ls:'+k, k:k, v:String(v), ts:Date.now() });
-    }
-    return out;
+  function withV(name){
+    try{ return window.__withV ? window.__withV(name) : name; }catch(_){ return name; }
+  }
+  function loadOptionalScript(name, onload){
+    try{
+      var s = document.createElement('script');
+      s.src = withV(name);
+      s.async = true;
+      s.onload = function(){ try{ onload && onload(); }catch(_){ } };
+      s.onerror = function(){ console.warn('[權限表] optional script load skipped:', name); };
+      document.body.appendChild(s);
+    }catch(_){ }
   }
 
-  function apply(rows){
-    if(!Array.isArray(rows)) return;
-    var touched=[];
-    for(var i=0;i<rows.length;i++){
-      var r=rows[i];
-      if(!r||typeof r.k!=='string') continue;
-      if(r.v==null){
-        localStorage.removeItem(r.k);
-        touched.push(r.k);
-        continue;
+  loadOptionalScript('tasun-cloud-kit.js', function(){
+    try{
+      var APP_VER = (window.__CACHE_V || (new URL(location.href)).searchParams.get('v') || '').trim();
+      var KEYS = [
+        'tasunAuthTable_v1',
+        'tasunPermMatrix_v1',
+        'tasunNavButtons_v1',
+        'tasunRoutes_v1',
+        'tasunEntrySelected_v1',
+        'tasunEntryRegistry_v1',
+        'tasunEntryButtonMap_v1'
+      ];
+      function getLocal(){
+        var out=[];
+        for(var i=0;i<KEYS.length;i++){
+          var k=KEYS[i], v=localStorage.getItem(k);
+          if(v==null) continue;
+          out.push({ id:'ls:'+k, k:k, v:String(v), ts:Date.now() });
+        }
+        return out;
       }
-      localStorage.setItem(r.k, String(r.v));
-      touched.push(r.k);
-    }
-    // 觸發頁面內的監聽（用 storage event 模擬）
-    for(var j=0;j<touched.length;j++){
-      var key=touched[j];
-      try{ window.dispatchEvent(new StorageEvent('storage',{ key:key, storageArea:localStorage })); }
-      catch(e){ try{ window.dispatchEvent(new Event('storage')); }catch(_){ } }
-    }
-  }
-
-  if(!window.TasunCloudKit || !window.TasunCloudKit.init || !window.TasunCloudKit.mount){
-    window.__TASUN_AUTH_CLOUD_CTRL = null;
-    return;
-  }
-
-  window.TasunCloudKit.init({
-    appVer: APP_VER,
-    resourcesUrl: 'tasun-resources.json',
-    resourceKey: 'tasun-index-db',
-    pk: 'id',
-    ui: { enabled:false },
-    lock: { enabled:false },
-    getLocal: getLocal,
-    apply: apply
+      function apply(rows){
+        if(!Array.isArray(rows)) return;
+        for(var i=0;i<rows.length;i++){
+          var r=rows[i];
+          if(!r||typeof r.k!=='string') continue;
+          if(r.v==null) localStorage.removeItem(r.k);
+          else localStorage.setItem(r.k, String(r.v));
+        }
+        try{ window.dispatchEvent(new Event('storage')); }catch(_){ }
+      }
+      if(!window.TasunCloudKit || !window.TasunCloudKit.init || !window.TasunCloudKit.mount){
+        window.__TASUN_AUTH_CLOUD_CTRL = null;
+        return;
+      }
+      window.TasunCloudKit.init({
+        appVer: APP_VER,
+        resourcesUrl: 'tasun-resources.json',
+        resourceKey: 'tasun-index-db',
+        pk: 'id',
+        ui: { enabled:false },
+        lock: { enabled:false },
+        getLocal: getLocal,
+        apply: apply
+      });
+      var ctrl = window.TasunCloudKit.mount();
+      window.__TASUN_AUTH_CLOUD_CTRL = ctrl || null;
+      try{ ctrl && ctrl.pullNow && setTimeout(function(){ try{ ctrl.pullNow(); }catch(_){ } }, 250); }catch(_){ }
+    }catch(err){ console.warn('[權限表] cloud init skipped:', err); }
   });
 
-  var ctrl = window.TasunCloudKit.mount();
-  // 讓主程式可以拿到 ctrl，做到「按鈕儲存也立即同步」
-  window.__TASUN_AUTH_CLOUD_CTRL = ctrl;
-
-  // 進站先拉一次
-  try{
-    ctrl && ctrl.pullNow && setTimeout(function(){ try{ ctrl.pullNow(); }catch(_){ } }, 250);
-  }catch(_){}
-
-  // 變更偵測（hash）→ 自動推（保底機制）
-  var lastHash = 0;
-  function hashNow(){
-    var h=2166136261>>>0;
-    for(var i=0;i<KEYS.length;i++){
-      var s=(localStorage.getItem(KEYS[i])||'');
-      for(var c=0;c<s.length;c++){
-        h^=s.charCodeAt(c);
-        h=Math.imul(h,16777619)>>>0;
-      }
-      h^=KEYS[i].length;
-    }
-    return h>>>0;
-  }
-
-  setInterval(function(){
-    var h=hashNow();
-    if(h!==lastHash){
-      lastHash=h;
-      try{ ctrl && ctrl.saveMerged && ctrl.saveMerged(); }catch(e){ }
-    }
-  }, 10000);
-
-  // 回前景自動拉（避免別台剛更新）
-  document.addEventListener('visibilitychange', function(){
-    if(document.visibilityState==='visible'){
-      try{ ctrl && ctrl.pullNow && ctrl.pullNow(); }catch(_){}
-    }
-  });
+  loadOptionalScript('tasun-global-auth-v65.js');
 })();
 </script>
-
-
-<script>document.write('<script src="' + ((window.__withV ? window.__withV("tasun-global-auth-v65.js") : "tasun-global-auth-v65.js")) + ""><\/script>');</script>
 </body>
 </html>
