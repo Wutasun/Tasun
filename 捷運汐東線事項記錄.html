@@ -878,13 +878,13 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
-    var DEFAULT_ENDPOINTS = { health:"/api/tasun/health", login:"/api/tasun/login", me:"/api/tasun/me", read:"/api/tasun/read", merge:"/api/tasun/merge" };
+    var DEFAULT_ENDPOINTS = { health:"/api/tasun/health", read:"/api/tasun/read", merge:"/api/tasun/merge" };
     // === 前端 API Base 強制鎖定（穩定鎖定版）===
     // 目的：避免 apiBase 變成空值或被 localStorage/資源檔覆寫，導致打到 https://wutasun.github.io/api/* 造成 404
     // 只鎖定「API Base 與 endpoints」，不影響 x-api-key（token）設定。
     var FORCE_API_BASE_LOCK = true;
     var FORCE_API_BASE = "https://tasun-worker.wutasun.workers.dev";
-    var FORCE_ENDPOINTS = { health:"/api/tasun/health", login:"/api/tasun/login", me:"/api/tasun/me", read:"/api/tasun/read", merge:"/api/tasun/merge" };
+    var FORCE_ENDPOINTS = { health:"/api/tasun/health", read:"/api/tasun/read", merge:"/api/tasun/merge" };
 
 
 
@@ -1161,104 +1161,6 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       return t;
     }
 
-    function getAuthUserRow(username){
-      username = norm(username);
-      if(!username) return null;
-      var auth = ensureAuthTable();
-      var users = Array.isArray(auth && auth.users) ? auth.users : [];
-      for(var i=0;i<users.length;i++){
-        var u = users[i];
-        if(!u) continue;
-        if(norm(u.user || u.username || u.name) === username) return u;
-      }
-      return null;
-    }
-
-    function persistWorkerToken(token, meta){
-      token = norm(token);
-      if(!token) return "";
-      var clean = /^Bearer\s+/i.test(token) ? token.replace(/^Bearer\s+/i, "") : token;
-      try{ sessionStorage.setItem("tasunCloudToken_v1", clean); }catch(e){}
-      try{ localStorage.setItem("tasunCloudToken_v1", clean); }catch(e){}
-      try{ sessionStorage.setItem("tasunCloudToken_v1__" + PAGE_KEY, clean); }catch(e){}
-      try{ localStorage.setItem("tasunCloudToken_v1__" + PAGE_KEY, clean); }catch(e){}
-      try{ sessionStorage.setItem("tasun_token", clean); }catch(e){}
-      try{ localStorage.setItem("tasun_token", clean); }catch(e){}
-      try{
-        var bridge = Object.assign({}, meta || {}, {
-          token: clean,
-          accessToken: clean,
-          authToken: clean,
-          workerToken: clean,
-          cloudToken: clean,
-          apiKey: clean,
-          updatedAt: nowISO()
-        });
-        sessionStorage.setItem("tasunSessionBridge_v1", JSON.stringify(bridge));
-        localStorage.setItem("tasunSessionBridge_v1", JSON.stringify(bridge));
-      }catch(e){}
-      return clean;
-    }
-
-    async function workerLoginWithLocalAuth(cfg, username){
-      cfg = cfg || await loadCloudCfg();
-      username = norm(username);
-      if(!cfg || !isValidApiBase(cfg.apiBase) || !username) return null;
-
-      var row = getAuthUserRow(username);
-      var password = row ? String(row.pass || row.password || "") : "";
-      if(!password) return null;
-
-      var loginPath = (cfg.endpoints && cfg.endpoints.login) ? cfg.endpoints.login : "/api/tasun/login";
-      var url = joinApiBase(cfg.apiBase, loginPath);
-
-      var res = await fetch(url, {
-        method: "POST",
-        cache: "no-store",
-        credentials: getWorkerCredentialMode(cfg),
-        headers: { "content-type":"application/json", "accept":"application/json" },
-        body: JSON.stringify({ username: username, password: password })
-      });
-
-      var txt = await res.text().catch(function(){ return ""; });
-      var js = safeJSON(txt) || {};
-      if(!res.ok || !js || !js.token){
-        return null;
-      }
-
-      var token = persistWorkerToken(js.token, {
-        user: js.user || username,
-        role: js.role || (row && row.role) || "read",
-        exp: js.exp || "",
-        source: "worker-login"
-      });
-      return { token: token, user: js.user || username, role: js.role || (row && row.role) || "read", exp: js.exp || "" };
-    }
-
-    async function ensureWorkerAuthorization(cfg, forceRefresh){
-      cfg = cfg || await loadCloudCfg();
-      if(!cfg || !isValidApiBase(cfg.apiBase)) return { ok:false, why:"bad-config" };
-
-      if(!forceRefresh){
-        var existing = norm(getSharedWorkerToken());
-        if(existing) return { ok:true, token: existing, source:"cache" };
-      }
-
-      var cur = null;
-      try{ cur = getCurrentUser(); }catch(e){ cur = null; }
-      var username = norm(cur && (cur.user || cur.name || cur.username));
-      if(!username) return { ok:false, why:"no-user" };
-
-      try{
-        var logged = await workerLoginWithLocalAuth(cfg, username);
-        if(logged && logged.token){
-          return { ok:true, token: logged.token, source:"worker-login", role: logged.role || "", user: logged.user || username };
-        }
-      }catch(e){}
-
-      return { ok:false, why:"worker-login-failed" };
-    }
-
     function getCurrentUser(){
       var cur = normalizeAuthUser(readJsonFromKeys(AUTH_BRIDGE_KEYS));
       if(cur) return cur;
@@ -1332,7 +1234,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     function readCookie(name){
       try{
-        var esc = String(name||"").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        var esc = String(name||"").replace(/[.*+?^${}()|[\]\]/g, "\$&");
         var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
         return m ? decodeURIComponent(m[1] || "") : "";
       }catch(e){ return ""; }
@@ -1502,6 +1404,114 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       return headers;
     }
 
+    function persistWorkerToken(token, scopeKey){
+      var raw = norm(token);
+      if(!raw) return "";
+      raw = raw.replace(/^Bearer\s+/i, "");
+      var keys = [
+        "tasunCloudToken_v1",
+        "tasunCloudToken_v1__sxdh-notes",
+        scopeKey ? ("tasunCloudToken_v1__" + String(scopeKey)) : "",
+        "tasunBearerToken_v1",
+        "tasunAccessToken_v1",
+        "tasunAuthToken_v1",
+        "tasunSessionToken_v1"
+      ].filter(Boolean);
+      for(var i=0;i<keys.length;i++){
+        try{ sessionStorage.setItem(keys[i], raw); }catch(e){}
+        try{ localStorage.setItem(keys[i], raw); }catch(e){}
+      }
+      try{
+        var bridge = safeJSON(sessionStorage.getItem("tasunSessionBridge_v1") || localStorage.getItem("tasunSessionBridge_v1") || "") || {};
+        bridge.token = raw;
+        bridge.workerToken = raw;
+        bridge.cloudToken = raw;
+        sessionStorage.setItem("tasunSessionBridge_v1", JSON.stringify(bridge));
+      }catch(e){}
+      return raw;
+    }
+
+    function getLocalAuthCredential(username){
+      username = norm(username);
+      if(!username) return null;
+      try{
+        var auth = ensureAuthTable();
+        var hit = (auth.users || []).find(function(u){ return norm(u.user) === username; });
+        if(hit && norm(hit.pass)){
+          return { username: username, password: String(hit.pass) };
+        }
+      }catch(e){}
+      return null;
+    }
+
+    async function workerLoginByCurrentUser(cfg){
+      cfg = cfg || await loadCloudCfg();
+      var apiBase = norm(cfg && cfg.apiBase);
+      if(!isValidApiBase(apiBase)) throw new Error("cloud apiBase invalid");
+      var cur = null;
+      try{ cur = getCurrentUser(); }catch(e){ cur = null; }
+      var username = norm(cur && (cur.user || cur.name || cur.username));
+      var cred = getLocalAuthCredential(username);
+      if(!cred || !cred.username || !cred.password) throw new Error("NO_LOCAL_CREDENTIAL");
+      var url = _joinUrl(apiBase, "/api/tasun/login");
+      var r = await fetch(url, {
+        method: "POST",
+        cache: "no-store",
+        credentials: getWorkerCredentialMode(cfg),
+        headers: { "content-type":"application/json", "accept":"application/json" },
+        body: JSON.stringify({ username: cred.username, password: cred.password })
+      });
+      var j = null;
+      try{ j = await r.json(); }catch(e){ j = null; }
+      if(!r.ok || !j || !j.ok || !j.token){
+        throw new Error("WORKER_LOGIN_" + r.status);
+      }
+      persistWorkerToken(j.token, PAGE_KEY);
+      setCloudState({ authState:"", cfgOk:true, reachable:true, apiBase:apiBase, lastOkAt: Date.now() }, true);
+      return j;
+    }
+
+    async function probeWorkerSession(cfg, allowRelogin){
+      cfg = cfg || await loadCloudCfg();
+      var apiBase = norm(cfg && cfg.apiBase);
+      if(!isValidApiBase(apiBase)) return { ok:false, status:0, error:"BAD_API_BASE" };
+      var meUrl = _joinUrl(apiBase, "/api/tasun/me");
+      async function callMe(){
+        var res = await fetch(meUrl, {
+          method: "GET",
+          cache: "no-store",
+          credentials: getWorkerCredentialMode(cfg),
+          headers: buildWorkerAuthHeaders({ "accept":"application/json" })
+        });
+        var js = null;
+        try{ js = await res.json(); }catch(e){ js = null; }
+        return { res:res, json:js };
+      }
+      var first = null;
+      try{ first = await callMe(); }catch(e){ return { ok:false, status:0, error:String(e && e.message ? e.message : e) }; }
+      if(first.res.ok){
+        setCloudState({ ok:true, cfgOk:true, reachable:true, authState:"", apiBase:apiBase, lastOkAt: Date.now() }, true);
+        return { ok:true, status:first.res.status, json:first.json };
+      }
+      if((first.res.status === 401 || first.res.status === 403) && allowRelogin !== false){
+        try{
+          await workerLoginByCurrentUser(cfg);
+          var second = await callMe();
+          if(second.res.ok){
+            setCloudState({ ok:true, cfgOk:true, reachable:true, authState:"", apiBase:apiBase, lastOkAt: Date.now() }, true);
+            return { ok:true, status:second.res.status, json:second.json, relogin:true };
+          }
+          setCloudState({ ok:false, cfgOk:true, reachable:true, authState:(second.res.status===403?"forbidden":"unauth") }, true);
+          return { ok:false, status:second.res.status, json:second.json, relogin:true };
+        }catch(e){
+          setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true);
+          return { ok:false, status:first.res.status, json:first.json, error:String(e && e.message ? e.message : e) };
+        }
+      }
+      setCloudState({ ok:false, cfgOk:true, reachable:true, authState:(first.res.status===403?"forbidden":"unauth") }, true);
+      return { ok:false, status:first.res.status, json:first.json };
+    }
+
     function ensureActionButtonsVisible(){
       try{
         var cur = null;
@@ -1629,8 +1639,6 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       ep = (ep && typeof ep==="object") ? ep : {};
       return {
         health: norm(ep.health || "/api/tasun/health") || "/api/tasun/health",
-        login:  norm(ep.login  || "/api/tasun/login") || "/api/tasun/login",
-        me:     norm(ep.me     || "/api/tasun/me") || "/api/tasun/me",
         read:   norm(ep.read   || "/api/tasun/read") || "/api/tasun/read",
         merge:  norm(ep.merge  || "/api/tasun/merge") || "/api/tasun/merge"
       };
@@ -2158,18 +2166,13 @@ function getVisibleRows(){
       }
     }
 
-    function isAuthHttpStatus(status){
-      status = Number(status||0);
-      return status===401 || status===403;
-    }
-
     function cloudBadgeText(){
       var c = state.cloud || {};
+      if(c.ok) return "已同步";
       if(c.authState==="unauth") return "未授權";
       if(c.authState==="forbidden") return "權限不足";
       if(c.authState==="expired") return "授權失敗";
       if(c.reachable===false && c.cfgOk) return "連線失敗";
-      if(c.ok && c.lastSyncAt) return "已同步";
       if(c.cfgOk) return "待同步";
       return "未設定";
     }
@@ -2823,11 +2826,11 @@ function getPromptOptions(mode){
     // ---------------------------
     // Cloud API
     // ---------------------------
-      // --- Cloud API (Worker pull/merge compatible) ---
+      // --- Cloud API (Worker v5 formal endpoints) ---
       // Worker supports:
-      //   GET  /api/tasun/pull?key=PAGE_KEY   (or GET /api/read?key=PAGE_KEY)
-      //   POST /api/tasun/merge              (or POST /api/merge) body: { key, payload:{db,counter}, client:{user,...} }
-      // Response payload shape: { ok:true, payload:{db,counter}, ... }
+      //   POST /api/tasun/read   body: { resourceKey }
+      //   POST /api/tasun/merge  body: { resourceKey, payload:{ db:[...] } }
+      // Protected endpoints require a valid bearer token or session.
 
       function _joinUrl(base, path){
         base = (base || "").replace(/\/+$/,"");
@@ -2844,28 +2847,18 @@ function getPromptOptions(mode){
           const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
           const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
           const cfgOk = !!(cfg && isValidApiBase(apiBase));
-          const candidates = [];
-          if(eps && eps.health) candidates.push(_joinUrl(apiBase, eps.health));
-          // common fallbacks
-          candidates.push(_joinUrl(apiBase, "/api/ping"));
-          candidates.push(_joinUrl(apiBase, "/api/tasun/ping"));
-          candidates.push(_joinUrl(apiBase, "/api/ping"));
-
+          const healthUrl = _joinUrl(apiBase, (eps && eps.health) ? eps.health : "/api/tasun/health");
           let reachable = false;
-          for(const url of candidates){
-            try{
-              const r = await fetch(url, { method:"GET", credentials: getWorkerCredentialMode(cfg), cache:"no-store", headers: buildWorkerAuthHeaders({ accept:"application/json" }) });
-              if(r.ok){ reachable = true; break; }
-            }catch(_e){}
-          }
-          // ✅ 健康檢查只代表 Worker 可達，不代表資料已完成同步或已授權。
+          try{
+            const r = await fetch(healthUrl, { method:"GET", credentials: getWorkerCredentialMode(cfg), cache:"no-store", headers: { accept:"application/json" } });
+            reachable = !!r.ok;
+          }catch(_e){ reachable = false; }
           setCloudState({
             cfgOk: cfgOk,
             reachable: reachable,
-            ok: !!(state.cloud && state.cloud.ok),
+            ok: reachable ? !!(state.cloud && state.cloud.ok) : false,
             apiBase: apiBase,
             endpoints: eps || null,
-            authState: reachable ? (state.cloud && state.cloud.authState ? state.cloud.authState : "") : (state.cloud && state.cloud.authState ? state.cloud.authState : ""),
             lastOkAt: reachable ? Date.now() : (state.cloud && state.cloud.lastOkAt ? state.cloud.lastOkAt : "")
           }, true);
           return reachable;
@@ -2882,12 +2875,20 @@ function getPromptOptions(mode){
       }
 
       function _normalizePullResponse(json){
-        // Accept both {ok:true,payload:{db,counter}} and legacy {payload:{...}} and raw payload.
         const j = (json && typeof json==="object") ? json : {};
-        const payload = (j.payload && typeof j.payload==="object") ? j.payload : (j.data && typeof j.data==="object") ? j.data : j;
-        const db = Array.isArray(payload.db) ? payload.db : (Array.isArray(payload.items) ? payload.items : []);
-        const counter = Number.isFinite(Number(payload.counter)) ? Number(payload.counter) : 0;
-        return { db, counter };
+        var rows = [];
+        if(Array.isArray(j.rows)) rows = j.rows;
+        else if(j.payload && Array.isArray(j.payload.db)) rows = j.payload.db;
+        else if(Array.isArray(j.db)) rows = j.db;
+        else if(Array.isArray(j.items)) rows = j.items;
+        var db = rows.map(ensureRowV1).filter(Boolean);
+        var maxRev = 0;
+        for(var i=0;i<db.length;i++){
+          var revNum = Number(db[i] && db[i].rev || 0);
+          if(Number.isFinite(revNum) && revNum > maxRev) maxRev = revNum;
+        }
+        const counter = Number.isFinite(Number(j.counter)) ? Number(j.counter) : maxRev;
+        return { db: db, counter: counter };
       }
 
       async function cloudRead(cfg, pageKey){
@@ -2895,15 +2896,11 @@ function getPromptOptions(mode){
         const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
         const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/read";
-
-        const auth = await ensureWorkerAuthorization(cfg, false);
+        const auth = await probeWorkerSession(cfg, true);
         if(!auth.ok){
-          setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true);
-          throw new Error("cloud read failed: 401 UNAUTH");
+          throw new Error("cloud read auth failed: " + auth.status);
         }
-
         const url = _joinUrl(apiBase, readPath);
-
         const r = await fetch(url, {
           method: "POST",
           cache: "no-store",
@@ -2911,22 +2908,16 @@ function getPromptOptions(mode){
           headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
           body: JSON.stringify({ resourceKey: pageKey })
         });
-        const t = await r.text().catch(()=> "");
-        const j = safeJSON(t) || {};
         if(!r.ok){
-          if(isAuthHttpStatus(r.status)){
-            try{
-              var retry = await ensureWorkerAuthorization(cfg, true);
-              if(retry.ok){
-                return await cloudRead(cfg, pageKey);
-              }
-            }catch(_retryErr){}
-            try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:(r.status===403?"forbidden":"unauth") }, true); }catch(_e){}
+          const t = await r.text().catch(()=> "");
+          if(r.status===401 || r.status===403){
+            setCloudState({ ok:false, cfgOk:true, reachable:true, authState:(r.status===403?"forbidden":"unauth") }, true);
           }
           throw new Error("cloud read failed: " + r.status + " " + t.slice(0,200));
         }
-        const rows = Array.isArray(j.rows) ? j.rows : [];
-        return { db: rows, counter: Number(j.count || rows.length || 0) || 0 };
+        const j = await r.json();
+        setCloudState({ ok:true, cfgOk:true, reachable:true, authState:"", lastOkAt: Date.now() }, true);
+        return _normalizePullResponse(j);
       }
 
       async function cloudMerge(cfg, pageKey, payloadLike, clientInfo){
@@ -2934,6 +2925,10 @@ function getPromptOptions(mode){
         const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
         const mergePath = (eps && eps.merge) ? String(eps.merge) : "/api/tasun/merge";
+        const auth = await probeWorkerSession(cfg, true);
+        if(!auth.ok){
+          throw new Error("cloud merge auth failed: " + auth.status);
+        }
 
         let payload = payloadLike;
         if(payload && typeof payload === "object"){
@@ -2942,12 +2937,6 @@ function getPromptOptions(mode){
         }
         payload = payload || { db:[], counter:0 };
 
-        const auth = await ensureWorkerAuthorization(cfg, false);
-        if(!auth.ok){
-          setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true);
-          throw new Error("cloud merge failed: 401 UNAUTH");
-        }
-
         const body = {
           resourceKey: pageKey,
           payload: { db: Array.isArray(payload.db)? payload.db : [], counter: Number(payload.counter)||0 },
@@ -2955,7 +2944,6 @@ function getPromptOptions(mode){
         };
 
         const url = _joinUrl(apiBase, mergePath);
-
         const r = await fetch(url, {
           method: "POST",
           cache: "no-store",
@@ -2963,81 +2951,17 @@ function getPromptOptions(mode){
           headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
           body: JSON.stringify(body)
         });
-        const t = await r.text().catch(()=> "");
-        const j = safeJSON(t) || {};
         if(!r.ok){
-          if(isAuthHttpStatus(r.status)){
-            try{
-              var retry = await ensureWorkerAuthorization(cfg, true);
-              if(retry.ok){
-                return await cloudMerge(cfg, pageKey, payload, clientInfo);
-              }
-            }catch(_retryErr){}
-            try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:(r.status===403?"forbidden":"unauth") }, true); }catch(_e){}
+          const t = await r.text().catch(()=> "");
+          if(r.status===401 || r.status===403){
+            setCloudState({ ok:false, cfgOk:true, reachable:true, authState:(r.status===403?"forbidden":"unauth") }, true);
           }
           throw new Error("cloud merge failed: " + r.status + " " + t.slice(0,200));
         }
-        const rows = Array.isArray(j.rows) ? j.rows : [];
-        return { db: rows, counter: Number(j.count || rows.length || 0) || 0 };
+        const j = await r.json();
+        setCloudState({ ok:true, cfgOk:true, reachable:true, authState:"", lastOkAt: Date.now() }, true);
+        return _normalizePullResponse(j);
       }
-
-    async function detectCloudAuthState(cfg){
-      cfg = cfg || await loadCloudCfg();
-      if(!cfg || !isValidApiBase(cfg.apiBase)){
-        return { auth:false, text:"未設定", status:0 };
-      }
-      var mePath = (cfg.endpoints && cfg.endpoints.me) ? cfg.endpoints.me : "/api/tasun/me";
-      var url = joinApiBase(cfg.apiBase, mePath);
-      try{
-        var res = await fetch(url, {
-          method: "GET",
-          cache: "no-store",
-          credentials: getWorkerCredentialMode(cfg),
-          headers: buildWorkerAuthHeaders({ "accept":"application/json" })
-        });
-        if(res.status===200) return { auth:true, text:"已授權", status:200 };
-        if(res.status===401){
-          try{
-            var relog = await ensureWorkerAuthorization(cfg, true);
-            if(relog && relog.ok){
-              var res2 = await fetch(url, {
-                method: "GET",
-                cache: "no-store",
-                credentials: getWorkerCredentialMode(cfg),
-                headers: buildWorkerAuthHeaders({ "accept":"application/json" })
-              });
-              if(res2.status===200) return { auth:true, text:"已授權", status:200 };
-            }
-          }catch(_e){}
-          return { auth:false, text:"未授權", status:401 };
-        }
-        if(res.status===403) return { auth:false, text:"權限不足", status:403 };
-        if(res.status===404) return { auth:false, text:"端點不存在", status:404 };
-        return { auth:false, text:"狀態異常", status:res.status||0 };
-      }catch(e){
-        return { auth:false, text:"連線失敗", status:0 };
-      }
-    }
-
-    async function refreshCloudAuthState(cfg){
-      cfg = cfg || await loadCloudCfg();
-      var info = await detectCloudAuthState(cfg);
-      if(info.status===200){
-        setCloudState({ cfgOk:true, reachable:true, authState:"" }, true);
-      }else if(info.status===401){
-        setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true);
-      }else if(info.status===403){
-        setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"forbidden" }, true);
-      }else if(info.status===404){
-        setCloudState({ ok:false, cfgOk:true, reachable:false }, true);
-      }else if(info.status===0){
-        setCloudState({ ok:false, cfgOk:true, reachable:false }, true);
-      }else{
-        setCloudState({ ok:false, cfgOk:true, reachable:true }, true);
-      }
-      return info;
-    }
-
     async function reconcileCloudOnOpen(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
       var silent = (opts.silent!==false);
@@ -3054,8 +2978,13 @@ function getPromptOptions(mode){
         try{ hydrateCrossPageAuth(); }catch(e){}
         await cloudHealth(cfg);
 
-        // 1.5) 以 Worker /api/tasun/me 真正回應判定授權狀態，不再只看本機 token
-        await refreshCloudAuthState(cfg);
+        // 1.5) 先實際測試 Worker /api/tasun/me；若需要則自動用本頁登入帳密換取 Worker token
+        var auth = await probeWorkerSession(cfg, true);
+        if(!auth.ok){
+          setCloudState({ ok:false, cfgOk:true, authState:(auth.status===403?"forbidden":"unauth") }, true);
+          if(!silent) toast(auth.status===403 ? "雲端權限不足" : "雲端未授權，請先登入");
+          return false;
+        }
 
         // 2) 先檢查本端資料；若本端已有資料，先送雲端 merge，避免本端較新的資料被空雲端覆蓋
         var localRows = (state.db||[]).map(ensureRowV1).filter(Boolean);
@@ -3093,7 +3022,6 @@ function getPromptOptions(mode){
           ok:true,
           cfgOk:true,
           reachable:true,
-          authState:"",
           lastOkAt: Date.now(),
           lastSyncAt: nowISO()
         }, false);
@@ -3119,7 +3047,12 @@ function getPromptOptions(mode){
 
       try{
         try{ hydrateCrossPageAuth(); }catch(e){}
-        setCloudState({ authState:"" }, true);
+        var auth = await probeWorkerSession(cfg, true);
+        if(!auth.ok){
+          setCloudState({ ok:false, cfgOk:true, authState:(auth.status===403?"forbidden":"unauth") }, true);
+          if(!silent) toast(auth.status===403 ? "雲端權限不足" : "雲端未授權，請先登入");
+          return;
+        }
         var remote = await cloudRead(cfg, PAGE_KEY);
 
         // If cloud is empty but local has data, offer to bootstrap to cloud (one-time)
@@ -3172,7 +3105,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         await saveLocal({ db: state.db, counter: state.counter });
 
         buildDictsFromDb();
-        setCloudState({ ok:true, cfgOk:true, reachable:true, authState:"", lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
+        setCloudState({ ok:true, cfgOk:true, reachable:true, lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
         refresh();
         if(!silent) toast("已從雲端更新");
       }catch(e){
@@ -3217,7 +3150,12 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
 
       try{
         try{ hydrateCrossPageAuth(); }catch(e){}
-        setCloudState({ authState:"" }, true);
+        var auth = await probeWorkerSession(cfg, true);
+        if(!auth.ok){
+          setCloudState({ ok:false, cfgOk:true, authState:(auth.status===403?"forbidden":"unauth") }, true);
+          if(!silent) toast(auth.status===403 ? "雲端權限不足" : "雲端未授權，請先登入");
+          return;
+        }
         var merged = await cloudMerge(cfg, PAGE_KEY, { db: sendRows, counter: state.counter }, {
           user: state.user || "",
           role: state.role || "",
@@ -3236,7 +3174,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         await saveLocal({ db: state.db, counter: state.counter });
 
         buildDictsFromDb();
-        setCloudState({ ok:true, cfgOk:true, reachable:true, authState:"", lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
+        setCloudState({ ok:true, cfgOk:true, reachable:true, lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
         refresh();
         if(!silent) toast(fullUpload ? "雲端同步完成（全量）" : "雲端同步完成（增量）");
       }catch(e){
@@ -3349,7 +3287,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       try{ refresh(); }catch(e){ try{ refreshHintSafe(); }catch(_e){} }
     }
 
-    function doLogin(){
+    async function doLogin(){
       var user = norm($("loginUser").value);
       var pass = norm($("loginPass").value);
       if(!user || !pass){
@@ -3367,14 +3305,16 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
       setCurrentUser(cur);
       applyUser(cur);
+      try{
+        var cfg = await loadCloudCfg();
+        await workerLoginByCurrentUser(cfg);
+        await probeWorkerSession(cfg, false);
+      }catch(e){
+        setCloudState({ ok:false, cfgOk:true, authState:"unauth" }, true);
+      }
       closeLogin();
       toast("登入成功");
-      setTimeout(async function(){
-        var cfg = await loadCloudCfg().catch(function(){ return null; });
-        await ensureWorkerAuthorization(cfg, true).catch(function(){});
-        refreshCloudAuthState().catch(function(){});
-        reconcileCloudOnOpen({ silent:true });
-      }, 60);
+      setTimeout(function(){ reconcileCloudOnOpen({ silent:true }); }, 60);
     }
 
     // ---------------------------
@@ -3435,7 +3375,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       toast("已儲存雲端設定");
       updateTokenHint();
       try{ hydrateCrossPageAuth(); }catch(e){}
-      cloudHealth().then(function(){ return refreshCloudAuthState(); }).catch(function(){});
+      cloudHealth();
     }
 
     function clearToken(){
@@ -3445,7 +3385,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       _cloudCfgCache = null;
       toast("已清除雲端設定");
       updateTokenHint();
-      cloudHealth().then(function(){ return refreshCloudAuthState(); }).catch(function(){});
+      cloudHealth();
     }
 
     function toggleTokenVis(){
@@ -3615,9 +3555,8 @@ $("btnSave").addEventListener("click", async function(){
         try{ refresh(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         try{ hydrateCrossPageAuth(); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
-        try{ await ensureWorkerAuthorization(null, false); }catch(e){}
-        try{ await refreshCloudAuthState(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
+        // ✅ 開頁同步策略：不再被登入顯示狀態阻斷，先同步資料，再由後續 bridge 回填使用者/權限。
         try{
           await reconcileCloudOnOpen({ silent:true });
           try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
