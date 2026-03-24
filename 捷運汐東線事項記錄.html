@@ -2058,6 +2058,11 @@ function getVisibleRows(){
       }
     }
 
+    function isAuthHttpStatus(status){
+      status = Number(status||0);
+      return status===401 || status===403;
+    }
+
     function cloudBadgeText(){
       var c = state.cloud || {};
       if(c.ok) return "已同步";
@@ -2759,6 +2764,7 @@ function getPromptOptions(mode){
             ok: reachable ? true : !!(state.cloud && state.cloud.ok),
             apiBase: apiBase,
             endpoints: eps || null,
+            authState: reachable ? "" : (state.cloud && state.cloud.authState ? state.cloud.authState : ""),
             lastOkAt: reachable ? Date.now() : (state.cloud && state.cloud.lastOkAt ? state.cloud.lastOkAt : "")
           }, true);
           return reachable;
@@ -2799,6 +2805,9 @@ function getPromptOptions(mode){
         });
         if(!r.ok){
           const t = await r.text().catch(()=> "");
+          if(isAuthHttpStatus(r.status)){
+            try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true); }catch(_e){}
+          }
           throw new Error("cloud read failed: " + r.status + " " + t.slice(0,200));
         }
         const j = await r.json();
@@ -2836,6 +2845,9 @@ function getPromptOptions(mode){
         });
         if(!r.ok){
           const t = await r.text().catch(()=> "");
+          if(isAuthHttpStatus(r.status)){
+            try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true); }catch(_e){}
+          }
           throw new Error("cloud merge failed: " + r.status + " " + t.slice(0,200));
         }
         const j = await r.json();
@@ -2857,12 +2869,9 @@ function getPromptOptions(mode){
         try{ hydrateCrossPageAuth(); }catch(e){}
         await cloudHealth(cfg);
 
-        // 1.5) 沒有 token / session 時，不直接打 read / merge，避免畫面一直停在「待同步」
-        if(!hasWorkerTokenReady()){
-          setCloudState({ ok:false, cfgOk:true, authState:"unauth" }, true);
-          if(!silent) toast("雲端未授權，請先登入或補 token");
-          return false;
-        }
+        // 1.5) 不預先以本地 token 存在與否判定未授權。
+        // 實際授權狀態以 Worker 真正回應為準，因為正式版可能透過 credentials/include 的 cookie / SSO 通行。
+        setCloudState({ authState:"" }, true);
 
         // 2) 先檢查本端資料；若本端已有資料，先送雲端 merge，避免本端較新的資料被空雲端覆蓋
         var localRows = (state.db||[]).map(ensureRowV1).filter(Boolean);
@@ -2900,6 +2909,7 @@ function getPromptOptions(mode){
           ok:true,
           cfgOk:true,
           reachable:true,
+          authState:"",
           lastOkAt: Date.now(),
           lastSyncAt: nowISO()
         }, false);
@@ -2925,11 +2935,7 @@ function getPromptOptions(mode){
 
       try{
         try{ hydrateCrossPageAuth(); }catch(e){}
-        if(!hasWorkerTokenReady()){
-          setCloudState({ ok:false, cfgOk:true, authState:"unauth" }, true);
-          if(!silent) toast("雲端未授權，請先登入或補 token");
-          return;
-        }
+        setCloudState({ authState:"" }, true);
         var remote = await cloudRead(cfg, PAGE_KEY);
 
         // If cloud is empty but local has data, offer to bootstrap to cloud (one-time)
@@ -2982,7 +2988,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         await saveLocal({ db: state.db, counter: state.counter });
 
         buildDictsFromDb();
-        setCloudState({ ok:true, cfgOk:true, reachable:true, lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
+        setCloudState({ ok:true, cfgOk:true, reachable:true, authState:"", lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
         refresh();
         if(!silent) toast("已從雲端更新");
       }catch(e){
@@ -3027,11 +3033,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
 
       try{
         try{ hydrateCrossPageAuth(); }catch(e){}
-        if(!hasWorkerTokenReady()){
-          setCloudState({ ok:false, cfgOk:true, authState:"unauth" }, true);
-          if(!silent) toast("雲端未授權，請先登入或補 token");
-          return;
-        }
+        setCloudState({ authState:"" }, true);
         var merged = await cloudMerge(cfg, PAGE_KEY, { db: sendRows, counter: state.counter }, {
           user: state.user || "",
           role: state.role || "",
@@ -3050,7 +3052,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         await saveLocal({ db: state.db, counter: state.counter });
 
         buildDictsFromDb();
-        setCloudState({ ok:true, cfgOk:true, reachable:true, lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
+        setCloudState({ ok:true, cfgOk:true, reachable:true, authState:"", lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
         refresh();
         if(!silent) toast(fullUpload ? "雲端同步完成（全量）" : "雲端同步完成（增量）");
       }catch(e){
