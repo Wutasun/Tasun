@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
-  <title>Tasun 權限表｜隔離修復測試版</title>
+  <title>Tasun 權限表</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
   <!-- ✅ Tasun v5：全站版本統一由 tasun-version-loader.js 控制，不再各頁各自寫死版號 -->
@@ -605,7 +605,6 @@
 
       <div class="header">
         <h1>Tasun 權限表</h1>
-      <p style="margin-top:6px;color:#ffd77a">隔離修復測試版：已停用外部雲端腳本，只驗證本機登入／權限／按鍵名稱資料鏈。</p>
         <p>
           只有 <b>admin</b> 可以編輯；其他權限只能查看。<br>
           ✅ 入口網頁下拉選單：會自動合併三個來源（內建清單 + resources.json(auth-table.entries/entryButtons) + routes/registry）。<br>
@@ -2790,7 +2789,8 @@ function safeJsonParse(s, fallback){
         };
       });
       writeNavButtons(updated);
-      setMsg('✅ 已儲存按鍵排序並同步（名稱、連結網址、target 會一起移動）。\n其他分頁（例如首頁）會自動更新。');
+      setMsg('✅ 已儲存按鍵排序並同步（名稱、連結網址、target 會一起移動）。
+其他分頁（例如首頁）會自動更新。');
       return;
     }
 
@@ -2849,17 +2849,11 @@ function safeJsonParse(s, fallback){
     applyEntrySelectionUI();
 
     renderAll();
-    updateStates(current && current.user && current.user !== '—' ? ('[隔離修復測試版] 已載入本機資料，目前使用者：' + current.user + '。') : '[隔離修復測試版] 已載入本機資料。');
+    updateStates(current && current.user && current.user !== '—' ? ('已載入本機資料，目前使用者：' + current.user + '。') : '已載入本機資料。');
 
     // 可見時仍保留舊 Dropbox pull（相容）；D1 已在上方優先拉取
     scheduleCloudPull('page-load');
   }
-
-  window.__ISOLATED_REPAIR__ = true;
-  const __origScheduleCloudPull = scheduleCloudPull;
-  scheduleCloudPull = function(){};
-  const __origD1PullAuthTable = d1PullAuthTable;
-  d1PullAuthTable = async function(){ return false; };
 
   window.addEventListener('storage', async (e) => {
     if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY){
@@ -2932,111 +2926,6 @@ function safeJsonParse(s, fallback){
 })();
 </script>
 
-<!-- 隔離修復測試版：停用外部 TasunCloudKit，先只驗證本機資料鏈 -->
-<script>
-(function(){
-  window.TasunCloudKit = window.TasunCloudKit || null;
-  console.info('[隔離修復測試版] 已停用外部 TasunCloudKit，自動上雲端/自動拉取暫停。');
-  var APP_VER = (window.__CACHE_V || (new URL(location.href)).searchParams.get('v') || '').trim();
-  var KEYS = [
-    'tasunAuthTable_v1',
-    'tasunPermMatrix_v1',
-    'tasunNavButtons_v1',
-    'tasunRoutes_v1',
-    'tasunEntrySelected_v1',
-    'tasunEntryRegistry_v1'
-  ];
-
-  function getLocal(){
-    var out=[];
-    for(var i=0;i<KEYS.length;i++){
-      var k=KEYS[i], v=localStorage.getItem(k);
-      if(v==null) continue;
-      out.push({ id:'ls:'+k, k:k, v:String(v), ts:Date.now() });
-    }
-    return out;
-  }
-
-  function apply(rows){
-    if(!Array.isArray(rows)) return;
-    var touched=[];
-    for(var i=0;i<rows.length;i++){
-      var r=rows[i];
-      if(!r||typeof r.k!=='string') continue;
-      if(r.v==null){
-        localStorage.removeItem(r.k);
-        touched.push(r.k);
-        continue;
-      }
-      localStorage.setItem(r.k, String(r.v));
-      touched.push(r.k);
-    }
-    // 觸發頁面內的監聽（用 storage event 模擬）
-    for(var j=0;j<touched.length;j++){
-      var key=touched[j];
-      try{ window.dispatchEvent(new StorageEvent('storage',{ key:key, storageArea:localStorage })); }
-      catch(e){ try{ window.dispatchEvent(new Event('storage')); }catch(_){ } }
-    }
-  }
-
-  if(!window.TasunCloudKit || !window.TasunCloudKit.init || !window.TasunCloudKit.mount){
-    console.warn('[權限表] TasunCloudKit not found.');
-    return;
-  }
-
-  window.TasunCloudKit.init({
-    appVer: APP_VER,
-    resourcesUrl: 'tasun-resources.json',
-    resourceKey: 'tasun-index-db',
-    pk: 'id',
-    ui: { enabled:false },
-    lock: { enabled:false },
-    getLocal: getLocal,
-    apply: apply
-  });
-
-  var ctrl = window.TasunCloudKit.mount();
-  // 讓主程式可以拿到 ctrl，做到「按鈕儲存也立即同步」
-  window.__TASUN_AUTH_CLOUD_CTRL = ctrl;
-
-  // 進站先拉一次
-  try{
-    ctrl && ctrl.pullNow && setTimeout(function(){ try{ ctrl.pullNow(); }catch(_){ } }, 250);
-  }catch(_){}
-
-  // 變更偵測（hash）→ 自動推（保底機制）
-  var lastHash = 0;
-  function hashNow(){
-    var h=2166136261>>>0;
-    for(var i=0;i<KEYS.length;i++){
-      var s=(localStorage.getItem(KEYS[i])||'');
-      for(var c=0;c<s.length;c++){
-        h^=s.charCodeAt(c);
-        h=Math.imul(h,16777619)>>>0;
-      }
-      h^=KEYS[i].length;
-    }
-    return h>>>0;
-  }
-
-  setInterval(function(){
-    var h=hashNow();
-    if(h!==lastHash){
-      lastHash=h;
-      try{ ctrl && ctrl.saveMerged && ctrl.saveMerged(); }catch(e){ }
-    }
-  }, 10000);
-
-  // 回前景自動拉（避免別台剛更新）
-  document.addEventListener('visibilitychange', function(){
-    if(document.visibilityState==='visible'){
-      try{ ctrl && ctrl.pullNow && ctrl.pullNow(); }catch(_){}
-    }
-  });
-})();
-</script>
-
-
-<script>document.write('<script src="' + ((window.__withV ? window.__withV("tasun-global-auth-v65.js") : "tasun-global-auth-v65.js")) + ""><\/script>');</script>
+<!-- 真隔離版：已移除頁尾 TasunCloudKit 與 tasun-global-auth-v65 外部鏈，僅保留本機資料鏈驗證。 -->
 </body>
 </html>
