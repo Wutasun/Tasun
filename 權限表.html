@@ -692,7 +692,7 @@
           </div>
           <div class="status">
             <div class="pill" id="tokenState">狀態：未設定 Token</div>
-            <div class="pill" id="cloudState">雲端：待機</div>
+            <div class="pill" id="cloudState">雲端：本機模式</div>
             <div class="pill" id="localState">本機：未儲存</div>
           </div>
         </div>
@@ -1034,46 +1034,16 @@
     if(Array.isArray(d.entryRegistry)) localStorage.setItem(ENTRY_REGISTRY_KEY, JSON.stringify(d.entryRegistry));
 
     localState.textContent = "本機：已更新";
-    cloudState.textContent = "雲端：已拉取" + (sourceTag ? ("（" + sourceTag + "）") : "");
+    cloudState.textContent = "雲端：本機模式" + (sourceTag ? ("（" + sourceTag + "）") : "");
     return true;
   }
 
   async function d1PullAuthTable(reason){
-    // ✅ 更積極：每次 load 都先拉一次（確保跨裝置一致）
-    try{
-      // 1) admin full
-      let r = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_FULL);
-      if(r.ok && r.json && r.json.ok){
-        applyAuthTableFromCloud(r.json, "admin");
-        return { ok:true, mode:"admin" };
-      }
-
-      // 2) public
-      r = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_PUB);
-      if(r.ok && r.json && r.json.ok){
-        applyAuthTableFromCloud(r.json, "public");
-        return { ok:true, mode:"public" };
-      }
-    }catch(_){}
-    return { ok:false };
+    return { ok:false, skipped:true, reason:"disabled_for_local_mode" };
   }
 
   async function d1PushAuthTable(reason){
-    try{
-      const role = (getEffectiveRole() || "read").toLowerCase();
-      if(role !== "admin"){
-        return { ok:false, skipped:true, reason:"not_admin" };
-      }
-      const payload = snapshotAuthTableForCloud();
-      const r = await d1PostJson(D1_AUTH_TABLE_ENDPOINT_ADMIN, payload);
-      if(r.ok && r.json && r.json.ok){
-        cloudState.textContent = "雲端：已寫入 D1";
-        return { ok:true };
-      }
-      return { ok:false, status:r.status, json:r.json };
-    }catch(e){
-      return { ok:false, error:String(e?.message||e) };
-    }
+    return { ok:false, skipped:true, reason:"disabled_for_local_mode" };
   }
 
 // ====== Auto cloud sync (TasunCloudKit) ======
@@ -1134,7 +1104,7 @@ function safeJsonParse(s, fallback){
 
   function setCloudState(text, isError=false){
     if(!cloudState) return;
-    cloudState.textContent = text || '雲端：待機';
+    cloudState.textContent = text || '雲端：本機模式';
     cloudState.style.color = isError ? 'rgba(255,170,170,.95)' : 'rgba(246,211,122,.92)';
   }
 
@@ -1725,12 +1695,12 @@ function safeJsonParse(s, fallback){
       }));
       btnMeta = currentEntryButtons.map(x => ({ ...x }));
     }else{
-      const extracted = await extractEntryButtonsFromPage(entry);
-      if(Array.isArray(extracted) && extracted.length){
-        btnMeta = extracted.map(x => ({ ...x }));
+      const fallback = getEntryButtonsFromDefaults(entry);
+      if(Array.isArray(fallback) && fallback.length){
+        btnMeta = fallback.map(x => ({ ...x }));
       }else{
-        const fallback = getEntryButtonsFromDefaults(entry);
-        btnMeta = Array.isArray(fallback) && fallback.length ? fallback : buildFallbackButtons(5);
+        const extracted = await extractEntryButtonsFromPage(entry);
+        btnMeta = Array.isArray(extracted) && extracted.length ? extracted.map(x => ({ ...x })) : buildFallbackButtons(5);
       }
       currentEntryButtons = (Array.isArray(btnMeta) ? btnMeta : []).map(x => ({ ...x }));
     }
@@ -2449,25 +2419,10 @@ function safeJsonParse(s, fallback){
   }
 
   function isSystemPermissionButton(it){
-    const sourceId = String(it?.sourceId || it?.id || it?.key || '').trim().toLowerCase();
-    const rawLabel = String(it?.label || it?.name || it?.title || '').trim();
+    const sourceId = String(it?.sourceId || it?.id || '').trim().toLowerCase();
+    const label = String(it?.label || '').trim();
     const href = String(it?.href || '').trim();
-    const normalizedLabel = rawLabel
-      .replace(/[／\/｜|·•．。\-－_（）()\[\]【】\s]/g, '')
-      .toLowerCase();
-    const normalizedSource = sourceId.replace(/[／\/｜|·•．。\-－_（）()\[\]【】\s]/g, '');
-
-    return (
-      sourceId === 'auth' ||
-      normalizedSource === 'auth' ||
-      normalizedSource.includes('systemauth') ||
-      normalizedSource.includes('xidongauth') ||
-      /權限表\.html$/i.test(href) ||
-      /系統\s*[\/／\]\s*權限/.test(rawLabel) ||
-      normalizedLabel === '系統權限' ||
-      normalizedLabel.includes('系統權限') ||
-      normalizedLabel.includes('權限表')
-    );
+    return sourceId === 'auth' || /權限表\.html$/i.test(href) || /系統\s*[\/／]\s*權限/.test(label) || /權限表/.test(label);
   }
 
   function renderNavRows(count){
@@ -2895,116 +2850,7 @@ function safeJsonParse(s, fallback){
 })();
 </script>
 
-<!-- ✅✅✅ [段落 #1] tasun-cloud-kit.js（版本需與本頁 APP_VER 一致） -->
-<script>document.write('<script src="' + ((window.__withV ? window.__withV("tasun-cloud-kit.js") : "tasun-cloud-kit.js")) + ""><\/script>');</script>
-
-<!-- ✅✅✅ [段落 #2] 永遠自動上雲端（TasunCloudKit）
-     - 同步本頁關鍵 localStorage keys
-     - pullNow：進站/回前景自動拉
-     - saveMerged：偵測變更自動推
--->
-<script>
-(function(){
-  var APP_VER = (window.__CACHE_V || (new URL(location.href)).searchParams.get('v') || '').trim();
-  var KEYS = [
-    'tasunAuthTable_v1',
-    'tasunPermMatrix_v1',
-    'tasunNavButtons_v1',
-    'tasunRoutes_v1',
-    'tasunEntrySelected_v1',
-    'tasunEntryRegistry_v1'
-  ];
-
-  function getLocal(){
-    var out=[];
-    for(var i=0;i<KEYS.length;i++){
-      var k=KEYS[i], v=localStorage.getItem(k);
-      if(v==null) continue;
-      out.push({ id:'ls:'+k, k:k, v:String(v), ts:Date.now() });
-    }
-    return out;
-  }
-
-  function apply(rows){
-    if(!Array.isArray(rows)) return;
-    var touched=[];
-    for(var i=0;i<rows.length;i++){
-      var r=rows[i];
-      if(!r||typeof r.k!=='string') continue;
-      if(r.v==null){
-        localStorage.removeItem(r.k);
-        touched.push(r.k);
-        continue;
-      }
-      localStorage.setItem(r.k, String(r.v));
-      touched.push(r.k);
-    }
-    // 觸發頁面內的監聽（用 storage event 模擬）
-    for(var j=0;j<touched.length;j++){
-      var key=touched[j];
-      try{ window.dispatchEvent(new StorageEvent('storage',{ key:key, storageArea:localStorage })); }
-      catch(e){ try{ window.dispatchEvent(new Event('storage')); }catch(_){ } }
-    }
-  }
-
-  if(!window.TasunCloudKit || !window.TasunCloudKit.init || !window.TasunCloudKit.mount){
-    console.warn('[權限表] TasunCloudKit not found.');
-    return;
-  }
-
-  window.TasunCloudKit.init({
-    appVer: APP_VER,
-    resourcesUrl: 'tasun-resources.json',
-    resourceKey: 'tasun-index-db',
-    pk: 'id',
-    ui: { enabled:false },
-    lock: { enabled:false },
-    getLocal: getLocal,
-    apply: apply
-  });
-
-  var ctrl = window.TasunCloudKit.mount();
-  // 讓主程式可以拿到 ctrl，做到「按鈕儲存也立即同步」
-  window.__TASUN_AUTH_CLOUD_CTRL = ctrl;
-
-  // 進站先拉一次
-  try{
-    ctrl && ctrl.pullNow && setTimeout(function(){ try{ ctrl.pullNow(); }catch(_){ } }, 250);
-  }catch(_){}
-
-  // 變更偵測（hash）→ 自動推（保底機制）
-  var lastHash = 0;
-  function hashNow(){
-    var h=2166136261>>>0;
-    for(var i=0;i<KEYS.length;i++){
-      var s=(localStorage.getItem(KEYS[i])||'');
-      for(var c=0;c<s.length;c++){
-        h^=s.charCodeAt(c);
-        h=Math.imul(h,16777619)>>>0;
-      }
-      h^=KEYS[i].length;
-    }
-    return h>>>0;
-  }
-
-  setInterval(function(){
-    var h=hashNow();
-    if(h!==lastHash){
-      lastHash=h;
-      try{ ctrl && ctrl.saveMerged && ctrl.saveMerged(); }catch(e){ }
-    }
-  }, 10000);
-
-  // 回前景自動拉（避免別台剛更新）
-  document.addEventListener('visibilitychange', function(){
-    if(document.visibilityState==='visible'){
-      try{ ctrl && ctrl.pullNow && ctrl.pullNow(); }catch(_){}
-    }
-  });
-})();
-</script>
 
 
-<script>document.write('<script src="' + ((window.__withV ? window.__withV("tasun-global-auth-v65.js") : "tasun-global-auth-v65.js")) + ""><\/script>');</script>
 </body>
 </html>
