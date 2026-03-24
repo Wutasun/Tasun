@@ -2065,10 +2065,11 @@ function getVisibleRows(){
 
     function cloudBadgeText(){
       var c = state.cloud || {};
-      if(c.ok) return "已同步";
       if(c.authState==="unauth") return "未授權";
+      if(c.authState==="forbidden") return "權限不足";
       if(c.authState==="expired") return "授權失敗";
       if(c.reachable===false && c.cfgOk) return "連線失敗";
+      if(c.ok && c.lastSyncAt) return "已同步";
       if(c.cfgOk) return "待同步";
       return "未設定";
     }
@@ -2757,14 +2758,14 @@ function getPromptOptions(mode){
               if(r.ok){ reachable = true; break; }
             }catch(_e){}
           }
-          // ✅ 健康檢查只代表 Worker 可達，不代表資料已完成同步。
+          // ✅ 健康檢查只代表 Worker 可達，不代表資料已完成同步或已授權。
           setCloudState({
             cfgOk: cfgOk,
             reachable: reachable,
-            ok: reachable ? true : !!(state.cloud && state.cloud.ok),
+            ok: !!(state.cloud && state.cloud.ok),
             apiBase: apiBase,
             endpoints: eps || null,
-            authState: reachable ? "" : (state.cloud && state.cloud.authState ? state.cloud.authState : ""),
+            authState: reachable ? (state.cloud && state.cloud.authState ? state.cloud.authState : "") : (state.cloud && state.cloud.authState ? state.cloud.authState : ""),
             lastOkAt: reachable ? Date.now() : (state.cloud && state.cloud.lastOkAt ? state.cloud.lastOkAt : "")
           }, true);
           return reachable;
@@ -2806,7 +2807,7 @@ function getPromptOptions(mode){
         if(!r.ok){
           const t = await r.text().catch(()=> "");
           if(isAuthHttpStatus(r.status)){
-            try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true); }catch(_e){}
+            try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:(r.status===403?"forbidden":"unauth") }, true); }catch(_e){}
           }
           throw new Error("cloud read failed: " + r.status + " " + t.slice(0,200));
         }
@@ -2846,13 +2847,56 @@ function getPromptOptions(mode){
         if(!r.ok){
           const t = await r.text().catch(()=> "");
           if(isAuthHttpStatus(r.status)){
-            try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true); }catch(_e){}
+            try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:(r.status===403?"forbidden":"unauth") }, true); }catch(_e){}
           }
           throw new Error("cloud merge failed: " + r.status + " " + t.slice(0,200));
         }
         const j = await r.json();
         return _normalizePullResponse(j);
       }
+
+    async function detectCloudAuthState(cfg){
+      cfg = cfg || await loadCloudCfg();
+      if(!cfg || !isValidApiBase(cfg.apiBase)){
+        return { auth:false, text:"未設定", status:0 };
+      }
+      var url = joinApiBase(cfg.apiBase, "/api/tasun/me");
+      try{
+        var res = await fetch(url, {
+          method: "GET",
+          cache: "no-store",
+          credentials: getWorkerCredentialMode(cfg),
+          headers: buildWorkerAuthHeaders({ "accept":"application/json" })
+        });
+        if(res.status===200) return { auth:true, text:"已授權", status:200 };
+        if(res.status===401) return { auth:false, text:"未授權", status:401 };
+        if(res.status===403) return { auth:false, text:"權限不足", status:403 };
+        if(res.status===404) return { auth:false, text:"端點不存在", status:404 };
+        return { auth:false, text:"狀態異常", status:res.status||0 };
+      }catch(e){
+        return { auth:false, text:"連線失敗", status:0 };
+      }
+    }
+
+    async function refreshCloudAuthState(cfg){
+      cfg = cfg || await loadCloudCfg();
+      var info = await detectCloudAuthState(cfg);
+      if(info.status===200){
+        setCloudState({ cfgOk:true, reachable:true, authState:"" }, true);
+      }else if(info.status===401){
+        setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true);
+      }else if(info.status===403){
+        setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"forbidden" }, true);
+      }else if(info.status===404){
+        setCloudState({ ok:false, cfgOk:true, reachable:false }, true);
+      }else if(info.status===0){
+        setCloudState({ ok:false, cfgOk:true, reachable:false }, true);
+      }else{
+        setCloudState({ ok:false, cfgOk:true, reachable:true }, true);
+      }
+      return info;
+    }
+
     async function reconcileCloudOnOpen(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
       var silent = (opts.silent!==false);
@@ -2869,9 +2913,8 @@ function getPromptOptions(mode){
         try{ hydrateCrossPageAuth(); }catch(e){}
         await cloudHealth(cfg);
 
-        // 1.5) 不預先以本地 token 存在與否判定未授權。
-        // 實際授權狀態以 Worker 真正回應為準，因為正式版可能透過 credentials/include 的 cookie / SSO 通行。
-        setCloudState({ authState:"" }, true);
+        // 1.5) 以 Worker /api/tasun/me 真正回應判定授權狀態，不再只看本機 token
+        await refreshCloudAuthState(cfg);
 
         // 2) 先檢查本端資料；若本端已有資料，先送雲端 merge，避免本端較新的資料被空雲端覆蓋
         var localRows = (state.db||[]).map(ensureRowV1).filter(Boolean);
@@ -3185,8 +3228,11 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       applyUser(cur);
       closeLogin();
       toast("登入成功");
-      // ✅ 登入後立即做一次「本端先 merge，再重抓雲端」
-      setTimeout(function(){ reconcileCloudOnOpen({ silent:true }); }, 60);
+      // ✅ 登入後立即重抓授權狀態，再做一次「本端先 merge，再重抓雲端」
+      setTimeout(function(){
+        refreshCloudAuthState().catch(function(){});
+        reconcileCloudOnOpen({ silent:true });
+      }, 60);
     }
 
     // ---------------------------
@@ -3247,7 +3293,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       toast("已儲存雲端設定");
       updateTokenHint();
       try{ hydrateCrossPageAuth(); }catch(e){}
-      cloudHealth();
+      cloudHealth().then(function(){ return refreshCloudAuthState(); }).catch(function(){});
     }
 
     function clearToken(){
@@ -3257,7 +3303,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       _cloudCfgCache = null;
       toast("已清除雲端設定");
       updateTokenHint();
-      cloudHealth();
+      cloudHealth().then(function(){ return refreshCloudAuthState(); }).catch(function(){});
     }
 
     function toggleTokenVis(){
@@ -3427,6 +3473,7 @@ $("btnSave").addEventListener("click", async function(){
         try{ refresh(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         try{ hydrateCrossPageAuth(); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
+        try{ await refreshCloudAuthState(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         // ✅ 開頁同步策略：不再被登入顯示狀態阻斷，先同步資料，再由後續 bridge 回填使用者/權限。
         try{
