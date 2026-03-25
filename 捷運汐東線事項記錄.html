@@ -540,9 +540,6 @@
 })();
 </script>
 
-  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-guard-v5.js")) || "tasun-guard-v5.js") + '"><\/script>');</script>
-  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-cloudwrap-v4.js")) || "tasun-cloudwrap-v4.js") + '"><\/script>');</script>
-  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-auth-v4.js")) || "tasun-auth-v4.js") + '"><\/script>');</script>
 <!-- Tasun Global Core bridge -->
 <script src="tasun-global-core.js"></script>
 <script>
@@ -2023,29 +2020,6 @@ function getVisibleRows(){
       var n = Date.parse(t);
       return Number.isFinite(n) ? n : 0;
     }
-    function rowFingerprint(r){
-      r = ensureRowV1(r);
-      if(!r) return "";
-      return [
-        PAGE_KEY,
-        norm(r.date),
-        norm(r.trade),
-        norm(r.sys),
-        norm(r.source),
-        norm(r.attach),
-        norm(r.remark),
-        norm(r.text),
-        String(!!r.deleted)
-      ].join("|");
-    }
-
-    function resequenceRows(arr){
-      arr = Array.isArray(arr) ? arr : [];
-      for(var i=0;i<arr.length;i++){
-        if(arr[i]) arr[i].id = i + 1;
-      }
-      return arr;
-    }
 
     // ---------------------------
     // State
@@ -2162,41 +2136,34 @@ function getVisibleRows(){
     }
 
     function mergePayload(remote, local){
+      // payload: {db:[rows], counter}
       var ldb = (local && Array.isArray(local.db)) ? local.db : [];
       var rdb = (remote && Array.isArray(remote.db)) ? remote.db : [];
 
-      var byUid = new Map();
-      function putUid(x){
+      var map = new Map();
+      function put(x){
         var r = ensureRowV1(x);
         if(!r) return;
-        var key = norm(r.uid);
-        if(!key) return;
-        if(!byUid.has(key)) byUid.set(key, r);
-        else byUid.set(key, mergeTwo(byUid.get(key), r));
+        var key = r.uid;
+        if(!map.has(key)) map.set(key, r);
+        else map.set(key, mergeTwo(map.get(key), r));
       }
-      ldb.forEach(putUid);
-      rdb.forEach(putUid);
+      ldb.forEach(put);
+      rdb.forEach(put);
 
-      var byFp = new Map();
-      Array.from(byUid.values()).forEach(function(r){
-        var fp = rowFingerprint(r) || ("uid|" + norm(r.uid));
-        if(!byFp.has(fp)) byFp.set(fp, r);
-        else byFp.set(fp, mergeTwo(byFp.get(fp), r));
-      });
-
-      var outDb = Array.from(byFp.values());
+      var outDb = Array.from(map.values());
+      // keep stable order: by date desc then updatedAt desc, else uid
       outDb.sort(function(a,b){
         var da = norm(a.date), db = norm(b.date);
         if(da && db && da!==db) return db.localeCompare(da);
         var ta = tsOf(a), tb = tsOf(b);
         if(tb!==ta) return tb-ta;
-        var ra = norm(a.rev), rb = norm(b.rev);
-        if(ra!==rb) return rb.localeCompare(ra);
         return norm(a.uid).localeCompare(norm(b.uid));
       });
 
-      resequenceRows(outDb);
-      return { db: outDb, counter: outDb.length };
+      var lc = Number(local && local.counter || 0) || 0;
+      var rc = Number(remote && remote.counter || 0) || 0;
+      return { db: outDb, counter: Math.max(lc, rc) };
     }
 
     // ---------------------------
@@ -2805,17 +2772,12 @@ function getPromptOptions(mode){
       }
 
       function _normalizePullResponse(json){
-        var j = (json && typeof json==="object") ? json : {};
-        var payload = (j.payload && typeof j.payload==="object") ? j.payload
-          : (j.data && typeof j.data==="object") ? j.data
-          : j;
-        var db = Array.isArray(payload.db) ? payload.db
-          : Array.isArray(payload.rows) ? payload.rows
-          : Array.isArray(payload.items) ? payload.items
-          : [];
-        var counter = Number.isFinite(Number(payload.counter)) ? Number(payload.counter)
-          : Array.isArray(db) ? db.length : 0;
-        return { db: db, counter: counter };
+        // Accept both {ok:true,payload:{db,counter}} and legacy {payload:{...}} and raw payload.
+        const j = (json && typeof json==="object") ? json : {};
+        const payload = (j.payload && typeof j.payload==="object") ? j.payload : (j.data && typeof j.data==="object") ? j.data : j;
+        const db = Array.isArray(payload.db) ? payload.db : (Array.isArray(payload.items) ? payload.items : []);
+        const counter = Number.isFinite(Number(payload.counter)) ? Number(payload.counter) : 0;
+        return { db, counter };
       }
 
       async function cloudRead(cfg, pageKey){
@@ -2888,40 +2850,61 @@ function getPromptOptions(mode){
       }
 
       try{
+        // 1) 先確認 Worker 可達
         try{ hydrateCrossPageAuth(); }catch(e){}
         await cloudHealth(cfg);
-        await refreshCloudAuthState(cfg);
 
-        var localPack = { db:(state.db||[]).map(ensureRowV1).filter(Boolean), counter: Number(state.counter||0)||0 };
-        var remotePack = await cloudRead(cfg, PAGE_KEY);
-        var mergedPack = mergePayload(remotePack, localPack);
+        // 1.5) 沒有 token / session 時，不直接打 read / merge，避免畫面一直停在「待同步」
+        if(!hasWorkerTokenReady()){
+          setCloudState({ ok:false, cfgOk:true, authState:"unauth" }, true);
+          if(!silent) toast("雲端未授權，請先登入或補 token");
+          return false;
+        }
 
-        await cloudMerge(cfg, PAGE_KEY, { db: mergedPack.db, counter: mergedPack.counter }, {
-          user: state.user || "",
-          role: state.role || "",
-          appVer: APP_VER,
-          clientId: state.clientId || getClientId(),
-          at: nowISO(),
-          reason: opts.reason || "fixed-v1-reconcile"
-        });
+        // 2) 先檢查本端資料；若本端已有資料，先送雲端 merge，避免本端較新的資料被空雲端覆蓋
+        var localRows = (state.db||[]).map(ensureRowV1).filter(Boolean);
+        var remoteOrMerged = null;
 
+        if(localRows.length>0){
+          try{ hydrateCrossPageAuth(); }catch(e){}
+          remoteOrMerged = await cloudMerge(cfg, PAGE_KEY, { db: localRows, counter: state.counter }, {
+            user: state.user || "",
+            role: state.role || "",
+            appVer: APP_VER,
+            clientId: state.clientId || getClientId(),
+            at: nowISO(),
+            reason: "boot-reconcile-local-first"
+          });
+        }else{
+          try{ hydrateCrossPageAuth(); }catch(e){}
+          remoteOrMerged = await cloudRead(cfg, PAGE_KEY);
+        }
+
+        // 3) 再抓一次最新雲端資料，確保拿到 merge 後的最終狀態（多人/多設備一致）
+        try{ hydrateCrossPageAuth(); }catch(e){}
         var remoteFinal = await cloudRead(cfg, PAGE_KEY);
-        var finalPack = mergePayload(remoteFinal, { db:[], counter: mergedPack.counter });
+        var out = mergePayload(remoteFinal || remoteOrMerged, { db: state.db, counter: state.counter });
 
-        state.db = finalPack.db;
-        state.counter = finalPack.counter;
+        state.db = out.db;
+        state.counter = out.counter;
         state.lastSyncAt = Date.now();
 
         try{ await idbClearOps(PAGE_KEY); }catch(e){}
         await saveLocal({ db: state.db, counter: state.counter });
         buildDictsFromDb();
 
-        setCloudState({ ok:true, cfgOk:true, reachable:true, authState:"", lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
+        setCloudState({
+          ok:true,
+          cfgOk:true,
+          reachable:true,
+          lastOkAt: Date.now(),
+          lastSyncAt: nowISO()
+        }, false);
         refresh();
         if(!silent) toast("已完成開啟同步");
         return true;
       }catch(e){
-        setCloudState({ ok:false, cfgOk:true, reachable:true }, true);
+        setCloudState({ ok:false }, true);
         if(!silent) toast("開啟同步失敗：" + (e && e.message ? e.message : String(e)));
         return false;
       }
@@ -2929,7 +2912,80 @@ function getPromptOptions(mode){
 
     async function syncFromCloud(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
-      return await reconcileCloudOnOpen({ silent: !!opts.silent, reason: "manual-from-cloud-fixed-v2" });
+      var silent = !!opts.silent;
+
+      var cfg = await loadCloudCfg();
+      if(!cfg || !isValidApiBase(cfg.apiBase)){
+        if(!silent) toast("雲端未設定/無效"); 
+        return;
+      }
+
+      try{
+        try{ hydrateCrossPageAuth(); }catch(e){}
+        if(!hasWorkerTokenReady()){
+          setCloudState({ ok:false, cfgOk:true, authState:"unauth" }, true);
+          if(!silent) toast("雲端未授權，請先登入或補 token");
+          return;
+        }
+        var remote = await cloudRead(cfg, PAGE_KEY);
+
+        // If cloud is empty but local has data, offer to bootstrap to cloud (one-time)
+        var cloudEmpty = !remote || !Array.isArray(remote.db) || remote.db.length===0;
+        var localHas = Array.isArray(state.db) && state.db.length>0;
+        var bootKey = "tasunCloudBooted_" + PAGE_KEY;
+        var autoFillKey = "tasunCloudAutoFill_" + PAGE_KEY;
+        var localDb = (state.db || []);
+        var remoteDb = (remote && remote.payload && Array.isArray(remote.payload.db)) ? remote.payload.db : [];
+
+        function _uid(x){
+          if(!x) return "";
+          return String(x.uid || x.pk || x.Uid || x.ID || x.id || "");
+        }
+
+        var rSet = new Set(remoteDb.map(_uid).filter(Boolean));
+        var missing = localDb.filter(function(it){
+          var u = _uid(it);
+          return u && !rSet.has(u);
+        });
+
+        var remoteEmpty = (!remoteDb || remoteDb.length === 0);
+        var localHas = (localDb.length > 0);
+
+        // Auto bootstrap when cloud empty OR auto-fill when cloud has fewer items than local.
+        // Run once per page-load to avoid loops.
+        if(localHas && (remoteEmpty || missing.length > 0) && !sessionStorage.getItem(autoFillKey)){
+          sessionStorage.setItem(autoFillKey, "1");
+          try{
+            var reason = remoteEmpty ? "auto-bootstrap-cloud-empty" : "auto-fill-cloud-missing";
+            try{ hydrateCrossPageAuth(); }catch(e){}
+            var merged = await cloudMerge({ payload: { db: localDb, counter: state.counter }, reason: reason });
+            if(merged && merged.ok && merged.payload){
+              remote = merged; // use merged payload as latest remote snapshot
+              if(remoteEmpty) localStorage.setItem(bootKey, "1");
+              toast(remoteEmpty
+                ? ("雲端空白，已自動倒入本機資料：" + localDb.length + " 筆")
+                : ("已自動補齊雲端缺少資料：" + missing.length + " 筆"), "ok");
+            }
+          }catch(e){
+            toast("雲端自動補齊失敗：" + (e && (e.message||e) ? (e.message||e) : e), "warn");
+          }
+        }
+var out = mergePayload(remote, { db: state.db, counter: state.counter });
+        state.db = out.db;
+        state.counter = out.counter;
+
+        state.lastSyncAt = Date.now();
+        await idbClearOps(PAGE_KEY);
+        await saveLocal({ db: state.db, counter: state.counter });
+
+        buildDictsFromDb();
+        setCloudState({ ok:true, cfgOk:true, reachable:true, lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
+        refresh();
+        if(!silent) toast("已從雲端更新");
+      }catch(e){
+        setCloudState({ ok:false }, true);
+        if(!silent) toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
+      }
     }
     async function syncToCloud(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
@@ -3402,7 +3458,5 @@ $("btnSave").addEventListener("click", async function(){
   })();
   </script>
 
-<script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-global-auth-v65.js")) || "tasun-global-auth-v65.js") + '"><\/script>');</script>
-<script>window.TasunGuardV4 && window.TasunGuardV4.boot({ pageKey: "捷運汐東線事項記錄.html" });</script>
 </body>
 </html>
