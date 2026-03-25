@@ -596,26 +596,14 @@
       const AUTH_CHANNEL_NAME = 'tasun_auth_channel_v1';
       const authChannel = (function(){ try{ return ('BroadcastChannel' in window) ? new BroadcastChannel(AUTH_CHANNEL_NAME) : null; }catch(e){ return null; }})();
 
-      const METRO_ID    = 'btn2';
-      const METRO_HREF  = '汐東工程管理表.html';
-      const FIXED_ROUTES = {
-        '捷運汐東線事項紀錄': '捷運汐東線事項記錄.html',
-        '捷運汐東線事項記錄': '捷運汐東線事項記錄.html',
-        '捷運汐東線事項紀錄.html': '捷運汐東線事項記錄.html',
-        '捷運汐東線事項記錄.html': '捷運汐東線事項記錄.html',
-        '捷運汐東線記事': '捷運汐東線事項記錄.html',
-        '捷運汐東線記事.html': '捷運汐東線事項記錄.html',
-        '捷運汐東線事項記錄': '捷運汐東線事項記錄.html',
-        '捷運汐東線事項記錄.html': '捷運汐東線事項記錄.html',
-        '臻鼎時代大廈管理表': '臻鼎管理表.html',
-        '臻鼎時代大廈管理表.html': '臻鼎管理表.html',
-        '臻鼎管理表': '臻鼎管理表.html',
-        '臻鼎管理表.html': '臻鼎管理表.html',
-        '工程資料庫': '工程資料庫.html',
-        '工程資料庫.html': '工程資料庫.html',
-        '雲端檔案': 'https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88'
-      };
       const LEGACY_BUTTON_KEYS = ['btn1','btn2','btn3','btn4','btn5'];
+      const HOME_BUTTON_LIBRARY = [
+        { sourceId:'metro',    id:'btn1', label:'捷運汐止東湖線',     href:'汐東工程管理表.html', target:'', roles:['admin','write','read'] },
+        { sourceId:'engdb',    id:'btn2', label:'工程資料庫',         href:'工程資料庫.html',     target:'', roles:['admin','write','read'] },
+        { sourceId:'zhending', id:'btn3', label:'臻鼎時代大廈管理表', href:'臻鼎管理表.html',     target:'', roles:['admin','write','read'] },
+        { sourceId:'cloud',    id:'btn4', label:'雲端檔案',           href:'https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav', target:'_blank', roles:['admin','write','read'] },
+        { sourceId:'auth',     id:'btn5', label:'系統/權限',         href:'權限表.html',         target:'', roles:['admin'] }
+      ];
 
       const bootCover    = document.getElementById('bootCover');
       const loginOverlay = $('#loginOverlay');
@@ -968,48 +956,97 @@
       window.addEventListener('pagehide', tryExportOnExit, { passive:true });
       document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'hidden') tryExportOnExit(); }, { passive:true });
 
-      function applyFixedRoutes(obj){ const out = (obj && typeof obj === 'object') ? { ...obj } : {}; Object.keys(FIXED_ROUTES).forEach(k => { out[k] = FIXED_ROUTES[k]; }); out[METRO_ID] = METRO_HREF; out.systemBtn = out.systemBtn || '權限表.html'; return out; }
-      function loadRoutes(){
-        const seed = applyFixedRoutes({
-          btn1: '臻鼎管理表.html',
-          btn3: 'https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88',
-          systemBtn: '權限表.html',
-          [METRO_ID]: METRO_HREF,
-          '臻鼎時代大廈管理表': '臻鼎管理表.html'
+      function getHomeButtonLibrary(){
+        return HOME_BUTTON_LIBRARY.map((it, idx) => ({
+          id: String(it.id || `btn${idx+1}`).trim() || `btn${idx+1}`,
+          sourceId: String(it.sourceId || `btn${idx+1}`).trim() || `btn${idx+1}`,
+          label: String(it.label || `btn${idx+1}`).trim() || `btn${idx+1}`,
+          href: String(it.href || '').trim(),
+          target: String(it.target || '').trim(),
+          roles: Array.isArray(it.roles) ? it.roles.slice() : ['admin','write','read']
+        }));
+      }
+      function getHomeLibraryBySourceId(sourceId){
+        const sid = String(sourceId || '').trim();
+        return getHomeButtonLibrary().find(it => it.sourceId === sid) || null;
+      }
+      function inferHomeSourceId(hit, fallbackId){
+        const rawSourceId = String(hit?.sourceId || '').trim();
+        const library = getHomeButtonLibrary();
+        if(rawSourceId && library.some(it => it.sourceId === rawSourceId)) return rawSourceId;
+        const href = String(hit?.href || '').trim();
+        if(href){
+          const byHref = library.find(it => String(it.href || '').trim() === href);
+          if(byHref) return byHref.sourceId;
+        }
+        const label = String(hit?.label || '').trim();
+        if(label){
+          const byLabel = library.find(it => String(it.label || '').trim() === label);
+          if(byLabel) return byLabel.sourceId;
+        }
+        const id = String(hit?.id || fallbackId || '').trim();
+        const match = id.match(/^btn(\d+)$/i);
+        if(match){
+          const idx = Number(match[1]) - 1;
+          if(library[idx]) return library[idx].sourceId;
+        }
+        return String(fallbackId || rawSourceId || '').trim();
+      }
+      function mirrorRoutesFromNav(nav){
+        const routes = {};
+        (Array.isArray(nav) ? nav : []).forEach((item, idx) => {
+          const id = String(item?.id || `btn${idx+1}`).trim() || `btn${idx+1}`;
+          const label = String(item?.label || '').trim();
+          const href = String(item?.href || '').trim();
+          if(!href) return;
+          routes[id] = href;
+          if(label) routes[label] = href;
         });
-        const raw = localStorage.getItem(ROUTE_KEY);
-        if(!raw){ localStorage.setItem(ROUTE_KEY, JSON.stringify(seed, null, 2)); return seed; }
-        const parsed = safeJsonParse(raw, null);
-        const base = (parsed && typeof parsed === 'object') ? parsed : {};
-        const merged = applyFixedRoutes({ ...base, ...seed });
-        if(JSON.stringify(base) !== JSON.stringify(merged)) localStorage.setItem(ROUTE_KEY, JSON.stringify(merged, null, 2));
-        return merged;
+        try{ localStorage.setItem(ROUTE_KEY, JSON.stringify(routes, null, 2)); }catch(e){}
+        try{ localStorage.setItem('tasunRoutes_v1', JSON.stringify(routes, null, 2)); }catch(e){}
+        return routes;
       }
-      function loadNavButtonsSeedIfMissing(){
-        const seed = [
-          { id:'btn1', label:'臻鼎時代大廈管理表' },
-          { id:'btn2', label:'捷運汐止東湖線' },
-          { id:'btn3', label:'雲端檔案' },
-          { id:'btn4', label:'工程資料庫' },
-          { id:'btn5', label:'資料庫' }
-        ];
-        const raw = localStorage.getItem(NAV_KEY);
-        if(!raw){ localStorage.setItem(NAV_KEY, JSON.stringify(seed)); return seed; }
-        const arr = safeJsonParse(raw, null);
-        if(Array.isArray(arr) && arr.length) return arr;
-        localStorage.setItem(NAV_KEY, JSON.stringify(seed));
-        return seed;
-      }
-      function resolveHref(cfg, routes){
-        const id = String(cfg?.id || '').trim();
-        const label = String(cfg?.label || '').trim();
-        if(label && FIXED_ROUTES[label]) return FIXED_ROUTES[label];
-        if(id === METRO_ID) return METRO_HREF;
-        if(routes && routes[id]) return routes[id];
-        if(routes && label && routes[label]) return routes[label];
-        const guess = labelToFile(label);
-        if(FIXED_ROUTES[guess]) return FIXED_ROUTES[guess];
-        return guess;
+      function loadHomeNavSingleSource(){
+        const library = getHomeButtonLibrary();
+        const raw = safeJsonParse(localStorage.getItem(NAV_KEY) || 'null', null);
+        let nav = [];
+        if(Array.isArray(raw) && raw.length){
+          nav = raw.map((hit, idx) => {
+            const id = `btn${idx+1}`;
+            const sourceId = inferHomeSourceId(hit, id) || id;
+            const lib = getHomeLibraryBySourceId(sourceId) || library[idx] || null;
+            return {
+              id,
+              sourceId: String(sourceId || id).trim() || id,
+              label: String(hit?.label || lib?.label || id).trim() || id,
+              href: String(hit?.href || lib?.href || '').trim(),
+              target: String(hit?.target || lib?.target || '').trim(),
+              roles: Array.isArray(hit?.roles) ? hit.roles.slice() : (Array.isArray(lib?.roles) ? lib.roles.slice() : ['admin','write','read'])
+            };
+          }).filter(row => row.label && row.href);
+        }
+        if(!nav.length){
+          nav = library.map((it, idx) => ({
+            id: `btn${idx+1}`,
+            sourceId: it.sourceId,
+            label: it.label,
+            href: it.href,
+            target: it.target,
+            roles: Array.isArray(it.roles) ? it.roles.slice() : ['admin','write','read']
+          }));
+        }
+        nav = nav.slice(0, LEGACY_BUTTON_KEYS.length).map((row, idx) => ({
+          id: `btn${idx+1}`,
+          sourceId: String(row?.sourceId || row?.id || `btn${idx+1}`).trim() || `btn${idx+1}`,
+          label: String(row?.label || `btn${idx+1}`).trim() || `btn${idx+1}`,
+          href: String(row?.href || '').trim(),
+          target: String(row?.target || '').trim(),
+          roles: Array.isArray(row?.roles) ? row.roles.slice() : ['admin','write','read']
+        }));
+        const json = JSON.stringify(nav);
+        if(localStorage.getItem(NAV_KEY) !== json) localStorage.setItem(NAV_KEY, json);
+        mirrorRoutesFromNav(nav);
+        return nav;
       }
       function getDefaultAuthTableLegacy(btnCount){
         const keys = Array.from({length: btnCount}, (_, i) => `btn${i+1}`);
@@ -1226,30 +1263,14 @@
         return null;
       }
 
-      const ROLE_MAP = { btn1: ['admin','write','read'], btn2: ['admin','write','read'], btn3: ['admin','write','read'], btn4: ['admin','write'], btn5: ['admin','write','read'], systemBtn: ['admin'] };
-      const SYSTEM_BTN = { id:'systemBtn', label:'系統 / 權限', roles:['admin'] };
       let BTN_CONFIGS = [];
       let mainNavBtns = [];
       let AUTH_TABLE = [];
-      let ROUTES = loadRoutes();
-      let NAV_ARR = loadNavButtonsSeedIfMissing();
+      let NAV_ARR = loadHomeNavSingleSource();
       let CURRENT_USER = null;
 
-      function isRoleAllowed(cfg, level){ if(!cfg || !Array.isArray(cfg.roles)) return true; return cfg.roles.includes(level); }
-      function isAuthLikeButtonCfg(cfg){
-        try{
-          const id = String(cfg?.id || '').trim().toLowerCase();
-          const label = String(cfg?.label || '').trim();
-          const href = String(resolveHref(cfg, ROUTES) || '').trim();
-          if(id === 'systembtn' || id === 'auth' || id === 'xidong_auth') return true;
-          if(/權限表\.html$/i.test(href)) return true;
-          if(/系統\s*[\/／]\s*權限/.test(label)) return true;
-          if(/權限表/.test(label)) return true;
-        }catch(e){}
-        return false;
-      }
+      function isRoleAllowed(cfg, level){ if(!cfg || !Array.isArray(cfg.roles) || !cfg.roles.length) return true; return cfg.roles.includes(level); }
       function isAllowedByAuth(user, cfg){
-        if(cfg && cfg.id === 'systemBtn') return true;
         try{
           const pm = loadPermMatrixSafe();
           const id = String(cfg?.id||'');
@@ -1267,29 +1288,27 @@
         return (v === undefined) ? true : !!v;
       }
       function buildMainButtonsDOM(){
-        ROUTES = loadRoutes();
-        NAV_ARR = loadNavButtonsSeedIfMissing();
-        const navConfigs = NAV_ARR.map(x => {
-          const id = String(x?.id || '').trim();
-          const label = String(x?.label || '').trim();
-          const roles = ROLE_MAP[id] || ['admin','write','read'];
-          const target = (id === 'btn3') ? '_blank' : '';
-          return { id, label, roles, target };
-        }).filter(cfg => !isAuthLikeButtonCfg(cfg));
-        BTN_CONFIGS = navConfigs.concat([SYSTEM_BTN]);
+        NAV_ARR = loadHomeNavSingleSource();
+        BTN_CONFIGS = NAV_ARR.map((x, idx) => ({
+          id: String(x?.id || `btn${idx+1}`).trim() || `btn${idx+1}`,
+          label: String(x?.label || `btn${idx+1}`).trim() || `btn${idx+1}`,
+          href: String(x?.href || '').trim(),
+          target: String(x?.target || '').trim(),
+          roles: Array.isArray(x?.roles) ? x.roles.slice() : ['admin','write','read'],
+          sourceId: String(x?.sourceId || '').trim()
+        }));
         mainNavBtns = [];
         navArea.innerHTML = '';
         BTN_CONFIGS.forEach((cfg) => {
           const a = document.createElement('a');
           a.className = 'nav-btn';
           a.id = cfg.id || '';
-          if(cfg.id === 'systemBtn') a.classList.add('is-system');
+          if(String(cfg?.sourceId || '').trim() === 'auth') a.classList.add('is-system');
           const span = document.createElement('span');
           span.textContent = cfg.label;
           markLatin(span);
           a.appendChild(span);
-          const finalHref = resolveHref(cfg, ROUTES);
-          a.setAttribute('href', hrefToDom(finalHref));
+          a.setAttribute('href', hrefToDom(cfg.href || '#'));
           const t = cfg.target || '';
           if(t){ a.target = t; if(t === '_blank') a.rel = 'noopener noreferrer'; }
           a.style.display = 'none';
@@ -1310,16 +1329,21 @@
           const okRole = isRoleAllowed(cfg, CURRENT_USER.level);
           const okAuth = isAllowedByAuth(CURRENT_USER, cfg);
           btn.style.display = (okRole && okAuth) ? 'flex' : 'none';
-          const finalHref = resolveHref(cfg, ROUTES);
-          btn.setAttribute('href', hrefToDom(finalHref));
+          btn.setAttribute('href', hrefToDom(cfg.href || '#'));
+          if(cfg.target){
+            btn.target = cfg.target;
+            if(cfg.target === '_blank') btn.rel = 'noopener noreferrer';
+          }else{
+            btn.removeAttribute('target');
+            btn.removeAttribute('rel');
+          }
         });
         scheduleAll();
       }
       function onIndexConfigApplied(){
         try{
           try{ migrateAuthToHashedIfNeeded(); }catch(_e){}
-          ROUTES = loadRoutes();
-          NAV_ARR = loadNavButtonsSeedIfMissing();
+          NAV_ARR = loadHomeNavSingleSource();
           AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
           try{ if(loginOverlay && loginOverlay.style.display === 'flex') populateUserSelect(); }catch(e){}
           buildMainButtonsDOM();
