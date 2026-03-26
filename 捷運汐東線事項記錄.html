@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- 重做正式版 v38：以 捷運汐東線事項記錄7已同步.html 為基底，補上 Console 診斷 helper -->
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
@@ -540,6 +541,9 @@
 })();
 </script>
 
+  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-guard-v5.js")) || "tasun-guard-v5.js") + '"><\/script>');</script>
+  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-cloudwrap-v4.js")) || "tasun-cloudwrap-v4.js") + '"><\/script>');</script>
+  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-auth-v4.js")) || "tasun-auth-v4.js") + '"><\/script>');</script>
 <!-- Tasun Global Core bridge -->
 <script src="tasun-global-core.js"></script>
 <script>
@@ -871,7 +875,7 @@ window.TASUN_RESOURCE_KEY = window.TASUN_RESOURCE_KEY || PAGE_KEY;
 window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
 window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
-    var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || (function(){try{var u=new URL(location.href);return (u.searchParams.get("v")||"").trim();}catch(e){return ""}})() || "20260319_16";
+    var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || (function(){try{var u=new URL(location.href);return (u.searchParams.get("v")||"").trim();}catch(e){return ""}})() || "20260326_v38";
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
@@ -893,13 +897,15 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     var SESSION_KEY = "tasunSession_v1";
     var INDEX_SESSION_KEY = "tasunIndexSession_v1";
     var AUTH_BRIDGE_KEYS = [CURRENT_KEY, SESSION_KEY, INDEX_SESSION_KEY, "tasunSessionBridge_v1", "tasunSso_v2", "tasunSso_v1", "tasunAuthSession_v1", "tasunCurrentUser_v2"];
+    var LAST_LOGIN_PASS_KEY = "tasunLastLoginPass_v1";
     var TOKEN_BRIDGE_KEYS = [
       "tasunCloudToken_v1", "tasunCloudToken_v1__sxdh-notes", "tasunCloudToken_v1__auth-table",
       "tasunBearerToken_v1", "tasunAccessToken_v1", "tasunAuthToken_v1", "tasunSessionToken_v1",
       "tasun_token", "tasunToken", "tasun_auth_token", "authToken", "access_token", "token", "x-api-key", "tasunApiKey_v1"
     ];
 
-    var DB_KEY = "tasunSxdhNotes_v1";
+    var DB_KEY = "tasun_db_v1__" + PAGE_KEY;
+    var LEGACY_DB_KEYS = ["tasunSxdhNotes_v1", "tasun_db_v1__" + PAGE_KEY];
     var COUNTER_KEY = "tasunSxdhNotes_counter_v1";
     var READ_MODE_KEY  = "tasunSxdhNotes_readMode_v1";
 
@@ -1231,7 +1237,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     function readCookie(name){
       try{
-        var esc = String(name||"").replace(/[.*+?^${}()|[\]\]/g, "\$&");
+        var esc = String(name||"").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
         return m ? decodeURIComponent(m[1] || "") : "";
       }catch(e){ return ""; }
@@ -1633,21 +1639,31 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
         return { db: rows||[], counter: counter };
       }
 
-      // 2) migrate from localStorage (legacy)
-      var arr = safeJSON(localStorage.getItem(DB_KEY));
-      if(!Array.isArray(arr)) arr = [];
-      var c = Number(localStorage.getItem(COUNTER_KEY)||"0");
-      if(!Number.isFinite(c) || c<0) c = 0;
+      // 2) migrate from localStorage v1 / legacy
+      var pack = safeJSON(localStorage.getItem(DB_KEY));
+      var arr = [];
+      var c = 0;
+      if(pack && typeof pack === "object" && Array.isArray(pack.items)){
+        arr = pack.items;
+        c = Number(pack.counter||0)||0;
+      }else{
+        var legacy = safeJSON(localStorage.getItem("tasunSxdhNotes_v1"));
+        arr = Array.isArray(legacy) ? legacy : [];
+        c = Number(localStorage.getItem(COUNTER_KEY)||"0");
+        if(!Number.isFinite(c) || c<0) c = 0;
+      }
 
       state.lastSyncAt = 0;
       state.clientId = getClientId();
 
-      // write into IDB for the first time
       try{
         await idbPutRows(PAGE_KEY, arr);
         await idbPutMeta({ pageKey: PAGE_KEY, counter: c, lastSyncAt: 0, clientId: state.clientId, updatedAt: nowISO() });
       }catch(e){}
 
+      try{
+        localStorage.setItem(DB_KEY, JSON.stringify({ items: arr, counter: c, rev: "", updatedAt: nowISO() }));
+      }catch(e){}
       return { db: arr, counter: c };
     }
 
@@ -1770,8 +1786,8 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
         async function saveLocal(payload){
       var dbArr = payload.db||[];
       var counter = Number(payload.counter||0)||0;
+      var pack = { items: dbArr, counter: counter, rev: payload.rev || ("r" + Date.now().toString(16)), updatedAt: nowISO() };
 
-      // IDB primary
       try{
         await idbPutRows(PAGE_KEY, dbArr);
         await idbPutMeta({
@@ -1779,15 +1795,12 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
           counter: counter,
           lastSyncAt: Number(state.lastSyncAt||0)||0,
           clientId: state.clientId || getClientId(),
-          updatedAt: nowISO()
+          updatedAt: pack.updatedAt
         });
       }catch(e){}
 
-      // localStorage fallback
-      try{
-        localStorage.setItem(DB_KEY, JSON.stringify(dbArr));
-        localStorage.setItem(COUNTER_KEY, String(counter));
-      }catch(e){}
+      try{ localStorage.setItem(DB_KEY, JSON.stringify(pack)); }catch(e){}
+      try{ localStorage.setItem(COUNTER_KEY, String(counter)); }catch(e){}
     }
 
     function normalizeRow(x){
@@ -2059,8 +2072,9 @@ function getVisibleRows(){
       var c = state.cloud || {};
       if(c.ok) return "已同步";
       if(c.authState==="unauth") return "未授權";
+      if(c.authState==="forbidden") return "權限不足";
       if(c.authState==="expired") return "授權失敗";
-      if(c.reachable===false && c.cfgOk) return "連線失敗";
+      if(c.cfgOk && c.reachable===false) return "連線失敗";
       if(c.cfgOk) return "待同步";
       return "未設定";
     }
@@ -2714,6 +2728,12 @@ function getPromptOptions(mode){
     // ---------------------------
     // Cloud API
     // ---------------------------
+      // --- Cloud API (Worker pull/merge compatible) ---
+      // Worker supports:
+      //   GET  /api/tasun/pull?key=PAGE_KEY   (or GET /api/read?key=PAGE_KEY)
+      //   POST /api/tasun/merge              (or POST /api/merge) body: { key, payload:{db,counter}, client:{user,...} }
+      // Response payload shape: { ok:true, payload:{db,counter}, ... }
+
       function _joinUrl(base, path){
         base = (base || "").replace(/\/+$/,"");
         path = (path || "").trim();
@@ -2723,30 +2743,19 @@ function getPromptOptions(mode){
         return base + path;
       }
 
-      function isAuthHttpStatus(status){
-        status = Number(status || 0) || 0;
-        return status===401 || status===403;
-      }
-
       function clearWorkerTokens(){
         try{
-          TOKEN_BRIDGE_KEYS.forEach(function(k){
-            try{ sessionStorage.removeItem(k); }catch(e){}
-            try{ localStorage.removeItem(k); }catch(e){}
-          });
+          TOKEN_BRIDGE_KEYS.forEach(function(k){ try{ sessionStorage.removeItem(k); }catch(e){} try{ localStorage.removeItem(k); }catch(e){} });
           try{ sessionStorage.removeItem("tasunCloudToken_v1__" + PAGE_KEY); }catch(e){}
           try{ localStorage.removeItem("tasunCloudToken_v1__" + PAGE_KEY); }catch(e){}
         }catch(e){}
       }
 
       function getWorkerLoginCredential(){
-        var cur = null, auth = null, user = "", pass = "", role = "read";
+        var cur = null, auth = null, user = "";
         try{ cur = getCurrentUser(); }catch(e){ cur = null; }
         try{ auth = ensureAuthTable(); }catch(e){ auth = null; }
-
         user = norm(cur && (cur.user || cur.name || cur.username));
-        role = norm(cur && cur.role) || "read";
-
         function pullPass(row){
           if(!row || typeof row !== "object") return "";
           return norm(
@@ -2756,21 +2765,17 @@ function getPromptOptions(mode){
             ""
           );
         }
-
-        pass = norm(readStorageValue(LAST_LOGIN_PASS_KEY + "__" + user) || readStorageValue(LAST_LOGIN_PASS_KEY));
-        var fallbackPassMap = { alex:"Tasun08040224", tasun:"tasun08040224", wu:"123456" };
-
+        var pass = norm(readStorageValue(LAST_LOGIN_PASS_KEY + "__" + user) || readStorageValue(LAST_LOGIN_PASS_KEY));
+        var role = norm(cur && cur.role) || "read";
         if(auth && Array.isArray(auth.users) && user){
           for(var i=0;i<auth.users.length;i++){
             var row = auth.users[i] || {};
             if(norm(row.user || row.name || row.username) !== user) continue;
-            pass = pullPass(row) || pass || norm(fallbackPassMap[user]);
+            pass = pullPass(row) || pass;
             role = norm(row.role || role) || "read";
             return pass ? { user:user, pass:pass, role:role } : { user:user, pass:"", role:role };
           }
         }
-
-        if(user && !pass) pass = norm(fallbackPassMap[user]);
         return user ? { user:user, pass:pass, role:role } : null;
       }
 
@@ -2778,26 +2783,19 @@ function getPromptOptions(mode){
         cfg = cfg || await loadCloudCfg();
         var cred = getWorkerLoginCredential();
         if(!cred || !cred.user || !cred.pass) return "";
-
         var apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         var url = _joinUrl(apiBase, "/api/tasun/login");
-
         var r = await fetch(url, {
           method: "POST",
           cache: "no-store",
           credentials: getWorkerCredentialMode(cfg),
           headers: { "content-type":"application/json", "accept":"application/json" },
-          body: JSON.stringify({
-            username: cred.user, password: cred.pass,
-            user: cred.user, pass: cred.pass
-          })
+          body: JSON.stringify({ username: cred.user, password: cred.pass, user: cred.user, pass: cred.pass })
         });
-
         if(!r.ok){
           var t = await r.text().catch(function(){ return ""; });
           throw new Error("worker login failed: " + r.status + " " + String(t).slice(0,200));
         }
-
         var j = await r.json().catch(function(){ return {}; });
         var token = norm(j && (j.token || j.accessToken || j.authToken || j.bearer || ""));
         if(token){
@@ -2814,46 +2812,58 @@ function getPromptOptions(mode){
         cfg = cfg || await loadCloudCfg();
         var apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         var url = _joinUrl(apiBase, "/api/tasun/me");
-
         var r = await fetch(url, {
           method: "GET",
           cache: "no-store",
           credentials: getWorkerCredentialMode(cfg),
           headers: buildWorkerAuthHeaders({ "accept":"application/json" })
         });
-
         var txt = await r.text().catch(function(){ return ""; });
-        var json = null;
-        try{ json = txt ? JSON.parse(txt) : null; }catch(e){ json = null; }
+        var json = null; try{ json = txt ? JSON.parse(txt) : null; }catch(e){ json = null; }
         return { ok:r.ok, status:r.status, json:json, text:txt };
       }
 
       async function ensureWorkerAuthorized(cfg){
         cfg = cfg || await loadCloudCfg();
         try{ hydrateCrossPageAuth(); }catch(e){}
-
         var first = await probeWorkerMe(cfg);
-        if(first.ok){
-          setCloudState({ authState:"ok", cfgOk:true, reachable:true }, false);
-          return true;
-        }
-
+        if(first.ok){ setCloudState({ authState:"ok", cfgOk:true, reachable:true }, false); return true; }
         if(first.status===401 || first.status===403){
           clearWorkerTokens();
           try{ await workerLogin(cfg); }catch(_e){}
           var second = await probeWorkerMe(cfg);
-          if(second.ok){
-            setCloudState({ authState:"ok", cfgOk:true, reachable:true }, false);
-            return true;
-          }
+          if(second.ok){ setCloudState({ authState:"ok", cfgOk:true, reachable:true }, false); return true; }
           setCloudState({ authState: second.status===403 ? "forbidden" : "unauth", cfgOk:true, reachable:true, ok:false }, false);
           return false;
         }
-
         setCloudState({ cfgOk:true, reachable:first.status>0, ok:false }, false);
         return false;
       }
 
+      async function cloudReadRaw(cfg, pageKey){
+        cfg = cfg || await loadCloudCfg();
+        const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
+        const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
+        const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/read";
+        const postUrl = _joinUrl(apiBase, readPath);
+        const getUrl = _joinUrl(apiBase, "/api/tasun/pull") + "?key=" + encodeURIComponent(pageKey);
+        async function doPost(){
+          return await fetch(postUrl, {
+            method: "POST", cache: "no-store", credentials: getWorkerCredentialMode(cfg),
+            headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
+            body: JSON.stringify({ resourceKey: pageKey, key: pageKey, pageKey: pageKey })
+          });
+        }
+        async function doGet(){
+          return await fetch(getUrl, {
+            method: "GET", cache: "no-store", credentials: getWorkerCredentialMode(cfg),
+            headers: buildWorkerAuthHeaders({ "accept":"application/json" })
+          });
+        }
+        var r = await doPost();
+        if(r.status===404) r = await doGet();
+        return r;
+      }
       async function cloudHealth(cfg){
         try{
           cfg = cfg || await loadCloudCfg();
@@ -2862,6 +2872,7 @@ function getPromptOptions(mode){
           const cfgOk = !!(cfg && isValidApiBase(apiBase));
           const candidates = [];
           if(eps && eps.health) candidates.push(_joinUrl(apiBase, eps.health));
+          // common fallbacks
           candidates.push(_joinUrl(apiBase, "/api/ping"));
           candidates.push(_joinUrl(apiBase, "/api/tasun/ping"));
           candidates.push(_joinUrl(apiBase, "/api/ping"));
@@ -2869,16 +2880,11 @@ function getPromptOptions(mode){
           let reachable = false;
           for(const url of candidates){
             try{
-              const r = await fetch(url, {
-                method:"GET",
-                credentials: getWorkerCredentialMode(cfg),
-                cache:"no-store",
-                headers: buildWorkerAuthHeaders({ accept:"application/json" })
-              });
+              const r = await fetch(url, { method:"GET", credentials: getWorkerCredentialMode(cfg), cache:"no-store", headers: buildWorkerAuthHeaders({ accept:"application/json" }) });
               if(r.ok){ reachable = true; break; }
             }catch(_e){}
           }
-
+          // ✅ 健康檢查只代表 Worker 可達，不代表資料已完成同步。
           setCloudState({
             cfgOk: cfgOk,
             reachable: reachable,
@@ -2895,6 +2901,8 @@ function getPromptOptions(mode){
       }
 
       function buildCloudEnvelope(pageKey, payload){
+        // Backward compatible wrapper; cloudMerge/cloudRead no longer require this shape,
+        // but keep it to avoid touching other code paths.
         return { key: pageKey, payload: payload || { db:[], counter:0 } };
       }
 
@@ -2914,38 +2922,21 @@ function getPromptOptions(mode){
         const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
         const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/read";
-        const postUrl = _joinUrl(apiBase, readPath);
-        const getUrl = _joinUrl(apiBase, "/api/tasun/pull") + "?key=" + encodeURIComponent(pageKey);
+        const url = _joinUrl(apiBase, readPath);
 
-        async function doPost(){
-          return await fetch(postUrl, {
-            method: "POST",
-            cache: "no-store",
-            credentials: getWorkerCredentialMode(cfg),
-            headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
-            body: JSON.stringify({ resourceKey: pageKey, key: pageKey, pageKey: pageKey })
-          });
-        }
-
-        async function doGet(){
-          return await fetch(getUrl, {
-            method: "GET",
-            cache: "no-store",
-            credentials: getWorkerCredentialMode(cfg),
-            headers: buildWorkerAuthHeaders({ "accept":"application/json" })
-          });
-        }
-
-        let r = await doPost();
-        if(isAuthHttpStatus(r.status)){
-          try{ await ensureWorkerAuthorized(cfg); }catch(_e){}
-          r = await doPost();
-        }
-        if(r.status===404){
-          r = await doGet();
-        }
+        const r = await fetch(url, {
+          method: "POST",
+          cache: "no-store",
+          credentials: getWorkerCredentialMode(cfg),
+          headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
+          body: JSON.stringify({
+            resourceKey: pageKey,
+            key: pageKey,
+            pageKey: pageKey
+          })
+        });
         if(!r.ok){
-          const t = await r.text().catch(function(){ return ""; });
+          const t = await r.text().catch(()=> "");
           if(isAuthHttpStatus(r.status)){
             try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true); }catch(_e){}
           }
@@ -2981,23 +2972,15 @@ function getPromptOptions(mode){
 
         const url = _joinUrl(apiBase, mergePath);
 
-        async function doMerge(){
-          return await fetch(url, {
-            method: "POST",
-            cache: "no-store",
-            credentials: getWorkerCredentialMode(cfg),
-            headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
-            body: JSON.stringify(body)
-          });
-        }
-
-        let r = await doMerge();
-        if(isAuthHttpStatus(r.status)){
-          try{ await ensureWorkerAuthorized(cfg); }catch(_e){}
-          r = await doMerge();
-        }
+        const r = await fetch(url, {
+          method: "POST",
+          cache: "no-store",
+          credentials: getWorkerCredentialMode(cfg),
+          headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
+          body: JSON.stringify(body)
+        });
         if(!r.ok){
-          const t = await r.text().catch(function(){ return ""; });
+          const t = await r.text().catch(()=> "");
           if(isAuthHttpStatus(r.status)){
             try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true); }catch(_e){}
           }
@@ -3006,7 +2989,6 @@ function getPromptOptions(mode){
         const j = await r.json().catch(function(){ return {}; });
         return _normalizePullResponse(j);
       }
-
     async function reconcileCloudOnOpen(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
       var silent = (opts.silent!==false);
@@ -3019,16 +3001,18 @@ function getPromptOptions(mode){
       }
 
       try{
+        // 1) 先確認 Worker 可達
         try{ hydrateCrossPageAuth(); }catch(e){}
         await cloudHealth(cfg);
 
-        var authOk = await ensureWorkerAuthorized(cfg);
-        if(!authOk){
+        // 1.5) 沒有 token / session 時，不直接打 read / merge，避免畫面一直停在「待同步」
+        if(!hasWorkerTokenReady()){
           setCloudState({ ok:false, cfgOk:true, authState:"unauth" }, true);
           if(!silent) toast("雲端未授權，請先登入或補 token");
           return false;
         }
 
+        // 2) 先檢查本端資料；若本端已有資料，先送雲端 merge，避免本端較新的資料被空雲端覆蓋
         var localRows = (state.db||[]).map(ensureRowV1).filter(Boolean);
         var remoteOrMerged = null;
 
@@ -3047,6 +3031,7 @@ function getPromptOptions(mode){
           remoteOrMerged = await cloudRead(cfg, PAGE_KEY);
         }
 
+        // 3) 再抓一次最新雲端資料，確保拿到 merge 後的最終狀態（多人/多設備一致）
         try{ hydrateCrossPageAuth(); }catch(e){}
         var remoteFinal = await cloudRead(cfg, PAGE_KEY);
         var out = mergePayload(remoteFinal || remoteOrMerged, { db: state.db, counter: state.counter });
@@ -3063,7 +3048,6 @@ function getPromptOptions(mode){
           ok:true,
           cfgOk:true,
           reachable:true,
-          authState:"ok",
           lastOkAt: Date.now(),
           lastSyncAt: nowISO()
         }, false);
@@ -3081,87 +3065,70 @@ function getPromptOptions(mode){
       opts = (opts && typeof opts==="object") ? opts : {};
       return await reconcileCloudOnOpen({ silent: !!opts.silent, reason:"manual-from-cloud" });
     }
-
     async function syncToCloud(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
       return await reconcileCloudOnOpen({ silent: !!opts.silent, reason: opts.reason || "manual-to-cloud" });
     }
 
-    async function refreshCloudAuthState(){
-      try{
-        var cfg = await loadCloudCfg();
-        var ok = await ensureWorkerAuthorized(cfg);
-        try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
-        return {
-          ok: !!ok,
-          cloud: Object.assign({}, state.cloud||{}),
-          tokenReady: !!getSharedWorkerToken(),
-          user: getCurrentUser()||null,
-          role: state.role || ((getCurrentUser()||{}).role) || "read"
-        };
-      }catch(e){
-        return {
-          ok:false,
-          error:String(e&&e.message||e),
-          cloud:Object.assign({}, state.cloud||{}),
-          tokenReady: !!getSharedWorkerToken(),
-          user: getCurrentUser()||null,
-          role: state.role || ((getCurrentUser()||{}).role) || "read"
-        };
-      }
-    }
-    try{ window.refreshCloudAuthState = refreshCloudAuthState; }catch(e){}
-
+    // Console manual diagnostic helper
     window.__TASUN_SXDH_DIAG__ = {
       clear: function(){
-        try{ clearWorkerTokens(); }catch(e){}
         try{ console.clear(); }catch(e){}
-        console.log('diag clear ok');
+        try{ clearWorkerTokens(); }catch(e){}
+        console.log("diag clear ok");
         return true;
       },
-      health: async function(){ return await (window.refreshCloudAuthState ? window.refreshCloudAuthState() : refreshCloudAuthState()); },
+      health: async function(){
+        var cfg = await loadCloudCfg();
+        var reachable = await cloudHealth(cfg);
+        var cur = null;
+        try{ cur = getCurrentUser(); }catch(e){ cur = null; }
+        return {
+          ok: !!reachable,
+          cloud: Object.assign({}, state.cloud||{}),
+          apiBase: cfg && cfg.apiBase || "",
+          endpoints: cfg && cfg.endpoints || {},
+          user: cur,
+          role: state.role || (cur && cur.role) || "read",
+          tokenReady: !!getSharedWorkerToken()
+        };
+      },
       login: async function(){
         var cfg = await loadCloudCfg();
-        var token = '';
+        var token = "";
         try{ token = await workerLogin(cfg); }catch(e){
-          return { ok:false, error:String(e&&e.message||e), cloud:Object.assign({}, state.cloud||{}), tokenReady:false };
+          return { ok:false, error:String(e && e.message || e), cloud:Object.assign({}, state.cloud||{}), tokenReady:false };
         }
-        var me = null;
-        try{ me = await probeWorkerMe(cfg); }catch(e){}
-        try{ await (window.refreshCloudAuthState ? window.refreshCloudAuthState() : refreshCloudAuthState()); }catch(e){}
+        var ok = false;
+        try{ ok = await ensureWorkerAuthorized(cfg); }catch(e){ ok = false; }
         return {
-          ok: !!token,
+          ok: !!ok,
+          token: token || "",
           tokenReady: !!getSharedWorkerToken(),
-          token: token||'',
-          me: me,
-          user: getCurrentUser()||null,
-          role: state.role || ((getCurrentUser()||{}).role) || 'read',
-          cloud:Object.assign({}, state.cloud||{})
+          cloud: Object.assign({}, state.cloud||{}),
+          user: getCurrentUser() || null,
+          role: state.role || ((getCurrentUser()||{}).role) || "read"
         };
       },
       read: async function(){
         var cfg = await loadCloudCfg();
-        try{ await ensureWorkerAuthorized(cfg); }catch(e){}
-        var data = await cloudRead(cfg, PAGE_KEY);
+        await ensureWorkerAuthorized(cfg);
+        var remote = await cloudRead(cfg, PAGE_KEY);
         return {
           ok:true,
-          count:Array.isArray(data.db)?data.db.length:0,
-          counter:Number(data.counter||0),
+          count:Array.isArray(remote.db) ? remote.db.length : 0,
+          counter:Number(remote.counter||0),
           cloud:Object.assign({}, state.cloud||{}),
           tokenReady: !!getSharedWorkerToken()
         };
       },
       sync: async function(){
         try{
-          await reconcileCloudOnOpen({ silent:false, force:true });
+          var ok = await reconcileCloudOnOpen({ silent:false, reason:"diag-sync" });
+          return { ok:!!ok, cloud:Object.assign({}, state.cloud||{}), count:Array.isArray(state.db)?state.db.length:0 };
         }catch(e){
-          return { ok:false, error:String(e&&e.message||e), cloud:Object.assign({}, state.cloud||{}), count:Array.isArray(state.db)?state.db.length:0 };
+          return { ok:false, error:String(e && e.message || e), cloud:Object.assign({}, state.cloud||{}), count:Array.isArray(state.db)?state.db.length:0 };
         }
-        return {
-          ok:!(state.cloud && cloudBadgeBad()),
-          cloud:Object.assign({}, state.cloud||{}),
-          count:Array.isArray(state.db)?state.db.length:0
-        };
       }
     };
 
@@ -3285,6 +3252,8 @@ function getPromptOptions(mode){
         return;
       }
       var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
+      try{ sessionStorage.setItem(LAST_LOGIN_PASS_KEY, pass); }catch(e){}
+      try{ sessionStorage.setItem(LAST_LOGIN_PASS_KEY + "__" + hit.user, pass); }catch(e){}
       setCurrentUser(cur);
       applyUser(cur);
       closeLogin();
@@ -3530,6 +3499,7 @@ $("btnSave").addEventListener("click", async function(){
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         try{ refresh(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         try{ hydrateCrossPageAuth(); }catch(e){}
+        try{ var _cfg = await loadCloudCfg(); setCloudState({ cfgOk: !!(_cfg && isValidApiBase(_cfg.apiBase)), apiBase: _cfg && _cfg.apiBase || "", endpoints: _cfg && _cfg.endpoints || null }, false); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         // ✅ 開頁同步策略：不再被登入顯示狀態阻斷，先同步資料，再由後續 bridge 回填使用者/權限。
@@ -3567,5 +3537,6 @@ $("btnSave").addEventListener("click", async function(){
   })();
   </script>
 
+<script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-global-auth-v65.js")) || "tasun-global-auth-v65.js") + '"><\/script>');</script>
 </body>
 </html>
