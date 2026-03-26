@@ -1234,12 +1234,21 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       if(role==="write") return 2;
       return 1;
     }
-
     function readCookie(name){
       try{
-        var esc = String(name||"").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
-        return m ? decodeURIComponent(m[1] || "") : "";
+        var key = String(name || "").trim();
+        if(!key) return "";
+        var parts = String(document.cookie || "").split(';');
+        for(var i=0;i<parts.length;i++){
+          var s = String(parts[i] || "").trim();
+          if(!s) continue;
+          var p = s.indexOf('=');
+          var k = (p >= 0 ? s.slice(0, p) : s).trim();
+          if(k !== key) continue;
+          var v = p >= 0 ? s.slice(p + 1) : "";
+          try{ return decodeURIComponent(v || ""); }catch(_e){ return v || ""; }
+        }
+        return "";
       }catch(e){ return ""; }
     }
 
@@ -2804,6 +2813,7 @@ function getPromptOptions(mode){
           try{ sessionStorage.setItem("tasunCloudToken_v1__" + PAGE_KEY, token); }catch(e){}
           try{ localStorage.setItem("tasunCloudToken_v1__" + PAGE_KEY, token); }catch(e){}
           try{ sessionStorage.setItem("tasunSessionBridge_v1", JSON.stringify({ user: cred.user, role: j.role || cred.role, token: token, at: nowISO() })); }catch(e){}
+          try{ localStorage.setItem("tasunSessionBridge_v1", JSON.stringify({ user: cred.user, role: j.role || cred.role, token: token, at: nowISO() })); }catch(e){}
         }
         return token;
       }
@@ -2822,6 +2832,36 @@ function getPromptOptions(mode){
         var json = null; try{ json = txt ? JSON.parse(txt) : null; }catch(e){ json = null; }
         return { ok:r.ok, status:r.status, json:json, text:txt };
       }
+
+      function isAuthHttpStatus(status){
+        status = Number(status || 0);
+        return status === 401 || status === 403;
+      }
+
+      async function refreshCloudAuthState(){
+        try{
+          var cfg = await loadCloudCfg();
+          var ok = await ensureWorkerAuthorized(cfg);
+          try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
+          return {
+            ok: !!ok,
+            cloud: Object.assign({}, state.cloud || {}),
+            tokenReady: !!getSharedWorkerToken(),
+            user: getCurrentUser() || null,
+            role: state.role || ((getCurrentUser()||{}).role) || 'read'
+          };
+        }catch(e){
+          return {
+            ok:false,
+            error:String(e && e.message || e),
+            cloud:Object.assign({}, state.cloud || {}),
+            tokenReady: !!getSharedWorkerToken(),
+            user: getCurrentUser() || null,
+            role: state.role || ((getCurrentUser()||{}).role) || 'read'
+          };
+        }
+      }
+      try{ window.refreshCloudAuthState = refreshCloudAuthState; }catch(e){}
 
       async function ensureWorkerAuthorized(cfg){
         cfg = cfg || await loadCloudCfg();
@@ -3079,19 +3119,7 @@ function getPromptOptions(mode){
         return true;
       },
       health: async function(){
-        var cfg = await loadCloudCfg();
-        var reachable = await cloudHealth(cfg);
-        var cur = null;
-        try{ cur = getCurrentUser(); }catch(e){ cur = null; }
-        return {
-          ok: !!reachable,
-          cloud: Object.assign({}, state.cloud||{}),
-          apiBase: cfg && cfg.apiBase || "",
-          endpoints: cfg && cfg.endpoints || {},
-          user: cur,
-          role: state.role || (cur && cur.role) || "read",
-          tokenReady: !!getSharedWorkerToken()
-        };
+        return await (window.refreshCloudAuthState ? window.refreshCloudAuthState() : refreshCloudAuthState());
       },
       login: async function(){
         var cfg = await loadCloudCfg();
