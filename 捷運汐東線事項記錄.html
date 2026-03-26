@@ -540,8 +540,9 @@
 })();
 </script>
 
-  <!-- 已移除舊版外掛：tasun-guard-v5 / tasun-cloudwrap-v4 / tasun-auth-v4
-       本頁改由內建正式版單一規則處理登入、雲端授權與同步，避免舊版腳本重複干擾。 -->
+  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-guard-v5.js")) || "tasun-guard-v5.js") + '"><\/script>');</script>
+  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-cloudwrap-v4.js")) || "tasun-cloudwrap-v4.js") + '"><\/script>');</script>
+  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-auth-v4.js")) || "tasun-auth-v4.js") + '"><\/script>');</script>
 <!-- Tasun Global Core bridge -->
 <script src="tasun-global-core.js"></script>
 <script>
@@ -873,7 +874,7 @@ window.TASUN_RESOURCE_KEY = window.TASUN_RESOURCE_KEY || PAGE_KEY;
 window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
 window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
-    var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || (function(){try{var u=new URL(location.href);return (u.searchParams.get("v")||"").trim();}catch(e){return ""}})() || "20260325_62";
+    var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || (function(){try{var u=new URL(location.href);return (u.searchParams.get("v")||"").trim();}catch(e){return ""}})() || "20260319_16";
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
@@ -1233,7 +1234,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     function readCookie(name){
       try{
-        var esc = String(name||"").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        var esc = String(name||"").replace(/[.*+?^${}()|[\]\]/g, "\$&");
         var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
         return m ? decodeURIComponent(m[1] || "") : "";
       }catch(e){ return ""; }
@@ -2359,7 +2360,45 @@ function getVisibleRows(){
       return b;
     }
 
+    function ensureTableHeaderVisible(){
+      try{
+        var tbl = $("tbl");
+        if(!tbl) return;
+        tbl.style.display = 'table';
+        tbl.style.visibility = 'visible';
+        tbl.style.width = '100%';
+        var thead = tbl.querySelector('thead');
+        if(!thead){
+          thead = document.createElement('thead');
+          thead.innerHTML = '<tr>'
+            + '<th style="width:90px;">項次</th>'
+            + '<th>記事內容</th>'
+            + '<th style="width:150px;">工種</th>'
+            + '<th style="width:150px;">系統</th>'
+            + '<th style="width:150px;">出處</th>'
+            + '<th style="width:160px;">附件</th>'
+            + '<th style="width:220px;">備註</th>'
+            + '<th style="width:140px;">登錄日期</th>'
+            + '<th style="width:160px;">操作</th>'
+            + '</tr>';
+          if(tbl.firstChild) tbl.insertBefore(thead, tbl.firstChild); else tbl.appendChild(thead);
+        }
+        thead.style.display = 'table-header-group';
+        thead.style.visibility = 'visible';
+        var tr = thead.querySelector('tr');
+        if(tr){
+          tr.style.display = 'table-row';
+          tr.style.visibility = 'visible';
+        }
+        thead.querySelectorAll('th').forEach(function(th){
+          th.style.display = 'table-cell';
+          th.style.visibility = 'visible';
+        });
+      }catch(e){}
+    }
+
     function renderTable(rows){
+      ensureTableHeaderVisible();
       var tb = $("tbody");
       tb.innerHTML = "";
       for(var i=0;i<rows.length;i++){
@@ -2475,6 +2514,7 @@ function getVisibleRows(){
     }
 
     function refresh(){
+      ensureTableHeaderVisible();
       ensureActionButtonsVisible();
       rebuildFilterOptions();
       var rows = getVisibleRows();
@@ -2782,6 +2822,94 @@ function getPromptOptions(mode){
         return { db, counter };
       }
 
+
+      function isAuthHttpStatus(status){
+        status = Number(status||0);
+        return status===401 || status===403;
+      }
+
+      function getAuthUserPassword(user){
+        user = norm(user);
+        if(!user) return "";
+        var auth = ensureAuthTable();
+        var arr = Array.isArray(auth && auth.users) ? auth.users : [];
+        for(var i=0;i<arr.length;i++){
+          var u = arr[i] || {};
+          if(norm(u.user)===user) return norm(u.pass || "");
+        }
+        return "";
+      }
+
+      async function workerLogin(cfg){
+        cfg = cfg || await loadCloudCfg();
+        var apiBase = norm(cfg && cfg.apiBase);
+        if(!apiBase) throw new Error('worker login missing apiBase');
+
+        var cur = null;
+        try{ cur = getCurrentUser(); }catch(e){ cur = null; }
+        var username = norm(cur && (cur.user || cur.name || cur.username));
+        var password = getAuthUserPassword(username);
+        if(!username || !password) throw new Error('worker login missing username/password');
+
+        var url = _joinUrl(apiBase, '/api/tasun/login');
+        var r = await fetch(url, {
+          method:'POST',
+          cache:'no-store',
+          credentials:'include',
+          headers:{ 'Content-Type':'application/json', 'accept':'application/json' },
+          body: JSON.stringify({ username: username, password: password })
+        });
+        var t = await r.text().catch(function(){ return ''; });
+        if(!r.ok) throw new Error('worker login failed: ' + r.status + ' ' + t.slice(0,200));
+
+        var j = null;
+        try{ j = JSON.parse(t||'{}'); }catch(e){ j = {}; }
+        var token = norm((j && (j.token || j.accessToken || j.authToken || j.bearer)) || '');
+        if(token){
+          try{ localStorage.setItem('tasunCloudToken_v1', token); }catch(e){}
+          try{ sessionStorage.setItem('tasunCloudToken_v1', token); }catch(e){}
+        }
+        setCloudState({ authState:'ok', cfgOk:true, reachable:true }, false);
+        return token || true;
+      }
+
+      async function ensureWorkerAuthorized(cfg){
+        cfg = cfg || await loadCloudCfg();
+        var apiBase = norm(cfg && cfg.apiBase);
+        if(!apiBase) return false;
+
+        async function hitMe(){
+          var meUrl = _joinUrl(apiBase, '/api/tasun/me');
+          return await fetch(meUrl, {
+            method:'GET',
+            cache:'no-store',
+            credentials:'include',
+            headers: buildWorkerAuthHeaders({ 'accept':'application/json' })
+          });
+        }
+
+        try{
+          var r = await hitMe();
+          if(r.ok){
+            setCloudState({ authState:'ok', cfgOk:true, reachable:true, ok:true, lastOkAt: Date.now() }, false);
+            return true;
+          }
+          if(isAuthHttpStatus(r.status)){
+            await workerLogin(cfg);
+            r = await hitMe();
+            if(r.ok){
+              setCloudState({ authState:'ok', cfgOk:true, reachable:true, ok:true, lastOkAt: Date.now() }, false);
+              return true;
+            }
+            setCloudState({ authState:(r.status===403?'forbidden':'unauth'), cfgOk:true, reachable:true, ok:false }, true);
+            return false;
+          }
+          return r.ok;
+        }catch(e){
+          return false;
+        }
+      }
+
       async function cloudRead(cfg, pageKey){
         cfg = cfg || await loadCloudCfg();
         const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
@@ -2795,24 +2923,24 @@ function getPromptOptions(mode){
             cache: "no-store",
             credentials: getWorkerCredentialMode(cfg),
             headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
-            body: JSON.stringify({ resourceKey: pageKey })
+            body: JSON.stringify({ resourceKey: pageKey, key: pageKey, pageKey: pageKey })
           });
         }
 
         let r = await doFetch();
-        if((r.status===401 || r.status===403)){
+        if(isAuthHttpStatus(r.status)){
           try{ await workerLogin(cfg); }catch(_e){}
           r = await doFetch();
         }
         if(!r.ok){
-          const t = await r.text().catch(function(){ return ""; });
-          if(r.status===401 || r.status===403){
-            setCloudState({ authState: r.status===403 ? "forbidden" : "unauth", ok:false, cfgOk:true }, true);
+          const t = await r.text().catch(()=> "");
+          if(isAuthHttpStatus(r.status)){
+            try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:(r.status===403?"forbidden":"unauth") }, true); }catch(_e){}
           }
           throw new Error("cloud read failed: " + r.status + " " + t.slice(0,200));
         }
         const j = await r.json();
-        setCloudState({ authState:"ok", cfgOk:true, reachable:true }, false);
+        try{ setCloudState({ ok:true, cfgOk:true, reachable:true, authState:'ok', lastOkAt: Date.now() }, false); }catch(_e){}
         return _normalizePullResponse(j);
       }
 
@@ -2831,6 +2959,8 @@ function getPromptOptions(mode){
 
         const body = {
           resourceKey: pageKey,
+          key: pageKey,
+          pageKey: pageKey,
           payload: { db: Array.isArray(payload.db)? payload.db : [], counter: Number(payload.counter)||0 },
           client: clientInfo && typeof clientInfo==="object" ? clientInfo : {}
         };
@@ -2848,19 +2978,19 @@ function getPromptOptions(mode){
         }
 
         let r = await doFetch();
-        if((r.status===401 || r.status===403)){
+        if(isAuthHttpStatus(r.status)){
           try{ await workerLogin(cfg); }catch(_e){}
           r = await doFetch();
         }
         if(!r.ok){
-          const t = await r.text().catch(function(){ return ""; });
-          if(r.status===401 || r.status===403){
-            setCloudState({ authState: r.status===403 ? "forbidden" : "unauth", ok:false, cfgOk:true }, true);
+          const t = await r.text().catch(()=> "");
+          if(isAuthHttpStatus(r.status)){
+            try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:(r.status===403?"forbidden":"unauth") }, true); }catch(_e){}
           }
           throw new Error("cloud merge failed: " + r.status + " " + t.slice(0,200));
         }
         const j = await r.json();
-        setCloudState({ authState:"ok", cfgOk:true, reachable:true }, false);
+        try{ setCloudState({ ok:true, cfgOk:true, reachable:true, authState:'ok', lastOkAt: Date.now() }, false); }catch(_e){}
         return _normalizePullResponse(j);
       }
     async function reconcileCloudOnOpen(opts){
@@ -2875,25 +3005,21 @@ function getPromptOptions(mode){
       }
 
       try{
-        // 1) 先確認 Worker 可達
         try{ hydrateCrossPageAuth(); }catch(e){}
         await cloudHealth(cfg);
 
-        // 1.5) 正式版：若尚無 token，先嘗試自動 Worker login，不直接判未授權/未設定
         var authed = false;
         try{ authed = await ensureWorkerAuthorized(cfg); }catch(e){ authed = false; }
         if(!authed){
           setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true);
-          if(!silent) toast("雲端未授權，已嘗試自動登入但未成功");
+          if(!silent) toast("雲端未授權");
           return false;
         }
 
-        // 2) 先檢查本端資料；若本端已有資料，先送雲端 merge，避免本端較新的資料被空雲端覆蓋
         var localRows = (state.db||[]).map(ensureRowV1).filter(Boolean);
         var remoteOrMerged = null;
 
         if(localRows.length>0){
-          try{ hydrateCrossPageAuth(); }catch(e){}
           remoteOrMerged = await cloudMerge(cfg, PAGE_KEY, { db: localRows, counter: state.counter }, {
             user: state.user || "",
             role: state.role || "",
@@ -2903,12 +3029,9 @@ function getPromptOptions(mode){
             reason: "boot-reconcile-local-first"
           });
         }else{
-          try{ hydrateCrossPageAuth(); }catch(e){}
           remoteOrMerged = await cloudRead(cfg, PAGE_KEY);
         }
 
-        // 3) 再抓一次最新雲端資料，確保拿到 merge 後的最終狀態（多人/多設備一致）
-        try{ hydrateCrossPageAuth(); }catch(e){}
         var remoteFinal = await cloudRead(cfg, PAGE_KEY);
         var out = mergePayload(remoteFinal || remoteOrMerged, { db: state.db, counter: state.counter });
 
@@ -2920,19 +3043,13 @@ function getPromptOptions(mode){
         await saveLocal({ db: state.db, counter: state.counter });
         buildDictsFromDb();
 
-        setCloudState({
-          ok:true,
-          cfgOk:true,
-          reachable:true,
-          lastOkAt: Date.now(),
-          lastSyncAt: nowISO()
-        }, false);
+        setCloudState({ ok:true, cfgOk:true, reachable:true, authState:'ok', lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
         refresh();
         if(!silent) toast("已完成開啟同步");
         return true;
       }catch(e){
         var msg = String((e && e.message) ? e.message : e || "");
-        setCloudState({ ok:false, cfgOk:true, reachable:true, authState: (/401|403|UNAUTH|FORBIDDEN/i.test(msg) ? "unauth" : (state.cloud && state.cloud.authState) || "") }, true);
+        setCloudState({ ok:false, cfgOk:true, reachable:true, authState: (/401|403|UNAUTH|FORBIDDEN/i.test(msg) ? "unauth" : ((state.cloud && state.cloud.authState) || "")) }, true);
         if(!silent) toast("開啟同步失敗：" + msg);
         return false;
       }
@@ -2944,7 +3061,7 @@ function getPromptOptions(mode){
 
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)){
-        if(!silent) toast("雲端未設定/無效"); 
+        if(!silent) toast("雲端未設定/無效");
         return;
       }
 
@@ -2954,70 +3071,29 @@ function getPromptOptions(mode){
         try{ authed = await ensureWorkerAuthorized(cfg); }catch(e){ authed = false; }
         if(!authed){
           setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true);
-          if(!silent) toast("雲端未授權，已嘗試自動登入但未成功");
+          if(!silent) toast("雲端未授權");
           return;
         }
+
         var remote = await cloudRead(cfg, PAGE_KEY);
-
-        // If cloud is empty but local has data, offer to bootstrap to cloud (one-time)
-        var cloudEmpty = !remote || !Array.isArray(remote.db) || remote.db.length===0;
-        var localHas = Array.isArray(state.db) && state.db.length>0;
-        var bootKey = "tasunCloudBooted_" + PAGE_KEY;
-        var autoFillKey = "tasunCloudAutoFill_" + PAGE_KEY;
-        var localDb = (state.db || []);
-        var remoteDb = (remote && remote.payload && Array.isArray(remote.payload.db)) ? remote.payload.db : [];
-
-        function _uid(x){
-          if(!x) return "";
-          return String(x.uid || x.pk || x.Uid || x.ID || x.id || "");
-        }
-
-        var rSet = new Set(remoteDb.map(_uid).filter(Boolean));
-        var missing = localDb.filter(function(it){
-          var u = _uid(it);
-          return u && !rSet.has(u);
-        });
-
-        var remoteEmpty = (!remoteDb || remoteDb.length === 0);
-        var localHas = (localDb.length > 0);
-
-        // Auto bootstrap when cloud empty OR auto-fill when cloud has fewer items than local.
-        // Run once per page-load to avoid loops.
-        if(localHas && (remoteEmpty || missing.length > 0) && !sessionStorage.getItem(autoFillKey)){
-          sessionStorage.setItem(autoFillKey, "1");
-          try{
-            var reason = remoteEmpty ? "auto-bootstrap-cloud-empty" : "auto-fill-cloud-missing";
-            try{ hydrateCrossPageAuth(); }catch(e){}
-            var merged = await cloudMerge({ payload: { db: localDb, counter: state.counter }, reason: reason });
-            if(merged && merged.ok && merged.payload){
-              remote = merged; // use merged payload as latest remote snapshot
-              if(remoteEmpty) localStorage.setItem(bootKey, "1");
-              toast(remoteEmpty
-                ? ("雲端空白，已自動倒入本機資料：" + localDb.length + " 筆")
-                : ("已自動補齊雲端缺少資料：" + missing.length + " 筆"), "ok");
-            }
-          }catch(e){
-            toast("雲端自動補齊失敗：" + (e && (e.message||e) ? (e.message||e) : e), "warn");
-          }
-        }
-var out = mergePayload(remote, { db: state.db, counter: state.counter });
+        var out = mergePayload(remote, { db: state.db, counter: state.counter });
         state.db = out.db;
         state.counter = out.counter;
-
         state.lastSyncAt = Date.now();
-        await idbClearOps(PAGE_KEY);
-        await saveLocal({ db: state.db, counter: state.counter });
 
+        try{ await idbClearOps(PAGE_KEY); }catch(e){}
+        await saveLocal({ db: state.db, counter: state.counter });
         buildDictsFromDb();
-        setCloudState({ ok:true, cfgOk:true, reachable:true, lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
+        setCloudState({ ok:true, cfgOk:true, reachable:true, authState:'ok', lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
         refresh();
         if(!silent) toast("已從雲端更新");
       }catch(e){
-        var msg = String((e && e.message) ? e.message : e || "");
-        setCloudState({ ok:false, cfgOk:true, reachable:true, authState: (/401|403|UNAUTH|FORBIDDEN/i.test(msg) ? "unauth" : (state.cloud && state.cloud.authState) || "") }, true);
+        var msg = String((e && e.message) ? e.message : e || '');
+        setCloudState({ ok:false, cfgOk:true, reachable:true, authState: (/401|403|UNAUTH|FORBIDDEN/i.test(msg) ? 'unauth' : ((state.cloud && state.cloud.authState) || '')) }, true);
         if(!silent) toast("雲端讀取失敗：" + msg);
       }
     }
+
     async function syncToCloud(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
       var silent = !!opts.silent;
@@ -3026,7 +3102,7 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
 
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)){
-        if(!silent) toast("雲端未設定/無效"); 
+        if(!silent) toast("雲端未設定/無效");
         return;
       }
 
@@ -3040,17 +3116,12 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
       }else{
         var dirtyUids = [];
         try{ dirtyUids = await idbGetDirtyUids(PAGE_KEY, lastSyncAt); }catch(e){ dirtyUids = []; }
-
         if(!dirtyUids.length){
           if(!silent) toast("沒有需要上傳的本機變更");
           return;
         }
-
         var dirtySet = new Set(dirtyUids.map(norm));
-        sendRows = (state.db||[])
-          .map(ensureRowV1)
-          .filter(Boolean)
-          .filter(function(r){ return dirtySet.has(norm(r.uid)); });
+        sendRows = (state.db||[]).map(ensureRowV1).filter(Boolean).filter(function(r){ return dirtySet.has(norm(r.uid)); });
       }
 
       try{
@@ -3059,9 +3130,10 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         try{ authed = await ensureWorkerAuthorized(cfg); }catch(e){ authed = false; }
         if(!authed){
           setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true);
-          if(!silent) toast("雲端未授權，已嘗試自動登入但未成功");
+          if(!silent) toast("雲端未授權");
           return;
         }
+
         var merged = await cloudMerge(cfg, PAGE_KEY, { db: sendRows, counter: state.counter }, {
           user: state.user || "",
           role: state.role || "",
@@ -3074,18 +3146,16 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         var out = mergePayload(merged, { db: state.db, counter: state.counter });
         state.db = out.db;
         state.counter = out.counter;
-
         state.lastSyncAt = Date.now();
-        await idbClearOps(PAGE_KEY);
+        try{ await idbClearOps(PAGE_KEY); }catch(e){}
         await saveLocal({ db: state.db, counter: state.counter });
-
         buildDictsFromDb();
-        setCloudState({ ok:true, cfgOk:true, reachable:true, lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
+        setCloudState({ ok:true, cfgOk:true, reachable:true, authState:'ok', lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
         refresh();
         if(!silent) toast(fullUpload ? "雲端同步完成（全量）" : "雲端同步完成（增量）");
       }catch(e){
-        var msg = String((e && e.message) ? e.message : e || "");
-        setCloudState({ ok:false, cfgOk:true, reachable:true, authState: (/401|403|UNAUTH|FORBIDDEN/i.test(msg) ? "unauth" : (state.cloud && state.cloud.authState) || "") }, true);
+        var msg = String((e && e.message) ? e.message : e || '');
+        setCloudState({ ok:false, cfgOk:true, reachable:true, authState: (/401|403|UNAUTH|FORBIDDEN/i.test(msg) ? 'unauth' : ((state.cloud && state.cloud.authState) || '')) }, true);
         if(!silent) toast("雲端同步失敗：" + msg);
       }
     }
@@ -3492,5 +3562,7 @@ $("btnSave").addEventListener("click", async function(){
   })();
   </script>
 
+<script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-global-auth-v65.js")) || "tasun-global-auth-v65.js") + '"><\/script>');</script>
+<script>window.TasunGuardV4 && window.TasunGuardV4.boot({ pageKey: "捷運汐東線事項記錄.html" });</script>
 </body>
 </html>
