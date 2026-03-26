@@ -540,9 +540,6 @@
 })();
 </script>
 
-  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-guard-v5.js")) || "tasun-guard-v5.js") + '"><\/script>');</script>
-  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-cloudwrap-v4.js")) || "tasun-cloudwrap-v4.js") + '"><\/script>');</script>
-  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-auth-v4.js")) || "tasun-auth-v4.js") + '"><\/script>');</script>
 <!-- Tasun Global Core bridge -->
 <script src="tasun-global-core.js"></script>
 <script>
@@ -1144,48 +1141,21 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     // Auth
     // ---------------------------
     function ensureAuthTable(){
-      var raw = safeJSON(localStorage.getItem(AUTH_KEY));
-      var users = [];
-
-      function asArray(v){ return Array.isArray(v) ? v : []; }
-      function pickUsers(x){
-        if(Array.isArray(x)) return x;
-        if(!x || typeof x !== "object") return [];
-        return asArray(x.users)
-          .concat(asArray(x.auth))
-          .concat(asArray(x.items))
-          .concat(asArray(x.rows))
-          .concat(asArray(x.list))
-          .concat(asArray(x.data && x.data.users))
-          .concat(asArray(x.data && x.data.items));
-      }
-
-      users = pickUsers(raw).map(function(u){
-        if(!u || typeof u !== "object") return null;
-        return {
-          user: norm(u.user || u.username || u.account || u.name || ""),
-          name: norm(u.name || u.user || u.username || u.account || ""),
-          role: norm(u.role || u.level || u.permission || "read") || "read",
-          pass: norm(u.pass || u.password || u.pwd || u.secret || u.plainPassword || u.loginPass || u.__pendingPass || ""),
-          passHash: norm(u.passHash || u.passwordHash || u.hash || "")
+      var t = safeJSON(localStorage.getItem(AUTH_KEY));
+      if(!t || typeof t !== "object"){
+        t = {
+          users: [
+            { user:"alex", pass:"alex", role:"admin", name:"alex" },
+            { user:"tasun", pass:"tasun", role:"write", name:"tasun" },
+            { user:"wu", pass:"wu", role:"read", name:"wu" }
+          ],
+          updatedAt: nowISO(),
+          rev: "seed"
         };
-      }).filter(function(u){ return u && u.user; });
-
-      if(!users.length){
-        users = [
-          { user:"alex",  pass:"Tasun08040224",  role:"admin", name:"alex" },
-          { user:"JOYCE", pass:"09220224",       role:"admin", name:"JOYCE" },
-          { user:"tasun", pass:"tasun08040224",  role:"write", name:"tasun" },
-          { user:"wu",    pass:"123456",         role:"read",  name:"wu" }
-        ];
-        try{ if(!raw) localStorage.setItem(AUTH_KEY, JSON.stringify(users)); }catch(e){}
+        localStorage.setItem(AUTH_KEY, JSON.stringify(t));
       }
-
-      return {
-        users: users,
-        updatedAt: norm(raw && raw.updatedAt) || nowISO(),
-        rev: norm(raw && raw.rev) || "seed"
-      };
+      if(!Array.isArray(t.users)) t.users = [];
+      return t;
     }
 
     function getCurrentUser(){
@@ -1261,12 +1231,79 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     function readCookie(name){
       try{
-        var esc = String(name||"").replace(/[.*+?^${}()|[\]\]/g, "\$&");
+        var esc = String(name || "").replace(/[.*+?^${}()|[\]\]/g, "\$&");
         var m = document.cookie.match(new RegExp("(?:^|; )" + esc + "=([^;]*)"));
         return m ? decodeURIComponent(m[1] || "") : "";
       }catch(e){ return ""; }
     }
 
+    // Console diagnostics for manual step-by-step worker troubleshooting
+    window.__TASUN_SXDH_DIAG__ = {
+      clear: function(){
+        try{ localStorage.removeItem('tasunCloudToken_v1'); }catch(e){}
+        try{ localStorage.removeItem('tasunCloudAuthState_v1'); }catch(e){}
+        try{ sessionStorage.removeItem('tasunCloudToken_v1'); }catch(e){}
+        return { ok:true, cleared:true };
+      },
+      user: function(){
+        var cur = null, auth = null;
+        try{ cur = JSON.parse(localStorage.getItem('tasunCurrentUser_v1') || 'null'); }catch(e){}
+        try{ auth = JSON.parse(localStorage.getItem('tasunAuthTable_v1') || 'null'); }catch(e){}
+        var rows = Array.isArray(auth) ? auth : (auth && Array.isArray(auth.users) ? auth.users : (auth && Array.isArray(auth.rows) ? auth.rows : []));
+        return { current: cur, authRows: rows.length, authShape: Array.isArray(auth) ? 'array' : typeof auth, token: (function(){ try{return localStorage.getItem('tasunCloudToken_v1')||'';}catch(e){return '';}})() };
+      },
+      health: async function(){
+        var base = (window.__SXDH_CFG__ && window.__SXDH_CFG__.apiBase) || 'https://tasun-worker.wutasun.workers.dev';
+        var r = await fetch(base + '/api/tasun/health', { method:'GET', cache:'no-store', credentials:'include' });
+        return { status:r.status, text: await r.text() };
+      },
+      login: async function(){
+        var base = (window.__SXDH_CFG__ && window.__SXDH_CFG__.apiBase) || 'https://tasun-worker.wutasun.workers.dev';
+        var cur = null, auth = null;
+        try{ cur = JSON.parse(localStorage.getItem('tasunCurrentUser_v1') || 'null'); }catch(e){}
+        try{ auth = JSON.parse(localStorage.getItem('tasunAuthTable_v1') || 'null'); }catch(e){}
+        var rows = Array.isArray(auth) ? auth : (auth && Array.isArray(auth.users) ? auth.users : (auth && Array.isArray(auth.rows) ? auth.rows : []));
+        var user = cur && (cur.user || cur.name || cur.username || cur.account);
+        var row = rows.find(function(x){
+          var u = x && (x.user || x.name || x.username || x.account || '');
+          return String(u||'').trim() === String(user||'').trim();
+        }) || null;
+        var pwd = row && (row.password || row.pass || row.pwd || row.secret || row.plainPassword || row.loginPass || '');
+        var r = await fetch(base + '/api/tasun/login', {
+          method:'POST', cache:'no-store', credentials:'include',
+          headers:{ 'Content-Type':'application/json' },
+          body: JSON.stringify({ username:user, password:pwd })
+        });
+        var text = await r.text();
+        var json = null;
+        try{ json = JSON.parse(text); }catch(e){}
+        if(json && json.token){ try{ localStorage.setItem('tasunCloudToken_v1', json.token); }catch(e){} }
+        return { status:r.status, text:text, username:user, hasPwd:!!pwd, token:json&&json.token||'' };
+      },
+      me: async function(){
+        var base = (window.__SXDH_CFG__ && window.__SXDH_CFG__.apiBase) || 'https://tasun-worker.wutasun.workers.dev';
+        var token=''; try{ token = localStorage.getItem('tasunCloudToken_v1')||''; }catch(e){}
+        var r = await fetch(base + '/api/tasun/me', {
+          method:'GET', cache:'no-store', credentials:'include',
+          headers: token ? { Authorization: 'Bearer ' + token } : {}
+        });
+        return { status:r.status, text: await r.text(), token: token };
+      },
+      read: async function(){
+        var base = (window.__SXDH_CFG__ && window.__SXDH_CFG__.apiBase) || 'https://tasun-worker.wutasun.workers.dev';
+        var token=''; try{ token = localStorage.getItem('tasunCloudToken_v1')||''; }catch(e){}
+        var pageKey = (window.__SXDH_CFG__ && window.__SXDH_CFG__.pageKey) || 'xsdh-notes';
+        var r = await fetch(base + '/api/tasun/read', {
+          method:'POST', cache:'no-store', credentials:'include',
+          headers:{ 'Content-Type':'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+          body: JSON.stringify({ resourceKey: pageKey, key: pageKey, pageKey: pageKey })
+        });
+        return { status:r.status, text: await r.text(), token: token, pageKey: pageKey };
+      },
+      sync: async function(){
+        return await (window.syncFromCloud ? window.syncFromCloud() : Promise.resolve({ ok:false, why:'syncFromCloud unavailable' }));
+      }
+    };
     function readStorageValue(key){
       var v = "";
       try{ v = sessionStorage.getItem(key) || ""; }catch(e){ v = ""; }
@@ -3404,27 +3441,6 @@ $("btnSave").addEventListener("click", async function(){
       setInterval(function(){ scheduleSync("periodic"); }, SYNC_PERIODIC_MS);
 
     }
-
-
-    window.__TASUN_SXDH_DIAG__ = {
-      pageKey: PAGE_KEY,
-      clear: function(){
-        try{ sessionStorage.removeItem("tasunCloudToken_v1"); }catch(e){}
-        try{ localStorage.removeItem("tasunCloudToken_v1"); }catch(e){}
-        try{ sessionStorage.removeItem("tasunCloudToken_v1__" + PAGE_KEY); }catch(e){}
-        try{ localStorage.removeItem("tasunCloudToken_v1__" + PAGE_KEY); }catch(e){}
-        try{ clearWorkerTokens(); }catch(e){}
-        return { ok:true, msg:"worker token cleared" };
-      },
-      user: function(){
-        return { current:getCurrentUser(), auth:ensureAuthTable(), token:getSharedWorkerToken(), apiBase:(state.cloud&&state.cloud.apiBase)||"" };
-      },
-      health: async function(){ var cfg=await loadCloudCfg(); return { cfg:cfg, ok:await cloudHealth(cfg) }; },
-      login: async function(){ var cfg=await loadCloudCfg(); var tok=await workerLogin(cfg); return { token:tok||"", stored:getSharedWorkerToken()||"" }; },
-      me: async function(){ var cfg=await loadCloudCfg(); return await probeWorkerMe(cfg); },
-      read: async function(){ var cfg=await loadCloudCfg(); return await cloudRead(cfg, PAGE_KEY); },
-      sync: async function(){ return await reconcileCloudOnOpen({ silent:false }); }
-    };
 
     // ---------------------------
     // Boot
