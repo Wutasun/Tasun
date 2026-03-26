@@ -540,6 +540,8 @@
 })();
 </script>
 
+  <!-- 已移除舊版外掛：tasun-guard-v5 / tasun-cloudwrap-v4 / tasun-auth-v4
+       本頁改由內建正式版單一規則處理登入、雲端授權與同步，避免舊版腳本重複干擾。 -->
 <!-- Tasun Global Core bridge -->
 <script src="tasun-global-core.js"></script>
 <script>
@@ -871,7 +873,7 @@ window.TASUN_RESOURCE_KEY = window.TASUN_RESOURCE_KEY || PAGE_KEY;
 window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
 window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
-    var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || (function(){try{var u=new URL(location.href);return (u.searchParams.get("v")||"").trim();}catch(e){return ""}})() || "20260319_16";
+    var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || (function(){try{var u=new URL(location.href);return (u.searchParams.get("v")||"").trim();}catch(e){return ""}})() || "20260325_62";
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
@@ -2784,21 +2786,33 @@ function getPromptOptions(mode){
         cfg = cfg || await loadCloudCfg();
         const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-        const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/pull";
+        const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/read";
+        const url = _joinUrl(apiBase, readPath);
 
-        const url = _joinUrl(apiBase, readPath) + (readPath.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(pageKey);
+        async function doFetch(){
+          return await fetch(url, {
+            method: "POST",
+            cache: "no-store",
+            credentials: getWorkerCredentialMode(cfg),
+            headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
+            body: JSON.stringify({ resourceKey: pageKey })
+          });
+        }
 
-        const r = await fetch(url, {
-          method: "GET",
-          cache: "no-store",
-          credentials: getWorkerCredentialMode(cfg),
-          headers: buildWorkerAuthHeaders({ "accept":"application/json" })
-        });
+        let r = await doFetch();
+        if((r.status===401 || r.status===403)){
+          try{ await workerLogin(cfg); }catch(_e){}
+          r = await doFetch();
+        }
         if(!r.ok){
-          const t = await r.text().catch(()=> "");
+          const t = await r.text().catch(function(){ return ""; });
+          if(r.status===401 || r.status===403){
+            setCloudState({ authState: r.status===403 ? "forbidden" : "unauth", ok:false, cfgOk:true }, true);
+          }
           throw new Error("cloud read failed: " + r.status + " " + t.slice(0,200));
         }
         const j = await r.json();
+        setCloudState({ authState:"ok", cfgOk:true, reachable:true }, false);
         return _normalizePullResponse(j);
       }
 
@@ -2808,7 +2822,6 @@ function getPromptOptions(mode){
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
         const mergePath = (eps && eps.merge) ? String(eps.merge) : "/api/tasun/merge";
 
-        // Accept: {key,payload:{db,counter}} / {payload:{db,counter}} / raw {db,counter}
         let payload = payloadLike;
         if(payload && typeof payload === "object"){
           if(payload.payload && typeof payload.payload==="object") payload = payload.payload;
@@ -2817,25 +2830,37 @@ function getPromptOptions(mode){
         payload = payload || { db:[], counter:0 };
 
         const body = {
-          key: pageKey,
+          resourceKey: pageKey,
           payload: { db: Array.isArray(payload.db)? payload.db : [], counter: Number(payload.counter)||0 },
           client: clientInfo && typeof clientInfo==="object" ? clientInfo : {}
         };
 
         const url = _joinUrl(apiBase, mergePath);
 
-        const r = await fetch(url, {
-          method: "POST",
-          cache: "no-store",
-          credentials: getWorkerCredentialMode(cfg),
-          headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
-          body: JSON.stringify(body)
-        });
+        async function doFetch(){
+          return await fetch(url, {
+            method: "POST",
+            cache: "no-store",
+            credentials: getWorkerCredentialMode(cfg),
+            headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
+            body: JSON.stringify(body)
+          });
+        }
+
+        let r = await doFetch();
+        if((r.status===401 || r.status===403)){
+          try{ await workerLogin(cfg); }catch(_e){}
+          r = await doFetch();
+        }
         if(!r.ok){
-          const t = await r.text().catch(()=> "");
+          const t = await r.text().catch(function(){ return ""; });
+          if(r.status===401 || r.status===403){
+            setCloudState({ authState: r.status===403 ? "forbidden" : "unauth", ok:false, cfgOk:true }, true);
+          }
           throw new Error("cloud merge failed: " + r.status + " " + t.slice(0,200));
         }
         const j = await r.json();
+        setCloudState({ authState:"ok", cfgOk:true, reachable:true }, false);
         return _normalizePullResponse(j);
       }
     async function reconcileCloudOnOpen(opts){
@@ -2854,10 +2879,12 @@ function getPromptOptions(mode){
         try{ hydrateCrossPageAuth(); }catch(e){}
         await cloudHealth(cfg);
 
-        // 1.5) 沒有 token / session 時，不直接打 read / merge，避免畫面一直停在「待同步」
-        if(!hasWorkerTokenReady()){
-          setCloudState({ ok:false, cfgOk:true, authState:"unauth" }, true);
-          if(!silent) toast("雲端未授權，請先登入或補 token");
+        // 1.5) 正式版：若尚無 token，先嘗試自動 Worker login，不直接判未授權/未設定
+        var authed = false;
+        try{ authed = await ensureWorkerAuthorized(cfg); }catch(e){ authed = false; }
+        if(!authed){
+          setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true);
+          if(!silent) toast("雲端未授權，已嘗試自動登入但未成功");
           return false;
         }
 
@@ -2904,8 +2931,9 @@ function getPromptOptions(mode){
         if(!silent) toast("已完成開啟同步");
         return true;
       }catch(e){
-        setCloudState({ ok:false }, true);
-        if(!silent) toast("開啟同步失敗：" + (e && e.message ? e.message : String(e)));
+        var msg = String((e && e.message) ? e.message : e || "");
+        setCloudState({ ok:false, cfgOk:true, reachable:true, authState: (/401|403|UNAUTH|FORBIDDEN/i.test(msg) ? "unauth" : (state.cloud && state.cloud.authState) || "") }, true);
+        if(!silent) toast("開啟同步失敗：" + msg);
         return false;
       }
     }
@@ -2922,9 +2950,11 @@ function getPromptOptions(mode){
 
       try{
         try{ hydrateCrossPageAuth(); }catch(e){}
-        if(!hasWorkerTokenReady()){
-          setCloudState({ ok:false, cfgOk:true, authState:"unauth" }, true);
-          if(!silent) toast("雲端未授權，請先登入或補 token");
+        var authed = false;
+        try{ authed = await ensureWorkerAuthorized(cfg); }catch(e){ authed = false; }
+        if(!authed){
+          setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true);
+          if(!silent) toast("雲端未授權，已嘗試自動登入但未成功");
           return;
         }
         var remote = await cloudRead(cfg, PAGE_KEY);
@@ -2983,8 +3013,9 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         refresh();
         if(!silent) toast("已從雲端更新");
       }catch(e){
-        setCloudState({ ok:false }, true);
-        if(!silent) toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
+        var msg = String((e && e.message) ? e.message : e || "");
+        setCloudState({ ok:false, cfgOk:true, reachable:true, authState: (/401|403|UNAUTH|FORBIDDEN/i.test(msg) ? "unauth" : (state.cloud && state.cloud.authState) || "") }, true);
+        if(!silent) toast("雲端讀取失敗：" + msg);
       }
     }
     async function syncToCloud(opts){
@@ -3024,9 +3055,11 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
 
       try{
         try{ hydrateCrossPageAuth(); }catch(e){}
-        if(!hasWorkerTokenReady()){
-          setCloudState({ ok:false, cfgOk:true, authState:"unauth" }, true);
-          if(!silent) toast("雲端未授權，請先登入或補 token");
+        var authed = false;
+        try{ authed = await ensureWorkerAuthorized(cfg); }catch(e){ authed = false; }
+        if(!authed){
+          setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true);
+          if(!silent) toast("雲端未授權，已嘗試自動登入但未成功");
           return;
         }
         var merged = await cloudMerge(cfg, PAGE_KEY, { db: sendRows, counter: state.counter }, {
@@ -3051,8 +3084,9 @@ var out = mergePayload(remote, { db: state.db, counter: state.counter });
         refresh();
         if(!silent) toast(fullUpload ? "雲端同步完成（全量）" : "雲端同步完成（增量）");
       }catch(e){
-        setCloudState({ ok:false }, true);
-        if(!silent) toast("雲端同步失敗：" + (e && e.message ? e.message : String(e)));
+        var msg = String((e && e.message) ? e.message : e || "");
+        setCloudState({ ok:false, cfgOk:true, reachable:true, authState: (/401|403|UNAUTH|FORBIDDEN/i.test(msg) ? "unauth" : (state.cloud && state.cloud.authState) || "") }, true);
+        if(!silent) toast("雲端同步失敗：" + msg);
       }
     }
 
