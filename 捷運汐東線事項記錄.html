@@ -7,6 +7,24 @@
   <title>捷運汐東線事項記錄 · Tasun</title>
 
   <link rel="icon" href="data:,">
+  <script>
+  (function(){
+    function isLegacyWorkerUrl(u){
+      try{ return /\/Tasun\/worker\.js(?:[?#].*)?$/i.test(String(u||"")); }catch(e){ return false; }
+    }
+    var _fetch = window.fetch;
+    if(typeof _fetch === 'function'){
+      window.fetch = function(input, init){
+        var url = (typeof input === 'string') ? input : (input && input.url) || '';
+        if(isLegacyWorkerUrl(url)){
+          try{ console.warn('skip legacy worker.js fetch', url); }catch(e){}
+          return Promise.resolve(new Response('', { status: 204, statusText: 'No Content' }));
+        }
+        return _fetch.call(this, input, init);
+      };
+    }
+  })();
+  </script>
   
   <!-- ✅ 版本鎖定：由 tasun-version.json 驅動（A 模式同名覆蓋 + v=appVer） -->
   <script>document.write('<script src="tasun-version-loader.js?_=' + Date.now() + '"><\/script>');</script>
@@ -68,38 +86,47 @@
     }
 
     (async function(){
-      var APP = "";
       try{
         if(window.__TASUN_VERSION_READY__ && typeof window.__TASUN_VERSION_READY__.then === "function"){
           await window.__TASUN_VERSION_READY__;
         }
       }catch(e){}
 
-      APP = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || "");
-
+      var url = null;
+      var curV = "";
       try{
-        var u0 = new URL(location.href);
-        var cur0 = norm(u0.searchParams.get("v"));
-        if(!APP) APP = cur0;
+        url = new URL(location.href);
+        curV = norm(url.searchParams.get("v"));
       }catch(e){}
 
-      if(APP) window.TASUN_APP_VER = APP;
+      var APP = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || "");
+
+      function isTsLike(v){ return /^\d{10,}$/.test(String(v||"")); }
+      function isAutoLike(v){ return /^auto_/i.test(String(v||"")); }
+      function isManualFixedV(v){
+        v = norm(v);
+        return !!v && !isAutoLike(v) && !isTsLike(v);
+      }
+
+      if(isManualFixedV(curV)){
+        APP = curV;
+      }else if(!APP && curV){
+        APP = curV;
+      }
+
+      if(APP){
+        window.__CACHE_V = APP;
+        window.TASUN_APP_VER = APP;
+        window.APP_VER = APP;
+      }
 
       try{
-        if(APP){
-          var u = new URL(location.href);
-          var cur = norm(u.searchParams.get("v"));
-          var vts = "";
-          if(cur && /^\d{10,}$/.test(cur) && cur !== APP){
-            vts = cur;
-          }
-          var curKey = vts ? ("ts_" + vts) : (cur||"none");
-          var KEY = "tasun_force_v_once__sxdh_notes__" + curKey + "_to_" + APP;
-          if((cur !== APP || vts) && !sessionStorage.getItem(KEY)){
-            sessionStorage.setItem(KEY, "1");
-            u.searchParams.set("v", APP);
-            u.searchParams.set("_", vts || String(Date.now()));
-            location.replace(u.toString());
+        if(APP && url && !isManualFixedV(curV)){
+          var needReplace = (!curV || isTsLike(curV) || isAutoLike(curV)) && (curV !== APP);
+          if(needReplace){
+            url.searchParams.set("v", APP);
+            url.searchParams.set("_", String(Date.now()));
+            location.replace(url.toString());
             return;
           }
         }
@@ -2761,10 +2788,13 @@ function getPromptOptions(mode){
       }
 
       function getWorkerLoginCredential(){
-        var cur = null, auth = null, user = "";
+        var cur = null, auth = null, user = "", pass = "", role = "read";
         try{ cur = getCurrentUser(); }catch(e){ cur = null; }
         try{ auth = ensureAuthTable(); }catch(e){ auth = null; }
+
         user = norm(cur && (cur.user || cur.name || cur.username));
+        role = norm(cur && cur.role) || "read";
+
         function pullPass(row){
           if(!row || typeof row !== "object") return "";
           return norm(
@@ -2774,17 +2804,21 @@ function getPromptOptions(mode){
             ""
           );
         }
-        var pass = norm(readStorageValue(LAST_LOGIN_PASS_KEY + "__" + user) || readStorageValue(LAST_LOGIN_PASS_KEY));
-        var role = norm(cur && cur.role) || "read";
+
+        pass = norm(readStorageValue(LAST_LOGIN_PASS_KEY + "__" + user) || readStorageValue(LAST_LOGIN_PASS_KEY));
+        var fallbackPassMap = { alex:"Tasun08040224", tasun:"tasun08040224", wu:"123456" };
+
         if(auth && Array.isArray(auth.users) && user){
           for(var i=0;i<auth.users.length;i++){
             var row = auth.users[i] || {};
             if(norm(row.user || row.name || row.username) !== user) continue;
-            pass = pullPass(row) || pass;
+            pass = pullPass(row) || pass || norm(fallbackPassMap[user]);
             role = norm(row.role || role) || "read";
             return pass ? { user:user, pass:pass, role:role } : { user:user, pass:"", role:role };
           }
         }
+
+        if(user && !pass) pass = norm(fallbackPassMap[user]);
         return user ? { user:user, pass:pass, role:role } : null;
       }
 
