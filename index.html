@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- TASUN_REBUILD_STAMP:index_v52 2026-03-25 00:00:00 (single-source-admin-auth-only) -->
+<!-- TASUN_REBUILD_STAMP:index_v52b 2026-03-27 00:00:00 (single-source-admin-auth-only + worker-token-bridge) -->
 <html lang="zh-Hant">
 <head>
   <!-- Tasun v5 FINAL：版本/快取由 tasun-version.json 控制；腳本改為動態帶 v 載入 -->
@@ -121,7 +121,7 @@
     await loadOnce('tasun-global-auth-v65', window.__withV('tasun-global-auth-v65.js'));
     await loadOnce('tasun-cloudwrap-v4', window.__withV('tasun-cloudwrap-v4.js'));
     await loadOnce('tasun-auth-v4', window.__withV('tasun-auth-v4.js'));
-    await loadOnce('tasun-guard-v5', window.__withV('tasun-guard-v5.js'));
+        await loadOnce('tasun-guard-v5', window.__withV('tasun-guard-v5.js'));
 
     (function initViewportStabilizer(){
       const root = document.documentElement;
@@ -726,16 +726,11 @@
         return String(v || 'https://tasun-worker.wutasun.workers.dev').replace(/\/+$/,'');
       }
       function getSharedWorkerToken(){
-        const keys = ['tasunBearerToken_v1','tasunCloudToken_v1','tasunCloudToken','tasun_token','tasunToken','tasunWorkerToken','tasun_auth_token','tasun_session_token','tasunCloudToken_v1__sxdh-notes','tasunCloudToken_v1__auth-table'];
+        const keys = ['tasunCloudToken_v1','tasunCloudToken_v1__sxdh-notes','tasunCloudToken_v1__auth-table'];
         for(const key of keys){
-          const v = String(sessionStorage.getItem(key) || localStorage.getItem(key) || '').trim();
-          if(v) return v.replace(/^Bearer\s+/i,'');
+          const v = String(localStorage.getItem(key) || sessionStorage.getItem(key) || '').trim();
+          if(v) return v;
         }
-        try{
-          const row = JSON.parse(sessionStorage.getItem('tasunSessionBridge_v1') || localStorage.getItem('tasunSessionBridge_v1') || sessionStorage.getItem('tasunCurrentUser_v1') || localStorage.getItem('tasunCurrentUser_v1') || 'null');
-          const tk = String((row && row.token) || '').trim();
-          if(tk) return tk.replace(/^Bearer\s+/i,'');
-        }catch(_e){}
         return '';
       }
       function buildWorkerAuthHeaders(extra){
@@ -1763,28 +1758,6 @@
 
 
 
-      function __tasunWriteWorkerTokenBridge(token){
-        try{
-          const tk = String(token || '').trim().replace(/^Bearer\s+/i,'');
-          const keys = ['tasunBearerToken_v1','tasunCloudToken_v1','tasunCloudToken','tasun_token','tasunToken','tasunWorkerToken','tasun_auth_token','tasun_session_token'];
-          keys.forEach(function(key){
-            try{ if(tk){ sessionStorage.setItem(key, tk); localStorage.setItem(key, tk); } else { sessionStorage.removeItem(key); localStorage.removeItem(key); } }catch(_e){}
-          });
-          return tk;
-        }catch(_e){ return ''; }
-      }
-      async function __tasunEnsureWorkerTokenBridge(username, password, role){
-        try{
-          if(window.TasunAuthV4 && window.TasunAuthV4.login){
-            const apiBase = (window.TASUN_API_BASE || 'https://tasun-worker.wutasun.workers.dev');
-            const cur = await window.TasunAuthV4.login({ username: username, password: password, apiBase: apiBase });
-            const tk = window.TasunAuthV4.getToken ? window.TasunAuthV4.getToken() : ((cur && cur.token) || '');
-            __tasunWriteWorkerTokenBridge(tk);
-            return tk;
-          }
-        }catch(err){ console.warn('worker token bridge login failed', err); }
-        return '';
-      }
       function __tasunSaveLoginBridge(username, password, role){
         try{
           const nowIso = new Date().toISOString();
@@ -1796,22 +1769,13 @@
 
           const userObj = {
             user: u,
-            username: u,
             name: u,
             role: r || 'read',
-            token: getSharedWorkerToken(),
             at: nowIso
           };
 
           try{ sessionStorage.setItem('tasunCurrentUser_v1', JSON.stringify(userObj)); }catch(e){}
           try{ localStorage.setItem('tasunCurrentUser_v1', JSON.stringify(userObj)); }catch(e){}
-          try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(userObj)); }catch(e){}
-          try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(userObj)); }catch(e){}
-
-          if(p){
-            try{ sessionStorage.setItem('tasunLastLoginPass_v1', p); }catch(e){}
-            try{ localStorage.setItem('tasunLastLoginPass_v1', p); }catch(e){}
-          }
 
           return true;
         }catch(err){
@@ -1854,7 +1818,6 @@
 
           setSession({ username: u.username, level: finalRole });
 
-          await __tasunEnsureWorkerTokenBridge(u.username, password, finalRole);
           __tasunSaveLoginBridge(u.username, password, finalRole);
 
           applyUser(
@@ -1940,6 +1903,245 @@
     document.addEventListener('DOMContentLoaded', function(){ setTimeout(forceLoginOverlay, 900); });
     window.addEventListener('load', function(){ setTimeout(forceLoginOverlay, 1200); });
   })();
+  </script>
+
+
+  <!-- Tasun v5 正式收斂：首頁登入後同步橋接 Worker token 到子頁 -->
+  <script>
+(function(){
+  'use strict';
+  if (window.__TASUN_INDEX_WORKER_TOKEN_BRIDGE_PATCH_V1__) return;
+  window.__TASUN_INDEX_WORKER_TOKEN_BRIDGE_PATCH_V1__ = true;
+
+  var API_BASE = 'https://tasun-worker.wutasun.workers.dev';
+  var CURRENT_KEY = 'tasunCurrentUser_v1';
+  var LAST_LOGIN_PASS_KEY = 'tasunLastLoginPass_v1';
+  var SESSION_KEY = 'tasunSessionLogin_v2';
+  var TOKEN_KEYS = [
+    'tasunCloudToken_v1',
+    'tasunCloudToken_v1__index',
+    'tasunCloudToken_v1__auth-table',
+    'tasunBearerToken_v1',
+    'tasunAccessToken_v1',
+    'tasunAuthToken_v1',
+    'tasunSessionToken_v1',
+    'tasun_token',
+    'tasunToken',
+    'tasun_auth_token',
+    'authToken',
+    'access_token',
+    'token',
+    'x-api-key',
+    'tasunApiKey_v1'
+  ];
+
+  function norm(v){ return String(v == null ? '' : v).trim(); }
+  function nowISO(){ try{ return new Date().toISOString(); }catch(e){ return ''; } }
+  function safeParse(raw){ try{ return JSON.parse(raw); }catch(e){ return null; } }
+  function readStorage(storage, key){ try{ return storage.getItem(key) || ''; }catch(e){ return ''; } }
+  function writeStorage(storage, key, value){ try{ storage.setItem(key, value); }catch(e){} }
+  function removeStorage(storage, key){ try{ storage.removeItem(key); }catch(e){} }
+  function readCookie(name){
+    try{
+      var esc = String(name || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      var m = document.cookie.match(new RegExp('(?:^|; )' + esc + '=([^;]*)'));
+      return m ? decodeURIComponent(m[1] || '') : '';
+    }catch(e){ return ''; }
+  }
+  function readJSONKeys(keys){
+    keys = Array.isArray(keys) ? keys : [];
+    for(var i=0;i<keys.length;i++){
+      var raw = readStorage(sessionStorage, keys[i]) || readStorage(localStorage, keys[i]);
+      if(!raw) continue;
+      var js = safeParse(raw);
+      if(js && typeof js === 'object') return js;
+    }
+    return null;
+  }
+  function getCurrentUser(){
+    var js = readJSONKeys([CURRENT_KEY, SESSION_KEY, 'tasunSessionBridge_v1', 'tasunSso_v2', 'tasunSso_v1', 'tasunCurrentUser_v2']);
+    if(js && typeof js === 'object'){
+      var user = norm(js.user || js.name || js.username || js.account);
+      if(user) return { user:user, role:norm(js.role || js.level || 'read') || 'read' };
+    }
+    try{
+      if(window.TasunAuthV4 && typeof window.TasunAuthV4.getCurrentUser === 'function'){
+        var u = window.TasunAuthV4.getCurrentUser();
+        var user2 = norm(u && (u.user || u.name || u.username));
+        if(user2) return { user:user2, role:norm(u.role || u.level || 'read') || 'read' };
+      }
+    }catch(e){}
+    return null;
+  }
+  function getLastPass(user){
+    user = norm(user);
+    return norm(
+      (user ? readStorage(sessionStorage, LAST_LOGIN_PASS_KEY + '__' + user) : '') ||
+      (user ? readStorage(localStorage,  LAST_LOGIN_PASS_KEY + '__' + user) : '') ||
+      readStorage(sessionStorage, LAST_LOGIN_PASS_KEY) ||
+      readStorage(localStorage, LAST_LOGIN_PASS_KEY)
+    );
+  }
+  function extractToken(obj){
+    if(!obj || typeof obj !== 'object') return '';
+    return norm(
+      obj.token || obj.accessToken || obj.authToken || obj.bearer || obj.workerToken || obj.cloudToken || obj.apiKey ||
+      (obj.auth && (obj.auth.token || obj.auth.accessToken || obj.auth.authToken || obj.auth.bearer || obj.auth.apiKey)) ||
+      (obj.session && (obj.session.token || obj.session.accessToken || obj.session.authToken || obj.session.bearer || obj.session.apiKey)) ||
+      (obj.data && (obj.data.token || obj.data.accessToken || obj.data.authToken || obj.data.bearer || obj.data.apiKey)) ||
+      (obj.payload && (obj.payload.token || obj.payload.accessToken || obj.payload.authToken || obj.payload.bearer || obj.payload.apiKey)) ||
+      ''
+    );
+  }
+  function getAnyToken(){
+    for(var i=0;i<TOKEN_KEYS.length;i++){
+      var v = norm(readStorage(sessionStorage, TOKEN_KEYS[i]) || readStorage(localStorage, TOKEN_KEYS[i]));
+      if(v) return v;
+    }
+    var bridge = readJSONKeys(['tasunSessionBridge_v1', 'tasunSso_v2', 'tasunSso_v1', CURRENT_KEY, SESSION_KEY]);
+    var t = extractToken(bridge);
+    if(t) return t;
+    try{
+      if(window.TasunAuthV4 && typeof window.TasunAuthV4.getToken === 'function'){
+        t = norm(window.TasunAuthV4.getToken() || '');
+        if(t) return t;
+      }
+    }catch(e){}
+    try{
+      var ga = window.TasunGlobalAuth || window.tasunGlobalAuth || window.TASUN_AUTH || null;
+      if(ga){
+        t = norm(ga.token || ga.accessToken || ga.authToken || ga.apiKey || (typeof ga.getToken === 'function' ? ga.getToken() : '') || '');
+        if(t) return t;
+      }
+    }catch(e){}
+    return norm(readCookie('tasun_bearer_token') || readCookie('tasun_token') || readCookie('token') || readCookie('tasun_auth_token'));
+  }
+  function bridgeToken(token, user, role, password){
+    token = norm(token);
+    user = norm(user);
+    role = norm(role || 'read') || 'read';
+    if(!token || !user) return false;
+    for(var i=0;i<TOKEN_KEYS.length;i++){
+      writeStorage(sessionStorage, TOKEN_KEYS[i], token);
+      writeStorage(localStorage, TOKEN_KEYS[i], token);
+    }
+    var bridge = { user:user, name:user, role:role, token:token, accessToken:token, authToken:token, bearer:token, at:nowISO() };
+    writeStorage(sessionStorage, 'tasunSessionBridge_v1', JSON.stringify(bridge));
+    writeStorage(localStorage, 'tasunSessionBridge_v1', JSON.stringify(bridge));
+    writeStorage(sessionStorage, CURRENT_KEY, JSON.stringify({ user:user, name:user, role:role, at:nowISO() }));
+    writeStorage(localStorage, CURRENT_KEY, JSON.stringify({ user:user, name:user, role:role, at:nowISO() }));
+    if(password){
+      writeStorage(sessionStorage, LAST_LOGIN_PASS_KEY, password);
+      writeStorage(localStorage, LAST_LOGIN_PASS_KEY, password);
+      writeStorage(sessionStorage, LAST_LOGIN_PASS_KEY + '__' + user, password);
+      writeStorage(localStorage, LAST_LOGIN_PASS_KEY + '__' + user, password);
+    }
+    return true;
+  }
+  function clearBridgedToken(){
+    for(var i=0;i<TOKEN_KEYS.length;i++){
+      removeStorage(sessionStorage, TOKEN_KEYS[i]);
+      removeStorage(localStorage, TOKEN_KEYS[i]);
+    }
+    try{
+      var js = safeParse(readStorage(sessionStorage, 'tasunSessionBridge_v1')) || safeParse(readStorage(localStorage, 'tasunSessionBridge_v1'));
+      if(js && typeof js === 'object'){
+        delete js.token; delete js.accessToken; delete js.authToken; delete js.bearer; delete js.workerToken; delete js.cloudToken; delete js.apiKey;
+        writeStorage(sessionStorage, 'tasunSessionBridge_v1', JSON.stringify(js));
+        writeStorage(localStorage, 'tasunSessionBridge_v1', JSON.stringify(js));
+      }
+    }catch(e){}
+  }
+  async function workerLogin(user, password, role){
+    user = norm(user); password = norm(password); role = norm(role || 'read') || 'read';
+    if(!user || !password) return '';
+    var res = await fetch(API_BASE + '/api/tasun/login', {
+      method:'POST',
+      cache:'no-store',
+      credentials:'include',
+      headers:{ 'content-type':'application/json', 'accept':'application/json' },
+      body: JSON.stringify({ username:user, password:password, user:user, pass:password })
+    });
+    if(!res.ok){
+      var txt = await res.text().catch(function(){ return ''; });
+      throw new Error('worker login failed: ' + res.status + ' ' + String(txt).slice(0,200));
+    }
+    var json = await res.json().catch(function(){ return {}; });
+    var token = extractToken(json);
+    if(token) bridgeToken(token, user, norm(json.role || role) || role, password);
+    return token;
+  }
+  function syncExistingTokenBridge(){
+    var cur = getCurrentUser();
+    if(!cur || !cur.user) return false;
+    var token = getAnyToken();
+    if(!token) return false;
+    return bridgeToken(token, cur.user, cur.role, '');
+  }
+  var pendingCred = null;
+  var inflight = false;
+  async function ensureWorkerBridgeFromCred(cred){
+    if(inflight) return false;
+    inflight = true;
+    try{
+      cred = cred || pendingCred || {};
+      var user = norm(cred.user);
+      var role = norm(cred.role || 'read') || 'read';
+      var pass = norm(cred.pass) || getLastPass(user);
+      if(!user){
+        var cur = getCurrentUser();
+        user = norm(cur && cur.user);
+        role = norm((cur && cur.role) || role || 'read') || 'read';
+      }
+      if(!user || !pass) return false;
+      var token = getAnyToken();
+      if(token){ bridgeToken(token, user, role, pass); return true; }
+      token = await workerLogin(user, pass, role).catch(function(){ return ''; });
+      return !!token;
+    }finally{
+      inflight = false;
+    }
+  }
+  function queueEnsureBridge(cred, delay){
+    pendingCred = cred || pendingCred;
+    window.setTimeout(function(){ ensureWorkerBridgeFromCred(pendingCred).catch(function(){}); }, Number(delay || 0));
+  }
+
+  function installSubmitPatch(){
+    var form = document.getElementById('loginForm');
+    var usernameSel = document.getElementById('username');
+    var passwordInput = document.getElementById('password');
+    if(!form || !usernameSel || !passwordInput) return false;
+    form.addEventListener('submit', function(){
+      pendingCred = {
+        user: norm(usernameSel.value),
+        pass: String(passwordInput.value || ''),
+        role: norm((getCurrentUser() || {}).role || 'read') || 'read'
+      };
+      queueEnsureBridge(pendingCred, 80);
+      queueEnsureBridge(pendingCred, 500);
+      queueEnsureBridge(pendingCred, 1200);
+    }, true);
+    return true;
+  }
+  function installLogoutPatch(){
+    ['btnLogout','btnSwitchUser','btnForceRelogin'].forEach(function(id){
+      var el = document.getElementById(id);
+      if(!el) return;
+      el.addEventListener('click', function(){ clearBridgedToken(); }, true);
+    });
+  }
+  function boot(){
+    installSubmitPatch();
+    installLogoutPatch();
+    syncExistingTokenBridge();
+    var cur = getCurrentUser();
+    if(cur && cur.user){ queueEnsureBridge({ user:cur.user, role:cur.role, pass:getLastPass(cur.user) }, 300); }
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
+  else boot();
+})();
+
   </script>
 </body>
 </html>
