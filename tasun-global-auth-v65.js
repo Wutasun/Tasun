@@ -19,7 +19,7 @@
   function isIndexPage(){ var p = currentPageName().toLowerCase(); return !p || p === "index.html"; }
   function readCookieSession(){
     try{
-      var m = document.cookie.match(new RegExp("(?:^|; )" + COOKIE_NAME.replace(/[.*+?^${}()|[\]\]/g, "\$&") + "=([^;]*)"));
+      var m = document.cookie.match(new RegExp("(?:^|; )" + COOKIE_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "=([^;]*)"));
       if(!m) return null;
       var raw = decodeURIComponent(m[1] || "");
       var json = b64d(raw);

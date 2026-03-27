@@ -15,7 +15,22 @@
   <meta http-equiv="Expires" content="0">
   <!-- ✅ 自動版本控版：改成 tasun-version.json + tasun-version-loader.js 自動雜湊 -->
   <script>document.write('<script src="tasun-version-loader.js?_=' + Date.now() + '"><\/script>');</script>
-  <script>window.__TASUN_CHILD_TOKEN_BRIDGE__ = true;<\/script>
+  <script>
+  // ✅SSO（免重複登入）：若 index 已登入，子頁直接沿用（不改 UI）
+  (function(){
+    const SSO_KEY="tasunSso_v1", CURRENT_KEY="tasunCurrentUser_v1";
+    function jparse(s,f){ try{return JSON.parse(s);}catch(_){return f;} }
+    function inferRole(n,r){ if(r) return r; if(n==="alex") return "admin"; if(n==="tasun") return "write"; return "read"; }
+    const sso = jparse(localStorage.getItem(SSO_KEY)||"", null);
+    if(sso && sso.name && (!sso.exp || Date.now() <= Number(sso.exp))){
+      try{
+        localStorage.setItem(CURRENT_KEY, JSON.stringify({ name:sso.name, user:sso.name, role: inferRole(sso.name, sso.role) }));
+      }catch(_e){}
+      try{ sessionStorage.setItem("tasunSsoTab_v1","1"); }catch(_e2){}
+      window.__TASUN_SSO_OK__=true;
+    }
+  })();
+  </script>
 
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -606,23 +621,146 @@
   <script>
   (() => {
     const CURRENT_KEY = "tasunCurrentUser_v1";
-    function getCurrentUser(){
-      try{
-        const raw = sessionStorage.getItem(CURRENT_KEY) || localStorage.getItem(CURRENT_KEY) || sessionStorage.getItem('tasunSessionBridge_v1') || localStorage.getItem('tasunSessionBridge_v1');
-        const obj = raw ? JSON.parse(raw) : null;
-        if(obj && (obj.name || obj.user)){
-          return { name: obj.name || obj.user, role: obj.role || 'read' };
-        }
-      }catch(e){}
-      return { name:'訪客', role:'read' };
+    const $ = (id) => document.getElementById(id);
+
+    function safeParse(s, fallback){ try{ return JSON.parse(s); }catch(_){ return fallback; } }
+    function inferRole(name, role){
+      const r = String(role || '').trim().toLowerCase();
+      if(r === 'admin' || r === 'write' || r === 'read') return r;
+      const n = String(name || '').trim().toLowerCase();
+      if(n === 'alex' || n === 'joyce') return 'admin';
+      if(n === 'tasun') return 'write';
+      return 'read';
     }
-    function setCurrentUser(u){
-      try{
-        const row = JSON.stringify({ name:u.name, user:u.name, role:u.role });
-        sessionStorage.setItem(CURRENT_KEY, row);
-        localStorage.setItem(CURRENT_KEY, row);
-      }catch(e){}
+    function getCurrent(){
+      const obj = safeParse(sessionStorage.getItem(CURRENT_KEY) || localStorage.getItem(CURRENT_KEY) || 'null', null) || {};
+      const name = obj?.name || obj?.user || obj?.username || obj?.account || '';
+      return { name: name || '未登入', role: inferRole(name, obj?.role) };
     }
+    function setCurrent(u){
+      const payload = { name: u.name, user: u.name, role: inferRole(u.name, u.role) };
+      try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+      try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+    }
+
+const AUTH_ENTRY_BUTTONS_KEY = "tasunAuthEntryButtons_v1";
+    const ROUTE_KEY = "tasunRoutes_v1";
+    const ENTRY_FILE = "汐東工程管理表.html";
+    const DEFAULT_ENTRY_BUTTONS = [
+      { key:"xidong_record", name:"捷運汐東線事項記錄", href:"捷運汐東線事項記錄.html", target:"", roles:["admin","write","read"] },
+      { key:"xidong_duty", name:"權責分工精簡版", href:"捷運汐東線權責分工精簡版.html", target:"", roles:["admin","write","read"] },
+      { key:"xidong_db", name:"捷運汐東線工程資料庫", href:"捷運汐止東湖線統包工程-資料庫.html", target:"", roles:["admin","write","read"] },
+      { key:"xidong_auth", name:"系統／權限", href:"權限表.html", target:"", roles:["admin"] },
+      { key:"xidong_cloud", name:"雲端檔案", href:"https://www.dropbox.com/scl/fo/glb4s65934h195bxuyuqm/AH5ClZ2u4MtPMvmgtfOUAa4?rlkey=tfxkpbpw8k9bctshx5xvuge8h&st=127vsul4&dl=0", target:"_blank", roles:["admin","write","read"] }
+    ];
+    function sParse(s,f){ try{return JSON.parse(s);}catch(_){ return f; } }
+    function normBtn(x, fallback){
+      const f = fallback || {};
+      return {
+        key: String(x?.key || f.key || "").trim(),
+        name: String(x?.name || x?.label || f.name || f.key || "").trim() || String(f.name || f.key || ""),
+        href: String(x?.href || f.href || "").trim(),
+        target: String(x?.target || f.target || "").trim(),
+        roles: Array.isArray(x?.roles) && x.roles.length ? x.roles.slice() : (Array.isArray(f.roles) ? f.roles.slice() : [])
+      };
+    }
+    function resolveEntryButtons(){
+      const store = sParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || '{}', {});
+      const routes = sParse(localStorage.getItem(ROUTE_KEY) || '{}', {});
+      const raw = Array.isArray(store[ENTRY_FILE]) && store[ENTRY_FILE].length ? store[ENTRY_FILE] : DEFAULT_ENTRY_BUTTONS;
+      return raw.map((x, i) => {
+        const fallback = DEFAULT_ENTRY_BUTTONS[i] || DEFAULT_ENTRY_BUTTONS.find(d => d.key === x?.key) || { key: 'btn' + (i+1), name: 'btn' + (i+1), href:'', target:'', roles:["admin","write","read"] };
+        const item = normBtn(x, fallback);
+        if(!item.href && routes && item.name && routes[item.name]) item.href = String(routes[item.name] || '').trim();
+        if(item.key === 'xidong_auth' && !item.href) item.href = '權限表.html';
+        return item;
+      });
+    }
+    function applyEntryButtons(){
+      const u = getCurrent();
+      const role = String(u?.role || 'read').toLowerCase();
+      const slots = [$("linkRecord"), $("linkDutyLite"), $("linkDB"), $("linkAuth"), $("linkDropbox")];
+      const items = resolveEntryButtons();
+      slots.forEach((a, i) => {
+        const item = items[i];
+        if(!a || !item){ if(a) a.style.display='none'; return; }
+        const allowed = !Array.isArray(item.roles) || !item.roles.length || item.roles.includes(role);
+        const authRestricted = (item.href === '權限表.html' || item.key === 'xidong_auth') && role === 'read';
+        if(!allowed || authRestricted){ a.style.display='none'; return; }
+        a.style.display='flex';
+        const span = a.querySelector('span');
+        if(span) span.textContent = item.name || item.key || ('按鍵' + (i+1));
+        let href = item.href || '#';
+        if(typeof window.__withV === 'function' && href && !/^https?:\/\//i.test(href) && !/^mailto:/i.test(href) && !/^tel:/i.test(href)) href = window.__withV(href);
+        a.setAttribute('href', href || '#');
+        const target = item.target || (/^https?:\/\//i.test(item.href || '') ? '_blank' : '');
+        if(target){ a.target = target; if(target === '_blank') a.rel = 'noopener'; }
+        else { a.removeAttribute('target'); a.removeAttribute('rel'); }
+      });
+    }
+
+    function renderUser(){
+      const u = getCurrent();
+      $("who").textContent  = u.name;
+      $("role").textContent = u.role;
+      applyEntryButtons();
+    }
+
+    function applyWithV(){
+      if(typeof window.__withV !== "function") return;
+      document.querySelectorAll('a[href]').forEach(a=>{
+        const href = a.getAttribute('href') || '';
+        if(!href) return;
+        if(/^https?:\/\//i.test(href)) return;
+        a.setAttribute('href', window.__withV(href));
+      });
+    }
+
+    /* ✅底圖(捷運車輛.png) 帶 cache v */
+    function applyVehicleBg(){
+      const file = "捷運車輛.png";
+      const url = (typeof window.__withV === "function") ? window.__withV(file) : file;
+      document.documentElement.style.setProperty("--vehicle-bg", `url("${url}")`);
+    }
+
+    window.__go = function(href){
+      const target = (typeof window.__withV === "function") ? window.__withV(href) : href;
+      location.href = target;
+    };
+
+    function enableStableNavigate(){
+      document.addEventListener("click", (e) => {
+        const a = e.target.closest("a[href]");
+        if(!a) return;
+
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        if (typeof e.button === "number" && e.button !== 0) return;
+
+        const href = a.getAttribute("href") || "";
+        if(!href) return;
+
+        if(/^https?:\/\//i.test(href)) return;
+        if(/^mailto:/i.test(href)) return;
+        if(/^tel:/i.test(href)) return;
+        if(href.startsWith("#")) return;
+
+        e.preventDefault();
+        window.__go(href);
+      }, { capture:true });
+    }
+
+    $("btnSwitch").addEventListener("click", () => {
+      const cur = getCurrent();
+      location.href = (typeof window.__withV === "function") ? window.__withV("index.html") : "index.html";
+    });
+
+    $("btnBack").addEventListener("click", () => {
+      window.__go("index.html");
+    });
+
+    applyWithV();
+    applyVehicleBg();
+    enableStableNavigate();
     window.addEventListener('storage', (e) => {
       if(!e || !e.key) return;
       if(e.key === AUTH_ENTRY_BUTTONS_KEY || e.key === ROUTE_KEY || e.key === CURRENT_KEY){
@@ -639,9 +777,9 @@
   <!-- ✅【允許新增段 2/2】：最穩兼容版（10 行接雲端） -->
   <script>
   (function(){
-    var APP_VER = (window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || "");
+    var APP_VER = (window.__CACHE_V || window.TASUN_APP_VER || "");
     var RESOURCE_KEY = "tasun-index-db", PK = "id", RES_URL = "tasun-resources.json";
-    var CURRENT_KEY = "tasunCurrentUser_v1"; /* 本頁本機資料來源：session/localStorage[tasunCurrentUser_v1] */
+    var CURRENT_KEY = "tasunCurrentUser_v1"; /* 本頁本機資料來源：localStorage[tasunCurrentUser_v1] */
     function jparse(s,f){ try{ return JSON.parse(s); }catch(_){ return f; } }
     function inferRole(name, role){ if(role) return role; if(name==="alex") return "admin"; if(name==="tasun") return "write"; return "read"; }
     function refreshUI(){ try{ var o=jparse(localStorage.getItem(CURRENT_KEY)||"",null)||{}; var n=o.name||o.user||o.username||o.account||"alex"; var r=inferRole(n,o.role); var w=document.getElementById("who"); if(w) w.textContent=n; var re=document.getElementById("role"); if(re) re.textContent=r; var la=document.getElementById("linkAuth"); if(la) la.style.display=(r==="read")?"none":""; }catch(_e){} if(typeof window.__xidongIndexAfterApply==="function"){ try{ window.__xidongIndexAfterApply(); }catch(_e2){} } else { console.log("[cloud] applied / refresh point ready"); } }
