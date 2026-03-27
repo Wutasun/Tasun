@@ -486,7 +486,6 @@
 </script>
 
   <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-guard-v5.js")) || "tasun-guard-v5.js") + '"><\/script>');</script>
-  <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-cloudwrap-v4.js")) || "tasun-cloudwrap-v4.js") + '"><\/script>');</script>
   <script>document.write('<script src="' + ((window.__withV && window.__withV("tasun-auth-v4.js")) || "tasun-auth-v4.js") + '"><\/script>');</script>
 <!-- Tasun Global Core bridge -->
 <script src="tasun-global-core.js"></script>
@@ -1990,27 +1989,35 @@ function getVisibleRows(){
         if(cfg && isValidApiBase(cfg.apiBase)){
           apiBase = String(cfg.apiBase);
           endpoints = cfg.endpoints ? Object.assign({}, cfg.endpoints) : endpoints;
-          cfgOk = true;
         }
       }catch(e){}
-      var authState = hasWorkerTokenReady() ? "" : "unauth";
-      setCloudState({ cfgOk: cfgOk, apiBase: apiBase, endpoints: endpoints, authState: authState }, false);
-      return { cfgOk: cfgOk, apiBase: apiBase, endpoints: endpoints, authState: authState };
+      var hasToken = hasWorkerTokenReady();
+      setCloudState({
+        cfgOk: cfgOk,
+        apiBase: apiBase,
+        endpoints: endpoints,
+        reachable: hasToken ? true : null,
+        authState: hasToken ? "ok" : "checking",
+        authPending: !hasToken
+      }, false);
+      return state.cloud;
     }
 
     async function refreshCloudAuthState(){
       try{
         var cfg = await loadCloudCfg();
-        var authState = hasWorkerTokenReady() ? "" : "unauth";
         setCloudState({
           cfgOk: !!(cfg && isValidApiBase(cfg.apiBase)),
           apiBase: (cfg && cfg.apiBase) ? cfg.apiBase : DEFAULT_API_BASE,
           endpoints: (cfg && cfg.endpoints) ? cfg.endpoints : Object.assign({}, DEFAULT_ENDPOINTS),
-          authState: authState
+          authPending: true,
+          authState: hasWorkerTokenReady() ? "ok" : "checking"
         }, false);
+        await ensureWorkerAuthorized(cfg);
+        state.cloud.authPending = false;
         return state.cloud;
       }catch(e){
-        setCloudState({ cfgOk: true, apiBase: DEFAULT_API_BASE, endpoints: Object.assign({}, DEFAULT_ENDPOINTS), authState: hasWorkerTokenReady() ? "" : "unauth" }, false);
+        setCloudState({ cfgOk: true, apiBase: DEFAULT_API_BASE, endpoints: Object.assign({}, DEFAULT_ENDPOINTS), authState: hasWorkerTokenReady() ? "ok" : "unauth", authPending:false }, false);
         return state.cloud;
       }
     }
@@ -2052,11 +2059,12 @@ function getVisibleRows(){
     function cloudBadgeText(){
       var c = state.cloud || {};
       if(c.ok) return "已同步";
+      if(c.authPending || c.authState==="checking") return "檢查中";
       if(c.authState==="unauth") return "未授權";
       if(c.authState==="forbidden") return "權限不足";
       if(c.authState==="expired") return "授權失敗";
       if(c.cfgOk && c.reachable===false) return "連線失敗";
-      if(c.cfgOk && (c.reachable===null || c.reachable===undefined) && !hasWorkerTokenReady()) return "未授權";
+      if(c.cfgOk && (c.reachable===null || c.reachable===undefined)) return "待同步";
       if(c.cfgOk) return "待同步";
       return "未設定";
     }
@@ -2807,18 +2815,23 @@ function getPromptOptions(mode){
 
       async function ensureWorkerAuthorized(cfg){
         cfg = cfg || await loadCloudCfg();
+        setCloudState({ authPending:true, authState: hasWorkerTokenReady() ? "ok" : "checking" }, false);
         try{ hydrateCrossPageAuth(); }catch(e){}
         var first = await probeWorkerMe(cfg);
-        if(first.ok){ setCloudState({ authState:"ok", cfgOk:true, reachable:true }, false); return true; }
+        if(first.ok){ setCloudState({ authState:"ok", authPending:false, cfgOk:true, reachable:true }, false); return true; }
         if(first.status===401 || first.status===403){
           clearWorkerTokens();
-          try{ await workerLogin(cfg); }catch(_e){}
-          var second = await probeWorkerMe(cfg);
-          if(second.ok){ setCloudState({ authState:"ok", cfgOk:true, reachable:true }, false); return true; }
-          setCloudState({ authState: second.status===403 ? "forbidden" : "unauth", cfgOk:true, reachable:true, ok:false }, false);
+          if(hasPlainWorkerCredential()){
+            try{ await workerLogin(cfg); }catch(_e){}
+            var second = await probeWorkerMe(cfg);
+            if(second.ok){ setCloudState({ authState:"ok", authPending:false, cfgOk:true, reachable:true }, false); return true; }
+            setCloudState({ authState: second.status===403 ? "forbidden" : "unauth", authPending:false, cfgOk:true, reachable:true, ok:false }, false);
+            return false;
+          }
+          setCloudState({ authState: first.status===403 ? "forbidden" : "unauth", authPending:false, cfgOk:true, reachable:true, ok:false }, false);
           return false;
         }
-        setCloudState({ cfgOk:true, reachable:first.status>0, ok:false }, false);
+        setCloudState({ cfgOk:true, reachable:first.status>0, authPending:false, ok:false }, false);
         return false;
       }
 
@@ -2854,7 +2867,6 @@ function getPromptOptions(mode){
           const cfgOk = !!(cfg && isValidApiBase(apiBase));
           const candidates = [];
           if(eps && eps.health) candidates.push(_joinUrl(apiBase, eps.health));
-          // common fallbacks
           candidates.push(_joinUrl(apiBase, "/api/ping"));
           candidates.push(_joinUrl(apiBase, "/api/tasun/ping"));
           candidates.push(_joinUrl(apiBase, "/api/ping"));
@@ -2866,11 +2878,10 @@ function getPromptOptions(mode){
               if(r.ok){ reachable = true; break; }
             }catch(_e){}
           }
-          // ✅ 健康檢查只代表 Worker 可達，不代表資料已完成同步。
           setCloudState({
             cfgOk: cfgOk,
             reachable: reachable,
-            ok: reachable ? true : !!(state.cloud && state.cloud.ok),
+            ok: !!(state.cloud && state.cloud.ok),
             apiBase: apiBase,
             endpoints: eps || null,
             lastOkAt: reachable ? Date.now() : (state.cloud && state.cloud.lastOkAt ? state.cloud.lastOkAt : "")
@@ -2987,10 +2998,11 @@ function getPromptOptions(mode){
         try{ hydrateCrossPageAuth(); }catch(e){}
         await cloudHealth(cfg);
 
-        // 1.5) 沒有 token / session 時，不直接打 read / merge，避免畫面一直停在「待同步」
-        if(!hasWorkerTokenReady()){
-          setCloudState({ ok:false, cfgOk:true, reachable:null, authState:"unauth" }, true);
-          if(!silent) toast("雲端未授權，請先登入或補 token");
+        // 1.5) 先檢查 Worker 授權：優先沿用既有 token / Worker session，必要時再嘗試登入
+        var authOk = await ensureWorkerAuthorized(cfg);
+        if(!authOk){
+          setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth", authPending:false }, true);
+          if(!silent) toast("雲端未授權，請先登入本頁一次");
           return false;
         }
 
@@ -3156,7 +3168,7 @@ function getPromptOptions(mode){
       try{ refresh(); }catch(e){ try{ refreshHintSafe(); }catch(_e){} }
     }
 
-    function doLogin(){
+    async function doLogin(){
       var user = norm($("loginUser").value);
       var pass = norm($("loginPass").value);
       if(!user || !pass){
@@ -3173,13 +3185,18 @@ function getPromptOptions(mode){
       }
       var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
       try{ sessionStorage.setItem(LAST_LOGIN_PASS_KEY, pass); }catch(e){}
+      try{ localStorage.setItem(LAST_LOGIN_PASS_KEY, pass); }catch(e){}
       try{ sessionStorage.setItem(LAST_LOGIN_PASS_KEY + "__" + hit.user, pass); }catch(e){}
+      try{ localStorage.setItem(LAST_LOGIN_PASS_KEY + "__" + hit.user, pass); }catch(e){}
       setCurrentUser(cur);
       applyUser(cur);
+      try{
+        var cfg = await loadCloudCfg();
+        await workerLogin(cfg);
+      }catch(e){}
       closeLogin();
       toast("登入成功");
-      try{ refreshCloudAuthStateSync(); }catch(e){}
-      // ✅ 登入後立即做一次「本端先 merge，再重抓雲端」
+      try{ await refreshCloudAuthState(); }catch(e){}
       setTimeout(function(){ reconcileCloudOnOpen({ silent:true }); }, 60);
     }
 
