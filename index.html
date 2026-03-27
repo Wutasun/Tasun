@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- TASUN_REBUILD_STAMP:index_v52b 2026-03-27 00:00:00 (single-source-admin-auth-only + worker-token-bridge) -->
+<!-- TASUN_REBUILD_STAMP:index_v52c 2026-03-27 00:00:00 (single-source-admin-auth-only + worker-token-bridge + child-page-sso-fix) -->
 <html lang="zh-Hant">
 <head>
   <!-- Tasun v5 FINAL：版本/快取由 tasun-version.json 控制；腳本改為動態帶 v 載入 -->
@@ -30,7 +30,7 @@
 
   <script>document.write('<script src="tasun-version-loader.js?_=' + Date.now() + '"><\/script>');</script>
   <script>
-    window.APP_VER = window.APP_VER || (window.__CACHE_V || '20260325_52');
+    window.APP_VER = window.APP_VER || (window.__CACHE_V || '20260327_52c');
     window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
   </script>
 
@@ -1767,23 +1767,97 @@
           const nowIso = new Date().toISOString();
           const u = String(username || '').trim();
           const p = String(password || '');
-          const r = String(role || '').trim().toLowerCase();
+          const r = String(role || '').trim().toLowerCase() || 'read';
 
           if(!u) return false;
 
           const userObj = {
             user: u,
             name: u,
-            role: r || 'read',
+            role: r,
+            at: nowIso
+          };
+
+          const bridgeObj = {
+            user: u,
+            name: u,
+            role: r,
             at: nowIso
           };
 
           try{ sessionStorage.setItem('tasunCurrentUser_v1', JSON.stringify(userObj)); }catch(e){}
           try{ localStorage.setItem('tasunCurrentUser_v1', JSON.stringify(userObj)); }catch(e){}
+          try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridgeObj)); }catch(e){}
+          try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridgeObj)); }catch(e){}
+
+          if(p){
+            try{ sessionStorage.setItem('tasunLastLoginPass_v1', p); }catch(e){}
+            try{ localStorage.setItem('tasunLastLoginPass_v1', p); }catch(e){}
+            try{ sessionStorage.setItem('tasunLastLoginPass_v1__' + u, p); }catch(e){}
+            try{ localStorage.setItem('tasunLastLoginPass_v1__' + u, p); }catch(e){}
+          }
 
           return true;
         }catch(err){
           console.warn('save login bridge failed', err);
+          return false;
+        }
+      }
+
+      async function __tasunBridgeWorkerTokenNow(username, password, role){
+        try{
+          const user = String(username || '').trim();
+          const pass = String(password || '').trim();
+          const finalRole = String(role || 'read').trim().toLowerCase() || 'read';
+          if(!user || !pass) return false;
+          const apiBase = 'https://tasun-worker.wutasun.workers.dev';
+          const res = await fetch(apiBase + '/api/tasun/login', {
+            method:'POST',
+            cache:'no-store',
+            credentials:'include',
+            headers:{ 'content-type':'application/json', 'accept':'application/json' },
+            body: JSON.stringify({ username:user, password:pass, user:user, pass:pass })
+          });
+          if(!res.ok) return false;
+          const json = await res.json().catch(() => ({}));
+          const token = String(
+            json.token || json.accessToken || json.authToken || json.bearer || json.workerToken || json.cloudToken || json.apiKey ||
+            ((json.auth || {}).token || (json.auth || {}).accessToken || (json.auth || {}).authToken || (json.auth || {}).bearer || (json.auth || {}).apiKey) ||
+            ((json.session || {}).token || (json.session || {}).accessToken || (json.session || {}).authToken || (json.session || {}).bearer || (json.session || {}).apiKey) ||
+            ((json.data || {}).token || (json.data || {}).accessToken || (json.data || {}).authToken || (json.data || {}).bearer || (json.data || {}).apiKey) ||
+            ((json.payload || {}).token || (json.payload || {}).accessToken || (json.payload || {}).authToken || (json.payload || {}).bearer || (json.payload || {}).apiKey) ||
+            ''
+          ).trim();
+          if(!token) return false;
+
+          const tokenKeys = [
+            'tasunCloudToken_v1',
+            'tasunCloudToken_v1__index',
+            'tasunCloudToken_v1__auth-table',
+            'tasunBearerToken_v1',
+            'tasunAccessToken_v1',
+            'tasunAuthToken_v1',
+            'tasunSessionToken_v1',
+            'tasun_token',
+            'tasunToken',
+            'tasun_auth_token',
+            'authToken',
+            'access_token',
+            'token',
+            'x-api-key',
+            'tasunApiKey_v1'
+          ];
+          tokenKeys.forEach((k) => {
+            try{ sessionStorage.setItem(k, token); }catch(e){}
+            try{ localStorage.setItem(k, token); }catch(e){}
+          });
+
+          const bridge = { user:user, name:user, role:finalRole, token:token, accessToken:token, authToken:token, bearer:token, at:new Date().toISOString() };
+          try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge)); }catch(e){}
+          try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge)); }catch(e){}
+          return true;
+        }catch(err){
+          console.warn('worker token bridge failed', err);
           return false;
         }
       }
@@ -1823,6 +1897,7 @@
           setSession({ username: u.username, level: finalRole });
 
           __tasunSaveLoginBridge(u.username, password, finalRole);
+          await __tasunBridgeWorkerTokenNow(u.username, password, finalRole);
 
           applyUser(
             Object.assign({}, u, { level: finalRole }),
