@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>捷運汐東線事項記錄 · Tasun</title>
+  <!-- cloud-unauth-final-fix 2026-03-27 -->
   <!-- [TASUN BUILD] sxdh-notes cloud-auth-fix 2026-03-27 -->
 
   <link rel="icon" href="data:,">
@@ -2044,6 +2045,10 @@ function getVisibleRows(){
           authPending: seed.authPending,
           authState: seed.authState
         }, false);
+        if(!seed.tokenReady && !seed.canRelogin){
+          setCloudState({ authPending:false, authState:"unauth", ok:false, reachable:true }, false);
+          return state.cloud;
+        }
         await ensureWorkerAuthorized(cfg);
         state.cloud.authPending = false;
         return state.cloud;
@@ -2829,8 +2834,8 @@ function getPromptOptions(mode){
           authState: seed.authState
         }, false);
 
-        // 最近 12 秒內已判定未授權/權限不足，直接沿用結果，避免 /api/tasun/me 401 連打
-        if(__workerAuthProbeMemo__ && __workerAuthProbeMemo__.ts && (now - __workerAuthProbeMemo__.ts < 12000)){
+        // 最近 60 秒內已判定未授權/權限不足，直接沿用結果，避免 /api/tasun/me 401 連打
+        if(__workerAuthProbeMemo__ && __workerAuthProbeMemo__.ts && (now - __workerAuthProbeMemo__.ts < 60000)){
           if(__workerAuthProbeMemo__.state==="unauth" || __workerAuthProbeMemo__.state==="forbidden"){
             setCloudState({
               authState: __workerAuthProbeMemo__.state,
@@ -2850,6 +2855,13 @@ function getPromptOptions(mode){
             }, false);
             return true;
           }
+        }
+
+        // 若既沒有 token，也沒有可重登的明碼密碼，直接判定未授權，不再打 /me 造成無限 401。
+        if(!seed.tokenReady && !hasPlainWorkerCredential()){
+          __workerAuthProbeMemo__ = { state:"unauth", ts: Date.now(), ok:false, status:401, reason:"no-token-no-plain-credential" };
+          setCloudState({ authState:"unauth", authPending:false, cfgOk:true, reachable:true, ok:false }, false);
+          return false;
         }
 
         // 若既沒有 token，也沒有可重登的明碼密碼，最多只做一次 /me 探測；401 後直接視為未授權
@@ -3567,10 +3579,16 @@ $("btnSave").addEventListener("click", async function(){
         try{ await refreshCloudAuthState(); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
-        // ✅ 開頁同步策略：不再被登入顯示狀態阻斷，先同步資料，再由後續 bridge 回填使用者/權限。
+        // ✅ 開頁同步策略：僅在雲端已授權或可自動重登時才進行，避免未授權時反覆 /me 401。
         try{
-          await reconcileCloudOnOpen({ silent:true });
-          try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
+          var _c = (typeof state !== "undefined" && state && state.cloud) ? state.cloud : {};
+          var _seed = getWorkerAuthSeedState();
+          if(_c && (_c.authState === "ok" || _seed.canRelogin || _seed.tokenReady)){
+            await reconcileCloudOnOpen({ silent:true });
+            try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
+          }else{
+            try{ setCloudState({ authState:"unauth", authPending:false, ok:false }, false); }catch(e){}
+          }
         }catch(e){}
         try{ ensureHeaderStateVisible(); }catch(e){}
         try{ if(!cur && !state.db.length) openLogin(); }catch(e){}
