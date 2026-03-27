@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>捷運汐東線事項記錄 · Tasun</title>
   <!-- cloud-unauth-final-fix 2026-03-27 -->
-  <!-- cloud-auth-inheritance-patch 2026-03-27 -->
   <!-- [TASUN BUILD] sxdh-notes cloud-auth-fix 2026-03-27 -->
 
   <link rel="icon" href="data:,">
@@ -841,14 +840,12 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     var CURRENT_KEY = "tasunCurrentUser_v1";
     var SESSION_KEY = "tasunSession_v1";
     var INDEX_SESSION_KEY = "tasunIndexSession_v1";
-    var AUTH_BRIDGE_KEYS = [CURRENT_KEY, SESSION_KEY, INDEX_SESSION_KEY, "tasunSessionBridge_v1", "tasunSso_v2", "tasunSso_v1", "tasunAuthSession_v1", "tasunCurrentUser_v2", "tasunCurrentUser", "tasun_current_user", "tasunUser", "tasun_user", "tasunLoginUser_v1", "tasunWorkerSession_v1", "tasunGlobalUser_v1"];
+    var AUTH_BRIDGE_KEYS = [CURRENT_KEY, SESSION_KEY, INDEX_SESSION_KEY, "tasunSessionBridge_v1", "tasunSso_v2", "tasunSso_v1", "tasunAuthSession_v1", "tasunCurrentUser_v2"];
     var LAST_LOGIN_PASS_KEY = "tasunLastLoginPass_v1";
     var TOKEN_BRIDGE_KEYS = [
       "tasunCloudToken_v1", "tasunCloudToken_v1__sxdh-notes", "tasunCloudToken_v1__auth-table",
       "tasunBearerToken_v1", "tasunAccessToken_v1", "tasunAuthToken_v1", "tasunSessionToken_v1",
-      "tasun_token", "tasunToken", "tasun_auth_token", "authToken", "access_token", "token", "x-api-key", "tasunApiKey_v1",
-      "tasunWorkerToken", "tasun_worker_token", "tasunWorkerBearer", "tasunSessionBearer", "tasunSessionAccessToken",
-      "tasunLoginToken_v1", "tasunLoginBearer_v1", "tasunGlobalToken_v1", "tasunCloudBearer_v1", "tasunAccessBearer_v1"
+      "tasun_token", "tasunToken", "tasun_auth_token", "authToken", "access_token", "token", "x-api-key", "tasunApiKey_v1"
     ];
 
     var DB_KEY = "tasun_db_v1__" + PAGE_KEY;
@@ -1195,10 +1192,6 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       try{ sessionStorage.setItem(INDEX_SESSION_KEY, "1"); }catch(e){}
       try{ sessionStorage.setItem("tasunSessionBridge_v1", JSON.stringify(row)); }catch(e){}
       try{ localStorage.setItem("tasunSessionBridge_v1", JSON.stringify(row)); }catch(e){}
-      try{ sessionStorage.setItem("tasunCurrentUser", JSON.stringify(row)); }catch(e){}
-      try{ sessionStorage.setItem("tasun_current_user", JSON.stringify(row)); }catch(e){}
-      try{ sessionStorage.setItem("tasunWorkerSession_v1", JSON.stringify(row)); }catch(e){}
-      try{ localStorage.setItem("tasunGlobalUser_v1", JSON.stringify(row)); }catch(e){}
     }
 
     function roleRank(role){
@@ -1384,14 +1377,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
         var token = getSharedWorkerToken();
         if(token){
           var normalized = /^Bearer\s+/i.test(token) ? token.replace(/^Bearer\s+/i, "") : token;
-          try{ sessionStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
-          try{ localStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
-          try{ sessionStorage.setItem("tasunBearerToken_v1", normalized); }catch(e){}
-          try{ localStorage.setItem("tasunBearerToken_v1", normalized); }catch(e){}
-          try{ sessionStorage.setItem("tasunWorkerToken", normalized); }catch(e){}
-          try{ localStorage.setItem("tasunWorkerToken", normalized); }catch(e){}
-          try{ sessionStorage.setItem("tasunCloudToken_v1__" + PAGE_KEY, normalized); }catch(e){}
-          try{ localStorage.setItem("tasunCloudToken_v1__" + PAGE_KEY, normalized); }catch(e){}
+          writeWorkerTokenBridges(normalized, row || {});
         }
       }catch(e){}
     }
@@ -2100,6 +2086,29 @@ function getVisibleRows(){
       }
     }
 
+    function setCloudState(patch, refreshNow){
+      try{
+        if(!state.cloud || typeof state.cloud !== "object") state.cloud = {};
+        var prevOk = !!state.cloud.ok;
+        var next = Object.assign({}, state.cloud, (patch && typeof patch === "object") ? patch : {});
+        if(next.apiBase && !isValidApiBase(next.apiBase)){
+          next.cfgOk = false;
+        }
+        if(next.ok && !prevOk){
+          next.lastOkAt = Date.now();
+        }else if(next.ok && !next.lastOkAt){
+          next.lastOkAt = state.cloud.lastOkAt || Date.now();
+        }else if(!next.ok && !next.lastOkAt && state.cloud.lastOkAt){
+          next.lastOkAt = state.cloud.lastOkAt;
+        }
+        state.cloud = next;
+      }catch(e){}
+      if(refreshNow !== false){
+        try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
+      }
+      return state.cloud;
+    }
+
     function cloudBadgeText(){
       var c = state.cloud || {};
       if(c.ok) return "已同步";
@@ -2785,6 +2794,45 @@ function getPromptOptions(mode){
         }catch(e){}
       }
 
+      function extractTokenFromAny(obj){
+        if(!obj || typeof obj !== "object") return "";
+        var direct = norm(
+          obj.token || obj.accessToken || obj.authToken || obj.bearer || obj.workerToken || obj.cloudToken || obj.apiToken || obj.jwt || obj.id_token || ""
+        );
+        if(direct) return direct;
+        var nests = [obj.data, obj.payload, obj.result, obj.session, obj.auth, obj.user, obj.me, obj.body];
+        for(var i=0;i<nests.length;i++){
+          var t = extractTokenFromAny(nests[i]);
+          if(t) return t;
+        }
+        if(Array.isArray(obj.tokens)){
+          for(var j=0;j<obj.tokens.length;j++){
+            var t2 = extractTokenFromAny(obj.tokens[j]);
+            if(t2) return t2;
+          }
+        }
+        return "";
+      }
+
+      function writeWorkerTokenBridges(token, meta){
+        token = norm(token);
+        if(!token) return "";
+        var raw = /^Bearer\s+/i.test(token) ? token.replace(/^Bearer\s+/i, "") : token;
+        var payload = Object.assign({ token: raw, bearer: "Bearer " + raw, accessToken: raw, authToken: raw, workerToken: raw, at: nowISO() }, meta || {});
+        try{
+          TOKEN_BRIDGE_KEYS.forEach(function(k){
+            try{ sessionStorage.setItem(k, raw); }catch(e){}
+            try{ localStorage.setItem(k, raw); }catch(e){}
+          });
+        }catch(e){}
+        try{ sessionStorage.setItem("tasunCloudToken_v1__" + PAGE_KEY, raw); }catch(e){}
+        try{ localStorage.setItem("tasunCloudToken_v1__" + PAGE_KEY, raw); }catch(e){}
+        try{ sessionStorage.setItem("tasunSessionBridge_v1", JSON.stringify(payload)); }catch(e){}
+        try{ localStorage.setItem("tasunSessionBridge_v1", JSON.stringify(payload)); }catch(e){}
+        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(Object.assign({}, readJsonFromKeys([CURRENT_KEY]) || {}, meta || {}, { token: raw, accessToken: raw, authToken: raw, at: nowISO() }))); }catch(e){}
+        return raw;
+      }
+
       function getWorkerLoginCredential(){
         var cur = null, auth = null, user = "";
         try{ cur = getCurrentUser(); }catch(e){ cur = null; }
@@ -2831,19 +2879,9 @@ function getPromptOptions(mode){
           throw new Error("worker login failed: " + r.status + " " + String(t).slice(0,200));
         }
         var j = await r.json().catch(function(){ return {}; });
-        var token = norm(j && (j.token || j.accessToken || j.authToken || j.bearer || ""));
+        var token = extractTokenFromAny(j);
         if(token){
-          try{ sessionStorage.setItem("tasunCloudToken_v1", token); }catch(e){}
-          try{ localStorage.setItem("tasunCloudToken_v1", token); }catch(e){}
-          try{ sessionStorage.setItem("tasunCloudToken_v1__" + PAGE_KEY, token); }catch(e){}
-          try{ localStorage.setItem("tasunCloudToken_v1__" + PAGE_KEY, token); }catch(e){}
-          try{ sessionStorage.setItem("tasunBearerToken_v1", token); }catch(e){}
-          try{ localStorage.setItem("tasunBearerToken_v1", token); }catch(e){}
-          try{ sessionStorage.setItem("tasunWorkerToken", token); }catch(e){}
-          try{ localStorage.setItem("tasunWorkerToken", token); }catch(e){}
-          try{ sessionStorage.setItem("tasunSessionBridge_v1", JSON.stringify({ user: cred.user, role: j.role || cred.role, token: token, at: nowISO() })); }catch(e){}
-          try{ sessionStorage.setItem("tasunWorkerSession_v1", JSON.stringify({ user: cred.user, role: j.role || cred.role, token: token, at: nowISO() })); }catch(e){}
-          try{ localStorage.setItem("tasunGlobalToken_v1", token); }catch(e){}
+          token = writeWorkerTokenBridges(token, { user: cred.user, role: norm(j.role || (j.data && j.data.role) || (j.user && j.user.role) || cred.role) || cred.role, name: cred.user });
         }
         return token;
       }
@@ -2866,7 +2904,6 @@ function getPromptOptions(mode){
       async function ensureWorkerAuthorized(cfg){
         cfg = cfg || await loadCloudCfg();
         var now = Date.now();
-        try{ hydrateCrossPageAuth(); }catch(e){}
         var seed = getWorkerAuthSeedState();
 
         // 先用種子狀態，避免沒有 token/密碼時一直停在「檢查中」
@@ -2874,11 +2911,6 @@ function getPromptOptions(mode){
           authPending: seed.authPending,
           authState: seed.authState
         }, false);
-
-        // 若已有 bearer token，先直接視為可驗證狀態；後續再用 /me 快速確認。
-        if(seed.tokenReady){
-          try{ setCloudState({ authPending:true, authState:"checking", cfgOk:true, reachable:true }, false); }catch(e){}
-        }
 
         // 最近 60 秒內已判定未授權/權限不足，直接沿用結果，避免 /api/tasun/me 401 連打
         if(__workerAuthProbeMemo__ && __workerAuthProbeMemo__.ts && (now - __workerAuthProbeMemo__.ts < 60000)){
@@ -2903,13 +2935,6 @@ function getPromptOptions(mode){
           }
         }
 
-        // 若沒有 token 但有可重登帳密，先主動登入一次，避免一進頁就 /me 401 卡在檢查中。
-        if(!seed.tokenReady && hasPlainWorkerCredential()){
-          try{ await workerLogin(cfg); }catch(_e){}
-          try{ hydrateCrossPageAuth(); }catch(e){}
-          seed = getWorkerAuthSeedState();
-        }
-
         // 若既沒有 token，也沒有可重登的明碼密碼，直接判定未授權，不再打 /me 造成無限 401。
         if(!seed.tokenReady && !hasPlainWorkerCredential()){
           __workerAuthProbeMemo__ = { state:"unauth", ts: Date.now(), ok:false, status:401, reason:"no-token-no-plain-credential" };
@@ -2917,7 +2942,7 @@ function getPromptOptions(mode){
           return false;
         }
 
-        // 進一步用 /me 確認授權狀態；401 後再嘗試一次重登。
+        // 若既沒有 token，也沒有可重登的明碼密碼，最多只做一次 /me 探測；401 後直接視為未授權
         try{ hydrateCrossPageAuth(); }catch(e){}
         var first = await probeWorkerMe(cfg);
 
@@ -3310,12 +3335,13 @@ function getPromptOptions(mode){
       try{ localStorage.setItem(LAST_LOGIN_PASS_KEY + "__" + hit.user, pass); }catch(e){}
       setCurrentUser(cur);
       applyUser(cur);
-      try{ hydrateCrossPageAuth(); }catch(e){}
       try{
         var cfg = await loadCloudCfg();
-        await workerLogin(cfg);
+        var loginToken = await workerLogin(cfg);
+        if(loginToken){
+          writeWorkerTokenBridges(loginToken, { user: cur.user, role: cur.role, name: cur.name });
+        }
       }catch(e){}
-      try{ hydrateCrossPageAuth(); }catch(e){}
       try{ resetWorkerAuthProbeMemo(); }catch(e){}
       closeLogin();
       toast("登入成功");
@@ -3522,29 +3548,6 @@ $("btnSave").addEventListener("click", async function(){
     // ---------------------------
     // Console diagnostics
     // ---------------------------
-    window.__TASUN_SXDH_CONSOLE_TEST__ = async function(){
-      var cfg = null, me = null, readRes = null, mergeRes = null, token = "";
-      try{ cfg = await loadCloudCfg(); }catch(e){}
-      try{ token = norm(getSharedWorkerToken()); }catch(e){ token = ""; }
-      try{ me = await probeWorkerMe(cfg); }catch(e){ me = { ok:false, status:0, text:String(e && e.message || e) }; }
-      try{ readRes = await cloudRead(cfg, PAGE_KEY); }catch(e){ readRes = { error:String(e && e.message || e) }; }
-      try{ mergeRes = await cloudMerge(cfg, PAGE_KEY, { db:(state.db||[]).map(ensureRowV1).filter(Boolean), counter:Number(state.counter||0)||0 }, { reason:"console-test", at: nowISO(), user: state.user || "", role: state.role || "" }); }catch(e){ mergeRes = { error:String(e && e.message || e) }; }
-      var out = {
-        href: location.href,
-        version: APP_VER,
-        user: state.user || null,
-        role: state.role || "",
-        tokenReady: !!token,
-        tokenPrefix: token ? token.slice(0,18) + "..." : "",
-        cloud: Object.assign({}, state.cloud || {}),
-        me: me,
-        read: readRes,
-        merge: mergeRes
-      };
-      try{ console.log("[SXDH_CONSOLE_TEST]", out); }catch(e){}
-      return out;
-    };
-
     window.__TASUN_SXDH_DIAG__ = {
       clear: function(){
         try{ console.clear(); }catch(e){}
