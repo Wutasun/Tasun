@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>捷運汐東線事項記錄 · Tasun</title>
+  <!-- [TASUN BUILD] sxdh-notes cloud-fix 2026-03-27 -->
 
   <link rel="icon" href="data:,">
   
@@ -1978,6 +1979,43 @@ function getVisibleRows(){
     }
 
     // ---------------------------
+    // Cloud badge preset / auth state
+    // ---------------------------
+    function refreshCloudAuthStateSync(){
+      var cfgOk = true;
+      var apiBase = DEFAULT_API_BASE;
+      var endpoints = Object.assign({}, DEFAULT_ENDPOINTS);
+      try{
+        var cfg = _cloudCfgCache || null;
+        if(cfg && isValidApiBase(cfg.apiBase)){
+          apiBase = String(cfg.apiBase);
+          endpoints = cfg.endpoints ? Object.assign({}, cfg.endpoints) : endpoints;
+          cfgOk = true;
+        }
+      }catch(e){}
+      var authState = hasWorkerTokenReady() ? "" : "unauth";
+      setCloudState({ cfgOk: cfgOk, apiBase: apiBase, endpoints: endpoints, authState: authState }, false);
+      return { cfgOk: cfgOk, apiBase: apiBase, endpoints: endpoints, authState: authState };
+    }
+
+    async function refreshCloudAuthState(){
+      try{
+        var cfg = await loadCloudCfg();
+        var authState = hasWorkerTokenReady() ? "" : "unauth";
+        setCloudState({
+          cfgOk: !!(cfg && isValidApiBase(cfg.apiBase)),
+          apiBase: (cfg && cfg.apiBase) ? cfg.apiBase : DEFAULT_API_BASE,
+          endpoints: (cfg && cfg.endpoints) ? cfg.endpoints : Object.assign({}, DEFAULT_ENDPOINTS),
+          authState: authState
+        }, false);
+        return state.cloud;
+      }catch(e){
+        setCloudState({ cfgOk: true, apiBase: DEFAULT_API_BASE, endpoints: Object.assign({}, DEFAULT_ENDPOINTS), authState: hasWorkerTokenReady() ? "" : "unauth" }, false);
+        return state.cloud;
+      }
+    }
+
+    // ---------------------------
     // State
     // ---------------------------
     var state = {
@@ -1990,7 +2028,7 @@ function getVisibleRows(){
       selectedUid: "",
       mode: "view",
       readMode: false,
-      cloud: { ok:false, cfgOk:false, reachable:false, apiBase:"", endpoints:null, authState:"", lastSyncAt:"", lastOkAt:"" },
+      cloud: { ok:false, cfgOk:true, reachable:null, apiBase:DEFAULT_API_BASE, endpoints:Object.assign({}, DEFAULT_ENDPOINTS), authState:(hasWorkerTokenReady() ? "" : "unauth"), lastSyncAt:"", lastOkAt:"" },
       _legacyScan: null
     };
 
@@ -2018,6 +2056,7 @@ function getVisibleRows(){
       if(c.authState==="forbidden") return "權限不足";
       if(c.authState==="expired") return "授權失敗";
       if(c.cfgOk && c.reachable===false) return "連線失敗";
+      if(c.cfgOk && (c.reachable===null || c.reachable===undefined) && !hasWorkerTokenReady()) return "未授權";
       if(c.cfgOk) return "待同步";
       return "未設定";
     }
@@ -2950,7 +2989,7 @@ function getPromptOptions(mode){
 
         // 1.5) 沒有 token / session 時，不直接打 read / merge，避免畫面一直停在「待同步」
         if(!hasWorkerTokenReady()){
-          setCloudState({ ok:false, cfgOk:true, authState:"unauth" }, true);
+          setCloudState({ ok:false, cfgOk:true, reachable:null, authState:"unauth" }, true);
           if(!silent) toast("雲端未授權，請先登入或補 token");
           return false;
         }
@@ -3139,6 +3178,7 @@ function getPromptOptions(mode){
       applyUser(cur);
       closeLogin();
       toast("登入成功");
+      try{ refreshCloudAuthStateSync(); }catch(e){}
       // ✅ 登入後立即做一次「本端先 merge，再重抓雲端」
       setTimeout(function(){ reconcileCloudOnOpen({ silent:true }); }, 60);
     }
@@ -3201,6 +3241,7 @@ function getPromptOptions(mode){
       toast("已儲存雲端設定");
       updateTokenHint();
       try{ hydrateCrossPageAuth(); }catch(e){}
+      try{ refreshCloudAuthStateSync(); }catch(e){}
       cloudHealth();
     }
 
@@ -3211,6 +3252,7 @@ function getPromptOptions(mode){
       _cloudCfgCache = null;
       toast("已清除雲端設定");
       updateTokenHint();
+      try{ refreshCloudAuthStateSync(); }catch(e){}
       cloudHealth();
     }
 
@@ -3409,6 +3451,7 @@ $("btnSave").addEventListener("click", async function(){
       var cur = null;
       try{
         try{ ensureActionButtonsVisible(); }catch(e){}
+        try{ refreshCloudAuthStateSync(); }catch(e){}
         try{ renderHintFallback(); }catch(e){}
         try{ await openIDB(); }catch(e){}
 
@@ -3446,7 +3489,7 @@ $("btnSave").addEventListener("click", async function(){
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         try{ refresh(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         try{ hydrateCrossPageAuth(); }catch(e){}
-        try{ var _cfg = await loadCloudCfg(); setCloudState({ cfgOk: !!(_cfg && isValidApiBase(_cfg.apiBase)), apiBase: _cfg && _cfg.apiBase || "", endpoints: _cfg && _cfg.endpoints || null }, false); }catch(e){}
+        try{ await refreshCloudAuthState(); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         // ✅ 開頁同步策略：不再被登入顯示狀態阻斷，先同步資料，再由後續 bridge 回填使用者/權限。
