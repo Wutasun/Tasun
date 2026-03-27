@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>捷運汐東線事項記錄 · Tasun</title>
   <!-- cloud-unauth-final-fix 2026-03-27 -->
+  <!-- final-stable-clean 2026-03-27 -->
   <!-- [TASUN BUILD] sxdh-notes cloud-auth-fix 2026-03-27 -->
 
   <link rel="icon" href="data:,">
@@ -1377,7 +1378,8 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
         var token = getSharedWorkerToken();
         if(token){
           var normalized = /^Bearer\s+/i.test(token) ? token.replace(/^Bearer\s+/i, "") : token;
-          writeWorkerTokenBridges(normalized, row || {});
+          try{ sessionStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
+          try{ localStorage.setItem("tasunCloudToken_v1", normalized); }catch(e){}
         }
       }catch(e){}
     }
@@ -2086,29 +2088,6 @@ function getVisibleRows(){
       }
     }
 
-    function setCloudState(patch, refreshNow){
-      try{
-        if(!state.cloud || typeof state.cloud !== "object") state.cloud = {};
-        var prevOk = !!state.cloud.ok;
-        var next = Object.assign({}, state.cloud, (patch && typeof patch === "object") ? patch : {});
-        if(next.apiBase && !isValidApiBase(next.apiBase)){
-          next.cfgOk = false;
-        }
-        if(next.ok && !prevOk){
-          next.lastOkAt = Date.now();
-        }else if(next.ok && !next.lastOkAt){
-          next.lastOkAt = state.cloud.lastOkAt || Date.now();
-        }else if(!next.ok && !next.lastOkAt && state.cloud.lastOkAt){
-          next.lastOkAt = state.cloud.lastOkAt;
-        }
-        state.cloud = next;
-      }catch(e){}
-      if(refreshNow !== false){
-        try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
-      }
-      return state.cloud;
-    }
-
     function cloudBadgeText(){
       var c = state.cloud || {};
       if(c.ok) return "已同步";
@@ -2127,6 +2106,52 @@ function getVisibleRows(){
       if(c.ok) return false;
       if(c.authState==="unauth" || c.authState==="expired" || c.reachable===false || !c.cfgOk) return true;
       return true;
+    }
+
+    function setCloudState(patch, repaint){
+      try{
+        var prev = state.cloud && typeof state.cloud === "object" ? state.cloud : {};
+        var next = Object.assign({
+          ok: false,
+          cfgOk: true,
+          reachable: false,
+          authState: "checking",
+          authPending: false,
+          apiBase: FORCE_API_BASE,
+          endpoints: Object.assign({}, FORCE_ENDPOINTS)
+        }, prev, (patch && typeof patch === "object") ? patch : {});
+
+        if(next.ok){
+          next.cfgOk = true;
+          next.reachable = true;
+          next.authState = "ok";
+          next.authPending = false;
+          if(!next.lastOkAt) next.lastOkAt = Date.now();
+        }
+
+        if(next.authState === "ok"){
+          next.authPending = false;
+          if(next.reachable === null || next.reachable === undefined) next.reachable = true;
+        }
+
+        state.cloud = next;
+
+        try{
+          if($("btnCloud")){
+            var txt = $("btnCloud").querySelector(".t") || $("btnCloud");
+            if(txt) txt.textContent = "雲端檔案";
+          }
+        }catch(e){}
+
+        if(repaint !== false){
+          try{ refreshHintSafe(); }catch(e){
+            try{ renderHintFallback(); }catch(_e){}
+          }
+        }
+        return state.cloud;
+      }catch(e){
+        return state.cloud;
+      }
     }
 
     function ensureHeaderStateVisible(){
@@ -2794,45 +2819,6 @@ function getPromptOptions(mode){
         }catch(e){}
       }
 
-      function extractTokenFromAny(obj){
-        if(!obj || typeof obj !== "object") return "";
-        var direct = norm(
-          obj.token || obj.accessToken || obj.authToken || obj.bearer || obj.workerToken || obj.cloudToken || obj.apiToken || obj.jwt || obj.id_token || ""
-        );
-        if(direct) return direct;
-        var nests = [obj.data, obj.payload, obj.result, obj.session, obj.auth, obj.user, obj.me, obj.body];
-        for(var i=0;i<nests.length;i++){
-          var t = extractTokenFromAny(nests[i]);
-          if(t) return t;
-        }
-        if(Array.isArray(obj.tokens)){
-          for(var j=0;j<obj.tokens.length;j++){
-            var t2 = extractTokenFromAny(obj.tokens[j]);
-            if(t2) return t2;
-          }
-        }
-        return "";
-      }
-
-      function writeWorkerTokenBridges(token, meta){
-        token = norm(token);
-        if(!token) return "";
-        var raw = /^Bearer\s+/i.test(token) ? token.replace(/^Bearer\s+/i, "") : token;
-        var payload = Object.assign({ token: raw, bearer: "Bearer " + raw, accessToken: raw, authToken: raw, workerToken: raw, at: nowISO() }, meta || {});
-        try{
-          TOKEN_BRIDGE_KEYS.forEach(function(k){
-            try{ sessionStorage.setItem(k, raw); }catch(e){}
-            try{ localStorage.setItem(k, raw); }catch(e){}
-          });
-        }catch(e){}
-        try{ sessionStorage.setItem("tasunCloudToken_v1__" + PAGE_KEY, raw); }catch(e){}
-        try{ localStorage.setItem("tasunCloudToken_v1__" + PAGE_KEY, raw); }catch(e){}
-        try{ sessionStorage.setItem("tasunSessionBridge_v1", JSON.stringify(payload)); }catch(e){}
-        try{ localStorage.setItem("tasunSessionBridge_v1", JSON.stringify(payload)); }catch(e){}
-        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(Object.assign({}, readJsonFromKeys([CURRENT_KEY]) || {}, meta || {}, { token: raw, accessToken: raw, authToken: raw, at: nowISO() }))); }catch(e){}
-        return raw;
-      }
-
       function getWorkerLoginCredential(){
         var cur = null, auth = null, user = "";
         try{ cur = getCurrentUser(); }catch(e){ cur = null; }
@@ -2879,9 +2865,13 @@ function getPromptOptions(mode){
           throw new Error("worker login failed: " + r.status + " " + String(t).slice(0,200));
         }
         var j = await r.json().catch(function(){ return {}; });
-        var token = extractTokenFromAny(j);
+        var token = norm(j && (j.token || j.accessToken || j.authToken || j.bearer || ""));
         if(token){
-          token = writeWorkerTokenBridges(token, { user: cred.user, role: norm(j.role || (j.data && j.data.role) || (j.user && j.user.role) || cred.role) || cred.role, name: cred.user });
+          try{ sessionStorage.setItem("tasunCloudToken_v1", token); }catch(e){}
+          try{ localStorage.setItem("tasunCloudToken_v1", token); }catch(e){}
+          try{ sessionStorage.setItem("tasunCloudToken_v1__" + PAGE_KEY, token); }catch(e){}
+          try{ localStorage.setItem("tasunCloudToken_v1__" + PAGE_KEY, token); }catch(e){}
+          try{ sessionStorage.setItem("tasunSessionBridge_v1", JSON.stringify({ user: cred.user, role: j.role || cred.role, token: token, at: nowISO() })); }catch(e){}
         }
         return token;
       }
@@ -2942,11 +2932,8 @@ function getPromptOptions(mode){
           return false;
         }
 
-        // 先做跨頁橋接；若目前沒有 token 但有明碼密碼，先直接 login 再 probe /me，避免首輪固定噴 401。
+        // 若既沒有 token，也沒有可重登的明碼密碼，最多只做一次 /me 探測；401 後直接視為未授權
         try{ hydrateCrossPageAuth(); }catch(e){}
-        if(!hasWorkerTokenReady() && hasPlainWorkerCredential()){
-          try{ await workerLogin(cfg); }catch(_e){}
-        }
         var first = await probeWorkerMe(cfg);
 
         if(first.ok){
@@ -3340,10 +3327,7 @@ function getPromptOptions(mode){
       applyUser(cur);
       try{
         var cfg = await loadCloudCfg();
-        var loginToken = await workerLogin(cfg);
-        if(loginToken){
-          writeWorkerTokenBridges(loginToken, { user: cur.user, role: cur.role, name: cur.name });
-        }
+        await workerLogin(cfg);
       }catch(e){}
       try{ resetWorkerAuthProbeMemo(); }catch(e){}
       closeLogin();
@@ -3551,24 +3535,10 @@ $("btnSave").addEventListener("click", async function(){
     // ---------------------------
     // Console diagnostics
     // ---------------------------
-    window.__TASUN_SXDH_CONSOLE_TEST__ = async function(){
-      try{
-        var h = await window.__TASUN_SXDH_DIAG__.health();
-        var l = await window.__TASUN_SXDH_DIAG__.login();
-        var r = await window.__TASUN_SXDH_DIAG__.read();
-        var s = await window.__TASUN_SXDH_DIAG__.sync();
-        console.log('[SXDH_CONSOLE_TEST]', { health:h, login:l, read:r, sync:s });
-        return { ok: !!(s && s.ok), health:h, login:l, read:r, sync:s };
-      }catch(e){
-        return { ok:false, error:String(e && e.message || e), cloud:Object.assign({}, state.cloud || {}) };
-      }
-    };
-
     window.__TASUN_SXDH_DIAG__ = {
       clear: function(){
         try{ console.clear(); }catch(e){}
-        console.log("diag clear ok");
-        return true;
+        return { ok:true };
       },
       health: async function(){
         try{
@@ -3624,6 +3594,33 @@ $("btnSave").addEventListener("click", async function(){
           return { ok:false, error: String(e && e.message || e), cloud:Object.assign({}, state.cloud || {}) };
         }
       }
+    };
+
+    window.__TASUN_SXDH_CONSOLE_TEST__ = async function(){
+      var out = { ok:false, health:null, login:null, read:null, sync:null };
+      try{
+        out.health = await window.__TASUN_SXDH_DIAG__.health();
+      }catch(e){
+        out.health = { ok:false, error:String(e && e.message || e) };
+      }
+      try{
+        out.login = await window.__TASUN_SXDH_DIAG__.login();
+      }catch(e){
+        out.login = { ok:false, error:String(e && e.message || e) };
+      }
+      try{
+        out.read = await window.__TASUN_SXDH_DIAG__.read();
+      }catch(e){
+        out.read = { ok:false, error:String(e && e.message || e) };
+      }
+      try{
+        out.sync = await window.__TASUN_SXDH_DIAG__.sync();
+      }catch(e){
+        out.sync = { ok:false, error:String(e && e.message || e) };
+      }
+      out.ok = !!((out.health && out.health.ok) && (out.login && (out.login.ok || out.login.tokenReady)) && (out.read && out.read.ok) && (out.sync && out.sync.ok));
+      try{ console.log("[SXDH_CONSOLE_TEST]", out); }catch(e){}
+      return out;
     };
 
     // ---------------------------
