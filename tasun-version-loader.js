@@ -1,8 +1,9 @@
+/* token bridge unified 2026-03-27 */
 (function(){
   "use strict";
 
   var VERSION_JSON_URL = "tasun-version.json";
-  var CACHE_KEY = "tasun_auto_version_cache_v3";
+  var CACHE_KEY = "tasun_auto_version_cache_v4";
   var READY_RESOLVE = function(){};
   var READY = new Promise(function(resolve){ READY_RESOLVE = resolve; });
   window.__TASUN_VERSION_READY__ = READY;
