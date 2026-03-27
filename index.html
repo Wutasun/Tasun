@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- TASUN_REBUILD_STAMP:index_v52c 2026-03-27 00:00:00 (single-source-admin-auth-only + worker-token-bridge + child-page-sso-fix) -->
+<!-- TASUN_REBUILD_STAMP:index_v52d 2026-03-27 00:00:00 (single-source-admin-auth-only + worker-token-bridge + child-page-sso-fix + nav-click-bridge) -->
 <html lang="zh-Hant">
 <head>
   <!-- Tasun v5 FINAL：版本/快取由 tasun-version.json 控制；腳本改為動態帶 v 載入 -->
@@ -30,7 +30,7 @@
 
   <script>document.write('<script src="tasun-version-loader.js?_=' + Date.now() + '"><\/script>');</script>
   <script>
-    window.APP_VER = window.APP_VER || (window.__CACHE_V || '20260327_52c');
+    window.APP_VER = window.APP_VER || (window.__CACHE_V || '20260327_52d');
     window.TASUN_APP_VER = window.TASUN_APP_VER || window.APP_VER;
   </script>
 
@@ -215,6 +215,7 @@
             document.head.appendChild(s);
           }catch(e){ resolve(false); }
         });
+        installChildNavBridge();
       }
       (async()=>{
         await loadScript(withV('tasun-boot.js'));
@@ -1381,11 +1382,68 @@
         const t = `目前使用者：${user.username} (${user.level})`;
         if(userInfo){ userInfo.textContent = t; userInfo.setAttribute('data-text', t); }
         refreshButtonsForCurrentUser();
+        ensureIndexChildPageBridge(user).catch(()=>{});
         scheduleExport('login:applyUser');
         ensureCloudMounted(user).catch(()=>{});
         scheduleAll();
         if(!o.skipBroadcast){ broadcastAuthState('state', { user: user.username, role: String(user.level||'').toLowerCase() }); }
       }
+
+      function getStoredLoginPassword(username){
+        const u = String(username || '').trim();
+        let p = '';
+        try{ if(u) p = String(sessionStorage.getItem('tasunLastLoginPass_v1__' + u) || localStorage.getItem('tasunLastLoginPass_v1__' + u) || ''); }catch(e){}
+        if(!p){ try{ p = String(sessionStorage.getItem('tasunLastLoginPass_v1') || localStorage.getItem('tasunLastLoginPass_v1') || ''); }catch(e){} }
+        return String(p || '').trim();
+      }
+      async function ensureIndexChildPageBridge(userLike){
+        try{
+          const u = String((userLike && (userLike.username || userLike.user || userLike.name)) || '').trim();
+          const role = String((userLike && (userLike.level || userLike.role)) || 'read').trim().toLowerCase() || 'read';
+          if(!u) return false;
+          const pass = getStoredLoginPassword(u);
+          if(pass){
+            const ok = await __tasunBridgeWorkerTokenNow(u, pass, role).catch(()=>false);
+            if(ok) return true;
+          }
+          try{
+            const rawBridge = sessionStorage.getItem('tasunSessionBridge_v1') || localStorage.getItem('tasunSessionBridge_v1') || '';
+            const js = rawBridge ? JSON.parse(rawBridge) : null;
+            const tk = String((js && (js.token || js.accessToken || js.authToken || js.bearer)) || '').trim();
+            if(tk){
+              const bridge = Object.assign({}, js || {}, { user:u, name:u, role:role, token:tk, accessToken:tk, authToken:tk, bearer:tk, at:new Date().toISOString() });
+              try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge)); }catch(e){}
+              try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge)); }catch(e){}
+              return true;
+            }
+          }catch(e){}
+          return false;
+        }catch(e){
+          return false;
+        }
+      }
+      function installChildNavBridge(){
+        try{
+          if(navArea && !navArea.__tasunChildBridgeBound){
+            navArea.__tasunChildBridgeBound = true;
+            navArea.addEventListener('click', async function(ev){
+              try{
+                const a = ev.target && ev.target.closest ? ev.target.closest('a.nav-btn') : null;
+                if(!a) return;
+                const href = String(a.getAttribute('href') || '').trim();
+                if(!href || href === '#') return;
+                if(/^https?:\/\//i.test(href) || /^mailto:/i.test(href) || /^tel:/i.test(href) || a.target === '_blank') return;
+                if(!CURRENT_USER || !CURRENT_USER.username) return;
+                ev.preventDefault();
+                try{ a.style.pointerEvents = 'none'; }catch(e){}
+                await ensureIndexChildPageBridge(CURRENT_USER);
+                setTimeout(function(){ location.href = href; }, 30);
+              }catch(e){}
+            }, true);
+          }
+        }catch(e){}
+      }
+
       function canSilentReenterFromSession(){
         try{
           if(sessionStorage.getItem(INDEX_SESSION_KEY) !== '1') return false;
