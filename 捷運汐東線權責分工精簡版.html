@@ -11,7 +11,7 @@
   <script>
   (function(){
     /* 你只要改這個版號即可（建議：YYYYMMDD_HHMM 或 2026.01.26.1） */
-    const APP_VER = "20260330_tasun_v5_total_final_raci_uploadfix5";
+    const APP_VER = "20260330_tasun_v5_total_final_raci_stagefix3";
     const KEY = "tasun_app_ver_v1";
 
     try{
@@ -326,12 +326,7 @@
     @media (max-width:920px){ .controls{grid-template-columns:1fr 1fr} }
     @media (max-width:520px){ .controls{grid-template-columns:1fr} }
 
-    .field{
-      display:flex;
-      flex-direction:column;
-      gap:6px;
-      justify-content:center;
-    }
+    .field{display:flex; flex-direction:column; gap:6px}
 
     /* ✅✅圖標示1：上方「搜尋/權責/期限」標籤文字改黃水晶（不要黑、清澈） */
     .label{
@@ -339,13 +334,6 @@
       letter-spacing:.04em;
       font-weight:900;
       line-height:1.25;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      min-height:28px;
-      text-align:center;
-      width:100%;
-      margin:0 auto;
     }
     .label.crystalGold{ /* 套 class 直接用 */ }
 
@@ -820,25 +808,6 @@
     }
   </style>
 
-
-  <style id="raciStageFixPatch_v4">
-    .controls .field{
-      justify-content:flex-start;
-    }
-    .controls .field > .label{
-      justify-content:center;
-      text-align:center;
-      align-self:center;
-      width:100%;
-      margin-bottom:2px;
-    }
-    @media (max-width: 920px){
-      .controls .field > .label{
-        min-height:24px;
-      }
-    }
-  </style>
-
 </head>
 
 <body>
@@ -1041,21 +1010,6 @@
 
     const $ = (id) => document.getElementById(id);
     const norm = (s) => (s ?? "").toString().trim();
-    const normHead = (s) => norm(s).replace(/^\uFEFF/, "").replace(/[\s\u3000\r\n\t]+/g, "");
-    function pickHeaderIndex(header){
-      const map = header.map(normHead);
-      const findAny = (keys)=> {
-        for(const k of keys){
-          const idx = map.indexOf(normHead(k));
-          if(idx >= 0) return idx;
-        }
-        return -1;
-      };
-      const idxProject = findAny(["工程項目","項目","工作項目","工程項"]);
-      const idxOwner   = findAny(["權責","主責","責任","負責單位"]);
-      const idxDue     = findAny(["期限","時程","完成期限","預定期限"]);
-      return { idxProject, idxOwner, idxDue };
-    }
 
     function toast(msg){
       const t = $("toast");
@@ -1493,7 +1447,7 @@
 
       $("hint").innerHTML =
         `目前為 <b style="color:var(--gold)">${writable ? "可維護模式" : "唯讀模式"}</b>（role: ${escHtml(role())}）。` +
-        ` 筆數：<b style="color:var(--gold)">${rows.length}</b>` + (rows.length !== db.length ? ` / <b style="color:var(--gold)">${db.length}</b>` : ``) + `。` +
+        ` 筆數：<b style="color:var(--gold)">${rows.length}</b>。` +
         (selectedId ? ` 已選取：<b style="color:var(--gold)">#${selectedId}</b>` : `（可點選列再按「編輯」）`);
     }
 
@@ -1719,27 +1673,19 @@
 
           if(!rows || rows.length < 1){ toast("檔案是空白"); return; }
 
-          // 從前 8 列中找真正表頭，容忍空白/BOM/換行/全形空白
-          let headerRowIndex = -1;
-          let headerInfo = null;
-          for(let i=0;i<Math.min(rows.length, 8);i++){
-            const info = pickHeaderIndex(rows[i] || []);
-            if(info.idxProject >= 0 && info.idxOwner >= 0 && info.idxDue >= 0){
-              headerRowIndex = i;
-              headerInfo = info;
-              break;
-            }
-          }
-          if(headerRowIndex < 0 || !headerInfo){
-            toast("表頭需包含：工程項目 / 權責 / 期限");
+          const header = (rows[0] || []).map(x=>norm(x));
+          const idxProject = header.indexOf("工程項目");
+          const idxOwner   = header.indexOf("權責");
+          const idxDue     = header.indexOf("期限");
+
+          if(idxProject < 0 || idxOwner < 0 || idxDue < 0){
+            toast("表頭需為：工程項目 / 權責 / 期限");
             return;
           }
 
           let mode = "append";
           if(db.length > 0){
-            const yes = confirm("是否要先清空既有資料，再匯入檔案內容？
-確定：清空後匯入
-取消：保留原資料並追加匯入");
+            const yes = confirm("是否要先清空既有資料，再匯入檔案內容？\n確定：清空後匯入\n取消：保留原資料並追加匯入");
             mode = yes ? "replace" : "append";
           }
           if(mode === "replace"){
@@ -1747,24 +1693,15 @@
             localStorage.setItem(COUNTER_KEY, "0");
           }
 
-          const seen = new Set(
-            db.map(r => [norm(r.project), norm(r.owner), norm(r.due)].join("｜").toLowerCase())
-          );
-
           let addCount = 0;
-          let skipCount = 0;
-          for(let i=headerRowIndex+1;i<rows.length;i++){
+          for(let i=1;i<rows.length;i++){
             const r = rows[i] || [];
-            const project = norm(r[headerInfo.idxProject]);
-            const owner   = norm(r[headerInfo.idxOwner]);
-            const due     = norm(r[headerInfo.idxDue]);
+            const project = norm(r[idxProject]);
+            const owner   = norm(r[idxOwner]);
+            const due     = norm(r[idxDue]);
 
             if(!project && !owner && !due) continue;
-            if(!project){ skipCount++; continue; }
-
-            const sig = [project, owner, due].join("｜").toLowerCase();
-            if(seen.has(sig)){ skipCount++; continue; }
-            seen.add(sig);
+            if(!project) continue;
 
             const id = nextCounter();
             db.push({ id, project, owner, due });
@@ -1772,18 +1709,10 @@
           }
 
           saveDB();
-          rebuildProjectDatalist();
-          rebuildFilters();
           render();
-
-          if(addCount > 0){
-            toast(`匯入完成：新增 ${addCount} 筆` + (skipCount ? `，略過 ${skipCount} 筆重複/空白` : ""));
-          }else{
-            toast("匯入完成，但沒有新增資料；請確認表頭或內容是否重複");
-          }
+          toast(`匯入完成：新增 ${addCount} 筆`);
         }catch(e){
-          console.error(e);
-          toast("匯入失敗：請確認檔案格式（xlsx/xls）與表頭");
+          toast("匯入失敗：請確認檔案格式（xlsx/xls）");
         }
       };
       reader.readAsArrayBuffer(file);
