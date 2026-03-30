@@ -9,7 +9,7 @@
 //   ACCESS_DEFAULT_USERNAME -> username to use when Cloudflare Access header is present, default local-part of email
 //   DEFAULT_PASSWORD_HASH   -> fallback hash for brand-new users without password/passHash, default sha256('123456')
 
-const SERVICE_VERSION = 'v4.4-total-final-20260330';
+const SERVICE_VERSION = 'v4.3-auth-sync-20260320_03';
 const DEFAULT_PASSWORD_HASH = '8d969eef6ecad3c29a3a629280e686cff0c3f5d5a86afff3ca12020c923adc6c92';
 
 const STORE_KEYS = {
