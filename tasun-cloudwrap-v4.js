@@ -5,7 +5,7 @@
 (function(global){
   'use strict';
   var _apiBase = null;
-  var TOKEN_KEYS=['tasunBearerToken_v1','tasunCloudToken_v1','tasunCloudToken','tasun_token','tasunToken','tasunWorkerToken','tasun_auth_token','tasun_session_token'];
+  var TOKEN_KEYS=['tasunBearerToken_v1','tasunCloudToken_v1','tasunCloudToken_v1__sxdh-notes','tasunCloudToken_v1__auth-table','tasunCloudToken','tasun_token','tasunToken','tasunWorkerToken','tasun_auth_token','tasun_session_token','tasunAccessToken_v1','tasunAuthToken_v1','tasunSessionToken_v1','authToken','access_token','token','x-api-key','tasunApiKey_v1'];
   function withV(path){ try{ return global.__withV ? global.__withV(path) : path; }catch(e){ return path; } }
   function norm(v){ return v == null ? '' : String(v).trim(); }
   function safeJSON(raw){ try{ return JSON.parse(raw); }catch(_e){ return null; } }
