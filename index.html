@@ -597,6 +597,7 @@
       const AUTH_KEY    = 'tasunAuthTable_v1';
       const CURRENT_KEY = 'tasunCurrentUser_v1';
       const INDEX_SESSION_KEY = 'tasunIndexSessionAuthed_v2';
+      const CHILD_INDEX_SESSION_KEY = 'tasunIndexSession_v1';
       const SESSION_KEY = 'tasunSessionLogin_v2';
       const NAV_KEY     = 'tasunNavButtons_v1';
       const ROUTE_KEY   = 'tasunNavRoutes_v1';
@@ -1215,6 +1216,8 @@
         try{
           sessionStorage.setItem(SESSION_KEY, JSON.stringify(record));
           sessionStorage.setItem(INDEX_SESSION_KEY, '1');
+          sessionStorage.setItem(CHILD_INDEX_SESSION_KEY, '1');
+          try{ localStorage.setItem(CHILD_INDEX_SESSION_KEY, '1'); }catch(_e){}
           sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: record.role }));
         }catch(e){}
         setCookieSession(user);
@@ -1223,7 +1226,8 @@
       }
       function clearSession(opts){
         const silent = !!(opts && opts.silent);
-        try{ sessionStorage.removeItem(SESSION_KEY); sessionStorage.removeItem(INDEX_SESSION_KEY); sessionStorage.removeItem(CURRENT_KEY); }catch(e){}
+        try{ sessionStorage.removeItem(SESSION_KEY); sessionStorage.removeItem(INDEX_SESSION_KEY); sessionStorage.removeItem(CHILD_INDEX_SESSION_KEY); sessionStorage.removeItem(CURRENT_KEY); }catch(e){}
+        try{ localStorage.removeItem(CHILD_INDEX_SESSION_KEY); }catch(_e){}
         clearCookieSession();
         clearSSO();
         if(!silent) broadcastAuthState('logout', null);
@@ -1270,6 +1274,69 @@
         if(isAuthLikeButtonCfg(cfg)) return level === 'admin';
         return ['admin','write','read'].includes(level);
       }
+
+      function persistChildPageBridgeForTarget(href){
+        try{
+          var target = String(href || '').trim();
+          if(!target) return false;
+          if(/^https?:\/\//i.test(target) || /^mailto:/i.test(target) || /^tel:/i.test(target)) return false;
+
+          var cur = CURRENT_USER || null;
+          if(!cur){
+            try{
+              cur = JSON.parse(sessionStorage.getItem(CURRENT_KEY) || localStorage.getItem(CURRENT_KEY) || 'null');
+            }catch(_e){ cur = null; }
+          }
+          var username = String((cur && (cur.username || cur.user || cur.name)) || '').trim();
+          var role = String((cur && (cur.level || cur.role)) || '').trim().toLowerCase() || inferRole(username, '');
+          var payload = { user: username, name: username, username: username, role: role, level: role, at: new Date().toISOString() };
+          if(username){
+            try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+            try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+            try{ sessionStorage.setItem('tasunSession_v1', JSON.stringify(payload)); }catch(_e){}
+            try{ localStorage.setItem('tasunSession_v1', JSON.stringify(payload)); }catch(_e){}
+            try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(payload)); }catch(_e){}
+            try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(payload)); }catch(_e){}
+          }
+          try{ sessionStorage.setItem(INDEX_SESSION_KEY, '1'); }catch(_e){}
+          try{ sessionStorage.setItem(CHILD_INDEX_SESSION_KEY, '1'); }catch(_e){}
+          try{ localStorage.setItem(CHILD_INDEX_SESSION_KEY, '1'); }catch(_e){}
+
+          var tokenKeys = ['tasunCloudToken_v1','tasunCloudToken_v1__index','tasunCloudToken_v1__auth-table','tasunCloudToken_v1__sxdh-notes','tasunBearerToken_v1','tasunAccessToken_v1','tasunAuthToken_v1','tasunSessionToken_v1','tasun_token','tasunToken','tasun_auth_token','authToken','access_token','token','x-api-key','tasunApiKey_v1'];
+          var token = '';
+          for(var i=0;i<tokenKeys.length;i++){
+            token = String(sessionStorage.getItem(tokenKeys[i]) || localStorage.getItem(tokenKeys[i]) || '').trim();
+            if(token) break;
+          }
+          if(token){
+            tokenKeys.forEach(function(k){
+              try{ sessionStorage.setItem(k, token); }catch(_e){}
+              try{ localStorage.setItem(k, token); }catch(_e){}
+            });
+          }
+
+          var pass = '';
+          try{
+            pass = String(sessionStorage.getItem('tasunLastLoginPass_v1__' + username) || localStorage.getItem('tasunLastLoginPass_v1__' + username) || sessionStorage.getItem('tasunLastLoginPass_v1') || localStorage.getItem('tasunLastLoginPass_v1') || '').trim();
+          }catch(_e){}
+          if(pass){
+            try{ sessionStorage.setItem('tasunLastLoginPass_v1', pass); }catch(_e){}
+            try{ localStorage.setItem('tasunLastLoginPass_v1', pass); }catch(_e){}
+            if(username){
+              try{ sessionStorage.setItem('tasunLastLoginPass_v1__' + username, pass); }catch(_e){}
+              try{ localStorage.setItem('tasunLastLoginPass_v1__' + username, pass); }catch(_e){}
+            }
+          }
+
+          try{ sessionStorage.setItem('tasun_next_path_v1', target); }catch(_e){}
+          try{ localStorage.setItem('tasun_next_path_v1', target); }catch(_e){}
+          return true;
+        }catch(_err){
+          console.warn('persistChildPageBridgeForTarget failed', _err);
+          return false;
+        }
+      }
+
       function buildMainButtonsDOM(){
         ROUTES = loadRoutes();
         NAV_ARR = loadNavButtonsSeedIfMissing();
@@ -1302,6 +1369,13 @@
           a.appendChild(span);
           const finalHref = resolveHref(cfg, ROUTES);
           a.setAttribute('href', hrefToDom(finalHref));
+          a.dataset.rawHref = finalHref;
+          a.addEventListener('click', function(ev){
+            var rawHref = String(this.dataset.rawHref || finalHref || '').trim();
+            var targetBlank = String(cfg.target || '').trim() === '_blank';
+            if(!rawHref || targetBlank || /^https?:\/\//i.test(rawHref) || /^mailto:/i.test(rawHref) || /^tel:/i.test(rawHref)) return;
+            persistChildPageBridgeForTarget(rawHref);
+          }, true);
           const t = cfg.target || '';
           if(t){ a.target = t; if(t === '_blank') a.rel = 'noopener noreferrer'; }
           a.style.display = 'none';
@@ -1788,6 +1862,8 @@
           try{ localStorage.setItem('tasunCurrentUser_v1', JSON.stringify(userObj)); }catch(e){}
           try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridgeObj)); }catch(e){}
           try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridgeObj)); }catch(e){}
+          try{ sessionStorage.setItem('tasunIndexSession_v1', '1'); }catch(e){}
+          try{ localStorage.setItem('tasunIndexSession_v1', '1'); }catch(e){}
 
           if(p){
             try{ sessionStorage.setItem('tasunLastLoginPass_v1', p); }catch(e){}
@@ -2235,6 +2311,29 @@
       return u.pathname + u.search + u.hash;
     }catch(e){ return href; }
   }
+  function persistNavBridgeToChild(targetHref){
+    try{
+      var href = String(targetHref || '').trim();
+      if(!href || /^https?:\/\//i.test(href) || /^mailto:/i.test(href) || /^tel:/i.test(href)) return false;
+      var cur = JSON.parse(sessionStorage.getItem('tasunCurrentUser_v1') || localStorage.getItem('tasunCurrentUser_v1') || 'null');
+      var u = String((cur && (cur.user || cur.name || cur.username)) || '').trim();
+      var r = String((cur && (cur.role || cur.level)) || '').trim().toLowerCase() || 'read';
+      if(u){
+        var row = { user:u, name:u, username:u, role:r, level:r, at:new Date().toISOString() };
+        try{ sessionStorage.setItem('tasunCurrentUser_v1', JSON.stringify(row)); }catch(e){}
+        try{ localStorage.setItem('tasunCurrentUser_v1', JSON.stringify(row)); }catch(e){}
+        try{ sessionStorage.setItem('tasunSession_v1', JSON.stringify(row)); }catch(e){}
+        try{ localStorage.setItem('tasunSession_v1', JSON.stringify(row)); }catch(e){}
+        try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(row)); }catch(e){}
+        try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(row)); }catch(e){}
+      }
+      try{ sessionStorage.setItem('tasunIndexSession_v1', '1'); }catch(e){}
+      try{ localStorage.setItem('tasunIndexSession_v1', '1'); }catch(e){}
+      try{ sessionStorage.setItem('tasun_next_path_v1', href); }catch(e){}
+      try{ localStorage.setItem('tasun_next_path_v1', href); }catch(e){}
+      return true;
+    }catch(e){ return false; }
+  }
   function syncBridge(){
     try{
       var cur = JSON.parse(sessionStorage.getItem('tasunCurrentUser_v1') || localStorage.getItem('tasunCurrentUser_v1') || 'null');
@@ -2263,6 +2362,9 @@
       var href = a.getAttribute('href') || '';
       if(!href || href === '#' || /^https?:\/\//i.test(href) || /^mailto:/i.test(href) || /^tel:/i.test(href) || a.target === '_blank') return;
       a.setAttribute('href', withV(href));
+      a.addEventListener('click', function(){
+        try{ persistNavBridgeToChild(href); }catch(e){}
+      }, true);
     });
   }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function(){ syncBridge(); patchAnchors(); }, {once:true});
