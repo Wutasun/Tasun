@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <title>Tasun 權限表</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="data:,">
 
   <!-- ✅ Tasun v5：全站版本統一由 tasun-version-loader.js 控制，不再各頁各自寫死版號 -->
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
@@ -1001,10 +1002,22 @@
   const D1_AUTH_TABLE_ENDPOINT_PUB   = "/api/auth/public";
 
   function getApiBaseLocked(){
-    // ✅ 不提供任何可修改 apiBase 的 UI；僅程式自動偵測/讀取既有設定
-    const v = (localStorage.getItem("tasunApiBase_v1") || "").trim();
-    const base = v || "https://tasun-worker.wutasun.workers.dev";
-    return String(base).replace(/\/+$/,"");
+    // ✅ 不提供任何可修改 apiBase 的 UI；僅在已明確設定時才啟用 D1，避免未配置環境造成 console 500
+    const v = String(localStorage.getItem("tasunApiBase_v1") || sessionStorage.getItem("tasunApiBase_v1") || "").trim();
+    return String(v || "").replace(/\/+$/,"");
+  }
+  function isD1SyncEnabled(){
+    try{
+      const base = getApiBaseLocked();
+      if(!base) return false;
+      const forced = String(localStorage.getItem('tasunEnableD1AuthSync_v1') || sessionStorage.getItem('tasunEnableD1AuthSync_v1') || '').trim().toLowerCase();
+      if(forced === '1' || forced === 'true' || forced === 'yes' || forced === 'on') return true;
+      const bearer = getSharedWorkerToken();
+      const hasCookie = !!readCookie('tasun_session_v4');
+      return !!(bearer || hasCookie);
+    }catch(_){
+      return false;
+    }
   }
   function getSharedWorkerToken(){
     const keys = [
@@ -1038,6 +1051,7 @@
   }
   async function d1GetJson(path){
     const base = getApiBaseLocked();
+    if(!isD1SyncEnabled() || !base) return { ok:false, skipped:true, status:0, json:null };
     const url = withNoCache(base + path);
     const res = await fetch(url, {
       method:"GET",
@@ -1050,6 +1064,7 @@
   }
   async function d1PostJson(path, body){
     const base = getApiBaseLocked();
+    if(!isD1SyncEnabled() || !base) return { ok:false, skipped:true, status:0, json:null };
     const url = withNoCache(base + path);
     const res = await fetch(url, {
       method:"POST",
@@ -1135,7 +1150,8 @@
   }
 
   async function d1PullAuthTable(reason){
-    // ✅ 更積極：每次 load 都先拉一次（確保跨裝置一致）
+    // ✅ 僅在已配置 D1/Worker 時才拉取，避免未配置環境殘留 console 500
+    if(!isD1SyncEnabled()) return { ok:false, skipped:true, reason:'d1-disabled' };
     try{
       // 1) admin full
       let r = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_FULL);
@@ -1159,6 +1175,9 @@
       const role = (getEffectiveRole() || "read").toLowerCase();
       if(role !== "admin"){
         return { ok:false, skipped:true, reason:"not_admin" };
+      }
+      if(!isD1SyncEnabled()){
+        return { ok:false, skipped:true, reason:"d1-disabled" };
       }
       const payload = snapshotAuthTableForCloud();
       const r = await d1PostJson(D1_AUTH_TABLE_ENDPOINT_ADMIN, payload);
@@ -1214,10 +1233,16 @@ function safeJsonParse(s, fallback){
     try{ return JSON.parse(s); }catch(e){ return fallback; }
   }
   function stripInvisibles(s){
-    return String(s ?? '')
+    let v = String(s ?? '')
       .replace(/\uFEFF/g, '')
       .replace(/[\u0000-\u001F\u007F]/g,'')
       .trim();
+    try{
+      if((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))){
+        v = v.slice(1, -1).trim();
+      }
+    }catch(_){}
+    return v;
   }
   function escapeHtml(s){
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -1650,12 +1675,23 @@ function safeJsonParse(s, fallback){
     e[String(btnKey||'')] = !!val;
   }
 
+  function parseSelectedEntryValue(raw){
+    let v = stripInvisibles(raw || '');
+    if(!v) return 'index.html';
+    try{
+      if((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))){
+        v = String(JSON.parse(v)).trim();
+      }
+    }catch(_){}
+    v = stripInvisibles(v);
+    return v || 'index.html';
+  }
   function loadSelectedEntry(){
-    const s = stripInvisibles(localStorage.getItem(ENTRY_SELECTED_KEY) || '') || 'index.html';
+    const s = parseSelectedEntryValue(localStorage.getItem(ENTRY_SELECTED_KEY) || '');
     currentEntry = s;
   }
   function saveSelectedEntry(v){
-    currentEntry = stripInvisibles(v) || 'index.html';
+    currentEntry = parseSelectedEntryValue(v);
     localStorage.setItem(ENTRY_SELECTED_KEY, currentEntry);
   }
 
@@ -1683,9 +1719,9 @@ function safeJsonParse(s, fallback){
   }
 
   function resolveEntryValue(){
-    const v = entrySelect.value;
+    const v = parseSelectedEntryValue(entrySelect.value);
     if(v === '__custom__'){
-      const c = stripInvisibles(entryCustom.value);
+      const c = parseSelectedEntryValue(entryCustom.value);
       return c || 'index.html';
     }
     return v || 'index.html';
