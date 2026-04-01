@@ -13,13 +13,13 @@
   <!-- ✅ 固定正式版：直接鎖定版本，不再透過 tasun-version-loader.js 改寫成 auto_... -->
   <script>
   (function(){
-    window.__TASUN_PAGE_FIXED_VERSION__ = "20260401_notes_authfix_v32";
-    window.TASUN_APP_VER = "20260401_notes_authfix_v32";
-    window.APP_VER = "20260401_notes_authfix_v32";
-    window.__CACHE_V = "20260401_notes_authfix_v32";
+    window.__TASUN_PAGE_FIXED_VERSION__ = "20260401_notes_authfix_v33";
+    window.TASUN_APP_VER = "20260401_notes_authfix_v33";
+    window.APP_VER = "20260401_notes_authfix_v33";
+    window.__CACHE_V = "20260401_notes_authfix_v33";
 
     try{
-      var __FIXED_VER = "20260401_notes_authfix_v32";
+      var __FIXED_VER = "20260401_notes_authfix_v33";
       var __u = new URL(location.href);
       var __v = String(__u.searchParams.get("v") || "").trim();
       var __ts = String(__u.searchParams.get("ts") || "").trim();
@@ -542,9 +542,12 @@
   
 
 @media (max-width: 760px){
-  body{ overflow:hidden; -webkit-overflow-scrolling: touch; }
+  body{
+    overflow:auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
   .wrap{
-    height:var(--appH,100dvh) !important;
+    height:auto !important;
     min-height:var(--appH,100dvh) !important;
     padding:10px 10px 12px;
     gap:10px;
@@ -552,34 +555,37 @@
   .topbar{
     position:sticky;
     top:max(0px, var(--vv-top, 0px));
-    z-index:30;
+    z-index:40;
   }
   .panel{
-    flex:1 1 auto;
+    flex:0 0 auto;
     min-height:0 !important;
     height:auto !important;
-    overflow:hidden !important;
+    overflow:visible !important;
   }
   .panelHead{
-    position:sticky;
-    top:0;
-    z-index:20;
-    background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(255,255,255,.94));
+    position:relative !important;
+    top:auto !important;
+    z-index:1;
+    background: transparent !important;
     padding-bottom:8px;
   }
   .panelBody{
-    flex:1 1 auto;
+    flex:0 0 auto;
     min-height:0 !important;
-    overflow:hidden !important;
+    overflow:visible !important;
   }
   .tableWrap{
-    flex:1 1 auto;
+    flex:0 0 auto;
     min-height:0 !important;
     max-height:none !important;
     overflow:auto !important;
     -webkit-overflow-scrolling: touch;
   }
-  thead th{ top:0; z-index:4; }
+  thead th{
+    top:calc(max(0px, var(--vv-top, 0px)) + var(--mobileTopbarH, 0px) + 8px);
+    z-index:35;
+  }
   .nav-desktop{display:none !important;}
   .nav-mobile{display:flex !important; gap:8px; align-items:center; width:100%;}
   .nav-mobile #mActionSel{
@@ -970,6 +976,37 @@
 })();
 </script>
 
+<script>
+// mobile topbar height -> sticky table header offset (no UI change)
+(function(){
+  function setTopbarH(){
+    try{
+      var tb = document.querySelector('.topbar');
+      var h = tb ? Math.round(tb.getBoundingClientRect().height || 0) : 0;
+      document.documentElement.style.setProperty('--mobileTopbarH', h + 'px');
+    }catch(e){}
+  }
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', setTopbarH, { once:true });
+  }else{
+    setTopbarH();
+  }
+  window.addEventListener('load', setTopbarH, { passive:true });
+  window.addEventListener('resize', setTopbarH, { passive:true });
+  window.addEventListener('orientationchange', setTopbarH, { passive:true });
+  window.addEventListener('pageshow', setTopbarH, { passive:true });
+  if('ResizeObserver' in window){
+    try{
+      var ro = new ResizeObserver(setTopbarH);
+      document.addEventListener('DOMContentLoaded', function(){
+        var tb = document.querySelector('.topbar');
+        if(tb) ro.observe(tb);
+      }, { once:true });
+    }catch(e){}
+  }
+})();
+</script>
+
 
 
   <script>
@@ -985,7 +1022,7 @@ window.TASUN_RESOURCE_KEY = window.TASUN_RESOURCE_KEY || PAGE_KEY;
 window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
 window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
-    var APP_VER = String(window.__TASUN_PAGE_FIXED_VERSION__ || window.TASUN_APP_VER || "20260401_notes_authfix_v32").trim() || "20260401_notes_authfix_v32";
+    var APP_VER = String(window.__TASUN_PAGE_FIXED_VERSION__ || window.TASUN_APP_VER || "20260401_notes_authfix_v33").trim() || "20260401_notes_authfix_v33";
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
@@ -3593,11 +3630,9 @@ function getPromptOptions(mode){
       }
 
       try{
-        // 1) 先確認 Worker 可達
         try{ hydrateCrossPageAuth(); }catch(e){}
         await cloudHealth(cfg);
 
-        // 1.5) 先檢查 Worker 授權：優先沿用既有 token / Worker session，必要時再嘗試登入
         var authOk = await ensureWorkerAuthorized(cfg);
         if(!authOk){
           setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth", authPending:false }, true);
@@ -3605,30 +3640,46 @@ function getPromptOptions(mode){
           return false;
         }
 
-        // 2) 先檢查本端資料；若本端已有資料，先送雲端 merge，避免本端較新的資料被空雲端覆蓋
         var localRows = canonicalizeRows((state.db||[]).map(ensureRowV1).filter(Boolean));
-        var remoteOrMerged = null;
+        var remoteBefore = null;
+        var dirtyRows = [];
+        var hasDirty = false;
 
-        if(localRows.length>0){
+        try{
+          dirtyRows = await getDirtyRowsSnapshot();
+          hasDirty = Array.isArray(dirtyRows) && dirtyRows.length > 0;
+        }catch(e){
+          dirtyRows = [];
+          hasDirty = !!(state.cloud && state.cloud.hasDirty);
+        }
+
+        try{ hydrateCrossPageAuth(); }catch(e){}
+        remoteBefore = await cloudRead(cfg, PAGE_KEY);
+        remoteBefore = mergePayload(remoteBefore, { db: [], counter: 0 });
+        remoteBefore.db = canonicalizeRows((remoteBefore.db||[]).map(ensureRowV1).filter(Boolean));
+
+        if(hasDirty){
+          var mergedUpload = mergePayload(
+            { db: localRows, counter: state.counter },
+            { db: remoteBefore.db || [], counter: Number(remoteBefore.counter||0)||0 }
+          );
+          mergedUpload.db = canonicalizeRows((mergedUpload.db||[]).map(ensureRowV1).filter(Boolean));
+
           try{ hydrateCrossPageAuth(); }catch(e){}
-          remoteOrMerged = await cloudMerge(cfg, PAGE_KEY, { db: localRows, counter: state.counter }, {
+          await cloudMerge(cfg, PAGE_KEY, { db: mergedUpload.db, counter: mergedUpload.counter }, {
             user: state.user || "",
             role: state.role || "",
             appVer: APP_VER,
             clientId: state.clientId || getClientId(),
             at: nowISO(),
-            reason: "boot-reconcile-local-first"
+            reason: "boot-reconcile-dirty-local"
           });
-        }else{
-          try{ hydrateCrossPageAuth(); }catch(e){}
-          remoteOrMerged = await cloudRead(cfg, PAGE_KEY);
         }
 
-        // 3) 再抓一次最新雲端資料，確保拿到 merge 後的最終狀態（多人/多設備一致）
         try{ hydrateCrossPageAuth(); }catch(e){}
         var remoteFinal = await cloudRead(cfg, PAGE_KEY);
-        var out = mergePayload(remoteFinal || remoteOrMerged, { db: canonicalizeRows(state.db), counter: state.counter });
-        out.db = canonicalizeRows(out.db);
+        var out = mergePayload(remoteFinal, { db: hasDirty ? localRows : [], counter: state.counter });
+        out.db = canonicalizeRows((out.db||[]).map(ensureRowV1).filter(Boolean));
 
         state.db = out.db;
         state.counter = out.counter;
@@ -3653,7 +3704,7 @@ function getPromptOptions(mode){
           lastSyncAt: nowISO()
         }, false);
         refresh();
-        if(!silent) toast("已完成開啟同步");
+        if(!silent) toast(hasDirty ? "已完成雲端合併同步" : "已完成雲端覆寫同步");
         return true;
       }catch(e){
         setCloudState({ ok:false }, true);
