@@ -11,16 +11,16 @@
   <link rel="icon" href="data:,">
   
   <!-- ✅ 固定正式版：直接鎖定版本，不再透過 tasun-version-loader.js 改寫成 auto_... -->
-  <!-- v56：補強「選取 / 雲端檔案 / 檢視 / 編輯」文件委派，避免事件遺失 -->
+  <!-- v57：修手機 sticky、搜尋浮動區、重複資料去重與同步問題 -->
   <script>
   (function(){
-    window.__TASUN_PAGE_FIXED_VERSION__ = "20260401_notes_authfix_v40";
-    window.TASUN_APP_VER = "20260401_notes_authfix_v40";
-    window.APP_VER = "20260401_notes_authfix_v40";
-    window.__CACHE_V = "20260401_notes_authfix_v40";
+    window.__TASUN_PAGE_FIXED_VERSION__ = "20260402_notes_authfix_v57";
+    window.TASUN_APP_VER = "20260402_notes_authfix_v57";
+    window.APP_VER = "20260402_notes_authfix_v57";
+    window.__CACHE_V = "20260402_notes_authfix_v57";
 
     try{
-      var __FIXED_VER = "20260401_notes_authfix_v40";
+      var __FIXED_VER = "20260402_notes_authfix_v57";
       var __HTML_PROBE_URL = (location.pathname || "") + "?__html_probe=" + Date.now();
       try{
         fetch(__HTML_PROBE_URL, { cache:"no-store", credentials:"same-origin" }).then(function(r){
@@ -384,6 +384,7 @@
 
     .panelBody{flex:1; min-height:0; display:flex; flex-direction:column;}
     .tableWrap{
+      position:relative;
       margin-top:4px;
       overflow:auto;
       border-radius:16px;
@@ -676,7 +677,7 @@
     overflow:auto !important;
     -webkit-overflow-scrolling: touch;
   }
-  thead th{ top:0; z-index:4; }
+  thead th{ position:sticky; top:0; z-index:12; }
   .nav-desktop{display:none !important;}
   .nav-mobile{display:flex !important; gap:8px; align-items:center; width:100%;}
   .nav-mobile #mActionSel{
@@ -1104,7 +1105,7 @@ window.TASUN_RESOURCE_KEY = window.TASUN_RESOURCE_KEY || PAGE_KEY;
 window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
 window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
-    var APP_VER = String(window.__TASUN_PAGE_FIXED_VERSION__ || window.TASUN_APP_VER || "20260401_notes_authfix_v40").trim() || "20260401_notes_authfix_v40";
+    var APP_VER = String(window.__TASUN_PAGE_FIXED_VERSION__ || window.TASUN_APP_VER || "20260402_notes_authfix_v57").trim() || "20260402_notes_authfix_v57";
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
@@ -2517,6 +2518,50 @@ function getVisibleRows(){
       return out;
     }
 
+
+    function isTombstoneRow(r){
+      r = ensureRowV1(r);
+      if(!r) return false;
+      return !!(r.__tombstone || /^ts_/.test(norm(r.uid)));
+    }
+
+    function makeTombstoneFromRow(r, mode, stamp){
+      r = ensureRowV1(r);
+      if(!r) return null;
+      mode = norm(mode || "loose") || "loose";
+      stamp = norm(stamp || nowISO()) || nowISO();
+      var baseKey = mode === "exact" ? rowIdentityKey(r) : rowFamilyKey(r);
+      baseKey = norm(baseKey);
+      if(!baseKey) return null;
+      return ensureRowV1({
+        uid: "ts_" + mode + "_" + fnv1a32(PAGE_KEY + "|" + baseKey),
+        id: 0,
+        text: "",
+        trade: norm(r.trade),
+        sys: norm(r.sys),
+        source: "",
+        attach: "",
+        remark: "",
+        date: norm(r.date),
+        updatedAt: stamp,
+        rev: "ts_" + fnv1a32(stamp + "|" + baseKey),
+        deleted: true,
+        __tombstone: true
+      });
+    }
+
+    async function getDirtyRowsSnapshot(){
+      try{
+        var dirty = await idbGetDirtyUids(PAGE_KEY, 0);
+        if(!Array.isArray(dirty) || !dirty.length) return [];
+        var set = new Set(dirty.map(function(x){ return norm(x); }).filter(Boolean));
+        var rows = canonicalizeRows((state.db || []).map(ensureRowV1).filter(Boolean));
+        return rows.filter(function(r){ return r && set.has(norm(r.uid)); });
+      }catch(e){
+        return [];
+      }
+    }
+
     // ---------------------------
     // Cloud badge preset / auth state
     // ---------------------------
@@ -3850,6 +3895,8 @@ function getPromptOptions(mode){
       localStorage.setItem(READ_MODE_KEY, state.readMode ? "1" : "0");
       refresh();
     }
+
+    window.__tasunToggleReadMode = function(){ try{ applyReadMode(!state.readMode); }catch(e){} };
 
     // ---------------------------
     // Nav / menus
