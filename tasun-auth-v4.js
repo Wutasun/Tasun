@@ -10,7 +10,7 @@
   var SESSION_BRIDGE_KEY='tasunSessionBridge_v1';
   var INDEX_SESSION_KEY='tasunIndexSession_v1';
   var LAST_PASS_KEY='tasunLastLoginPass_v1';
-  var TOKEN_KEYS=['tasunBearerToken_v1','tasunCloudToken_v1','tasunCloudToken_v1__sxdh-notes','tasunCloudToken_v1__auth-table','tasunCloudToken','tasun_token','tasunToken','tasunWorkerToken','tasun_auth_token','tasun_session_token','tasunAccessToken_v1','tasunAuthToken_v1','tasunSessionToken_v1','authToken','access_token','token','x-api-key','tasunApiKey_v1'];
+  var TOKEN_KEYS=['tasunBearerToken_v1','tasunCloudToken_v1','tasunCloudToken','tasun_token','tasunToken','tasunWorkerToken','tasun_auth_token','tasun_session_token'];
   function norm(v){ return v == null ? '' : String(v).trim(); }
   function safeJSON(raw){ try{ return JSON.parse(raw); }catch(_e){ return null; } }
   function write(store,k,v){ try{ store.setItem(k, typeof v==='string' ? v : JSON.stringify(v)); }catch(_e){} }
