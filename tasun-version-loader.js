@@ -70,7 +70,7 @@
   }
   function parseConfig(raw){
     raw = (raw && typeof raw === "object") ? raw : {};
-    var fallback = norm(raw.fallbackVersion || raw.manualVersion || raw.appVer || raw.APP_VER || raw.ver || raw.version || raw.appVersion || "") || "20260405_notes_authfix_v62";
+    var fallback = norm(raw.fallbackVersion || raw.manualVersion || raw.appVer || raw.APP_VER || raw.ver || raw.version || raw.appVersion || "") || "20260406_tasun_v5_syncfix_v63";
     var mode = norm(raw.versionMode || raw.mode || "manual").toLowerCase();
     var sources = [];
     if(Array.isArray(raw.versionSources)) sources = raw.versionSources.slice();
@@ -162,13 +162,13 @@
       if(cfg.mode.indexOf("auto") >= 0){
         ver = await computeAutoVersion(cfg);
       }
-      if(!ver) ver = cfg.fallbackVersion || initial || "20260405_notes_authfix_v62";
+      if(!ver) ver = cfg.fallbackVersion || initial || "20260406_tasun_v5_syncfix_v63";
       setGlobals(ver);
       saveCache(ver, { mode: cfg.mode, current: currentBaseName() });
       maybeRedirect(ver);
       READY_RESOLVE(true);
     }catch(e){
-      var fallback = initial || "20260405_notes_authfix_v62";
+      var fallback = initial || "20260406_tasun_v5_syncfix_v63";
       setGlobals(fallback);
       READY_RESOLVE(true);
     }
