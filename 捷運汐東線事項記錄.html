@@ -6,14 +6,14 @@
   <title>捷運汐東線事項記錄 · Tasun</title>
   <!-- cloud-unauth-final-fix 2026-03-27 -->
   <!-- final-stable-clean 2026-03-27 -->
-  <!-- [TASUN BUILD] sxdh-notes cloud-auth-fix + unified-final-v67 2026-04-06 -->
+  <!-- [TASUN BUILD] sxdh-notes cloud-auth-fix + unified-final-v68 2026-04-06 -->
 
   <link rel="icon" href="data:,">
   
   <!-- ✅ 固定正式版：直接鎖定版本，不再透過 tasun-version-loader.js 改寫成 auto_... -->
   <script>
   (function(){
-    var FALLBACK_VER = "20260406_tasun_v5_unified_final_v67";
+    var FALLBACK_VER = "20260406_tasun_v5_unified_final_v68";
     var WAIT = window.__TASUN_READY__;
     if(!WAIT || typeof WAIT !== "object"){
       var _q = [], _ready = false, _resolve = null;
@@ -667,6 +667,8 @@
             <option value="edit">編輯</option>
             <option value="token">雲端設定</option>
             <option value="cloud">雲端檔案</option>
+            <option value="excelExport">下載Excel</option>
+            <option value="excelImport">上傳Excel</option>
             <option value="export">匯出備份</option>
             <option value="read">閱讀模式切換</option>
             <option value="clear">清除條件</option>
@@ -713,6 +715,8 @@
 
           <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
             <button class="btn ghost" id="btnCloud" type="button"><span class="t">雲端檔案</span></button>
+            <button class="btn ghost" id="btnExcelExport" type="button"><span class="t">下載Excel</span></button>
+            <button class="btn ghost" id="btnExcelImport" type="button"><span class="t">上傳Excel</span></button>
             <button class="btn ghost" id="btnExport" type="button"><span class="t">匯出備份</span></button>
             <button class="btn ghost" id="btnRead" type="button"><span class="t">閱讀模式：關</span></button>
             <button class="btn ghost" id="btnClear" type="button"><span class="t">清除條件</span></button>
@@ -928,6 +932,7 @@
     </div>
   </div>
 
+  <input type="file" id="excelFileInput" accept=".xlsx,.xls,.csv" style="display:none" />
   <div class="toast" id="toast"></div><script>
 // iOS visualViewport / 100vh second-layer stabilization (no UI change)
 (function(){
@@ -992,7 +997,7 @@ window.TASUN_RESOURCE_KEY = window.TASUN_RESOURCE_KEY || PAGE_KEY;
 window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
 window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
-    var APP_VER = String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || window.__TASUN_FALLBACK_VER__ || "20260406_tasun_v5_unified_final_v67").trim() || "20260406_tasun_v5_unified_final_v67";
+    var APP_VER = String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || window.__TASUN_FALLBACK_VER__ || "20260406_tasun_v5_unified_final_v68").trim() || "20260406_tasun_v5_unified_final_v68";
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
@@ -3733,6 +3738,8 @@ function getPromptOptions(mode){
         if(v==="edit") return openEdit();
         if(v==="token") return openToken();
         if(v==="cloud") return syncFromCloud();
+        if(v==="excelExport") return exportExcelTemplate();
+        if(v==="excelImport"){ if($("excelFileInput")) $("excelFileInput").click(); return; }
         if(v==="export") return exportBackup();
         if(v==="read") return applyReadMode(!state.readMode);
         if(v==="clear"){
@@ -3891,6 +3898,233 @@ function getPromptOptions(mode){
       inp.type = (inp.type==="password") ? "text" : "password";
     }
 
+
+    // ---------------------------
+    // Excel export / import
+    // ---------------------------
+    function ensureXLSXLoaded(){
+      return new Promise(function(resolve, reject){
+        if(window.XLSX && typeof window.XLSX.utils === "object") return resolve(window.XLSX);
+        var exist = document.querySelector('script[data-xlsx-lib="1"]');
+        if(exist){
+          exist.addEventListener("load", function(){ resolve(window.XLSX); }, { once:true });
+          exist.addEventListener("error", function(){ reject(new Error("XLSX_LOAD_FAIL")); }, { once:true });
+          return;
+        }
+        var s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+        s.async = true;
+        s.setAttribute("data-xlsx-lib", "1");
+        s.onload = function(){ resolve(window.XLSX); };
+        s.onerror = function(){ reject(new Error("XLSX_LOAD_FAIL")); };
+        document.head.appendChild(s);
+      });
+    }
+
+    function excelColumns(){
+      return [
+        { key:"no", label:"項次" },
+        { key:"uid", label:"UID" },
+        { key:"text", label:"記事內容" },
+        { key:"trade", label:"工種" },
+        { key:"sys", label:"系統" },
+        { key:"source", label:"出處" },
+        { key:"attach", label:"附件" },
+        { key:"remark", label:"備註" },
+        { key:"date", label:"登錄日期" }
+      ];
+    }
+
+    function normalizeHeaderName(v){
+      return norm(v).replace(/\s+/g, "").replace(/[()（）]/g, "").toLowerCase();
+    }
+
+    function exportExcelTemplate(){
+      ensureXLSXLoaded().then(function(){
+        var rows = getVisibleRows();
+        var cols = excelColumns();
+        var data = [cols.map(function(c){ return c.label; })];
+        if(rows.length){
+          rows.forEach(function(r, idx){
+            r = normalizeRow(r) || {};
+            data.push([
+              idx + 1,
+              norm(r.uid),
+              norm(r.text),
+              norm(r.trade),
+              norm(r.sys),
+              norm(r.source),
+              norm(r.attach),
+              norm(r.remark),
+              norm(r.date)
+            ]);
+          });
+        }else{
+          data.push(["", "", "", "", "", "", "", "", ""]);
+        }
+        data.push([]);
+        data.push(["說明", "UID 欄位請勿刪除；修改既有資料時請保留 UID，新列可留空讓系統自動建立。"]);
+        data.push(["說明", "登錄日期格式請使用 YYYY-MM-DD，例如 2026-04-06。"]);
+        var ws = XLSX.utils.aoa_to_sheet(data);
+        ws["!cols"] = [
+          { wch:8 }, { wch:24 }, { wch:48 }, { wch:14 }, { wch:14 }, { wch:18 }, { wch:30 }, { wch:28 }, { wch:14 }
+        ];
+        var wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "事項記錄");
+        XLSX.writeFile(wb, "捷運汐東線事項記錄_表格範本_" + APP_VER + ".xlsx");
+        toast("已下載 Excel 範本");
+      }).catch(function(){
+        alert("Excel 套件載入失敗，請確認網路連線後再試。");
+      });
+    }
+
+    function showExcelImportError(lines){
+      var msg = ["Excel 上傳格式錯誤："].concat(lines || []);
+      msg.push("");
+      msg.push("修正方式：");
+      msg.push("1. 請先按「下載Excel」取得最新範本。");
+      msg.push("2. 保留欄位：項次、UID、記事內容、工種、系統、出處、附件、備註、登錄日期。");
+      msg.push("3. 修改既有資料時請保留 UID；新增資料可將 UID 留空。");
+      msg.push("4. 登錄日期請使用 YYYY-MM-DD。");
+      alert(msg.join("\n"));
+    }
+
+    function parseExcelDateValue(v){
+      v = norm(v);
+      if(!v) return "";
+      if(/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+      if(/^\d{4}\/\d{1,2}\/\d{1,2}$/.test(v)){
+        var p = v.split("/");
+        return p[0] + "-" + pad2(Number(p[1]||0)) + "-" + pad2(Number(p[2]||0));
+      }
+      return v;
+    }
+
+    function buildImportRowsFromSheet(rows2d){
+      var cols = excelColumns();
+      if(!Array.isArray(rows2d) || !rows2d.length){
+        return { ok:false, errors:["Excel 內容為空。"] };
+      }
+      var header = rows2d[0] || [];
+      var headerNorm = header.map(normalizeHeaderName);
+      var required = cols.map(function(c){ return normalizeHeaderName(c.label); });
+      var errors = [];
+      required.forEach(function(h, idx){
+        if(headerNorm[idx] !== h){
+          errors.push("第 " + (idx+1) + " 欄應為「" + cols[idx].label + "」。");
+        }
+      });
+      if(errors.length){
+        return { ok:false, errors:errors };
+      }
+
+      var imported = [];
+      for(var i=1;i<rows2d.length;i++){
+        var row = rows2d[i] || [];
+        var allEmpty = row.every(function(v){ return !norm(v); });
+        if(allEmpty) continue;
+        if(normalizeHeaderName(row[0]) === normalizeHeaderName("說明")) continue;
+
+        var uid = norm(row[1]);
+        var text = norm(row[2]);
+        var trade = norm(row[3]);
+        var sys = norm(row[4]);
+        var source = norm(row[5]);
+        var attach = norm(row[6]);
+        var remark = norm(row[7]);
+        var date = parseExcelDateValue(row[8]);
+
+        if(!text) errors.push("第 " + (i+1) + " 列「記事內容」不得為空。");
+        if(!trade) errors.push("第 " + (i+1) + " 列「工種」不得為空。");
+        if(date && !/^\d{4}-\d{2}-\d{2}$/.test(date)){
+          errors.push("第 " + (i+1) + " 列「登錄日期」格式錯誤，請改為 YYYY-MM-DD。");
+        }
+
+        imported.push({
+          uid: uid,
+          text: text,
+          trade: trade,
+          sys: sys,
+          source: source,
+          attach: attach,
+          remark: remark,
+          date: date || todayISO(),
+          deleted: false
+        });
+      }
+
+      if(errors.length){
+        return { ok:false, errors:errors.slice(0, 20) };
+      }
+      return { ok:true, rows:imported };
+    }
+
+    function mergeImportedRows(importedRows){
+      var nowRows = canonicalizeRows(state.db || []);
+      var byUid = new Map();
+      nowRows.forEach(function(r){ r = ensureRowV1(r); if(r) byUid.set(r.uid, r); });
+
+      importedRows.forEach(function(item){
+        var uid = norm(item.uid);
+        var base = uid ? (byUid.get(uid) || null) : null;
+        if(!uid) uid = uuid();
+        var row = ensureRowV1({
+          uid: uid,
+          text: norm(item.text),
+          trade: norm(item.trade),
+          sys: norm(item.sys),
+          source: norm(item.source),
+          attach: norm(item.attach),
+          remark: norm(item.remark),
+          date: norm(item.date) || todayISO(),
+          updatedAt: nowISO(),
+          rev: "r" + Date.now().toString(16) + Math.random().toString(16).slice(2,6),
+          deleted: false,
+          _touch: { text:1, trade:1, sys:1, source:1, attach:1, remark:1, date:1 }
+        });
+        if(base) row = mergeTwo(base, row);
+        byUid.set(uid, row);
+      });
+
+      state.db = canonicalizeRows(Array.from(byUid.values()));
+      state.counter = Math.max(Number(state.counter||0)||0, state.db.filter(function(r){ return r && !r.deleted; }).length);
+    }
+
+    function handleExcelImport(file){
+      if(!file) return;
+      ensureXLSXLoaded().then(function(){
+        var reader = new FileReader();
+        reader.onload = async function(evt){
+          try{
+            var data = evt.target.result;
+            var wb = XLSX.read(data, { type:"array" });
+            var ws = wb.Sheets[wb.SheetNames[0]];
+            var rows2d = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:"" });
+            var parsed = buildImportRowsFromSheet(rows2d);
+            if(!parsed.ok){
+              showExcelImportError(parsed.errors || ["格式錯誤"]);
+              return;
+            }
+            mergeImportedRows(parsed.rows || []);
+            buildDictsFromDb();
+            await saveLocal({ db: state.db, counter: state.counter });
+            refresh();
+            scheduleSync("excel-import", true);
+            try{ syncToCloud({ silent:true, reason:"excel-import-immediate" }); }catch(_e){}
+            toast("Excel 上傳完成");
+          }catch(err){
+            showExcelImportError(["檔案無法解析，請確認是由本頁下載的 Excel 範本。"]);
+          } finally {
+            if($("excelFileInput")) $("excelFileInput").value = "";
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      }).catch(function(){
+        alert("Excel 套件載入失敗，請確認網路連線後再試。");
+        if($("excelFileInput")) $("excelFileInput").value = "";
+      });
+    }
+
     // ---------------------------
     // Wire events
     // ---------------------------
@@ -3910,6 +4144,12 @@ function getPromptOptions(mode){
       $("btnAdd").addEventListener("click", openAdd);
 
       $("btnCloud").addEventListener("click", syncFromCloud);
+      $("btnExcelExport").addEventListener("click", exportExcelTemplate);
+      $("btnExcelImport").addEventListener("click", function(){ if($("excelFileInput")) $("excelFileInput").click(); });
+      if($("excelFileInput")) $("excelFileInput").addEventListener("change", function(e){
+        var file = e && e.target && e.target.files ? e.target.files[0] : null;
+        handleExcelImport(file);
+      });
       $("btnExport").addEventListener("click", exportBackup);
       $("btnClear").addEventListener("click", function(){
         $("qText").value="";
