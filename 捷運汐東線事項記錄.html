@@ -1700,6 +1700,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
         try{ ok = resolveRuntimeUser(); }catch(e){ ok = false; }
         try{ ensureActionButtonsVisible(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
+        try{ watchRuntimeVersionReady(); }catch(e){}
         if(!syncedOnce){
           try{
             await reconcileCloudOnOpen({ silent:true });
@@ -2305,6 +2306,9 @@ function getVisibleRows(){
         byUid.set(r.uid, old ? mergeTwo(old, r) : r);
       });
 
+      // ✅ 正式同步版：只做「同 uid」與「完全相同內容」去重，
+      // 不再做 loose / near family 模糊去重，避免不同設備把合法資料誤合併，
+      // 造成桌機 / 手機筆數不一致（例如 31 筆被壓成 27 筆）。
       var byExact = new Map();
       byUid.forEach(function(r){
         var key = rowIdentityKey(r) || ("uid:" + r.uid);
@@ -2313,44 +2317,8 @@ function getVisibleRows(){
         byExact.set(key, arr);
       });
 
-      var afterExact = [];
-      byExact.forEach(function(arr){
-        var merged = reduceGroup(arr);
-        if(merged) afterExact.push(merged);
-      });
-
-      var byLoose = new Map();
-      afterExact.forEach(function(r){
-        var key = rowLooseIdentityKey(r) || ("uid:" + r.uid);
-        var arr = byLoose.get(key) || [];
-        arr.push(r);
-        byLoose.set(key, arr);
-      });
-
-      var afterLoose = [];
-      byLoose.forEach(function(arr, key){
-        if(!key || key.indexOf("|") < 0 || arr.length === 1){
-          if(arr[0]) afterLoose.push(arr[0]);
-          return;
-        }
-        var merged = reduceGroup(arr);
-        if(merged) afterLoose.push(merged);
-      });
-
-      var byNear = new Map();
-      afterLoose.forEach(function(r){
-        var key = rowNearFamilyKey(r) || rowLooseIdentityKey(r) || ("uid:" + r.uid);
-        var arr = byNear.get(key) || [];
-        arr.push(r);
-        byNear.set(key, arr);
-      });
-
       var out = [];
-      byNear.forEach(function(arr, key){
-        if(!key || key.indexOf("|") < 0 || arr.length === 1){
-          if(arr[0]) out.push(arr[0]);
-          return;
-        }
+      byExact.forEach(function(arr){
         var merged = reduceGroup(arr);
         if(merged) out.push(merged);
       });
@@ -3705,67 +3673,48 @@ function getPromptOptions(mode){
           return false;
         }
 
+        // ✅ 開頁同步正式規則：
+        // 先讀雲端，再與本端合併；不可在開頁時先把本端舊資料直接推回雲端，
+        // 否則不同設備會發生筆數互相覆蓋（桌機 27、手機 31）的情況。
         var localRows = canonicalizeRows((state.db||[]).map(ensureRowV1).filter(Boolean));
-        var remoteOrMerged = null;
+        var remoteRead = { db:[], counter:0, resourceKey: PAGE_KEY };
         var remoteReadCount = 0;
 
-        if(localRows.length>0){
-          try{ hydrateCrossPageAuth(); }catch(e){}
-          remoteOrMerged = await cloudMerge(cfg, PAGE_KEY, { db: localRows, counter: state.counter }, {
-            user: state.user || "",
-            role: state.role || "",
-            appVer: currentAppVer() || "",
-            clientId: state.clientId || getClientId(),
-            at: nowISO(),
-            reason: "boot-reconcile-local-first"
-          });
-        }else{
-          try{ hydrateCrossPageAuth(); }catch(e){}
-          remoteOrMerged = await cloudReadWithFallbackKeys(cfg, PAGE_KEY);
-          remoteReadCount = Math.max(remoteReadCount, Array.isArray(remoteOrMerged && remoteOrMerged.db) ? remoteOrMerged.db.length : 0);
-          if(remoteOrMerged && remoteOrMerged.resourceKey && remoteOrMerged.resourceKey !== PAGE_KEY && Array.isArray(remoteOrMerged.db) && remoteOrMerged.db.length){
-            try{
-              await cloudMerge(cfg, PAGE_KEY, { db: canonicalizeRows(remoteOrMerged.db), counter: Number(remoteOrMerged.counter||remoteOrMerged.db.length)||remoteOrMerged.db.length }, {
-                user: state.user || "",
-                role: state.role || "",
-                appVer: currentAppVer() || "",
-                clientId: state.clientId || getClientId(),
-                at: nowISO(),
-                reason: "legacy-key-promote:" + remoteOrMerged.resourceKey
-              });
-            }catch(_promoteErr){}
-          }
-        }
-
         try{ hydrateCrossPageAuth(); }catch(e){}
-        var remoteFinal = await cloudReadWithFallbackKeys(cfg, PAGE_KEY);
-        remoteReadCount = Math.max(remoteReadCount, Array.isArray(remoteFinal && remoteFinal.db) ? remoteFinal.db.length : 0);
-        if(remoteFinal && remoteFinal.resourceKey && remoteFinal.resourceKey !== PAGE_KEY && Array.isArray(remoteFinal.db) && remoteFinal.db.length){
-          try{
-            await cloudMerge(cfg, PAGE_KEY, { db: canonicalizeRows(remoteFinal.db), counter: Number(remoteFinal.counter||remoteFinal.db.length)||remoteFinal.db.length }, {
-              user: state.user || "",
-              role: state.role || "",
-              appVer: currentAppVer() || "",
-              clientId: state.clientId || getClientId(),
-              at: nowISO(),
-              reason: "legacy-key-promote-final:" + remoteFinal.resourceKey
-            });
-            remoteFinal = await cloudRead(cfg, PAGE_KEY);
-          }catch(_promoteFinalErr){}
-        }
-        var out = mergePayload(remoteFinal || remoteOrMerged, { db: canonicalizeRows(state.db), counter: state.counter });
-        out.db = canonicalizeRows(out.db);
+        remoteRead = await cloudReadWithFallbackKeys(cfg, PAGE_KEY);
+        remoteReadCount = Math.max(remoteReadCount, Array.isArray(remoteRead && remoteRead.db) ? remoteRead.db.length : 0);
 
-        state.db = out.db;
-        state.counter = out.counter;
+        var merged = mergePayload(remoteRead, { db: localRows, counter: state.counter });
+        merged.db = canonicalizeRows(merged.db);
+
+        state.db = merged.db;
+        state.counter = merged.counter;
         state.lastSyncAt = Date.now();
 
         try{ await idbClearOps(PAGE_KEY); }catch(e){}
         await saveLocal({ db: state.db, counter: state.counter });
         buildDictsFromDb();
 
+        // 將合併後的唯一結果再回寫到正式 PAGE_KEY，順便收斂舊 key 相容資料
+        try{ hydrateCrossPageAuth(); }catch(e){}
+        var mergedBack = await cloudMerge(cfg, PAGE_KEY, { db: state.db, counter: state.counter }, {
+          user: state.user || "",
+          role: state.role || "",
+          appVer: currentAppVer() || "",
+          clientId: state.clientId || getClientId(),
+          at: nowISO(),
+          reason: "boot-reconcile-merged"
+        });
+
+        if(mergedBack && Array.isArray(mergedBack.db)){
+          state.db = canonicalizeRows(mergePayload(mergedBack, { db: state.db, counter: state.counter }).db);
+          state.counter = Math.max(Number(mergedBack.counter||0)||0, state.db.filter(function(r){ return r && !r.deleted; }).length);
+          await saveLocal({ db: state.db, counter: state.counter });
+          buildDictsFromDb();
+        }
+
         setCloudState({
-          ok: !!(localRows.length || remoteReadCount || (out.db && out.db.length)),
+          ok: !!((state.db && state.db.length) || remoteReadCount),
           cfgOk:true,
           reachable:true,
           authState:"ok",
@@ -3841,6 +3790,37 @@ function getPromptOptions(mode){
       $("btnRead").querySelector(".t").textContent = "閱讀模式：" + (state.readMode ? "開" : "關");
       localStorage.setItem(READ_MODE_KEY, state.readMode ? "1" : "0");
       refresh();
+    }
+
+    function syncVersionToUrlAndUi(){
+      try{
+        var ver = currentAppVer();
+        if(!ver) return false;
+        APP_VER = ver;
+        try{
+          var u = new URL(location.href);
+          if(u.searchParams.get("v") !== ver){
+            u.searchParams.set("v", ver);
+            history.replaceState(null, "", u.toString());
+          }
+        }catch(e){}
+        try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
+        return true;
+      }catch(e){
+        return false;
+      }
+    }
+
+    function watchRuntimeVersionReady(){
+      var hit = syncVersionToUrlAndUi();
+      if(hit) return;
+      var tries = 0, maxTries = 80;
+      var tm = setInterval(function(){
+        tries++;
+        if(syncVersionToUrlAndUi() || tries >= maxTries) clearInterval(tm);
+      }, 250);
+      window.addEventListener("pageshow", syncVersionToUrlAndUi);
+      window.addEventListener("focus", syncVersionToUrlAndUi);
     }
 
     // ---------------------------
