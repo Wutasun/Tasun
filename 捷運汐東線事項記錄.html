@@ -6,14 +6,14 @@
   <title>捷運汐東線事項記錄 · Tasun</title>
   <!-- cloud-unauth-final-fix 2026-03-27 -->
   <!-- final-stable-clean 2026-03-27 -->
-  <!-- [TASUN BUILD] sxdh-notes cloud-auth-fix + unified-final-v68 2026-04-06 -->
+  <!-- [TASUN BUILD] sxdh-notes cloud-auth-fix + unified-final-v69 cloud-syncfix 2026-04-07 -->
 
   <link rel="icon" href="data:,">
   
   <!-- ✅ 固定正式版：直接鎖定版本，不再透過 tasun-version-loader.js 改寫成 auto_... -->
   <script>
   (function(){
-    var FALLBACK_VER = "20260406_tasun_v5_unified_final_v68";
+    var FALLBACK_VER = "20260406_tasun_v5_unified_final_v69";
     var WAIT = window.__TASUN_READY__;
     if(!WAIT || typeof WAIT !== "object"){
       var _q = [], _ready = false, _resolve = null;
@@ -997,7 +997,7 @@ window.TASUN_RESOURCE_KEY = window.TASUN_RESOURCE_KEY || PAGE_KEY;
 window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
 window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
-    var APP_VER = String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || window.__TASUN_FALLBACK_VER__ || "20260406_tasun_v5_unified_final_v68").trim() || "20260406_tasun_v5_unified_final_v68";
+    var APP_VER = String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || window.__TASUN_FALLBACK_VER__ || "20260406_tasun_v5_unified_final_v69").trim() || "20260406_tasun_v5_unified_final_v69";
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
@@ -2380,6 +2380,7 @@ function getVisibleRows(){
       if(c.authState==="expired") return "授權失敗";
       if(c.authPending || c.authState==="checking") return "檢查中";
       if(c.cfgOk && c.reachable===false) return "連線失敗";
+      if(c.cfgOk && c.reachable===true && c.authState==="ok") return "已連線";
       if(c.cfgOk && (c.reachable===null || c.reachable===undefined)) return "待同步";
       if(c.cfgOk) return "待同步";
       return "未設定";
@@ -3646,14 +3647,23 @@ function getPromptOptions(mode){
         if(!silent) toast("已完成開啟同步");
         return true;
       }catch(e){
-        setCloudState({ ok:false }, true);
-        if(!silent) toast("開啟同步失敗：" + (e && e.message ? e.message : String(e)));
+        var msg = String(e && e.message ? e.message : e || "");
+        var authState = (state.cloud && state.cloud.authState) ? state.cloud.authState : "checking";
+        var reachable = (state.cloud && state.cloud.reachable!==undefined) ? state.cloud.reachable : null;
+        if(/401|403|unauth|forbidden/i.test(msg)) authState = "unauth";
+        setCloudState({ ok:false, authState:authState, reachable:reachable, authPending:false }, true);
+        if(!silent) toast("開啟同步失敗：" + msg);
         return false;
       }
     }
 
     async function syncFromCloud(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
+      try{
+        var cfg = await loadCloudCfg();
+        await cloudHealth(cfg);
+        await refreshCloudAuthState();
+      }catch(_e){}
       return await reconcileCloudOnOpen({ silent: !!opts.silent, reason:"manual-from-cloud" });
     }
     async function syncToCloud(opts){
@@ -4391,11 +4401,12 @@ $("btnSave").addEventListener("click", async function(){
         try{ await refreshCloudAuthState(); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
-        // ✅ 開頁同步策略：僅在雲端已授權或可自動重登時才進行，避免未授權時反覆 /me 401。
+        // ✅ 開頁同步策略修正：只要雲端設定有效，就主動跑一次 reconcile；
+        // 由 reconcile / ensureWorkerAuthorized 自行判斷已授權、未授權或連線失敗，
+        // 避免頁面長時間停在「待同步」卻未真正嘗試同步。
         try{
           var _c = (typeof state !== "undefined" && state && state.cloud) ? state.cloud : {};
-          var _seed = getWorkerAuthSeedState();
-          if(_c && (_c.authState === "ok" || _seed.canRelogin || _seed.tokenReady)){
+          if(_c && _c.cfgOk){
             await reconcileCloudOnOpen({ silent:true });
             try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
           }else{
