@@ -13,7 +13,7 @@
   <!-- ✅ 固定正式版：直接鎖定版本，不再透過 tasun-version-loader.js 改寫成 auto_... -->
   <script>
   (function(){
-    var FALLBACK_VER = "20260406_tasun_v5_unified_final_v69";
+    var FALLBACK_VER = "";
     var WAIT = window.__TASUN_READY__;
     if(!WAIT || typeof WAIT !== "object"){
       var _q = [], _ready = false, _resolve = null;
@@ -67,16 +67,12 @@
           await window.__TASUN_VERSION_READY__;
         }else{
           if(!window.__CACHE_V && !window.TASUN_APP_VER && !window.APP_VER){
-            window.__CACHE_V = FALLBACK_VER;
-            window.TASUN_APP_VER = FALLBACK_VER;
-            window.APP_VER = FALLBACK_VER;
+            // 正式版號唯一來源為 tasun-version.json / tasun-version-loader.js；此頁不再自行寫死 fallback 正式版號
           }
         }
       }catch(e){
         if(!window.__CACHE_V && !window.TASUN_APP_VER && !window.APP_VER){
-          window.__CACHE_V = FALLBACK_VER;
-          window.TASUN_APP_VER = FALLBACK_VER;
-          window.APP_VER = FALLBACK_VER;
+          // 保持空值，等待正式版號來源注入
         }
       }
 
@@ -1020,7 +1016,13 @@ window.TASUN_RESOURCE_KEY = window.TASUN_RESOURCE_KEY || PAGE_KEY;
 window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
 window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
-    var APP_VER = String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || window.__TASUN_FALLBACK_VER__ || "20260406_tasun_v5_unified_final_v69").trim() || "20260406_tasun_v5_unified_final_v69";
+    function currentAppVer(){
+      return String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || "").trim();
+    }
+    function displayAppVer(){
+      return currentAppVer() || "載入中…";
+    }
+    var APP_VER = currentAppVer();
     var RESOURCES_URL = "tasun-resources.json";
 
     var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
@@ -1303,10 +1305,12 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     function addV(url){
       if(!url) return url;
+      var ver = currentAppVer();
+      if(!ver) return url;
       if(url.startsWith("http://") || url.startsWith("https://")){
-        try{ var u = new URL(url); u.searchParams.set("v", APP_VER); return u.toString(); }catch(e){ return url; }
+        try{ var u = new URL(url); u.searchParams.set("v", ver); return u.toString(); }catch(e){ return url; }
       }
-      return url + (url.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(APP_VER);
+      return url + (url.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(ver);
     }
 
     // ---------------------------
@@ -1630,8 +1634,9 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
         }catch(e){ totalCount = 0; }
         var cloudTxt = cloudBadgeText();
         var lastTxt = (state.cloud && state.cloud.lastOkAt) ? fmtClock(state.cloud.lastOkAt) : "—";
+        APP_VER = currentAppVer();
         hint.innerHTML = ""
-          + '<span class="hb"><span class="k">版本</span><span class="v">' + escHtml(APP_VER) + '</span></span>'
+          + '<span class="hb"><span class="k">版本</span><span class="v">' + escHtml(displayAppVer()) + '</span></span>'
           + '<span class="hb"><span class="k">筆數</span><span class="v">' + escHtml(String(visibleCount) + " / " + String(totalCount)) + '</span></span>'
           + '<span class="hb' + (state.selectedUid ? '' : ' bad') + '"><span class="k">選取</span><span class="v">' + escHtml(state.selectedUid ? "已選取" : "未選取") + '</span></span>'
           + '<span class="hb' + (cloudBadgeBad() ? ' bad' : '') + '"><span class="k">雲端</span><span class="v">' + escHtml(cloudTxt) + '</span></span>'
@@ -1661,7 +1666,8 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
           s.innerHTML = '<span class="k">'+escHtml(k)+'</span><span class="v">'+escHtml(v)+'</span>';
           return s;
         }
-        hint.appendChild(hb("版本", APP_VER));
+        APP_VER = currentAppVer();
+        hint.appendChild(hb("版本", displayAppVer()));
         hint.appendChild(hb("筆數", String(rowsVisible.length) + " / " + String(totalRows)));
         hint.appendChild(hb("選取", state.selectedUid ? "已選取" : "未選取", !state.selectedUid));
         hint.appendChild(hb("雲端", cloudTxt, cloudBadgeBad()));
@@ -2014,6 +2020,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
       // uid / pk
       r.uid = norm(pick(r, ["uid","pk","_pk","uuid","_uid","user"])) || "";
+      if(!r.uid) r.uid = deriveLegacyUid(r);
       if(!r.uid) return null;
 
       // 顯示用 id（允許舊資料用「項次/序號」）
@@ -2257,6 +2264,23 @@ function getVisibleRows(){
         normText(r.text),
         normText(r.trade),
         normText(r.sys)
+      ].join("|");
+    }
+
+    function rowNearFamilyKey(r){
+      r = ensureRowV1(r);
+      if(!r) return "";
+      function normText(v){
+        return norm(v).replace(/[，、；：。！？]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+      }
+      var text = normText(r.text);
+      if(!text) return "";
+      if(text.length > 60) text = text.slice(0, 60);
+      return [
+        text,
+        normText(r.trade),
+        normText(r.sys),
+        normText(r.date)
       ].join("|");
     }
 
@@ -3794,7 +3818,7 @@ function getPromptOptions(mode){
 
     function exportBackup(){
       var pack = {
-        meta: { app:"Tasun sxdh-notes", ver: APP_VER, exportedAt: nowISO(), pageKey: PAGE_KEY },
+        meta: { app:"Tasun sxdh-notes", ver: currentAppVer() || "", exportedAt: nowISO(), pageKey: PAGE_KEY },
         db: state.db.map(ensureRowV1).filter(Boolean),
         counter: state.counter,
         dicts: {
@@ -3804,7 +3828,7 @@ function getPromptOptions(mode){
           tradeSysMap: loadMap()
         }
       };
-      downloadText("捷運汐東線事項記錄_backup_"+APP_VER+".json", JSON.stringify(pack, null, 2));
+      downloadText("捷運汐東線事項記錄_backup_"+(currentAppVer() || "unversioned")+".json", JSON.stringify(pack, null, 2));
       toast("已匯出備份");
     }
 
@@ -4087,7 +4111,7 @@ function getPromptOptions(mode){
         ];
         var wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "事項記錄");
-        XLSX.writeFile(wb, "捷運汐東線事項記錄_表格範本_" + APP_VER + ".xlsx");
+        XLSX.writeFile(wb, "捷運汐東線事項記錄_表格範本_" + (currentAppVer() || "unversioned") + ".xlsx");
         toast("已下載 Excel 範本");
       }).catch(function(){
         alert("Excel 套件載入失敗，請確認網路連線後再試。");
@@ -4373,7 +4397,7 @@ $("btnSave").addEventListener("click", async function(){
           return {
             ok: true,
             href: location.href,
-            version: APP_VER,
+            version: currentAppVer() || "",
             user: cur ? (cur.user || cur.name || "") : "—",
             role: cur ? (cur.role || "read") : "—",
             cloud: Object.assign({}, state.cloud || {}),
