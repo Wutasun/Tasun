@@ -6,7 +6,7 @@
   <title>捷運汐東線事項記錄 · Tasun</title>
   <!-- cloud-unauth-final-fix 2026-03-27 -->
   <!-- final-stable-clean 2026-03-27 -->
-  <!-- [TASUN BUILD] sxdh-notes cloud-auth-fix + unified-final-v69 cloud-syncfix 2026-04-07 -->
+  <!-- [TASUN BUILD] sxdh-notes cloud-auth-fix + unified-final-v69 cloud-syncfix + cloud-read-fallback 2026-04-07 -->
 
   <link rel="icon" href="data:,">
   
@@ -3393,12 +3393,14 @@ function getPromptOptions(mode){
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
         const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/read";
         const postUrl = _joinUrl(apiBase, readPath);
-        const getUrl = _joinUrl(apiBase, "/api/tasun/pull") + "?key=" + encodeURIComponent(pageKey);
-        async function doPost(){
+        const pullBase = _joinUrl(apiBase, "/api/tasun/pull");
+        const query = "?key=" + encodeURIComponent(pageKey) + "&resourceKey=" + encodeURIComponent(pageKey) + "&pageKey=" + encodeURIComponent(pageKey) + "&fileKey=" + encodeURIComponent(pageKey);
+        const getUrl = pullBase + query;
+        async function doPost(body){
           return await fetch(postUrl, {
             method: "POST", cache: "no-store", credentials: getWorkerCredentialMode(cfg),
             headers: buildWorkerAuthHeaders({ "content-type":"application/json", "accept":"application/json" }),
-            body: JSON.stringify({ resourceKey: pageKey, key: pageKey, pageKey: pageKey })
+            body: JSON.stringify(body)
           });
         }
         async function doGet(){
@@ -3407,9 +3409,19 @@ function getPromptOptions(mode){
             headers: buildWorkerAuthHeaders({ "accept":"application/json" })
           });
         }
-        var r = await doPost();
-        if(r.status===404) r = await doGet();
-        return r;
+        var tries = [
+          { resourceKey: pageKey, key: pageKey, pageKey: pageKey, fileKey: pageKey },
+          { resourceKey: pageKey, pageKey: pageKey },
+          { key: pageKey },
+          { pageKey: pageKey }
+        ];
+        var r = null;
+        for(var i=0;i<tries.length;i++){
+          r = await doPost(tries[i]);
+          if(r && r.ok) return r;
+          if(r && r.status!==404 && r.status!==400) return r;
+        }
+        return await doGet();
       }
       async function cloudHealth(cfg){
         try{
@@ -3451,15 +3463,81 @@ function getPromptOptions(mode){
         return { key: pageKey, payload: payload || { db:[], counter:0 } };
       }
 
+      function _tryParseJsonMaybe(v){
+        if(v===undefined || v===null) return null;
+        if(typeof v === "object") return v;
+        var s = String(v || "").trim();
+        if(!s) return null;
+        if((s[0] !== "{" && s[0] !== "[") || (s[s.length-1] !== "}" && s[s.length-1] !== "]")) return null;
+        try{ return JSON.parse(s); }catch(e){ return null; }
+      }
+
+      function _unwrapCloudPayloadDeep(input, depth){
+        depth = Number(depth || 0);
+        if(depth > 8) return input;
+        var cur = _tryParseJsonMaybe(input) || input;
+        if(Array.isArray(cur)) return cur;
+        if(!cur || typeof cur !== "object") return cur;
+        var keys = ["payload","data","result","record","item","content","body","value","file","json"];
+        for(var i=0;i<keys.length;i++){
+          var k = keys[i];
+          if(cur[k]===undefined || cur[k]===null) continue;
+          var next = _tryParseJsonMaybe(cur[k]) || cur[k];
+          if(next && next !== cur){
+            var out = _unwrapCloudPayloadDeep(next, depth + 1);
+            if(out !== undefined && out !== null) return out;
+          }
+        }
+        return cur;
+      }
+
+      function _extractRowsFromAny(input, depth){
+        depth = Number(depth || 0);
+        if(depth > 8) return [];
+        var cur = _tryParseJsonMaybe(input) || input;
+        if(Array.isArray(cur)){
+          var looksLikeRows = cur.some(function(x){ return x && typeof x === "object" && (x.uid || x.pk || x.text || x.content || x.note || x.trade || x.sys || x.system); });
+          return looksLikeRows ? cur : [];
+        }
+        if(!cur || typeof cur !== "object") return [];
+
+        if(Array.isArray(cur.db)) return cur.db;
+        if(Array.isArray(cur.rows)) return cur.rows;
+        if(Array.isArray(cur.items)) return cur.items;
+        if(Array.isArray(cur.records)) return cur.records;
+        if(Array.isArray(cur.list)) return cur.list;
+
+        var deepKeys = ["payload","data","result","record","item","content","body","value","file","json"];
+        for(var i=0;i<deepKeys.length;i++){
+          var key = deepKeys[i];
+          if(cur[key]===undefined || cur[key]===null) continue;
+          var rows = _extractRowsFromAny(cur[key], depth + 1);
+          if(rows && rows.length) return rows;
+        }
+        return [];
+      }
+
+      function _extractCounterFromAny(input, fallback){
+        var cur = _tryParseJsonMaybe(input) || input;
+        if(!cur || typeof cur !== "object") return Number(fallback || 0) || 0;
+        var direct = Number(cur.counter);
+        if(Number.isFinite(direct)) return direct;
+        var keys = ["payload","data","result","record","item","content","body","value","file","json"];
+        for(var i=0;i<keys.length;i++){
+          var k = keys[i];
+          if(cur[k]===undefined || cur[k]===null) continue;
+          var n = _extractCounterFromAny(cur[k], fallback);
+          if(Number.isFinite(Number(n)) && Number(n) > 0) return Number(n);
+        }
+        return Number(fallback || 0) || 0;
+      }
+
       function _normalizePullResponse(json){
-        const j = (json && typeof json==="object") ? json : {};
-        const payload = (j.payload && typeof j.payload==="object") ? j.payload : ((j.data && typeof j.data==="object") ? j.data : j);
-        var db = [];
-        if(Array.isArray(payload.db)) db = payload.db;
-        else if(Array.isArray(payload.rows)) db = payload.rows;
-        else if(Array.isArray(payload.items)) db = payload.items;
-        const counter = Number.isFinite(Number(payload.counter)) ? Number(payload.counter) : (Array.isArray(db) ? db.length : 0);
-        return { db, counter };
+        const base = _unwrapCloudPayloadDeep(json, 0);
+        var db = _extractRowsFromAny(base, 0);
+        if(!db.length) db = _extractRowsFromAny(json, 0);
+        const counter = _extractCounterFromAny(base, Array.isArray(db) ? db.length : 0);
+        return { db: Array.isArray(db) ? db : [], counter: Number(counter||0) || (Array.isArray(db) ? db.length : 0) };
       }
 
       async function cloudRead(cfg, pageKey){
