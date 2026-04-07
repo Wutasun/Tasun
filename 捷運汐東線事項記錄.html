@@ -1716,57 +1716,28 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     function startAuthHydrationWatch(){
       var tries = 0, maxTries = 28;
       var syncedOnce = false;
-      var reconcileBusy = false;
-      var lastReconcileAt = 0;
-
-      async function maybeReconcile(reason, force){
-        var now = Date.now();
-        if(reconcileBusy) return false;
-        if(!force && (now - lastReconcileAt) < 1800) return false;
-        reconcileBusy = true;
-        try{
-          await reconcileCloudOnOpen({ silent:true, reason: reason || "watch" });
-          lastReconcileAt = Date.now();
-          syncedOnce = true;
-          return true;
-        }catch(e){
-          return false;
-        }finally{
-          reconcileBusy = false;
-        }
-      }
-
-      async function settle(reason, force){
+      async function settle(){
         var ok = false;
         try{ ok = resolveRuntimeUser(); }catch(e){ ok = false; }
         try{ ensureActionButtonsVisible(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
-        if(!syncedOnce || force){
-          try{ await maybeReconcile(reason, !!force); }catch(e){}
+        if(!syncedOnce){
+          try{
+            await reconcileCloudOnOpen({ silent:true });
+            syncedOnce = true;
+          }catch(e){}
         }
         return ok;
       }
-
       var tm = setInterval(function(){
         tries++;
-        settle("hydrate-poll", !syncedOnce).then(function(ok){ if(ok || tries >= maxTries) clearInterval(tm); });
+        settle().then(function(ok){ if(ok || tries >= maxTries) clearInterval(tm); });
       }, 250);
-
-      ["focus","load"].forEach(function(evt){
-        window.addEventListener(evt, function(){ settle("window-" + evt, false); });
+      ["focus","pageshow","load"].forEach(function(evt){
+        window.addEventListener(evt, function(){ settle(); });
       });
-
-      window.addEventListener("pageshow", function(ev){
-        settle("pageshow", !!(ev && ev.persisted));
-      });
-
-      document.addEventListener("visibilitychange", function(){
-        if(!document.hidden) settle("visible", false);
-      });
-
-      window.addEventListener("storage", function(){
-        settle("storage", true);
-      });
+      document.addEventListener("visibilitychange", function(){ if(!document.hidden) settle(); });
+      window.addEventListener("storage", function(){ settle(); });
     }
 
     // ---------------------------
@@ -1877,14 +1848,21 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     // Local data + dicts
     // ---------------------------
         async function loadDb(){
-      // 1) 先讀 IndexedDB
+      // 1) try IDB
       var meta = null, rows = [];
       try{
         meta = await idbGetMeta(PAGE_KEY);
         rows = await idbGetAllRows(PAGE_KEY);
       }catch(e){ meta=null; rows=[]; }
 
-      // 2) 再讀 localStorage 正式包 + legacy，避免只剩 meta/空 rows 時直接回傳 0 筆
+      if(meta || (rows && rows.length)){
+        var counter = Number(meta && meta.counter || 0) || 0;
+        state.lastSyncAt = Number(meta && meta.lastSyncAt || 0) || 0;
+        state.clientId = norm(meta && meta.clientId) || getClientId();
+        return { db: canonicalizeRows(rows||[]), counter: counter };
+      }
+
+      // 2) migrate from localStorage v1 / legacy
       var pack = safeJSON(localStorage.getItem(DB_KEY));
       var arr = [];
       var c = 0;
@@ -1898,27 +1876,6 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
         if(!Number.isFinite(c) || c<0) c = 0;
       }
 
-      // 3) 只要任一端有資料/中繼資訊，就做本機雙端合併，避免 IDB meta 存在但 rows 空白時把 localStorage 正式資料忽略掉
-      if(meta || (rows && rows.length) || (arr && arr.length)){
-        state.lastSyncAt = Number(meta && meta.lastSyncAt || 0) || 0;
-        state.clientId = norm(meta && meta.clientId) || getClientId();
-        var counter = Math.max(
-          Number(meta && meta.counter || 0) || 0,
-          Number(c || 0) || 0,
-          Array.isArray(rows) ? rows.length : 0,
-          Array.isArray(arr) ? arr.length : 0
-        );
-        var mergedLocal = mergePayload(
-          { db: Array.isArray(arr) ? arr : [], counter: Number(c||0)||0 },
-          { db: Array.isArray(rows) ? rows : [], counter: counter }
-        );
-        return {
-          db: canonicalizeRows((mergedLocal && mergedLocal.db) || []),
-          counter: Number((mergedLocal && mergedLocal.counter) || counter) || counter
-        };
-      }
-
-      // 4) 雙端都沒有資料時，初始化空本機容器
       state.lastSyncAt = 0;
       state.clientId = getClientId();
 
@@ -2329,6 +2286,24 @@ function getVisibleRows(){
         normText(r.text),
         normText(r.trade),
         normText(r.sys)
+      ].join("|");
+    }
+
+    function rowNearFamilyKey(r){
+      r = ensureRowV1(r);
+      if(!r) return "";
+      function normText(v){
+        return norm(v).replace(/[，、；：。！？]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+      }
+      function clip(v, n){
+        v = normText(v);
+        return v.length > n ? v.slice(0, n) : v;
+      }
+      return [
+        clip(r.text, 80),
+        normText(r.trade),
+        normText(r.sys),
+        normText(r.date)
       ].join("|");
     }
 
@@ -3844,6 +3819,70 @@ function getPromptOptions(mode){
       return await reconcileCloudOnOpen({ silent: !!opts.silent, reason: opts.reason || "manual-to-cloud" });
     }
 
+
+    async function pullAllCloudCandidates(cfg){
+      cfg = cfg || await loadCloudCfg();
+      var merged = { db: [], counter: 0, keys: [] };
+      var seen = Object.create(null);
+      var keys = getCloudKeyCandidates(PAGE_KEY);
+      for(var i=0;i<keys.length;i++){
+        var key = norm(keys[i]);
+        if(!key || seen[key]) continue;
+        seen[key] = 1;
+        try{
+          var payload = await cloudRead(cfg, key);
+          merged.keys.push({ key:key, count:Array.isArray(payload.db) ? payload.db.length : 0, ok:true });
+          merged = mergePayload({ db: Array.isArray(payload.db) ? payload.db : [], counter: Number(payload.counter||0)||0 }, merged);
+        }catch(e){
+          merged.keys.push({ key:key, count:0, ok:false, error:String(e && e.message || e) });
+        }
+      }
+      merged.db = canonicalizeRows(merged.db || []);
+      merged.counter = Number(merged.counter || (merged.db||[]).length) || (merged.db||[]).length || 0;
+      return merged;
+    }
+
+    async function forceMobileCloudHydrate(reason){
+      reason = norm(reason) || "mobile-hydrate";
+      try{ hydrateCrossPageAuth(); }catch(e){}
+      var cfg = await loadCloudCfg();
+      if(!cfg || !isValidApiBase(cfg.apiBase)) return false;
+      var authOk = false;
+      try{ authOk = await ensureWorkerAuthorized(cfg); }catch(e){ authOk = false; }
+      if(!authOk) return false;
+
+      var mergedCloud = await pullAllCloudCandidates(cfg);
+      if(!mergedCloud || !Array.isArray(mergedCloud.db) || !mergedCloud.db.length) return false;
+
+      var out = mergePayload(mergedCloud, { db: canonicalizeRows(state.db || []), counter: state.counter });
+      out.db = canonicalizeRows(out.db || []);
+      if(!out.db.length) return false;
+
+      state.db = out.db;
+      state.counter = Math.max(Number(out.counter||0)||0, out.db.filter(function(r){ return r && !r.deleted; }).length);
+      state.lastSyncAt = Date.now();
+      try{ await idbClearOps(PAGE_KEY); }catch(e){}
+      await saveLocal({ db: state.db, counter: state.counter });
+      buildDictsFromDb();
+      setCloudState({ ok:true, cfgOk:true, reachable:true, lastOkAt: Date.now(), lastSyncAt: nowISO() }, false);
+      refresh();
+      return true;
+    }
+
+    function scheduleMobileHydrationRetries(){
+      if(!(window.matchMedia && window.matchMedia("(max-width:760px)").matches)) return;
+      var waits = [500, 1500, 3200, 5200];
+      waits.forEach(function(ms, idx){
+        setTimeout(async function(){
+          try{
+            var alive = canonicalizeRows(state.db || []).map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
+            if(alive > 0) return;
+            await forceMobileCloudHydrate("mobile-retry-" + idx);
+          }catch(e){}
+        }, ms);
+      });
+    }
+
     // ---------------------------
     // Export / Import helpers (backup)
     // ---------------------------
@@ -4435,10 +4474,6 @@ $("btnSave").addEventListener("click", async function(){
       // 週期保底同步（避免長時間開著頁面但沒互動）
       setInterval(function(){ scheduleSync("periodic"); }, SYNC_PERIODIC_MS);
 
-      // 開頁返回 / 切回前景 / 即將離頁時做最佳努力同步，減少必須手動強制更新的情況
-      window.addEventListener("pagehide", function(){ try{ scheduleSync("pagehide", true); }catch(e){} }, { passive:true });
-      window.addEventListener("beforeunload", function(){ try{ scheduleSync("beforeunload", true); }catch(e){} });
-
     }
 
 
@@ -4593,6 +4628,12 @@ $("btnSave").addEventListener("click", async function(){
         try{ hydrateCrossPageAuth(); }catch(e){}
         try{ await refreshCloudAuthState(); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
+        try{
+          var _alive0 = canonicalizeRows(state.db || []).map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
+          if(_alive0===0 && window.matchMedia && window.matchMedia("(max-width:760px)").matches){
+            await forceMobileCloudHydrate("boot-mobile-empty-first");
+          }
+        }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         // ✅ 開頁同步策略修正：只要雲端設定有效，就主動跑一次 reconcile；
         // 由 reconcile / ensureWorkerAuthorized 自行判斷已授權、未授權或連線失敗，
@@ -4634,6 +4675,7 @@ $("btnSave").addEventListener("click", async function(){
       try{ syncMobileTopbarHeight(); }catch(e){}
       try{ resolveRuntimeUser(); }catch(e){}
       try{ ensureHeaderStateVisible(); }catch(e){}
+      try{ scheduleMobileHydrationRetries(); }catch(e){}
     }).catch(function(e){ console.error(e); });
   })();
   </script>
