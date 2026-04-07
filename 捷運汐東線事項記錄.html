@@ -401,7 +401,7 @@
     @media (max-width:720px){
       .grid{grid-template-columns:1fr}
       .span2{grid-column:span 1}
-      table{min-width:1240px}
+      table{min-width:960px}
     }
     .inline2{display:grid; grid-template-columns: 1fr auto; gap:10px; align-items:end}
     @media (max-width:520px){
@@ -527,7 +527,37 @@
     overflow:auto !important;
     -webkit-overflow-scrolling: touch;
   }
+  table{
+    min-width:880px;
+    width:max-content;
+  }
+  thead th,
+  tbody td{
+    padding:10px 8px;
+    font-size:13.5px;
+    line-height:1.65;
+    white-space:normal;
+    vertical-align:top;
+  }
   thead th{ top:0; z-index:4; }
+  #tbl th:nth-child(1), #tbl td:nth-child(1){ min-width:54px; width:54px; text-align:center; }
+  #tbl th:nth-child(2), #tbl td:nth-child(2){
+    min-width:320px;
+    width:min(56vw, 480px);
+    text-align:left;
+    word-break:break-word;
+    overflow-wrap:anywhere;
+    white-space:normal;
+    font-weight:800;
+  }
+  #tbl th:nth-child(3), #tbl td:nth-child(3),
+  #tbl th:nth-child(4), #tbl td:nth-child(4),
+  #tbl th:nth-child(5), #tbl td:nth-child(5){ min-width:86px; width:86px; text-align:center; }
+  #tbl th:nth-child(6), #tbl td:nth-child(6){ min-width:70px; width:70px; text-align:center; }
+  #tbl th:nth-child(7), #tbl td:nth-child(7){ min-width:110px; width:110px; }
+  #tbl th:nth-child(8), #tbl td:nth-child(8){ min-width:94px; width:94px; text-align:center; }
+  #tbl th:nth-child(9), #tbl td:nth-child(9){ min-width:72px; width:72px; text-align:center; }
+  .attBtn{ padding:7px 10px; }
   .nav-desktop{display:none !important;}
   .nav-mobile{display:flex !important; gap:8px; align-items:center; width:100%;}
   .nav-mobile #mActionSel{
@@ -730,7 +760,7 @@
             <thead>
               <tr>
                 <th style="width:90px;">項次</th>
-                <th>記事內容</th>
+                <th style="text-align:left;">記事內容</th>
                 <th style="width:150px;">工種</th>
                 <th style="width:150px;">系統</th>
                 <th style="width:150px;">出處</th>
@@ -1016,11 +1046,65 @@ window.TASUN_RESOURCE_KEY = window.TASUN_RESOURCE_KEY || PAGE_KEY;
 window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
 window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
+    var TASUN_VERSION_JSON = "tasun-version.json";
+    var __tasunResolvedFormalVer = "";
+
+    function extractFormalVersionValue(obj, depth){
+      depth = Number(depth || 0);
+      if(depth > 6 || obj===undefined || obj===null) return "";
+      if(typeof obj === "string") return norm(obj);
+      if(Array.isArray(obj)){
+        for(var i=0;i<obj.length;i++){
+          var av = extractFormalVersionValue(obj[i], depth + 1);
+          if(av) return av;
+        }
+        return "";
+      }
+      if(typeof obj !== "object") return "";
+      var directKeys = ["version","ver","appVersion","app_ver","currentVersion","current","releaseVersion","cacheVersion"];
+      for(var j=0;j<directKeys.length;j++){
+        var k = directKeys[j];
+        var dv = norm(obj[k]);
+        if(dv) return dv;
+      }
+      var deepKeys = ["data","payload","result","meta","build","release"];
+      for(var x=0;x<deepKeys.length;x++){
+        var dk = deepKeys[x];
+        if(obj[dk]===undefined || obj[dk]===null) continue;
+        var vv = extractFormalVersionValue(obj[dk], depth + 1);
+        if(vv) return vv;
+      }
+      return "";
+    }
+
     function currentAppVer(){
-      return String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || "").trim();
+      return String(__tasunResolvedFormalVer || window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || "").trim();
     }
     function displayAppVer(){
       return currentAppVer() || "載入中…";
+    }
+    async function fetchFormalAppVer(force){
+      try{
+        if(!force){
+          var cur0 = currentAppVer();
+          if(cur0) return cur0;
+        }
+        var u = TASUN_VERSION_JSON + "?_=" + Date.now();
+        var r = await fetch(u, { cache:"no-store" });
+        if(!r || !r.ok) return currentAppVer();
+        var txt = await r.text();
+        var js = parseJsonLenient(txt) || safeJSON(txt) || null;
+        var ver = extractFormalVersionValue(js, 0);
+        if(ver){
+          __tasunResolvedFormalVer = ver;
+          try{ window.__CACHE_V = window.__CACHE_V || ver; }catch(e){}
+          try{ window.TASUN_APP_VER = window.TASUN_APP_VER || ver; }catch(e){}
+          try{ window.APP_VER = window.APP_VER || ver; }catch(e){}
+        }
+        return currentAppVer();
+      }catch(e){
+        return currentAppVer();
+      }
     }
     var APP_VER = currentAppVer();
     var RESOURCES_URL = "tasun-resources.json";
@@ -3812,15 +3896,20 @@ function getPromptOptions(mode){
     }
 
     function watchRuntimeVersionReady(){
-      var hit = syncVersionToUrlAndUi();
-      if(hit) return;
+      if(syncVersionToUrlAndUi()) return;
+      if(watchRuntimeVersionReady._busy) return;
+      watchRuntimeVersionReady._busy = true;
       var tries = 0, maxTries = 80;
-      var tm = setInterval(function(){
+      var tm = setInterval(async function(){
         tries++;
-        if(syncVersionToUrlAndUi() || tries >= maxTries) clearInterval(tm);
+        try{ await fetchFormalAppVer(tries > 2); }catch(e){}
+        if(syncVersionToUrlAndUi() || tries >= maxTries){
+          clearInterval(tm);
+          watchRuntimeVersionReady._busy = false;
+        }
       }, 250);
-      window.addEventListener("pageshow", syncVersionToUrlAndUi);
-      window.addEventListener("focus", syncVersionToUrlAndUi);
+      window.addEventListener("pageshow", function(){ try{ fetchFormalAppVer(true).then(syncVersionToUrlAndUi); }catch(e){} });
+      window.addEventListener("focus", function(){ try{ fetchFormalAppVer(true).then(syncVersionToUrlAndUi); }catch(e){} });
     }
 
     // ---------------------------
@@ -4505,6 +4594,8 @@ $("btnSave").addEventListener("click", async function(){
         try{ wire(); }catch(e){}
         try{ ensureHeaderStateVisible(); }catch(e){}
         try{ renderHintFallback(); }catch(e){}
+        try{ await fetchFormalAppVer(true); }catch(e){}
+        try{ syncVersionToUrlAndUi(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         try{ refresh(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         try{ hydrateCrossPageAuth(); }catch(e){}
