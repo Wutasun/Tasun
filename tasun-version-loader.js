@@ -1,4 +1,3 @@
-\
 /* Tasun Version Loader v5 single-source final
  * 正式版號唯一來源：tasun-version.json -> version
  * 頁面 / 首頁 / 子頁 / 核心檔不得再手寫正式版號
