@@ -1086,8 +1086,6 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       selectedUid: "",
       lastSyncAt: 0,
       clientId: "",
-      sessionDirty: false,
-      lastLocalMutationAt: 0,
       cloud: {
         ok: false,
         cfgOk: true,
@@ -1243,24 +1241,8 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
 
     function markDirty(uid){
       try{ idbAddOp(PAGE_KEY, uid); }catch(e){}
-      try{ state.sessionDirty = true; state.lastLocalMutationAt = Date.now(); }catch(e){}
       // ✅ 企業級最佳做法：任何變更都排程自動同步（去抖 + 互斥 + 離線重試）
       try{ scheduleSync("dirty"); }catch(e){}
-    }
-
-    function reasonAllowsDirtyPush(reason){
-      reason = norm(reason).toLowerCase();
-      if(!reason) return false;
-      return (
-        reason.indexOf("add") >= 0 ||
-        reason.indexOf("edit") >= 0 ||
-        reason.indexOf("delete") >= 0 ||
-        reason.indexOf("save") >= 0 ||
-        reason.indexOf("excel-import") >= 0 ||
-        reason.indexOf("import") >= 0 ||
-        reason.indexOf("manual-to-cloud") >= 0 ||
-        reason.indexOf("force-push") >= 0
-      );
     }
 
     // ---------------------------
@@ -2137,9 +2119,7 @@ function calcMaxDisplayChars(rows, key){
       (rows || []).forEach(function(r){
         var v = norm(r && r[key]);
         if(!v) return;
-        var lines = v.split(/
-?
-/);
+        var lines = v.split(/\r?\n/);
         for(var i=0;i<lines.length;i++){
           var len = Array.from(lines[i] || "").length;
           if(len > maxChars) maxChars = len;
@@ -3763,8 +3743,6 @@ function getPromptOptions(mode){
     async function reconcileCloudOnOpen(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
       var silent = (opts.silent!==false);
-      var reason = norm(opts.reason || "open");
-      var allowDirtyPush = reasonAllowsDirtyPush(reason);
 
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)){
@@ -3819,7 +3797,7 @@ function getPromptOptions(mode){
         var out = null;
 
         if(hasCloudPayloadRows(remoteBase)){
-          if(allowDirtyPush && dirtyRows.length){
+          if(dirtyRows.length){
             var mergedDirty = mergePayload({ db: dirtyRows, counter: state.counter }, remoteBase);
             var pushed = await cloudMerge(cfg, PAGE_KEY, {
               db: canonicalizeRows(mergedDirty.db || []),
@@ -3830,12 +3808,11 @@ function getPromptOptions(mode){
               appVer: APP_VER,
               clientId: state.clientId || getClientId(),
               at: nowISO(),
-              reason: reason || "explicit-dirty-push"
+              reason: "open-reconcile-dirty-only"
             });
             out = mergePayload(pushed, mergedDirty);
           }else{
-            // ✅ 正式修正：開頁 / 自動重試時一律以雲端為準，不再把舊 dirty 資料自動推回雲端，
-            // 避免舊資料、已刪除資料或測試列反覆覆蓋回去，造成雲端筆數持續增加。
+            // ✅ 沒有本機髒資料時，雲端為準，避免手機舊本機 31 筆把桌機已刪除的 30 筆覆蓋回去。
             out = mergePayload(remoteBase, { db: [], counter: 0 });
           }
         }else if(localRows.length){
@@ -3860,15 +3837,7 @@ function getPromptOptions(mode){
         state.counter = out.counter;
         state.lastSyncAt = Date.now();
 
-        try{
-          if(hasCloudPayloadRows(remoteBase) && !allowDirtyPush){
-            await idbClearOps(PAGE_KEY);
-            state.sessionDirty = false;
-          }else{
-            await idbClearOps(PAGE_KEY);
-            state.sessionDirty = false;
-          }
-        }catch(e){}
+        try{ await idbClearOps(PAGE_KEY); }catch(e){}
         await saveLocal({ db: state.db, counter: state.counter });
         buildDictsFromDb();
 
