@@ -3,15 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>捷運汐東線事項記錄｜自動連續測試＋正式 TXT 報告版</title>
+  <title>捷運汐東線事項記錄｜自動連續測試＋正式 TXT 報告版 v2（嚴格判定）</title>
   <script>document.write('<script src="tasun-version-loader.js?_=' + Date.now() + '"><\/script>');</script>
   <style>
-    :root{
-      --bg:#edf2f1;--panel:#ffffff;--border:#d6d6d6;--ink:#1d1d1f;--muted:#666;
-      --ok:#0a7a37;--warn:#a35b00;--bad:#b42318;--info:#175cd3;
-    }
-    *{box-sizing:border-box}
-    body{margin:0;font-family:system-ui,-apple-system,"Segoe UI","Noto Sans TC",sans-serif;background:var(--bg);color:var(--ink)}
+    :root{--bg:#edf2f1;--panel:#fff;--border:#d6d6d6;--ink:#1d1d1f;--muted:#666;--ok:#0a7a37;--warn:#a35b00;--bad:#b42318;--info:#175cd3}
+    *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,"Segoe UI","Noto Sans TC",sans-serif;background:var(--bg);color:var(--ink)}
     .wrap{max-width:1280px;margin:24px auto;padding:0 16px}
     h1{font-size:24px;margin:0 0 10px}
     .sub{color:var(--muted);margin:0 0 16px;line-height:1.7}
@@ -34,7 +30,7 @@
     .badge.info{color:var(--info);background:#eff8ff;border-color:#b2ddff}
     label{display:block;font-weight:700;margin:10px 0 6px}
     input,textarea{width:100%;border:1px solid #cfcfcf;border-radius:12px;padding:10px 12px;font:inherit}
-    textarea{min-height:240px;resize:vertical}
+    textarea{min-height:260px;resize:vertical}
     .ruleBox{border:1px solid var(--border);border-radius:12px;padding:12px;background:#fafafa;margin-bottom:14px}
     .ruleBox h2{font-size:16px;margin:0 0 8px}
     .ruleBox ul{margin:0;padding-left:20px;line-height:1.8}
@@ -43,16 +39,16 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>捷運汐東線事項記錄｜自動連續測試＋正式 TXT 報告版</h1>
-  <p class="sub">用途：自動連續執行 Step 1~11，完成後直接產出正式 TXT 測試報告，符合 Tasun v5 全站固定口令總版（正式版）測試用途。</p>
+  <h1>捷運汐東線事項記錄｜自動連續測試＋正式 TXT 報告版 v2（嚴格判定）</h1>
+  <p class="sub">修正版重點：不再用「已同步（測試推定）」直接判定合格；若雲端筆數前後變動、本機與雲端筆數不一致，或只靠推定，則一律判為不合格。</p>
 
   <div class="ruleBox">
-    <h2>正式測試判定原則</h2>
+    <h2>嚴格判定規則</h2>
     <ul>
-      <li>正式版號唯一來源：tasun-version.json / tasun-version-loader.js。</li>
-      <li>若最終仍顯示「待同步」，視為未完成，不得判定合格。</li>
-      <li>Read / Merge / 本機資料 / 最終判定都要列入正式 TXT 報告。</li>
-      <li>主控台錯誤需列入報告。</li>
+      <li>Step 5~6 與 Step 7~8、Step 10 的 Read 筆數若前後不一致，視為同步未穩定。</li>
+      <li>本機資料存在時，Step 10 上傳後的雲端筆數若與本機筆數不同，視為桌機 / 手機 / 雲端不同步。</li>
+      <li>除非有明確一致證據，報告不得寫「已同步」，只能寫「未驗證」或「不一致」。</li>
+      <li>若實際頁面仍顯示「待同步」，本測試也不得判定合格。</li>
     </ul>
   </div>
 
@@ -85,6 +81,8 @@
       <input id="mergeEp" value="/api/tasun/merge" />
       <label>本機 localStorage key（可手動指定）</label>
       <input id="localKey" value="tasunSxdhNotes_v1" />
+      <label>實際頁面雲端狀態（手動填入，可留空）</label>
+      <input id="actualCloudStatus" placeholder="例如：待同步 / 已同步" />
     </div>
 
     <div class="card">
@@ -123,7 +121,8 @@
 
   const state = {
     resolved:null, lastRead:null, lastMerge:null, lastHealth:null, localRows:[], localMeta:null,
-    lastSummaryText:'', lastJudge:null, lastConsoleError:'', lastTxt:'', autoDone:false
+    lastSummaryText:'', lastJudge:null, lastConsoleError:'', lastTxt:'',
+    readRowsFirst:null, readRowsAfterMerge:null, readRowsAfterUpload:null, uploadResult:null
   };
 
   window.addEventListener('error', function(ev){
@@ -155,8 +154,8 @@
   function clearAll(){
     logs.textContent=''; summary.textContent=''; txtView.value=''; state.lastSummaryText='';
     summaryBadge.className='badge info'; summaryBadge.textContent='尚未執行';
-    state.lastRead = state.lastMerge = state.lastHealth = state.lastJudge = null;
-    state.lastTxt = ''; state.autoDone = false;
+    state.lastRead = state.lastMerge = state.lastHealth = state.lastJudge = state.uploadResult = null;
+    state.lastTxt = ''; state.readRowsFirst = state.readRowsAfterMerge = state.readRowsAfterUpload = null;
     refreshMeta();
   }
   function readCookie(name){
@@ -166,10 +165,7 @@
     }catch(e){ return ''; }
   }
   function tokenCandidates(){
-    const names = [
-      'tasunBearerToken_v1','tasunAccessToken_v1','tasun_token','tasunToken','tasun_auth_token',
-      'authToken','access_token','token','tasunAuthToken_v1','tasunSessionToken_v1','tasunCloudToken_v1'
-    ];
+    const names = ['tasunBearerToken_v1','tasunAccessToken_v1','tasun_token','tasunToken','tasun_auth_token','authToken','access_token','token','tasunAuthToken_v1','tasunSessionToken_v1','tasunCloudToken_v1'];
     const out = [];
     for(const k of names){
       try{
@@ -236,6 +232,7 @@
       'console error：' + (state.lastConsoleError || '無')
     ].join('\n');
   }
+
   async function resolveConfig(){
     refreshMeta();
     const resourceKey = norm($('resourceKey').value) || 'sxdh-notes';
@@ -251,6 +248,7 @@
         merge: norm($('mergeEp').value) || '/api/tasun/merge'
       },
       localKey: norm($('localKey').value) || 'tasunSxdhNotes_v1',
+      actualCloudStatus: norm($('actualCloudStatus').value),
       resourcesJson: null,
       from: manualBase ? 'manual' : 'default',
       version: norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '')
@@ -275,8 +273,6 @@
         cfg.endpoints.health = norm(picked.health || (picked.endpoints && picked.endpoints.health) || topApi.health || topEndpoints.health || cfg.endpoints.health);
         cfg.endpoints.read   = norm(picked.read   || (picked.endpoints && picked.endpoints.read)   || topApi.read   || topEndpoints.read   || cfg.endpoints.read);
         cfg.endpoints.merge  = norm(picked.merge  || (picked.endpoints && picked.endpoints.merge)  || topApi.merge  || topEndpoints.merge  || cfg.endpoints.merge);
-      } else {
-        log('resources 讀取失敗：', rt.text.slice(0, 300));
       }
     }catch(err){
       log('resources 例外：', String(err && err.message || err));
@@ -289,14 +285,10 @@
       }catch(e){}
     }
     state.resolved = cfg;
-    setSummaryText([
-      'Step 1~3：' + (cfg.apiBase ? '完成' : '失敗'),
-      '版本：' + (cfg.version || '(空)'),
-      'apiBase: ' + (cfg.apiBase || '(空)'),
-      '來源: ' + cfg.from
-    ].join('\n'), cfg.apiBase ? 'ok' : 'bad');
+    setSummaryText(['Step 1~3：' + (cfg.apiBase ? '完成' : '失敗'),'版本：' + (cfg.version || '(空)'),'apiBase: ' + (cfg.apiBase || '(空)'),'來源: ' + cfg.from].join('\n'), cfg.apiBase ? 'ok' : 'bad');
     return cfg;
   }
+
   async function stepHealth(){
     const cfg = state.resolved || await resolveConfig();
     log('\n===== Step 4：測 Health =====');
@@ -308,40 +300,44 @@
       log('Health HTTP:', String(res.status));
       log('Health Body:', text.slice(0, 300));
       state.lastHealth = { status:res.status, body:text };
-      setSummaryText(['Step 4：' + ((res.ok || res.status===401 || res.status===403) ? '可到達' : '失敗'),'HTTP ' + res.status, explainHttp(res.status)].join('\n'), (res.ok || res.status===401 || res.status===403) ? 'ok' : 'bad');
       return state.lastHealth;
     }catch(err){
       log('Health 例外：', String(err && err.message || err));
-      setSummaryText('Step 4：例外\n' + String(err && err.message || err), 'bad');
+      state.lastHealth = { status:0, body:String(err && err.message || err) };
       return null;
     }
   }
-  async function stepRead(){
+
+  async function doRead(tag){
     const cfg = state.resolved || await resolveConfig();
-    log('\n===== Step 5~6：測 Read =====');
-    if(!cfg.apiBase){ setSummaryText('Step 5~6：失敗\napiBase 為空', 'bad'); return null; }
     const url = joinUrl(cfg.apiBase, cfg.endpoints.read);
     const body = { resourceKey: cfg.resourceKey };
+    const res = await fetch(url, { method:'POST', cache:'no-store', headers: authHeaders({ 'content-type':'application/json', accept:'application/json' }), body: JSON.stringify(body) });
+    const text = await res.text();
+    const json = parseJsonLenient(text) || { raw:text };
+    const rows = Array.isArray(json.rows) ? json.rows.length : Array.isArray(json.db) ? json.db.length : 0;
+    log(tag + ' Read HTTP:', String(res.status));
+    log(tag + ' Read rows:', String(rows));
+    return { status:res.status, json, rows };
+  }
+
+  async function stepRead(){
+    log('\n===== Step 5~6：測 Read =====');
     try{
-      const res = await fetch(url, { method:'POST', cache:'no-store', headers: authHeaders({ 'content-type':'application/json', accept:'application/json' }), body: JSON.stringify(body) });
-      const text = await res.text();
-      const json = parseJsonLenient(text) || { raw:text };
-      const rows = Array.isArray(json.rows) ? json.rows.length : Array.isArray(json.db) ? json.db.length : 0;
-      state.lastRead = { status:res.status, json, rows };
-      log('Read HTTP:', String(res.status));
-      log('Read rows:', String(rows));
-      setSummaryText(['Step 5~6：' + (res.ok ? '完成' : '異常'),'HTTP ' + res.status,'rows=' + rows, explainHttp(res.status)].join('\n'), res.ok ? 'ok' : 'warn');
+      state.lastRead = await doRead('Step5');
+      state.readRowsFirst = state.lastRead.rows;
       return state.lastRead;
     }catch(err){
       log('Read 例外：', String(err && err.message || err));
-      setSummaryText('Step 5~6：例外\n' + String(err && err.message || err), 'bad');
+      state.lastRead = { status:0, json:null, rows:0 };
       return null;
     }
   }
+
   async function stepMergeProbe(){
     const cfg = state.resolved || await resolveConfig();
     log('\n===== Step 7~8：測 Merge + 再 Read =====');
-    if(!cfg.apiBase){ setSummaryText('Step 7~8：失敗\napiBase 為空', 'bad'); return null; }
+    if(!cfg.apiBase){ state.lastMerge = { status:0, json:null }; return null; }
     const mergeUrl = joinUrl(cfg.apiBase, cfg.endpoints.merge);
     const probe = { uid:'probe_' + Date.now(), id:0, text:'cloud-probe', trade:'PROBE', sys:'PROBE', source:'tester', attach:'', remark:'probe', date:new Date().toISOString().slice(0,10), updatedAt:Date.now(), rev:Date.now(), deleted:true };
     try{
@@ -350,19 +346,16 @@
       const json = parseJsonLenient(text) || { raw:text };
       state.lastMerge = { status:res.status, json };
       log('Merge HTTP:', String(res.status));
-      const rb = await stepRead();
-      setSummaryText([
-        'Step 7~8：' + ((res.ok && rb && rb.status===200) ? '完成' : '異常'),
-        'Merge HTTP ' + res.status,
-        '再 Read HTTP ' + (rb ? rb.status : '(未執行)')
-      ].join('\n'), (res.ok && rb && rb.status===200) ? 'ok' : 'warn');
+      const rb = await doRead('Step8');
+      state.readRowsAfterMerge = rb.rows;
       return state.lastMerge;
     }catch(err){
       log('Merge 例外：', String(err && err.message || err));
-      setSummaryText('Step 7~8：例外\n' + String(err && err.message || err), 'bad');
+      state.lastMerge = { status:0, json:null };
       return null;
     }
   }
+
   async function openIDB(){
     return await new Promise((resolve,reject)=>{
       const req = indexedDB.open('tasun_notes_idb_v1', 1);
@@ -371,6 +364,7 @@
       req.onupgradeneeded = ()=>{};
     });
   }
+
   async function readLocalRows(){
     const cfg = state.resolved || await resolveConfig();
     const out = { localKey: cfg.localKey, localRows: [], idbRows: [], idbMeta:null };
@@ -397,74 +391,103 @@
     state.localMeta = out.idbMeta || null;
     return out;
   }
+
   async function stepLocal(){
     const data = await readLocalRows();
     log('\n===== Step 9：檢查本機 localStorage / IDB =====');
     log('localStorage 筆數:', String((data.localRows||[]).length));
     log('IndexedDB 筆數:', String((data.idbRows||[]).length));
-    setSummaryText([
-      'Step 9：完成',
-      'localStorage 筆數: ' + (data.localRows||[]).length,
-      'IndexedDB 筆數: ' + (data.idbRows||[]).length
-    ].join('\n'), 'info');
     return data;
   }
+
   async function stepUploadLocal(){
     const cfg = state.resolved || await resolveConfig();
     const local = await readLocalRows();
     log('\n===== Step 10：本機資料上傳雲端 =====');
-    if(!cfg.apiBase){ setSummaryText('Step 10：失敗\napiBase 為空', 'bad'); return null; }
+    if(!cfg.apiBase){ state.uploadResult = { status:0 }; return null; }
     const rows = (local.idbRows && local.idbRows.length) ? local.idbRows : (local.localRows || []);
     log('準備上傳筆數:', String(rows.length));
-    if(!rows.length){ setSummaryText('Step 10：停止\n本機沒有可上傳資料', 'warn'); return null; }
+    if(!rows.length){ state.uploadResult = { status:-1, rows:0 }; return null; }
     const mergeUrl = joinUrl(cfg.apiBase, cfg.endpoints.merge);
     try{
       const res = await fetch(mergeUrl, { method:'POST', cache:'no-store', headers: authHeaders({ 'content-type':'application/json', accept:'application/json' }), body: JSON.stringify({ resourceKey: cfg.resourceKey, payload: { db: rows } }) });
-      const rb = await stepRead();
-      setSummaryText([
-        'Step 10：' + ((res.ok && rb && rb.status===200) ? '完成' : '異常'),
-        'Merge HTTP ' + res.status,
-        '再 Read HTTP ' + (rb ? rb.status : '(未執行)')
-      ].join('\n'), (res.ok && rb && rb.status===200) ? 'ok' : 'warn');
-      return { status: res.status, readBack: rb };
+      const rb = await doRead('Step10');
+      state.readRowsAfterUpload = rb.rows;
+      state.uploadResult = { status:res.status, rows:rows.length, readBack:rb };
+      return state.uploadResult;
     }catch(err){
       log('上傳例外：', String(err && err.message || err));
-      setSummaryText('Step 10：例外\n' + String(err && err.message || err), 'bad');
+      state.uploadResult = { status:0, rows:rows.length };
       return null;
     }
   }
+
   function judgeFinal(){
     log('\n===== Step 11：最終合格判定 =====');
     const cfg = state.resolved || {};
+    const actualCloudStatus = norm(cfg.actualCloudStatus || $('actualCloudStatus').value);
     const versionOk = !!norm(cfg.version || window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '');
-    const healthOk = !!(state.lastHealth && (state.lastHealth.status===200 || state.lastHealth.status===401 || state.lastHealth.status===403));
+    const healthOk = !!(state.lastHealth && state.lastHealth.status===200);
     const readOk = !!(state.lastRead && state.lastRead.status===200);
     const mergeOk = !!(state.lastMerge && state.lastMerge.status===200);
-    const localOk = !!(state.localRows && state.localRows.length);
+    const localCount = (state.localRows || []).length;
+    const read1 = Number(state.readRowsFirst || 0);
+    const read2 = Number(state.readRowsAfterMerge || 0);
+    const read3 = Number(state.readRowsAfterUpload || 0);
+    const readStable = !!(read1 > 0 && read2 > 0 && read1 === read2 && (read3 === 0 || read2 === read3));
+    const localCloudMatch = !(localCount > 0 && read3 > 0) ? false : (localCount === read3);
     const consoleOk = !state.lastConsoleError;
-    const finalSyncOk = !!(healthOk && readOk && (mergeOk || localOk));
-    const finalCloudText = finalSyncOk ? '已同步（測試推定）' : '待同步 / 未完成';
-    const pass = !!(versionOk && readOk && consoleOk && finalSyncOk);
-    state.lastJudge = { pass, finalCloudText, versionOk, healthOk, readOk, mergeOk, localOk, consoleOk };
+    const actualPageOk = actualCloudStatus ? (actualCloudStatus === '已同步') : false;
+
+    let finalCloudText = '未驗證';
+    if(actualCloudStatus){
+      finalCloudText = actualCloudStatus;
+    }else if(readStable && localCloudMatch){
+      finalCloudText = '同步一致';
+    }else{
+      finalCloudText = '不一致 / 待同步';
+    }
+
+    const pass = !!(
+      versionOk &&
+      healthOk &&
+      readOk &&
+      mergeOk &&
+      consoleOk &&
+      readStable &&
+      localCloudMatch &&
+      (!actualCloudStatus || actualPageOk)
+    );
+
+    state.lastJudge = {
+      pass, finalCloudText, versionOk, healthOk, readOk, mergeOk, consoleOk,
+      readStable, localCloudMatch, localCount, read1, read2, read3, actualCloudStatus
+    };
+
     setSummaryText([
       'Step 11：' + (pass ? '合格' : '不合格'),
       '版本判定：' + (versionOk ? '通過' : '失敗'),
-      'Health：' + (healthOk ? '可到達' : '失敗'),
+      'Health：' + (healthOk ? '成功' : '失敗'),
       'Read：' + (readOk ? '成功' : '失敗'),
-      'Merge：' + (mergeOk ? '成功' : '未成功/未測'),
-      '本機資料：' + (localOk ? '存在' : '不存在'),
+      'Merge：' + (mergeOk ? '成功' : '失敗'),
       '主控台錯誤：' + (consoleOk ? '無' : state.lastConsoleError),
-      '最終雲端狀態判讀：' + finalCloudText,
-      pass ? '結論：符合 Tasun v5 正式版測試標準。' : '結論：目前仍不能視為已完成同步，若實際頁面顯示待同步，則不合格。'
+      'Read 前後筆數：' + read1 + ' → ' + read2 + ' → ' + read3,
+      'Read 穩定性：' + (readStable ? '一致' : '不一致'),
+      '本機/雲端筆數：' + localCount + ' / ' + read3,
+      '本機/雲端一致：' + (localCloudMatch ? '是' : '否'),
+      '實際頁面雲端狀態：' + (actualCloudStatus || '未填'),
+      '最終判讀：' + finalCloudText,
+      pass ? '結論：符合 Tasun v5 正式版測試標準。' : '結論：目前不符合；不可再用「已同步（測試推定）」直接判定合格。'
     ].join('\n'), pass ? 'ok' : 'bad');
     return state.lastJudge;
   }
+
   function buildTxtReport(){
     const cfg = state.resolved || {};
     const j = state.lastJudge || {};
     const lines = [
       'Tasun v5 全站固定口令總版（正式版）',
-      '捷運汐東線事項記錄.html 雲端自動連續測試正式報告',
+      '捷運汐東線事項記錄.html 雲端自動連續測試正式報告（嚴格判定修正版）',
       '========================================',
       '測試時間：' + now(),
       '測試頁面：' + location.href,
@@ -484,38 +507,44 @@
       '2. console error：' + (state.lastConsoleError || '無'),
       '',
       '三、逐步測試結果',
-      'Step 1~3：' + (cfg.apiBase ? '完成' : '失敗'),
       'Step 4 Health：' + (state.lastHealth ? ('HTTP ' + state.lastHealth.status) : '未執行'),
-      'Step 5~6 Read：' + (state.lastRead ? ('HTTP ' + state.lastRead.status + '，rows=' + state.lastRead.rows) : '未執行'),
-      'Step 7~8 Merge：' + (state.lastMerge ? ('HTTP ' + state.lastMerge.status) : '未執行'),
-      'Step 9 本機資料：local/IDB 共 ' + ((state.localRows||[]).length) + ' 筆',
-      'Step 10 上傳測試：' + (state.lastRead ? '已執行後續 Read 檢查' : '未完整執行'),
-      'Step 11 最終判定：' + (j.pass ? '合格' : '不合格'),
+      'Step 5~6 Read：' + (state.lastRead ? ('HTTP ' + state.lastRead.status + '，rows=' + state.readRowsFirst) : '未執行'),
+      'Step 7~8 Merge 後 Read：' + (state.readRowsAfterMerge != null ? ('rows=' + state.readRowsAfterMerge) : '未執行'),
+      'Step 9 本機資料：' + ((state.localRows||[]).length) + ' 筆',
+      'Step 10 上傳後 Read：' + (state.readRowsAfterUpload != null ? ('rows=' + state.readRowsAfterUpload) : '未執行'),
       '',
-      '四、正式判定',
+      '四、嚴格一致性檢查',
+      '1. Read 前後筆數：' + [state.readRowsFirst, state.readRowsAfterMerge, state.readRowsAfterUpload].map(v => v == null ? '未執行' : String(v)).join(' → '),
+      '2. Read 穩定性：' + (j.readStable ? '一致' : '不一致'),
+      '3. 本機 / 雲端筆數：' + ((state.localRows||[]).length) + ' / ' + (state.readRowsAfterUpload == null ? '未執行' : state.readRowsAfterUpload),
+      '4. 本機 / 雲端一致：' + (j.localCloudMatch ? '是' : '否'),
+      '5. 實際頁面雲端狀態：' + (j.actualCloudStatus || '未填'),
+      '',
+      '五、正式判定',
       '1. 版本判定：' + (j.versionOk ? '通過' : '失敗'),
-      '2. Health：' + (j.healthOk ? '可到達' : '失敗'),
+      '2. Health：' + (j.healthOk ? '成功' : '失敗'),
       '3. Read：' + (j.readOk ? '成功' : '失敗'),
-      '4. Merge：' + (j.mergeOk ? '成功' : '未成功/未測'),
-      '5. 本機資料：' + (j.localOk ? '存在' : '不存在'),
-      '6. 主控台錯誤：' + (j.consoleOk ? '無' : (state.lastConsoleError || '有')),
-      '7. 最終雲端狀態判讀：' + (j.finalCloudText || '未判定'),
+      '4. Merge：' + (j.mergeOk ? '成功' : '失敗'),
+      '5. 主控台錯誤：' + (j.consoleOk ? '無' : (state.lastConsoleError || '有')),
+      '6. 最終雲端狀態判讀：' + (j.finalCloudText || '未判定'),
+      '7. 最終結果：' + (j.pass ? '合格' : '不合格'),
       '',
-      '五、結論',
+      '六、結論',
       j.pass
         ? '本次自動連續測試結果：符合 Tasun v5 全站固定口令總版（正式版）測試標準。'
-        : '本次自動連續測試結果：目前不符合 Tasun v5 全站固定口令總版（正式版）測試標準；若實際頁面仍顯示「待同步」，不得判定為已完成同步。',
+        : '本次自動連續測試結果：不符合 Tasun v5 全站固定口令總版（正式版）測試標準；不得再以「已同步（測試推定）」直接視為合格。',
       '',
-      '六、摘要',
+      '七、摘要',
       state.lastSummaryText || '(無)',
       '',
-      '七、逐步記錄',
+      '八、逐步記錄',
       logs.textContent || '(無)'
     ];
     state.lastTxt = lines.join('\n');
     txtView.value = state.lastTxt;
     return state.lastTxt;
   }
+
   function buildJsonReport(){
     const cfg = state.resolved || {};
     return {
@@ -530,7 +559,11 @@
       health: state.lastHealth,
       read: state.lastRead,
       merge: state.lastMerge,
+      readRowsFirst: state.readRowsFirst,
+      readRowsAfterMerge: state.readRowsAfterMerge,
+      readRowsAfterUpload: state.readRowsAfterUpload,
       localMeta: state.localMeta,
+      localCount: (state.localRows||[]).length,
       judge: state.lastJudge,
       consoleError: state.lastConsoleError,
       summary: state.lastSummaryText || summary.textContent || '',
@@ -538,6 +571,7 @@
       txt: state.lastTxt || txtView.value || ''
     };
   }
+
   function downloadText(name, text, mime){
     const blob = new Blob([text], {type:(mime || 'text/plain;charset=utf-8')});
     const a = document.createElement('a');
@@ -547,10 +581,12 @@
     a.click();
     setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 0);
   }
+
   async function copyText(text){
     try{ await navigator.clipboard.writeText(text); return true; }
     catch(e){ return false; }
   }
+
   async function runAuto(){
     clearAll();
     log('開始自動連續測試...');
@@ -562,18 +598,17 @@
     await stepUploadLocal();
     judgeFinal();
     buildTxtReport();
-    state.autoDone = true;
     log('自動連續測試完成。');
   }
 
   $('btnAuto').onclick = runAuto;
   $('btnTxt').onclick = ()=>{
     const txt = state.lastTxt || buildTxtReport();
-    downloadText('捷運汐東線事項記錄_正式TXT測試報告_' + new Date().toISOString().slice(0,19).replace(/[T:]/g,'-') + '.txt', txt, 'text/plain;charset=utf-8');
+    downloadText('捷運汐東線事項記錄_正式TXT測試報告_嚴格判定版_' + new Date().toISOString().slice(0,19).replace(/[T:]/g,'-') + '.txt', txt, 'text/plain;charset=utf-8');
   };
   $('btnJson').onclick = ()=>{
     const report = buildJsonReport();
-    downloadText('捷運汐東線事項記錄_自動測試診斷資料_' + new Date().toISOString().slice(0,19).replace(/[T:]/g,'-') + '.json', JSON.stringify(report, null, 2), 'application/json;charset=utf-8');
+    downloadText('捷運汐東線事項記錄_自動測試診斷資料_嚴格判定版_' + new Date().toISOString().slice(0,19).replace(/[T:]/g,'-') + '.json', JSON.stringify(report, null, 2), 'application/json;charset=utf-8');
   };
   $('btnCopy').onclick = async ()=>{
     const txt = state.lastTxt || buildTxtReport();
