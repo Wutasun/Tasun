@@ -970,6 +970,173 @@
 
 
 
+
+  <script>
+  (function(){
+    function norm(v){ return (v===undefined||v===null) ? "" : String(v).trim(); }
+    function sjson(raw){ try{ return JSON.parse(raw); }catch(_e){ return null; } }
+    function readAny(keys){
+      for(var i=0;i<keys.length;i++){
+        try{
+          var v = sessionStorage.getItem(keys[i]) || localStorage.getItem(keys[i]) || "";
+          if(v) return v;
+        }catch(_e){}
+      }
+      return "";
+    }
+    function findUser(){
+      var keys = ["tasunCurrentUser_v1","tasunSessionBridge_v1","tasunSso_v2","tasunSso_v1","tasunSession_v1","tasunAuthSession_v1","tasunCurrentUser_v2"];
+      var raw = readAny(keys);
+      var js = sjson(raw);
+      if(js && typeof js==="object"){
+        var user = norm(js.user || js.name || js.username || js.account || "");
+        if(user){
+          var role = norm(js.role || js.level || js.permission || "");
+          if(!role){
+            var u = user.toLowerCase();
+            role = (u==="alex" || u==="joyce") ? "admin" : (u==="tasun" ? "write" : "read");
+          }
+          return { user:user, role:role };
+        }
+      }
+      return null;
+    }
+    function hasToken(){
+      var keys = ["tasunCloudToken_v1","tasunCloudToken_v1__sxdh-notes","tasunBearerToken_v1","tasun_token","tasunToken","authToken","access_token","token"];
+      return !!norm(readAny(keys));
+    }
+    function version(){
+      try{
+        var u = new URL(location.href);
+        return norm((window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || u.searchParams.get("v") || ""));
+      }catch(_e){
+        return norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || "");
+      }
+    }
+    function setText(id, txt){
+      var el = document.getElementById(id);
+      if(el) el.textContent = txt;
+    }
+    function patchHint(ver, cloudTxt){
+      var hint = document.getElementById("hint");
+      if(!hint) return;
+      var spans = hint.querySelectorAll(".hb .v");
+      if(spans[0]) spans[0].textContent = ver || "—";
+      if(spans[3]) spans[3].textContent = cloudTxt;
+    }
+    function normalizeRow(x){
+      if(!x || typeof x !== "object") return null;
+      function pick(obj, keys){
+        for(var i=0;i<keys.length;i++){
+          var k = keys[i];
+          if(obj && obj[k]!==undefined && obj[k]!==null && String(obj[k]).trim()!=="") return obj[k];
+        }
+        return "";
+      }
+      var uid = norm(pick(x, ["uid","pk","uuid","_uid"]));
+      var text = norm(pick(x, ["text","content","記事內容","事項內容","內容","記事"]));
+      if(!uid && !text) return null;
+      return {
+        uid: uid || ("u_" + Math.random().toString(36).slice(2)),
+        text: text,
+        trade: norm(pick(x, ["trade","工種","類別","工程","工別"])),
+        sys: norm(pick(x, ["sys","system","系統","系統項目","系統別"])),
+        source: norm(pick(x, ["source","src","出處","來源"])),
+        attach: norm(pick(x, ["attach","附件","file","files","附件連結"])),
+        remark: norm(pick(x, ["remark","備註","note","註記"])),
+        date: norm(pick(x, ["date","登錄日期","日期","createdAt","created_at"])),
+        deleted: !!(x.deleted || x._deleted)
+      };
+    }
+    function renderRows(rows){
+      var tb = document.getElementById("tbody");
+      if(!tb || tb.children.length) return;
+      rows = (rows || []).map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
+      if(!rows.length) return;
+      tb.innerHTML = "";
+      for(var i=0;i<rows.length;i++){
+        var r = rows[i];
+        var tr = document.createElement("tr");
+        function td(txt, center){
+          var el = document.createElement("td");
+          if(center) el.style.textAlign = "center";
+          el.textContent = txt || "";
+          return el;
+        }
+        tr.appendChild(td(String(i+1), true));
+        tr.appendChild(td(r.text));
+        tr.appendChild(td(r.trade, true));
+        tr.appendChild(td(r.sys, true));
+        tr.appendChild(td(r.source, true));
+        var tdAtt = document.createElement("td");
+        tdAtt.style.textAlign = "center";
+        if(r.attach){
+          var a = document.createElement("a");
+          a.href = r.attach;
+          a.target = "_blank";
+          a.rel = "noopener";
+          a.textContent = "開啟";
+          tdAtt.appendChild(a);
+        }else{
+          tdAtt.textContent = "—";
+        }
+        tr.appendChild(tdAtt);
+        tr.appendChild(td(r.remark));
+        tr.appendChild(td(r.date, true));
+        tr.appendChild(td("選取", true));
+        tb.appendChild(tr);
+      }
+      var hint = document.getElementById("hint");
+      var spans = hint ? hint.querySelectorAll(".hb .v") : [];
+      if(spans[1]) spans[1].textContent = rows.length + " / " + rows.length;
+    }
+    async function restoreRows(){
+      try{
+        var pack = sjson(localStorage.getItem("tasun_db_v1__sxdh-notes") || "");
+        var arr = pack && Array.isArray(pack.items) ? pack.items : null;
+        if(!arr){
+          var legacy = sjson(localStorage.getItem("tasunSxdhNotes_v1") || "");
+          if(Array.isArray(legacy)) arr = legacy;
+        }
+        if(Array.isArray(arr) && arr.length){
+          renderRows(arr);
+          return;
+        }
+      }catch(_e){}
+      try{
+        var db = await new Promise(function(resolve, reject){
+          var req = indexedDB.open("tasun_notes_idb_v1", 1);
+          req.onsuccess = function(){ resolve(req.result); };
+          req.onerror = function(){ reject(req.error || new Error("idb open error")); };
+        });
+        var rows = await new Promise(function(resolve, reject){
+          var tx = db.transaction(["rows"], "readonly");
+          var idx = tx.objectStore("rows").index("by_page");
+          var req = idx.getAll("sxdh-notes");
+          req.onsuccess = function(){ resolve(req.result || []); };
+          req.onerror = function(){ reject(req.error || new Error("idb getAll error")); };
+        });
+        renderRows(rows);
+      }catch(_e){}
+    }
+    function run(){
+      var cur = findUser();
+      var ver = version();
+      if(cur){
+        setText("uName", cur.user || "—");
+        setText("uRole", cur.role || "read");
+      }
+      patchHint(ver || "—", (cur || hasToken()) ? "待同步" : "待登入");
+      restoreRows();
+    }
+    if(document.readyState === "loading"){
+      document.addEventListener("DOMContentLoaded", run, { once:true });
+    }else{
+      run();
+    }
+  })();
+  </script>
+
   <script>
   (function(){
     "use strict";
