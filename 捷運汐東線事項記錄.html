@@ -719,7 +719,7 @@
           </div>
         </div>
 
-        <div class="hint" id="hint"><span class="hb"><span class="k">版本</span><span class="v">載入中…</span></span><span class="hb"><span class="k">筆數</span><span class="v">0 / 0</span></span><span class="hb bad"><span class="k">選取</span><span class="v">未選取</span></span><span class="hb bad"><span class="k">雲端</span><span class="v">未設定</span></span><span class="hb"><span class="k">最後</span><span class="v">—</span></span></div>
+        <div class="hint" id="hint"><span class="hb"><span class="k">版本</span><span class="v">檢查中…</span></span><span class="hb"><span class="k">筆數</span><span class="v">0 / 0</span></span><span class="hb bad"><span class="k">選取</span><span class="v">未選取</span></span><span class="hb"><span class="k">雲端</span><span class="v">檢查中</span></span><span class="hb"><span class="k">最後</span><span class="v">—</span></span></div>
       </div>
 
       <div class="panelBody">
@@ -1021,6 +1021,70 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
     }
     function displayAppVer(){
       return currentAppVer() || "載入中…";
+    }
+    function setResolvedAppVer(ver){
+      ver = norm(ver);
+      if(!ver) return "";
+      try{ window.__CACHE_V = ver; }catch(e){}
+      try{ window.TASUN_APP_VER = ver; }catch(e){}
+      try{ window.APP_VER = ver; }catch(e){}
+      APP_VER = ver;
+      return ver;
+    }
+    function extractVersionFromJson(json){
+      if(!json || typeof json !== "object") return "";
+      var candidates = [
+        json.version, json.ver, json.appVersion, json.cacheVersion,
+        json.currentVersion, json.release, json.build,
+        json.data && (json.data.version || json.data.ver || json.data.appVersion),
+        json.payload && (json.payload.version || json.payload.ver || json.payload.appVersion)
+      ];
+      for(var i=0;i<candidates.length;i++){
+        var v = norm(candidates[i]);
+        if(v) return v;
+      }
+      return "";
+    }
+    async function ensureAppVersionResolved(){
+      var ver = currentAppVer();
+      if(ver) return setResolvedAppVer(ver);
+      try{
+        if(window.__TASUN_VERSION_READY__ && typeof window.__TASUN_VERSION_READY__.then === "function"){
+          await window.__TASUN_VERSION_READY__;
+          ver = currentAppVer();
+          if(ver) return setResolvedAppVer(ver);
+        }
+      }catch(e){}
+      try{
+        var res = await fetch("tasun-version.json?_=" + Date.now(), { cache:"no-store" });
+        if(res && res.ok){
+          var json = await res.json().catch(function(){ return null; });
+          ver = extractVersionFromJson(json);
+          if(ver) return setResolvedAppVer(ver);
+        }
+      }catch(e){}
+      try{
+        var usp = new URLSearchParams(location.search || "");
+        ver = norm(usp.get("v"));
+        if(ver) return setResolvedAppVer(ver);
+      }catch(e){}
+      return currentAppVer();
+    }
+    function startVersionResolveWatch(){
+      var tries = 0;
+      var tm = setInterval(function(){
+        tries++;
+        Promise.resolve(ensureAppVersionResolved()).then(function(v){
+          if(v){
+            try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
+            clearInterval(tm);
+          }else if(tries >= 24){
+            clearInterval(tm);
+          }
+        }).catch(function(){
+          if(tries >= 24) clearInterval(tm);
+        });
+      }, 500);
     }
     var APP_VER = currentAppVer();
     var RESOURCES_URL = "tasun-resources.json";
@@ -3758,16 +3822,29 @@ function getPromptOptions(mode){
         await cloudHealth(cfg);
 
         var authOk = await ensureWorkerAuthorized(cfg);
-        if(!authOk){
-          setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth", authPending:false }, true);
-          if(!silent) toast("雲端未授權，請先登入本頁一次");
-          return false;
-        }
 
         var localRows = canonicalizeRows((state.db||[]).map(ensureRowV1).filter(Boolean));
         var remoteBase = null;
         try{ hydrateCrossPageAuth(); }catch(e){}
-        remoteBase = await cloudReadWithFallbackKeys(cfg, PAGE_KEY, { allowFallback:true });
+        try{
+          remoteBase = await cloudReadWithFallbackKeys(cfg, PAGE_KEY, { allowFallback:true });
+          if(remoteBase && hasCloudPayloadRows(remoteBase)){
+            authOk = true;
+            try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"ok", authPending:false }, true); }catch(_e){}
+          }
+        }catch(readErr){
+          if(!authOk){
+            setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth", authPending:false }, true);
+            if(!silent) toast("雲端未授權，請先登入本頁一次");
+            return false;
+          }
+          throw readErr;
+        }
+        if(!authOk && !(remoteBase && hasCloudPayloadRows(remoteBase))){
+          setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth", authPending:false }, true);
+          if(!silent) toast("雲端未授權，請先登入本頁一次");
+          return false;
+        }
 
         // ✅ 只有正式 PAGE_KEY 沒資料時，才允許舊 key 補救並升級到正式 key。
         if(remoteBase && remoteBase.resourceKey && remoteBase.resourceKey !== PAGE_KEY && hasCloudPayloadRows(remoteBase)){
@@ -4557,6 +4634,7 @@ $("btnSave").addEventListener("click", async function(){
         async function boot(){
       // ✅ 目的：無論雲端/IndexedDB 是否異常，都要「先畫出」版本/筆數/選取/雲端/最後 等資訊。
       try{ hydrateCrossPageAuth(); }catch(e){}
+      try{ await ensureAppVersionResolved(); }catch(e){}
       try{ refreshCloudAuthStateSync(); }catch(e){}
       try{
         var __cur0 = getCurrentUser();
@@ -4648,8 +4726,10 @@ $("btnSave").addEventListener("click", async function(){
     }
 
     boot().then(function(){
+      try{ startVersionResolveWatch(); }catch(e){}
       try{ startAuthHydrationWatch(); }catch(e){}
       try{ ensureHeaderStateVisible(); }catch(e){}
+      try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
     }).catch(function(e){ console.error(e); });
   })();
   </script>
