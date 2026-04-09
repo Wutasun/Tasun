@@ -943,6 +943,10 @@ main.hero,
 
 </style>
 
+
+  
+  <a class="login-cloud-btn" id="loginCloudBtn" href="https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav" target="_blank" rel="noopener noreferrer">雲端檔案</a>
+
   <div class="boot-cover" id="bootCover" hidden aria-hidden="true">
     <div class="boot-cover-card">
       <div class="boot-cover-title gold-crystal">Tasun 資料 · 載入中</div>
@@ -3294,6 +3298,18 @@ html, body{
       if(!navArea) return;
       var btns = Array.from(navArea.querySelectorAll('.nav-btn'));
       if(!btns.length) return;
+      var bodyLocked = !!(document.body && document.body.classList.contains('locked'));
+      var loginOverlay = document.getElementById('loginOverlay');
+      var loginShowing = !!(loginOverlay && getComputedStyle(loginOverlay).display !== 'none');
+      if(bodyLocked || loginShowing){
+        btns.forEach(function(btn){
+          btn.style.display = 'none';
+          btn.style.opacity = '0';
+          btn.style.visibility = 'hidden';
+          btn.style.pointerEvents = 'none';
+        });
+        return;
+      }
       var userRaw = sessionStorage.getItem('tasunCurrentUser_v1') || localStorage.getItem('tasunCurrentUser_v1') || '{}';
       var user = {};
       try{ user = JSON.parse(userRaw) || {}; }catch(e){}
@@ -3321,6 +3337,17 @@ html, body{
 /* ===== Tasun v5 login stage targeted fix ===== */
 body.locked .login-cloud-btn{
   display:none !important;
+}
+body.locked #navArea,
+body.locked .nav-area{
+  pointer-events:none !important;
+}
+body.locked #navArea .nav-btn,
+body.locked .nav-area .nav-btn{
+  display:none !important;
+  opacity:0 !important;
+  visibility:hidden !important;
+  pointer-events:none !important;
 }
 .login-cloud-btn{
   position:fixed;
@@ -3514,274 +3541,282 @@ body:not(.locked) .login-cloud-btn{display:none !important;}
 }
 </style>
 
-
-<script id="tasun-v5-login-cloud-hide-and-version-watch">
+<script id="tasun-v5-login-hide-nav-guard">
 (function(){
-  'use strict';
-
-  function hideLoginCloudBtn(){
+  function hideLoginStageCloudButtons(){
     try{
-      document.querySelectorAll('#loginCloudBtn, .login-cloud-btn').forEach(function(el){
-        try{ el.remove(); }catch(_e){
-          try{ el.style.setProperty('display','none','important'); }catch(__e){}
-          try{ el.setAttribute('hidden','hidden'); }catch(__e){}
-          try{ el.setAttribute('aria-hidden','true'); }catch(__e){}
-        }
+      var locked = !!(document.body && document.body.classList.contains('locked'));
+      var overlay = document.getElementById('loginOverlay');
+      var loginShowing = !!(overlay && getComputedStyle(overlay).display !== 'none');
+      if(!(locked || loginShowing)) return;
+      var loginCloudBtn = document.getElementById('loginCloudBtn');
+      if(loginCloudBtn){
+        loginCloudBtn.style.display = 'none';
+        loginCloudBtn.style.opacity = '0';
+        loginCloudBtn.style.visibility = 'hidden';
+        loginCloudBtn.style.pointerEvents = 'none';
+      }
+      document.querySelectorAll('#navArea .nav-btn, .nav-area .nav-btn').forEach(function(btn){
+        btn.style.display = 'none';
+        btn.style.opacity = '0';
+        btn.style.visibility = 'hidden';
+        btn.style.pointerEvents = 'none';
       });
     }catch(e){}
   }
-
-  hideLoginCloudBtn();
-  if(document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', hideLoginCloudBtn, { once:true });
-  }
-  window.addEventListener('load', hideLoginCloudBtn, { once:true });
-  var obs = null;
-  try{
-    obs = new MutationObserver(function(){ hideLoginCloudBtn(); });
-    obs.observe(document.documentElement || document.body, { childList:true, subtree:true });
-  }catch(e){}
-
-  var CHANNEL = 'tasun_version_watch_v1';
-  var bc = null;
-  try{ if('BroadcastChannel' in window) bc = new BroadcastChannel(CHANNEL); }catch(e){}
-
-  function norm(v){ return String(v == null ? '' : v).trim(); }
-  function currentVer(){
-    try{
-      var qv = new URL(location.href).searchParams.get('v');
-      return norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || qv || '');
-    }catch(e){
-      return norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '');
-    }
-  }
-  function extractVer(data){
-    if(!data || typeof data !== 'object') return '';
-    return norm(
-      data.version || data.ver || data.appVer || data.cacheV || data.build ||
-      (data.data && (data.data.version || data.data.ver || data.data.appVer || data.data.cacheV)) ||
-      (data.meta && (data.meta.version || data.meta.ver || data.meta.appVer || data.meta.cacheV)) ||
-      ''
-    );
-  }
-  function gotoVersion(nextVer, reason){
-    nextVer = norm(nextVer);
-    if(!nextVer) return false;
-    if(nextVer === currentVer()) return false;
-    try{
-      localStorage.setItem('tasunLatestVersionSeen_v1', nextVer);
-      localStorage.setItem('tasunLatestVersionReason_v1', norm(reason || 'watch'));
-    }catch(e){}
-    try{ if(bc) bc.postMessage({ type:'version-update', ver:nextVer, reason:norm(reason||'watch'), ts:Date.now() }); }catch(e){}
-    try{
-      var u = new URL(location.href);
-      u.searchParams.set('v', nextVer);
-      u.searchParams.set('_', String(Date.now()));
-      location.replace(u.toString());
-      return true;
-    }catch(e){
-      return false;
-    }
-  }
-  async function checkLatestVersion(reason){
-    try{
-      var res = await fetch('tasun-version.json?_=' + Date.now(), { cache:'no-store', credentials:'same-origin' });
-      if(!res.ok) return false;
-      var json = await res.json().catch(function(){ return null; });
-      var latest = extractVer(json);
-      if(!latest) return false;
-      if(latest !== currentVer()) return gotoVersion(latest, reason || 'fetch');
-      try{
-        window.__CACHE_V = latest;
-        window.TASUN_APP_VER = latest;
-        window.APP_VER = latest;
-      }catch(e){}
-      return false;
-    }catch(e){
-      return false;
-    }
-  }
-  function scheduleVersionWatch(){
-    try{ setTimeout(function(){ checkLatestVersion('boot'); }, 250); }catch(e){}
-    try{
-      document.addEventListener('visibilitychange', function(){
-        if(document.visibilityState === 'visible') checkLatestVersion('visible');
-      }, { passive:true });
-    }catch(e){}
-    try{ window.addEventListener('focus', function(){ checkLatestVersion('focus'); }, { passive:true }); }catch(e){}
-    try{ setInterval(function(){ checkLatestVersion('interval'); }, 60000); }catch(e){}
-    try{
-      window.addEventListener('storage', function(e){
-        if(!e) return;
-        if(e.key === 'tasunLatestVersionSeen_v1' && norm(e.newValue) && norm(e.newValue) !== currentVer()){
-          gotoVersion(norm(e.newValue), 'storage');
-        }
-      });
-    }catch(e){}
-    if(bc){
-      try{
-        bc.onmessage = function(ev){
-          var msg = ev && ev.data;
-          if(msg && msg.type === 'version-update' && norm(msg.ver) && norm(msg.ver) !== currentVer()){
-            gotoVersion(norm(msg.ver), 'broadcast');
-          }
-        };
-      }catch(e){}
-    }
-  }
-  scheduleVersionWatch();
-})();
-</script>
-
-
-
-<style id="tasun-v5-top-action-bar-visibility-fix">
-/* ===== Tasun v5 top action bar visibility fix ===== */
-body.locked #userBar{
-  display:none !important;
-}
-body:not(.locked) #userBar{
-  position:fixed !important;
-  top:max(12px, env(safe-area-inset-top)) !important;
-  left:max(16px, env(safe-area-inset-left)) !important;
-  right:auto !important;
-  width:auto !important;
-  max-width:calc(100vw - 32px - env(safe-area-inset-left) - env(safe-area-inset-right)) !important;
-  display:flex !important;
-  flex-wrap:wrap !important;
-  align-items:center !important;
-  gap:10px !important;
-  padding:10px 14px !important;
-  border-radius:18px !important;
-  background:
-    linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,244,214,0.06) 52%, rgba(120,78,28,0.08) 100%),
-    linear-gradient(135deg, rgba(255,255,255,0.10), rgba(255,255,255,0.02) 44%, rgba(255,236,196,0.06) 100%) !important;
-  border:1px solid rgba(255,248,232,0.72) !important;
-  box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.40),
-    0 14px 36px rgba(48,28,8,0.18),
-    0 0 28px rgba(255,228,166,0.12) !important;
-  backdrop-filter: blur(8px) saturate(1.14) !important;
-  -webkit-backdrop-filter: blur(8px) saturate(1.14) !important;
-  z-index:100120 !important;
-  visibility:visible !important;
-  opacity:1 !important;
-  overflow:visible !important;
-}
-body:not(.locked) #userBar .user-pill,
-body:not(.locked) #userBar .btn-switch{
-  display:inline-flex !important;
-  align-items:center !important;
-  justify-content:center !important;
-  min-height:46px !important;
-  padding:0 18px !important;
-  border-radius:999px !important;
-  white-space:nowrap !important;
-  visibility:visible !important;
-  opacity:1 !important;
-}
-body:not(.locked) #userBar .user-pill{
-  color:rgba(255,239,198,0.98) !important;
-  font-size:clamp(1rem, 1vw, 1.18rem) !important;
-  font-weight:700 !important;
-  letter-spacing:.04em !important;
-  border:1px solid rgba(255,248,232,0.58) !important;
-  background:
-    linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,244,214,0.05) 52%, rgba(120,78,28,0.08) 100%) !important;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 8px 20px rgba(48,28,8,0.14) !important;
-  text-shadow: 0 1px 0 rgba(80,54,22,0.40), 0 0 10px rgba(255,244,220,0.18) !important;
-}
-body:not(.locked) #userBar .btn-switch{
-  color:rgba(116,72,22,0.98) !important;
-  font-size:clamp(1rem, 1vw, 1.12rem) !important;
-  font-weight:700 !important;
-  letter-spacing:.08em !important;
-  border:1px solid rgba(255,248,232,0.76) !important;
-  background:
-    linear-gradient(180deg, rgba(255,255,255,0.22), rgba(255,244,214,0.08) 52%, rgba(120,78,28,0.10) 100%),
-    linear-gradient(135deg, rgba(255,255,255,0.10), rgba(255,255,255,0.02) 44%, rgba(255,236,196,0.08) 100%) !important;
-  box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.58),
-    0 10px 24px rgba(48,28,8,0.14),
-    0 0 18px rgba(255,228,166,0.10) !important;
-  text-shadow:
-    0 1px 0 rgba(255,255,255,0.90),
-    0 0 10px rgba(255,244,220,0.20),
-    0 8px 14px rgba(66,42,14,0.10) !important;
-}
-body:not(.locked) #userBar #btnRelease{
-  display:none;
-}
-@media (max-width: 900px){
-  body:not(.locked) #userBar{
-    left:max(10px, env(safe-area-inset-left)) !important;
-    right:max(10px, env(safe-area-inset-right)) !important;
-    max-width:none !important;
-    gap:8px !important;
-    padding:8px 10px !important;
-  }
-  body:not(.locked) #userBar .user-pill,
-  body:not(.locked) #userBar .btn-switch{
-    min-height:42px !important;
-    padding:0 14px !important;
-    font-size:clamp(.88rem, 2.8vw, 1rem) !important;
-  }
-}
-</style>
-
-<script id="tasun-v5-top-action-bar-visibility-fix-script">
-(function(){
-  function readCurrentUser(){
-    try{
-      return window.CURRENT_USER
-        || JSON.parse(sessionStorage.getItem('tasunCurrentUser_v1') || localStorage.getItem('tasunCurrentUser_v1') || 'null')
-        || JSON.parse(sessionStorage.getItem('tasunSessionLogin_v2') || 'null')
-        || null;
-    }catch(e){ return null; }
-  }
-  function isAdmin(user){
-    try{
-      return String((user && (user.level || user.role)) || '').trim().toLowerCase() === 'admin';
-    }catch(e){ return false; }
-  }
-  function applyTopActionBarFix(){
-    try{
-      var body = document.body;
-      var userBar = document.getElementById('userBar');
-      var btnRelease = document.getElementById('btnRelease');
-      if(!body || !userBar) return;
-      if(body.classList.contains('locked')){
-        userBar.style.display = 'none';
-        return;
-      }
-      userBar.style.display = 'flex';
-      userBar.style.visibility = 'visible';
-      userBar.style.opacity = '1';
-      var user = readCurrentUser();
-      if(btnRelease){
-        btnRelease.style.display = isAdmin(user) ? 'inline-flex' : 'none';
-        btnRelease.disabled = false;
-        if(!btnRelease.textContent || btnRelease.textContent === '發布中...'){
-          btnRelease.textContent = '發布新版';
-        }
-      }
-    }catch(e){}
-  }
-  document.addEventListener('DOMContentLoaded', function(){
-    setTimeout(applyTopActionBarFix, 80);
-    setTimeout(applyTopActionBarFix, 400);
-    setTimeout(applyTopActionBarFix, 1200);
-  });
-  window.addEventListener('load', function(){
-    setTimeout(applyTopActionBarFix, 120);
-    setTimeout(applyTopActionBarFix, 600);
-  });
-  document.addEventListener('visibilitychange', function(){
-    if(document.visibilityState === 'visible') setTimeout(applyTopActionBarFix, 60);
-  });
-  window.addEventListener('focus', function(){ setTimeout(applyTopActionBarFix, 60); });
+  document.addEventListener('DOMContentLoaded', function(){ hideLoginStageCloudButtons(); setTimeout(hideLoginStageCloudButtons, 150); setTimeout(hideLoginStageCloudButtons, 800); setTimeout(hideLoginStageCloudButtons, 1800); });
+  window.addEventListener('load', function(){ hideLoginStageCloudButtons(); setTimeout(hideLoginStageCloudButtons, 300); setTimeout(hideLoginStageCloudButtons, 1200); });
+  window.addEventListener('pageshow', function(){ setTimeout(hideLoginStageCloudButtons, 80); });
+  document.addEventListener('visibilitychange', function(){ if(document.visibilityState === 'visible') setTimeout(hideLoginStageCloudButtons, 80); });
 })();
 </script>
 
 </body>
 </html>
+
+<style id="tasun-v5-login-stage-20260409-targeted-fix">
+/* ===== Tasun v5 2026-04-09 targeted login/stage refinement ===== */
+body.locked #loginCloudBtn,
+html body.locked a#loginCloudBtn{
+  display:inline-flex !important;
+  visibility:visible !important;
+  opacity:1 !important;
+}
+#loginCloudBtn{
+  top:clamp(16px,2vh,28px) !important;
+  left:clamp(8px,1vw,18px) !important;
+  min-width:clamp(260px,23vw,420px) !important;
+  height:clamp(50px,5.6vh,64px) !important;
+  padding:0 clamp(24px,2.2vw,40px) !important;
+  border-radius:999px !important;
+  border:1px solid rgba(255,247,228,0.96) !important;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.36), rgba(255,244,219,0.18) 40%, rgba(186,120,38,0.18) 100%),
+    linear-gradient(135deg, rgba(255,255,255,0.20), rgba(255,255,255,0.05) 42%, rgba(255,238,198,0.14) 100%) !important;
+  color:rgba(122,76,20,0.99) !important;
+  font-size:clamp(1.16rem,1.5vw,1.66rem) !important;
+  font-weight:800 !important;
+  letter-spacing:.14em !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.98),
+    0 0 14px rgba(255,247,228,0.34),
+    0 10px 18px rgba(84,48,14,0.14) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.92),
+    inset 0 -12px 18px rgba(146,84,16,0.10),
+    0 14px 36px rgba(58,30,8,0.18),
+    0 0 32px rgba(255,226,162,0.18) !important;
+}
+
+#zwLeft,
+#zwRight,
+#zwBottomLine{
+  font-weight:800 !important;
+  color:rgba(112,78,34,0.96) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.98),
+    0 0 10px rgba(255,246,226,0.34),
+    0 3px 0 rgba(190,144,76,0.32),
+    0 10px 18px rgba(74,44,12,0.16),
+    0 16px 26px rgba(58,32,8,0.12) !important;
+  filter: drop-shadow(0 0 8px rgba(255,236,198,0.18));
+}
+#zwLeft{
+  left:clamp(140px, 14vw, 260px) !important;
+  top:58% !important;
+  font-size:clamp(1.56rem, 2.3vw, 2.22rem) !important;
+}
+#zwRight{
+  right:clamp(140px, 14vw, 260px) !important;
+  top:58% !important;
+  font-size:clamp(1.56rem, 2.3vw, 2.22rem) !important;
+}
+#zwBottomLine{
+  bottom:clamp(32px, 6vh, 68px) !important;
+  font-size:clamp(1.42rem, 2.3vw, 2.08rem) !important;
+  letter-spacing:.54em !important;
+  padding-left:.54em !important;
+}
+#zwAxisText{
+  font-size:clamp(2.32rem, 4.35vw, 4.18rem) !important;
+  font-weight:800 !important;
+  color:rgba(112,76,28,0.97) !important;
+  padding:.08em .22em .14em .66em !important;
+  border-radius:999px !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.99),
+    0 0 12px rgba(255,248,232,0.30),
+    0 3px 0 rgba(194,148,78,0.30),
+    0 12px 20px rgba(74,44,12,0.14),
+    0 18px 30px rgba(58,32,8,0.10) !important;
+}
+
+#loginOverlay .login-box{
+  width:clamp(500px,39vw,640px) !important;
+  aspect-ratio:1.56 / 1 !important;
+  max-height:min(72vh,610px) !important;
+  padding:clamp(24px,2vw,34px) clamp(28px,2.2vw,38px) clamp(18px,1.5vw,24px) !important;
+}
+#loginOverlay .login-title{
+  font-size:clamp(2.08rem,2.45vw,2.92rem) !important;
+  margin-bottom:clamp(10px,.9vw,16px) !important;
+}
+#loginOverlay .login-field label{
+  font-size:clamp(1.04rem,1.12vw,1.20rem) !important;
+}
+#loginOverlay .login-pwd-input,
+#loginOverlay .select-wrap.native-touch select,
+#loginOverlay .select-display{
+  background:rgba(255,255,255,0.03) !important;
+  border:2px solid rgba(176,120,42,0.88) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.26),
+    inset 0 0 0 1px rgba(255,236,198,0.08),
+    0 10px 18px rgba(58,36,12,0.05),
+    0 0 0 1px rgba(124,78,20,0.12) !important;
+  color:rgba(88,52,22,0.98) !important;
+  backdrop-filter:none !important;
+  -webkit-backdrop-filter:none !important;
+}
+#loginOverlay .login-pwd-input:focus,
+#loginOverlay .select-wrap.native-touch select:focus,
+#loginOverlay .select-display:focus{
+  border-color:rgba(150,92,18,0.96) !important;
+  box-shadow:
+    0 0 0 2px rgba(246,214,148,0.18),
+    0 0 18px rgba(255,228,166,0.18),
+    inset 0 1px 0 rgba(255,255,255,0.24) !important;
+}
+#loginOverlay .login-actions{
+  margin-top:4px !important;
+  transform:translateY(-10px) !important;
+  padding-bottom:2px !important;
+}
+#loginOverlay .btn-login,
+#loginOverlay .btn-secondary{
+  min-width:110px !important;
+  padding:14px 20px 10px !important;
+  line-height:1.1 !important;
+}
+#loginOverlay .btn-login,
+#loginOverlay .btn-secondary,
+#loginOverlay .btn-login span,
+#loginOverlay .btn-secondary span{
+  vertical-align:middle !important;
+}
+
+.lotus-stage::before{
+  content:'';
+  position:absolute;
+  inset:24% 19% 10% 19%;
+  pointer-events:none;
+  z-index:3;
+  background:
+    radial-gradient(40% 28% at 50% 58%, rgba(255,255,255,0.28) 0%, rgba(255,244,220,0.14) 26%, rgba(0,0,0,0) 68%),
+    radial-gradient(50% 34% at 50% 62%, rgba(255,229,170,0.18) 0%, rgba(255,212,138,0.10) 38%, rgba(0,0,0,0) 78%),
+    radial-gradient(62% 48% at 50% 68%, rgba(255,246,230,0.12) 0%, rgba(0,0,0,0) 74%);
+  mix-blend-mode:screen;
+  filter:blur(2px);
+}
+#zenImg{
+  filter:brightness(1.34) contrast(1.26) saturate(1.22) drop-shadow(0 0 26px rgba(255,245,224,0.30)) !important;
+}
+.hero-inner{
+  background:
+    radial-gradient(1160px 740px at 50% 15%, rgba(255,249,234,0.42) 0%, rgba(255,238,202,0.18) 32%, rgba(0,0,0,0) 72%),
+    radial-gradient(940px 720px at 50% 74%, rgba(255,226,162,0.28) 0%, rgba(255,212,138,0.12) 38%, rgba(0,0,0,0) 76%),
+    linear-gradient(90deg, rgba(255,242,214,0.20) 0%, rgba(255,238,206,0.08) 10%, rgba(255,234,194,0.02) 18%, rgba(255,234,194,0.02) 82%, rgba(255,238,206,0.08) 90%, rgba(255,242,214,0.20) 100%),
+    linear-gradient(180deg, rgba(96,64,34,0.08) 0%, rgba(64,40,18,0.04) 42%, rgba(24,14,8,0.10) 100%) !important;
+}
+
+@media (max-width: 900px){
+  #loginCloudBtn{
+    min-width:min(78vw,320px) !important;
+    font-size:clamp(1rem,3.2vw,1.24rem) !important;
+  }
+  #zwLeft{
+    left:22px !important;
+    top:58% !important;
+    font-size:clamp(1.16rem,3.4vw,1.48rem) !important;
+  }
+  #zwRight{
+    right:22px !important;
+    top:58% !important;
+    font-size:clamp(1.16rem,3.4vw,1.48rem) !important;
+  }
+  #zwBottomLine{
+    bottom:28px !important;
+    font-size:clamp(1.08rem,3.1vw,1.38rem) !important;
+  }
+  #zwAxisText{
+    font-size:clamp(1.88rem,5.1vw,2.92rem) !important;
+  }
+  #loginOverlay .login-box{
+    width:min(88vw,620px) !important;
+    max-width:calc(100vw - 28px) !important;
+    aspect-ratio:auto !important;
+  }
+}
+</style>
+
+
+<style id="tasun-v5-login-title-buttons-border-20260409-fix">
+/* ===== Tasun v5 2026-04-09 targeted login title / buttons / border fix ===== */
+#loginOverlay .login-box{
+  border:2px solid rgba(255,248,232,0.98) !important;
+  box-shadow:
+    inset 0 2px 0 rgba(255,255,255,0.98),
+    inset 0 0 0 1px rgba(255,244,220,0.34),
+    inset 0 -34px 70px rgba(190,132,48,0.14),
+    inset 0 -62px 104px rgba(82,46,10,0.10),
+    0 30px 64px rgba(48,26,6,0.24),
+    0 56px 136px rgba(92,54,14,0.24),
+    0 0 188px rgba(255,232,175,0.42),
+    0 0 308px rgba(255,214,118,0.20) !important;
+  padding-top:clamp(34px,2.9vw,48px) !important;
+  padding-bottom:clamp(18px,1.6vw,24px) !important;
+}
+#loginOverlay .login-title{
+  position:relative !important;
+  top:clamp(10px,0.8vw,14px) !important;
+  margin-bottom:clamp(26px,2vw,34px) !important;
+}
+#loginOverlay .login-actions{
+  margin-top:clamp(2px,.3vw,6px) !important;
+  padding-top:0 !important;
+  transform:translateY(-20px) !important;
+}
+#loginOverlay .btn-login,
+#loginOverlay .btn-secondary{
+  border:2px solid rgba(255,248,232,0.98) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.72),
+    inset 0 0 0 1px rgba(255,244,220,0.16),
+    0 14px 30px rgba(58,36,12,0.14),
+    0 0 24px rgba(255,244,214,0.14) !important;
+}
+#loginOverlay .login-pwd-input,
+#loginOverlay .select-wrap.native-touch select,
+#loginOverlay .select-wrap.native-touch .select-display,
+#loginOverlay .select-display{
+  border:2px solid rgba(255,248,232,0.98) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.46),
+    inset 0 0 0 1px rgba(255,250,236,0.10),
+    0 12px 22px rgba(58,36,12,0.08),
+    0 0 18px rgba(255,242,210,0.10) !important;
+}
+@media (max-width: 900px){
+  #loginOverlay .login-box{
+    padding-top:clamp(28px,6vw,36px) !important;
+    padding-bottom:clamp(16px,3vw,22px) !important;
+  }
+  #loginOverlay .login-title{
+    top:clamp(8px,1.6vw,12px) !important;
+    margin-bottom:clamp(22px,4vw,30px) !important;
+  }
+  #loginOverlay .login-actions{
+    transform:translateY(-14px) !important;
+  }
+}
+</style>
