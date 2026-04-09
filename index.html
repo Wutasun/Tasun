@@ -95,6 +95,52 @@
       }
     }catch(e){}
 
+    async function fetchLatestVersionText(){
+      try{
+        const res = await fetch('tasun-version.json?_=' + Date.now(), { cache:'no-store', credentials:'same-origin' });
+        if(!res.ok) return '';
+        const data = await res.json().catch(()=>null);
+        if(!data) return '';
+        const cand = [
+          data.version, data.ver, data.appVer, data.app_ver, data.cacheV, data.cache_v,
+          data.build, data.buildVersion, data.release,
+          data.data && (data.data.version || data.data.ver || data.data.appVer || data.data.cacheV),
+          data.meta && (data.meta.version || data.meta.ver || data.meta.appVer || data.meta.cacheV)
+        ];
+        for(const v of cand){
+          const s = normVer(v);
+          if(s) return s;
+        }
+      }catch(e){}
+      return '';
+    }
+
+    async function hardRefreshToVersion(nextVer){
+      const nv = normVer(nextVer);
+      if(!nv) return false;
+      try{
+        if('caches' in window){
+          const names = await caches.keys().catch(()=>[]);
+          await Promise.all((names || []).map((n)=>caches.delete(n).catch(()=>false)));
+        }
+      }catch(e){}
+      try{
+        if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations){
+          const regs = await navigator.serviceWorker.getRegistrations().catch(()=>[]);
+          await Promise.all((regs || []).map((r)=>r.unregister().catch(()=>false)));
+        }
+      }catch(e){}
+      try{
+        sessionStorage.setItem('tasun_force_latest_seen_v1', nv);
+        localStorage.setItem('tasun_force_latest_seen_v1', nv);
+      }catch(e){}
+      const nextUrl = new URL(location.href);
+      nextUrl.searchParams.set('v', nv);
+      nextUrl.searchParams.set('_', String(Date.now()));
+      location.replace(nextUrl.toString());
+      return true;
+    }
+
     const url = new URL(location.href);
     const curV = normVer(url.searchParams.get('v'));
     let VER = normVer(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '') || curV || FALLBACK_VER;
@@ -111,9 +157,16 @@
       }
     }catch(e){}
 
-    window.APP_VER = VER;
-    window.TASUN_APP_VER = VER;
-    window.__CACHE_V = VER || curV || '';
+    const latestVer = normVer(await fetchLatestVersionText()) || '';
+    if(latestVer && latestVer !== VER){
+      await hardRefreshToVersion(latestVer);
+      return;
+    }
+
+    window.APP_VER = latestVer || VER;
+    window.TASUN_APP_VER = latestVer || VER;
+    window.__CACHE_V = latestVer || VER || curV || '';
+    VER = latestVer || VER;
 
     if (VER && (curV !== VER || vts)) {
       url.searchParams.set('v', VER);
@@ -1329,7 +1382,77 @@ main.hero,
           }
         }, 650);
       }
-      async function ensureCloudMounted(user){ return null; }
+            async function ensureCloudMounted(user){
+        try{
+          if(cloudCtrl && typeof cloudCtrl.pullNow === 'function' && typeof cloudCtrl.saveMerged === 'function') return cloudCtrl;
+          const wrap = window.TasunCloudWrapV4 || null;
+          if(!wrap) return null;
+
+          function pickMethod(obj, names){
+            for(const n of names){
+              if(obj && typeof obj[n] === 'function') return obj[n].bind(obj);
+            }
+            return null;
+          }
+
+          const mountFn = pickMethod(wrap, ['mountIndexCloud','mountIndexDb','mountPageCloud','mountPageDb','createSyncController','createCloudController','mount']);
+          let mounted = null;
+          if(mountFn){
+            mounted = await mountFn({
+              pageKey:'index',
+              resourceKey:CLOUD_RESOURCE_KEY,
+              cloudKey:CLOUD_RESOURCE_KEY,
+              keys:CLOUD_KEYS.slice(),
+              buildPayload:buildCloudPayloadFromLocal,
+              user:user || CURRENT_USER || null
+            }).catch(()=>null);
+          }
+          const baseObj = mounted || wrap;
+          const pullFn = pickMethod(baseObj, ['pullNow','pull','download','syncDown','loadMerged','load']);
+          const saveFn = pickMethod(baseObj, ['saveMerged','pushNow','push','upload','syncUp','save']);
+          if(!pullFn && !saveFn) return null;
+
+          cloudCtrl = {
+            __mounted__: !!mounted,
+            __readOnly__: false,
+            __disabled__: false,
+            async pullNow(){
+              if(cloudApplying) return null;
+              cloudApplying = true;
+              try{
+                const data = pullFn ? await pullFn({ pageKey:'index', resourceKey:CLOUD_RESOURCE_KEY, cloudKey:CLOUD_RESOURCE_KEY, user:user || CURRENT_USER || null }).catch(()=>null) : null;
+                if(data && typeof data === 'object'){
+                  const rows = Array.isArray(data.db) ? data.db : (Array.isArray(data.rows) ? data.rows : []);
+                  rows.forEach((row)=>{
+                    const k = String(row && (row.k || row.key || '') || '').trim();
+                    if(!CLOUD_KEY_SET.has(k)) return;
+                    const deleted = !!(row && row.deleted);
+                    const v = row && Object.prototype.hasOwnProperty.call(row,'v') ? row.v : (row && row.value);
+                    try{
+                      if(deleted) localStorage.removeItem(k);
+                      else localStorage.setItem(k, v == null ? '' : String(v));
+                    }catch(e){}
+                  });
+                  try{ onIndexConfigApplied(); }catch(e){}
+                }
+                return data;
+              }finally{
+                cloudApplying = false;
+              }
+            },
+            async saveMerged(opts){
+              if(!saveFn) return null;
+              const payload = buildCloudPayloadFromLocal();
+              return await saveFn(Object.assign({ pageKey:'index', resourceKey:CLOUD_RESOURCE_KEY, cloudKey:CLOUD_RESOURCE_KEY, payload, db:payload.db, rows:payload.db, user:user || CURRENT_USER || null }, opts || {}));
+            }
+          };
+
+          try{ await cloudCtrl.pullNow(); }catch(e){}
+          return cloudCtrl;
+        }catch(e){
+          return null;
+        }
+      }
 
       function isAdminUser(user){
         try{ return String(user && (user.level || user.role || '')).trim().toLowerCase() === 'admin'; }catch(e){ return false; }
@@ -2391,6 +2514,7 @@ main.hero,
       updateReleaseButtonVisibility();
       ensureCloudMounted(null).catch(()=>{});
       showLogin();
+      ensureCloudMounted(null).then((ctrl)=>{ try{ if(ctrl && ctrl.pullNow) ctrl.pullNow().catch(()=>{}); }catch(e){} }).catch(()=>{});
       syncAuthTableFromAuthority().then(()=>{
         try{
           repairKnownAuthSecrets();
@@ -2589,15 +2713,28 @@ main.hero,
       if(btnRelease) btnRelease.addEventListener('click', triggerAdminRelease);
       window.addEventListener('resize', () => scheduleAll(), { passive:true });
       if(window.visualViewport) window.visualViewport.addEventListener('resize', () => scheduleAll(), { passive:true });
+      async function forceRefreshLatestOnVisible(){
+        try{
+          const liveVer = String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '').trim();
+          const latest = String(await fetchLatestVersionText() || '').trim();
+          if(latest && latest !== liveVer){
+            await hardRefreshToVersion(latest);
+            return true;
+          }
+        }catch(e){}
+        return false;
+      }
       document.addEventListener('visibilitychange', ()=>{
         if(document.visibilityState === 'visible'){
           scheduleAll();
+          forceRefreshLatestOnVisible().catch(()=>{});
           try{ if(cloudCtrl && cloudCtrl.pullNow) cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
           syncAuthTableFromAuthority().catch(()=>{});
           if(!CURRENT_USER){ tryRestoreLogin(); }
         }
       }, { passive:true });
-      window.addEventListener('focus', ()=>{ try{ if(cloudCtrl && cloudCtrl.pullNow) cloudCtrl.pullNow().catch(()=>{}); }catch(e){} try{ syncAuthTableFromAuthority().catch(()=>{}); }catch(e){} }, { passive:true });
+      window.addEventListener('focus', ()=>{ forceRefreshLatestOnVisible().catch(()=>{}); try{ if(cloudCtrl && cloudCtrl.pullNow) cloudCtrl.pullNow().catch(()=>{}); }catch(e){} try{ syncAuthTableFromAuthority().catch(()=>{}); }catch(e){} }, { passive:true });
+      window.addEventListener('pageshow', ()=>{ forceRefreshLatestOnVisible().catch(()=>{}); try{ if(cloudCtrl && cloudCtrl.pullNow) cloudCtrl.pullNow().catch(()=>{}); }catch(e){} }, { passive:true });
       window.addEventListener('storage', (e)=>{
         if(!e) return;
         if(e.key === '__tasun_auth_sync__' && e.newValue){
