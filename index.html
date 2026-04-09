@@ -119,6 +119,16 @@
       const nv = normVer(nextVer);
       if(!nv) return false;
       try{
+        const LOCK_KEY = 'tasun_force_latest_lock_v1';
+        const now = Date.now();
+        const raw = sessionStorage.getItem(LOCK_KEY) || '';
+        const lock = raw ? JSON.parse(raw) : null;
+        if(lock && lock.v === nv && (now - Number(lock.ts || 0)) < 15000){
+          return false;
+        }
+        sessionStorage.setItem(LOCK_KEY, JSON.stringify({ v:nv, ts:now }));
+      }catch(e){}
+      try{
         if('caches' in window){
           const names = await caches.keys().catch(()=>[]);
           await Promise.all((names || []).map((n)=>caches.delete(n).catch(()=>false)));
@@ -2713,7 +2723,24 @@ main.hero,
       if(btnRelease) btnRelease.addEventListener('click', triggerAdminRelease);
       window.addEventListener('resize', () => scheduleAll(), { passive:true });
       if(window.visualViewport) window.visualViewport.addEventListener('resize', () => scheduleAll(), { passive:true });
-      async function forceRefreshLatestOnVisible(){
+      let __visibleRefreshBusy = false;
+      let __visibleRefreshTs = 0;
+      function isLoginStageActive(){
+        try{
+          if(document.body && document.body.classList.contains('locked')) return true;
+          return !!(loginOverlay && getComputedStyle(loginOverlay).display !== 'none');
+        }catch(e){
+          return !!(loginOverlay && loginOverlay.style.display === 'flex');
+        }
+      }
+      async function forceRefreshLatestOnVisible(opts){
+        const o = opts || {};
+        const now = Date.now();
+        if(__visibleRefreshBusy) return false;
+        if(!o.force && (now - __visibleRefreshTs) < 12000) return false;
+        if(isLoginStageActive()) return false;
+        __visibleRefreshBusy = true;
+        __visibleRefreshTs = now;
         try{
           const liveVer = String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '').trim();
           const latest = String(await fetchLatestVersionText() || '').trim();
@@ -2722,19 +2749,32 @@ main.hero,
             return true;
           }
         }catch(e){}
+        finally{
+          __visibleRefreshBusy = false;
+        }
         return false;
       }
       document.addEventListener('visibilitychange', ()=>{
         if(document.visibilityState === 'visible'){
           scheduleAll();
+          if(isLoginStageActive()) return;
           forceRefreshLatestOnVisible().catch(()=>{});
           try{ if(cloudCtrl && cloudCtrl.pullNow) cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
           syncAuthTableFromAuthority().catch(()=>{});
           if(!CURRENT_USER){ tryRestoreLogin(); }
         }
       }, { passive:true });
-      window.addEventListener('focus', ()=>{ forceRefreshLatestOnVisible().catch(()=>{}); try{ if(cloudCtrl && cloudCtrl.pullNow) cloudCtrl.pullNow().catch(()=>{}); }catch(e){} try{ syncAuthTableFromAuthority().catch(()=>{}); }catch(e){} }, { passive:true });
-      window.addEventListener('pageshow', ()=>{ forceRefreshLatestOnVisible().catch(()=>{}); try{ if(cloudCtrl && cloudCtrl.pullNow) cloudCtrl.pullNow().catch(()=>{}); }catch(e){} }, { passive:true });
+      window.addEventListener('focus', ()=>{
+        if(isLoginStageActive()) return;
+        forceRefreshLatestOnVisible().catch(()=>{});
+        try{ if(cloudCtrl && cloudCtrl.pullNow) cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
+        try{ syncAuthTableFromAuthority().catch(()=>{}); }catch(e){}
+      }, { passive:true });
+      window.addEventListener('pageshow', ()=>{
+        if(isLoginStageActive()) return;
+        forceRefreshLatestOnVisible({ force:true }).catch(()=>{});
+        try{ if(cloudCtrl && cloudCtrl.pullNow) cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
+      }, { passive:true });
       window.addEventListener('storage', (e)=>{
         if(!e) return;
         if(e.key === '__tasun_auth_sync__' && e.newValue){
