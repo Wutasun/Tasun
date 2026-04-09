@@ -1,317 +1,279 @@
 #!/usr/bin/env node
-import fs from 'fs';
-import path from 'path';
-import crypto from 'crypto';
+/**
+ * Tasun v5 自動改版號腳本（GitHub 可直接使用）
+ *
+ * 功能：
+ * 1. 讀取 tasun-version.json
+ * 2. 自動掃描專案中的 html/js/json/css/mjs 檔案
+ * 3. 產生新版本號（日期 + 專案名 + 流程名 + v流水號）
+ * 4. 回寫 tasun-version.json
+ * 5. 輸出 GitHub Actions 可讀的 output
+ *
+ * 使用方式：
+ *   node publish-version_tasun_project_autoscan.mjs
+ *   node publish-version_tasun_project_autoscan.mjs --mode=release
+ *   node publish-version_tasun_project_autoscan.mjs --write-manifest=false
+ */
 
-const argv = process.argv.slice(2);
-const args = new Map();
-for (let i = 0; i < argv.length; i++) {
-  const a = argv[i];
-  if (!a.startsWith('--')) continue;
-  const key = a.slice(2);
-  const next = argv[i + 1];
-  if (!next || next.startsWith('--')) args.set(key, 'true');
-  else {
-    args.set(key, next);
-    i++;
-  }
-}
+import fs from 'node:fs';
+import path from 'node:path';
+import process from 'node:process';
+import crypto from 'node:crypto';
 
-const ROOT = path.resolve(args.get('root') || '.');
-const WRITE_FALLBACKS = String(args.get('write-fallbacks') || 'false').toLowerCase() === 'true';
-const ADMIN_RELEASE = String(process.env.ADMIN_RELEASE || '') === '1';
-
-if (!ADMIN_RELEASE) {
-  console.error('❌ 拒絕執行：只有 admin 可發布。請用 ADMIN_RELEASE=1 執行。');
-  process.exit(1);
-}
-
-const CORE_FILES = [
-  'entry.html',
-  'index.html',
-  '汐東工程管理表.html',
-  '捷運汐東線事項記錄.html',
-  '捷運汐東線權責分工精簡版.html',
-  'tasun-version.json',
-  'tasun-version-loader.js',
-  'tasun-resources.json',
-  'tasun-core.js',
-  'tasun-boot.js',
-  'tasun-loader.js',
-  'tasun-next-fix.js',
-  'tasun-global-core.js',
-  'tasun-auth-v4.js',
-  'tasun-cloudwrap-v4.js',
-  'tasun-guard-v5.js',
-  'tasun-global-auth-v65.js',
-  'worker.js'
-];
-
-const SCAN_EXTS = new Set(['.html', '.js', '.json']);
+const ROOT = process.cwd();
+const VERSION_FILE = path.join(ROOT, 'tasun-version.json');
+const TZ = 'Asia/Taipei';
 const EXCLUDE_DIRS = new Set([
   '.git',
   '.github',
   'node_modules',
   'dist',
   'build',
-  'archive',
-  'archives',
-  'backup',
-  'backups',
+  '.next',
+  '.vercel',
+  '.idea',
+  '.vscode',
+  'coverage',
   'tmp',
-  'temp',
-  '.history',
-  '.vscode'
+  'temp'
 ]);
+const ALLOW_EXTS = new Set(['.html', '.js', '.json', '.css', '.mjs']);
+const OUTPUTS = {};
 
-const EXCLUDE_FILE_PATTERNS = [
-  /(^|\/)tasun-version\.json$/i, // version file excluded from hash input; written after hash
-  /(^|\/)publish-version.*\.mjs$/i,
-  /(^|\/)README(\.[^\/]+)?$/i,
-  /(^|\/).*\.zip$/i,
-  /(^|\/).*\.bak$/i,
-  /(^|\/).*\.old$/i,
-  /(^|\/).*\.tmp$/i,
-  /(^|\/).*_backup.*$/i,
-  /(^|\/).*備份.*$/i,
-  /(^|\/).*修正版.*$/i,
-  /(^|\/).*整包.*$/i,
-  /(^|\/).*bundle.*$/i,
-];
-
-const FALLBACK_FILES = [
-  'entry.html',
-  'index.html',
-  '汐東工程管理表.html',
-  '捷運汐東線事項記錄.html',
-  '捷運汐東線權責分工精簡版.html'
-];
-
-function exists(p) {
-  try { fs.accessSync(p); return true; } catch { return false; }
-}
-
-function readUtf8(p) {
-  return fs.readFileSync(p, 'utf8');
-}
-
-function writeUtf8(p, content) {
-  fs.writeFileSync(p, content, 'utf8');
-}
-
-function relUnix(p) {
-  return path.relative(ROOT, p).split(path.sep).join('/');
-}
-
-function shouldExcludeRel(rel) {
-  const norm = rel.replace(/\\/g, '/');
-  return EXCLUDE_FILE_PATTERNS.some((re) => re.test(norm));
-}
-
-function collectAutoFiles(dir, out = []) {
-  const items = fs.readdirSync(dir, { withFileTypes: true });
-  for (const item of items) {
-    const abs = path.join(dir, item.name);
-    const rel = relUnix(abs);
-    if (item.isDirectory()) {
-      if (EXCLUDE_DIRS.has(item.name)) continue;
-      collectAutoFiles(abs, out);
-      continue;
-    }
-    const ext = path.extname(item.name).toLowerCase();
-    if (!SCAN_EXTS.has(ext)) continue;
-    if (shouldExcludeRel(rel)) continue;
-    out.push(rel);
+function parseArgs(argv) {
+  const args = {};
+  for (const raw of argv.slice(2)) {
+    if (!raw.startsWith('--')) continue;
+    const body = raw.slice(2);
+    const eq = body.indexOf('=');
+    if (eq === -1) args[body] = true;
+    else args[body.slice(0, eq)] = body.slice(eq + 1);
   }
-  return out;
+  return args;
 }
 
-function uniqueSorted(list) {
-  return [...new Set(list.filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+function readJson(file) {
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
-function normalizeForHash(content) {
-  return String(content)
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    .replace(/^\uFEFF/, '');
+function writeJson(file, data) {
+  fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n', 'utf8');
 }
 
-function todayTW() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}${m}${day}`;
+function pad2(n) {
+  return String(n).padStart(2, '0');
 }
 
-function isoOffsetNow() {
-  const d = new Date();
-  const tzo = -d.getTimezoneOffset();
-  const sign = tzo >= 0 ? '+' : '-';
-  const hh = String(Math.floor(Math.abs(tzo) / 60)).padStart(2, '0');
-  const mm = String(Math.abs(tzo) % 60).padStart(2, '0');
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}T${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}${sign}${hh}:${mm}`;
+function nowInTaipei() {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).formatToParts(now);
+  const map = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    hour: Number(map.hour),
+    minute: Number(map.minute),
+    second: Number(map.second),
+    dateTag: `${map.year}${map.month}${map.day}`,
+    iso: `${map.year}-${map.month}-${map.day}T${map.hour}:${map.minute}:${map.second}+08:00`
+  };
 }
 
-function makeVersion(hash8) {
-  return `${todayTW()}_tasun_v5_autoscan_${hash8}`;
+function safeRel(file) {
+  return path.relative(ROOT, file).split(path.sep).join('/');
 }
 
-function hashFiles(relFiles) {
-  const h = crypto.createHash('sha256');
-  for (const rel of relFiles) {
-    const abs = path.join(ROOT, rel);
-    if (!exists(abs)) continue;
-    h.update(`FILE:${rel}\n`);
-    h.update(normalizeForHash(readUtf8(abs)));
-    h.update('\n<<<END>>>\n');
-  }
-  return h.digest('hex').slice(0, 8);
-}
-
-function findLegacyLocks(content) {
-  const hits = [];
-  const checks = [
-    /__TASUN_PAGE_FIXED_VERSION__/g,
-    /20260405_notes_authfix_v62/g,
-    /notes_authfix_v62/g,
-    /tasun_v5_syncfix/g,
-    /tasun_v5_unified_final/g,
-    /window\.APP_VER\s*=\s*["'`][^"'`]+["'`]/g,
-    /window\.TASUN_APP_VER\s*=\s*["'`][^"'`]+["'`]/g,
-    /window\.__CACHE_V\s*=\s*["'`][^"'`]+["'`]/g
-  ];
-  for (const re of checks) {
-    if (re.test(content)) hits.push(re.source);
-  }
-  return hits;
-}
-
-function rewriteFallbackVersion(content, version) {
-  let out = content;
-  out = out.replace(/window\.__TASUN_FALLBACK_VER__\s*=\s*window\.__TASUN_FALLBACK_VER__\s*\|\|\s*["'`][^"'`]+["'`]/g,
-    `window.__TASUN_FALLBACK_VER__ = window.__TASUN_FALLBACK_VER__ || "${version}"`);
-  out = out.replace(/var\s+FALLBACK_VER\s*=\s*["'`][^"'`]+["'`]/g, `var FALLBACK_VER = "${version}"`);
-  out = out.replace(/const\s+FALLBACK_VER\s*=\s*["'`][^"'`]+["'`]/g, `const FALLBACK_VER = "${version}"`);
-  out = out.replace(/let\s+FALLBACK_VER\s*=\s*["'`][^"'`]+["'`]/g, `let FALLBACK_VER = "${version}"`);
-  out = out.replace(/window\.__TASUN_PAGE_FIXED_VERSION__\s*=\s*["'`][^"'`]+["'`];?/g, '');
-  out = out.replace(/window\.TASUN_APP_VER\s*=\s*["'`][^"'`]+["'`];?/g, '');
-  out = out.replace(/window\.APP_VER\s*=\s*["'`][^"'`]+["'`];?/g, '');
-  out = out.replace(/window\.__CACHE_V\s*=\s*["'`][^"'`]+["'`];?/g, '');
-  out = out.replace(/\/\/\s*✅\s*固定正式版：[\s\S]*?(?=<meta http-equiv="Cache-Control"|<link href=)/, '');
-  return out;
-}
-
-function updateVersionJson(versionFile, version, relFiles, hash8) {
-  const abs = path.join(ROOT, versionFile);
-  let json = {};
-  if (exists(abs)) {
-    try { json = JSON.parse(readUtf8(abs)); } catch { json = {}; }
-  }
-  json.app = json.app || 'Tasun';
-  json.versionMode = 'auto';
-  json.includeCurrentPage = false;
-  json.versionSources = relFiles;
-  json.manualVersion = version;
-  json.fallbackVersion = version;
-  json.ver = version;
-  json.version = version;
-  json.appVer = version;
-  json.APP_VER = version;
-  json.appVersion = version;
-  json.updatedAt = isoOffsetNow();
-  json.notes = `Tasun v5 自動掃描新增檔案版：${version} (${hash8})`;
-  writeUtf8(abs, JSON.stringify(json, null, 2) + '\n');
-}
-
-function updateResourcesJson(resourcesFile, version) {
-  const abs = path.join(ROOT, resourcesFile);
-  if (!exists(abs)) return false;
-  let json = {};
-  try { json = JSON.parse(readUtf8(abs)); } catch { return false; }
-  json.meta = json.meta && typeof json.meta === 'object' ? json.meta : {};
-  json.meta.ver = version;
-  json.meta.notes = `Tasun v5 自動掃描新增檔案版 ${version}`;
-  writeUtf8(abs, JSON.stringify(json, null, 2) + '\n');
+function isAllowedFile(file) {
+  const ext = path.extname(file).toLowerCase();
+  if (!ALLOW_EXTS.has(ext)) return false;
+  const rel = safeRel(file);
+  if (rel === 'tasun-version.json') return true;
+  if (rel.startsWith('.github/')) return false;
+  if (rel.includes('/backup/') || rel.includes('/bak/')) return false;
+  if (rel.endsWith('.min.js')) return true;
   return true;
 }
 
+function walk(dir, out = []) {
+  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, ent.name);
+    if (ent.isDirectory()) {
+      if (EXCLUDE_DIRS.has(ent.name)) continue;
+      walk(full, out);
+      continue;
+    }
+    if (!ent.isFile()) continue;
+    if (!isAllowedFile(full)) continue;
+    out.push(full);
+  }
+  return out;
+}
+
+function sha256(text) {
+  return crypto.createHash('sha256').update(text).digest('hex');
+}
+
+function fileHash(file) {
+  return sha256(fs.readFileSync(file));
+}
+
+function loadCurrentVersionConfig() {
+  if (!fs.existsSync(VERSION_FILE)) {
+    throw new Error('找不到 tasun-version.json，請先把此檔放在 repo 根目錄');
+  }
+  return readJson(VERSION_FILE);
+}
+
+function buildVersionBase(config) {
+  const app = String(config.app || 'tasun').trim().toLowerCase();
+  return `${app}_v5_unified_final`;
+}
+
+function parsePreviousVersion(ver) {
+  const text = String(ver || '').trim();
+  const m = text.match(/^(\d{8})_(.+?)_v(\d+)$/i);
+  if (!m) return null;
+  return {
+    dateTag: m[1],
+    stem: m[2],
+    seq: Number(m[3] || '0')
+  };
+}
+
+function buildNextVersion(config, now) {
+  const current = String(config.version || config.ver || config.manualVersion || config.fallbackVersion || '').trim();
+  const parsed = parsePreviousVersion(current);
+  const stem = buildVersionBase(config);
+  let nextSeq = 1;
+  if (parsed && parsed.stem === stem) {
+    nextSeq = parsed.dateTag === now.dateTag ? parsed.seq + 1 : parsed.seq + 1;
+  } else if (parsed && parsed.dateTag === now.dateTag) {
+    nextSeq = parsed.seq + 1;
+  } else if (parsed) {
+    nextSeq = parsed.seq + 1;
+  }
+  return `${now.dateTag}_${stem}_v${nextSeq}`;
+}
+
+function getTrackedFiles(config, args) {
+  const writeManifest = String(args['write-manifest'] ?? 'true').toLowerCase() !== 'false';
+  const autoFiles = walk(ROOT)
+    .map(safeRel)
+    .filter((file) => file !== '.github/workflows/release-version.yml')
+    .filter((file) => file !== 'publish-version_tasun_project_autoscan.mjs')
+    .sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+
+  const fixed = Array.isArray(config.versionSources) ? config.versionSources.map(String) : [];
+  const merged = Array.from(new Set([...fixed, ...autoFiles]))
+    .filter((file) => fs.existsSync(path.join(ROOT, file)))
+    .sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+
+  if (writeManifest) {
+    config.versionSources = merged;
+  }
+  return merged;
+}
+
+function createManifest(files, version) {
+  const manifest = [];
+  for (const rel of files) {
+    const full = path.join(ROOT, rel);
+    const stat = fs.statSync(full);
+    manifest.push({
+      file: rel,
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      sha256: fileHash(full),
+      version
+    });
+  }
+  return manifest;
+}
+
+function writeOutputs(kv) {
+  const githubOutput = process.env.GITHUB_OUTPUT;
+  if (githubOutput) {
+    const lines = [];
+    for (const [k, v] of Object.entries(kv)) {
+      lines.push(`${k}=${String(v)}`);
+    }
+    fs.appendFileSync(githubOutput, lines.join('\n') + '\n', 'utf8');
+  }
+  Object.assign(OUTPUTS, kv);
+}
+
 function main() {
-  if (!exists(ROOT)) {
-    console.error(`❌ 找不到根目錄：${ROOT}`);
-    process.exit(1);
-  }
+  const args = parseArgs(process.argv);
+  const now = nowInTaipei();
+  const config = loadCurrentVersionConfig();
 
-  const autoFiles = collectAutoFiles(ROOT);
-  const allFiles = uniqueSorted([...CORE_FILES.filter((f) => exists(path.join(ROOT, f))), ...autoFiles]);
+  const nextVersion = String(args.version || '').trim() || buildNextVersion(config, now);
+  const trackedFiles = getTrackedFiles(config, args);
+  const manifest = createManifest(trackedFiles, nextVersion);
+  const projectHash = sha256(JSON.stringify(manifest.map((m) => [m.file, m.sha256])));
 
-  const legacyProblems = [];
-  for (const rel of allFiles) {
-    const abs = path.join(ROOT, rel);
-    if (!exists(abs)) continue;
-    const text = readUtf8(abs);
-    const hits = findLegacyLocks(text);
-    if (hits.length && !WRITE_FALLBACKS) {
-      legacyProblems.push({ file: rel, hits });
-    }
-  }
+  config.versionMode = 'auto';
+  config.manualVersion = nextVersion;
+  config.fallbackVersion = nextVersion;
+  config.ver = nextVersion;
+  config.version = nextVersion;
+  config.appVer = nextVersion;
+  config.APP_VER = nextVersion;
+  config.appVersion = nextVersion;
+  config.updatedAt = now.iso;
+  config.notes = `Tasun v5 全站自動發布版：${nextVersion}`;
+  config.release = Object.assign({}, config.release || {}, {
+    mode: 'github-actions',
+    branch: process.env.GITHUB_REF_NAME || 'main',
+    script: 'publish-version_tasun_project_autoscan.mjs',
+    workflow: '.github/workflows/release-version.yml',
+    timezone: TZ,
+    fileCount: trackedFiles.length,
+    projectHash
+  });
+  config.build = {
+    generatedAt: now.iso,
+    generatedBy: 'publish-version_tasun_project_autoscan.mjs',
+    hash: projectHash,
+    fileCount: trackedFiles.length
+  };
 
-  if (legacyProblems.length) {
-    console.error('❌ 偵測到手寫固定版號或舊版殘留。請先用 --write-fallbacks true 自動清理：');
-    for (const p of legacyProblems) {
-      console.error(`- ${p.file}`);
-    }
-    process.exit(1);
-  }
+  writeJson(VERSION_FILE, config);
 
-  const hashInputFiles = allFiles.filter((f) => !/^(tasun-version\.json)$/i.test(f));
-  const hash8 = hashFiles(hashInputFiles);
-  const version = makeVersion(hash8);
+  const manifestFile = path.join(ROOT, 'tasun-release-manifest.json');
+  fs.writeFileSync(manifestFile, JSON.stringify({ version: nextVersion, generatedAt: now.iso, files: manifest }, null, 2) + '\n', 'utf8');
 
-  if (WRITE_FALLBACKS) {
-    for (const rel of FALLBACK_FILES) {
-      const abs = path.join(ROOT, rel);
-      if (!exists(abs)) continue;
-      const old = readUtf8(abs);
-      const next = rewriteFallbackVersion(old, version);
-      if (next !== old) writeUtf8(abs, next);
-    }
-  }
+  writeOutputs({
+    version: nextVersion,
+    updated_at: now.iso,
+    file_count: trackedFiles.length,
+    manifest_file: 'tasun-release-manifest.json',
+    project_hash: projectHash
+  });
 
-  updateVersionJson('tasun-version.json', version, allFiles, hash8);
-  const resourcesUpdated = updateResourcesJson('tasun-resources.json', version);
-
-  const finalHashInputFiles = uniqueSorted([
-    ...allFiles.filter((f) => f !== 'tasun-version.json' && f !== 'tasun-resources.json'),
-    ...(exists(path.join(ROOT, 'tasun-resources.json')) ? ['tasun-resources.json'] : [])
-  ]);
-  const finalHash8 = hashFiles(finalHashInputFiles);
-  const finalVersion = makeVersion(finalHash8);
-  if (finalVersion !== version) {
-    if (WRITE_FALLBACKS) {
-      for (const rel of FALLBACK_FILES) {
-        const abs = path.join(ROOT, rel);
-        if (!exists(abs)) continue;
-        const old = readUtf8(abs);
-        const next = rewriteFallbackVersion(old, finalVersion);
-        if (next !== old) writeUtf8(abs, next);
-      }
-    }
-    updateVersionJson('tasun-version.json', finalVersion, allFiles, finalHash8);
-    updateResourcesJson('tasun-resources.json', finalVersion);
-  }
-
-  const released = finalVersion;
   console.log(JSON.stringify({
     ok: true,
-    root: ROOT,
-    version: released,
-    writeFallbacks: WRITE_FALLBACKS,
-    resourcesUpdated,
-    scannedCount: allFiles.length,
-    scannedFiles: allFiles
+    version: nextVersion,
+    updatedAt: now.iso,
+    fileCount: trackedFiles.length,
+    manifestFile: 'tasun-release-manifest.json',
+    projectHash
   }, null, 2));
 }
 
-main();
+try {
+  main();
+} catch (error) {
+  console.error('[publish-version] 失敗：', error && error.stack ? error.stack : error);
+  process.exit(1);
+}
