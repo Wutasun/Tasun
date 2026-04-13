@@ -1366,6 +1366,47 @@
       }catch(e){}
       return out;
     }
+
+
+    // ✅ 補強：頁面命名空間判斷 / 寫回 helper
+    // 先前部分版本遺漏這兩個函式，會導致 ensureRowV1() 在儲存時拋出 ReferenceError，
+    // 表現成「儲存按鈕無動作」。
+    function rowBelongsToCurrentPage(r){
+      if(!r || typeof r !== "object") return false;
+      if(!STRICT_PAGE_NAMESPACE) return true;
+
+      var accepted = getRuntimeCloudKeyCandidates().concat([PAGE_NAMESPACE, PAGE_KEY]);
+      var seen = Object.create(null);
+      accepted = accepted.map(function(v){ return norm(v); }).filter(function(v){
+        if(!v || seen[v]) return false;
+        seen[v] = 1;
+        return true;
+      });
+
+      var rowKeys = [
+        norm(r.pageKey),
+        norm(r.pageNs),
+        norm(r.resourceKey),
+        norm(r.key)
+      ].filter(Boolean);
+
+      // 舊資料沒有 page namespace 時，允許視為本頁資料，避免舊資料無法儲存/升級。
+      if(!rowKeys.length) return true;
+
+      for(var i=0;i<rowKeys.length;i++){
+        if(accepted.indexOf(rowKeys[i]) >= 0) return true;
+      }
+      return false;
+    }
+
+    function stampRowNamespace(r){
+      if(!r || typeof r !== "object") return r;
+      r.pageKey = PAGE_NAMESPACE;
+      r.pageNs = PAGE_NAMESPACE;
+      r.resourceKey = PAGE_NAMESPACE;
+      if(!r.key) r.key = PAGE_NAMESPACE;
+      return r;
+    }
 // ✅ B方案：提供 TasunCloudKit mount() 必要的 resourceKey（避免 MOUNT_MISSING_KEY）
 window.TASUN_RESOURCE_KEY = window.TASUN_RESOURCE_KEY || PAGE_KEY;
 window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
@@ -4818,10 +4859,20 @@ function getPromptOptions(mode){
       $("btnAddSys").addEventListener("click", function(){ openPrompt("sys"); });
       $("btnAddSource").addEventListener("click", function(){ openPrompt("source"); });
 
-      $("btnNetDisk").addEventListener("click", function(){
-  // ✅ 修正：新增表單「網路硬碟」按鍵固定開啟指定 Dropbox 資料夾，不再受附件欄位內容影響
-  var url = "https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88";
-  window.open(url, "_blank", "noopener");
+      $("btnNetDisk").addEventListener("click", async function(){
+  // ✅ 行為修正：附件欄位為空時，「網路硬碟」仍可打開預設網路硬碟（不影響 UI）
+  var v = norm($("mAttach").value);
+  if(v){
+    window.open(addV(v), "_blank", "noopener");
+    return;
+  }
+  try{
+    var cfg = await loadCloudCfg();
+    var url = (cfg && cfg.netDiskUrl) ? String(cfg.netDiskUrl) : "https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88";
+    window.open(addV(url), "_blank", "noopener");
+  }catch(e){
+    window.open("https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88", "_blank", "noopener");
+  }
 });
 
 $("btnSave").addEventListener("click", async function(){
