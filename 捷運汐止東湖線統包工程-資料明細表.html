@@ -13,8 +13,13 @@
     window.__TASUN_BUILD_STAMP__ = PAGE_BUILD_STAMP;
     window.__TASUN_PAGE_BUILD_STAMP__ = PAGE_BUILD_STAMP;
 
+    var CHECK_LOCK_KEY = 'tasun_buildstamp_check_lock__' + location.pathname;
+    var REFRESH_LOCK_KEY = 'tasun_force_refresh_lock__' + location.pathname;
+    var RUNNING = false;
+
     function norm(v){ return (v===undefined || v===null) ? '' : String(v).trim(); }
     function queryV(){ try{ return norm(new URL(location.href).searchParams.get('v')); }catch(_e){ return ''; } }
+    function now(){ return Date.now(); }
     function ensureWithV(){
       if(typeof window.__withV === 'function') return;
       window.__withV = function(url){
@@ -36,7 +41,7 @@
 
     async function fetchVersionBundle(){
       try{
-        var res = await fetch('tasun-version.json?_=' + Date.now(), { cache:'no-store', credentials:'same-origin' });
+        var res = await fetch('tasun-version.json?_=' + now(), { cache:'no-store', credentials:'same-origin' });
         if(!res.ok) return null;
         var data = await res.json().catch(function(){ return null; });
         if(!data) return null;
@@ -57,10 +62,10 @@
       }
     }
 
-    async function fetchRemotePageBuildStamp(){
+    async function fetchRemotePageBuildStampOnce(){
       try{
         var pageUrl = new URL(location.pathname, location.origin);
-        pageUrl.searchParams.set('_pagebs', String(Date.now()));
+        pageUrl.searchParams.set('__bs_probe', String(now()));
         var res = await fetch(pageUrl.toString(), { cache:'no-store', credentials:'same-origin' });
         if(!res.ok) return { htmlBuildStamp:'', htmlRebuildStamp:'' };
         var html = await res.text().catch(function(){ return ''; });
@@ -70,8 +75,6 @@
         var buildVar = html.match(/var\s+PAGE_BUILD_STAMP\s*=\s*["']([^"']+)["']/i);
         var rebuildMeta = html.match(/<meta[^>]+name=["']tasun-rebuild-stamp["'][^>]+content=["']([^"']+)["']/i);
         var rebuildVar = html.match(/(?:window\.)?TASUN_REBUILD_STAMP\s*=\s*["']([^"']+)["']/i);
-        var rebuildComment = html.match(/TASUN_REBUILD_STAMP\s*[:=]\s*([^\n<]+)/i);
-
         function pick(){
           for(var i=0;i<arguments.length;i++){
             var s = norm(arguments[i]);
@@ -79,11 +82,10 @@
           }
           return '';
         }
-
-        var htmlBuildStamp = pick(buildMeta && buildMeta[1], buildVar && buildVar[1]);
-        var htmlRebuildStamp = pick(rebuildMeta && rebuildMeta[1], rebuildVar && rebuildVar[1], rebuildComment && rebuildComment[1]);
-        htmlRebuildStamp = norm(htmlRebuildStamp).replace(/["';>]/g,'').trim();
-        return { htmlBuildStamp: htmlBuildStamp, htmlRebuildStamp: htmlRebuildStamp };
+        return {
+          htmlBuildStamp: pick(buildMeta && buildMeta[1], buildVar && buildVar[1]),
+          htmlRebuildStamp: pick(rebuildMeta && rebuildMeta[1], rebuildVar && rebuildVar[1])
+        };
       }catch(_e){
         return { htmlBuildStamp:'', htmlRebuildStamp:'' };
       }
@@ -91,6 +93,15 @@
 
     async function hardRefreshTo(version, buildStamp){
       var nextVer = norm(version) || norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '');
+      var nextBs = norm(buildStamp || PAGE_BUILD_STAMP);
+      try{
+        var prev = JSON.parse(sessionStorage.getItem(REFRESH_LOCK_KEY) || 'null');
+        if(prev && prev.v === nextVer && prev.bs === nextBs && (now() - Number(prev.ts || 0)) < 15000){
+          return false;
+        }
+        sessionStorage.setItem(REFRESH_LOCK_KEY, JSON.stringify({ v: nextVer, bs: nextBs, ts: now() }));
+      }catch(_e){}
+
       try{
         if('caches' in window){
           var names = await caches.keys().catch(function(){ return []; });
@@ -103,61 +114,79 @@
           await Promise.all((regs || []).map(function(r){ return r.unregister().catch(function(){ return false; }); }));
         }
       }catch(_e){}
-      try{ if(nextVer) sessionStorage.setItem('tasun_force_latest_seen_v1', nextVer); }catch(_e){}
-      try{ if(nextVer) localStorage.setItem('tasun_force_latest_seen_v1', nextVer); }catch(_e){}
-      try{ if(buildStamp) sessionStorage.setItem('tasun_force_latest_build_stamp_v1', buildStamp); }catch(_e){}
-      try{ if(buildStamp) localStorage.setItem('tasun_force_latest_build_stamp_v1', buildStamp); }catch(_e){}
 
       var u = new URL(location.href);
       if(nextVer) u.searchParams.set('v', nextVer);
-      u.searchParams.set('_', String(Date.now()));
-      u.searchParams.set('_bs', encodeURIComponent(buildStamp || PAGE_BUILD_STAMP));
+      u.searchParams.set('_', String(now()));
+      u.searchParams.set('_bs', encodeURIComponent(nextBs));
       location.replace(u.toString());
       return true;
     }
 
-    async function ensureLatestVersionAndBuildStamp(){
-      ensureWithV();
-      var bundle = await fetchVersionBundle();
-      if(!bundle) return false;
+    async function ensureLatestVersionAndBuildStamp(opts){
+      opts = opts || {};
+      if(RUNNING) return false;
+      RUNNING = true;
+      try{
+        var force = !!opts.force;
+        try{
+          var memo = JSON.parse(sessionStorage.getItem(CHECK_LOCK_KEY) || 'null');
+          if(!force && memo && (now() - Number(memo.ts || 0)) < 10000){
+            if(memo.v){
+              window.__CACHE_V = memo.v;
+              window.TASUN_APP_VER = memo.v;
+              window.APP_VER = memo.v;
+            }
+            return false;
+          }
+        }catch(_e){}
 
-      var curV = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || queryV() || '');
-      var latestV = norm(bundle.version);
-      var latestBS = norm(bundle.buildStamp);
-      var remotePage = await fetchRemotePageBuildStamp();
-      var remoteHtmlBS = norm(remotePage && remotePage.htmlBuildStamp);
-      var remoteRebuildStamp = norm(remotePage && remotePage.htmlRebuildStamp);
-      var needRefresh = false;
+        ensureWithV();
+        var bundle = await fetchVersionBundle();
+        if(!bundle) return false;
 
-      if(latestV && latestV !== curV) needRefresh = true;
-      if(latestBS && latestBS !== PAGE_BUILD_STAMP) needRefresh = true;
-      if(remoteHtmlBS && remoteHtmlBS !== PAGE_BUILD_STAMP) needRefresh = true;
-      if(remoteRebuildStamp && remoteRebuildStamp !== norm(window.TASUN_REBUILD_STAMP || '')) needRefresh = true;
+        var curV = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || queryV() || '');
+        var latestV = norm(bundle.version);
+        var latestBS = norm(bundle.buildStamp);
+        var remotePage = await fetchRemotePageBuildStampOnce();
+        var remoteHtmlBS = norm(remotePage && remotePage.htmlBuildStamp);
+        var remoteRebuildStamp = norm(remotePage && remotePage.htmlRebuildStamp);
+        var currentRebuild = norm(window.TASUN_REBUILD_STAMP || window.__TASUN_REBUILD_STAMP__ || PAGE_BUILD_STAMP);
+        var needRefresh = false;
 
-      if(needRefresh){
-        await hardRefreshTo(latestV || curV, latestBS || remoteHtmlBS || PAGE_BUILD_STAMP);
-        return true;
+        if(latestV && latestV !== curV) needRefresh = true;
+        if(latestBS && latestBS !== PAGE_BUILD_STAMP) needRefresh = true;
+        if(remoteHtmlBS && remoteHtmlBS !== PAGE_BUILD_STAMP) needRefresh = true;
+        if(remoteRebuildStamp && currentRebuild && remoteRebuildStamp !== currentRebuild) needRefresh = true;
+
+        try{
+          sessionStorage.setItem(CHECK_LOCK_KEY, JSON.stringify({
+            ts: now(),
+            v: latestV || curV || '',
+            bs: latestBS || remoteHtmlBS || PAGE_BUILD_STAMP
+          }));
+        }catch(_e){}
+
+        if(needRefresh){
+          return await hardRefreshTo(latestV || curV, latestBS || remoteHtmlBS || PAGE_BUILD_STAMP);
+        }
+
+        if(latestV){
+          window.__CACHE_V = latestV;
+          window.TASUN_APP_VER = latestV;
+          window.APP_VER = latestV;
+        }
+        return false;
+      } finally {
+        RUNNING = false;
       }
-
-      if(latestV){
-        window.__CACHE_V = latestV;
-        window.TASUN_APP_VER = latestV;
-        window.APP_VER = latestV;
-      }
-      return false;
     }
 
     window.__TASUN_ENSURE_LATEST_BUILDSTAMP__ = ensureLatestVersionAndBuildStamp;
 
     Promise.resolve(window.__TASUN_VERSION_READY__ || true).then(function(){
-      ensureLatestVersionAndBuildStamp().catch(function(){});
+      ensureLatestVersionAndBuildStamp({ force:true }).catch(function(){});
     });
-
-    document.addEventListener('visibilitychange', function(){
-      if(document.visibilityState === 'visible') ensureLatestVersionAndBuildStamp().catch(function(){});
-    }, { passive:true });
-    window.addEventListener('focus', function(){ ensureLatestVersionAndBuildStamp().catch(function(){}); }, { passive:true });
-    window.addEventListener('pageshow', function(){ ensureLatestVersionAndBuildStamp().catch(function(){}); }, { passive:true });
   })();
   </script>
 
@@ -1970,19 +1999,43 @@ window.__TASUN_REBUILD_STAMP__ = window.__TASUN_REBUILD_STAMP__ || window.TASUN_
     function startAuthHydrationWatch(){
       var tries = 0, maxTries = 28;
       var syncedOnce = false;
-      async function settle(){
+      var settling = false;
+      var queued = false;
+      var syncPromise = null;
+
+      async function doOneSettle(){
         var ok = false;
         try{ ok = resolveRuntimeUser(); }catch(e){ ok = false; }
         try{ ensureActionButtonsVisible(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
+
         if(!syncedOnce){
-          try{
-            await reconcileCloudOnOpen({ silent:true });
-            syncedOnce = true;
-          }catch(e){}
+          if(!syncPromise){
+            syncPromise = reconcileCloudOnOpen({ silent:true }).catch(function(){ return false; }).then(function(){
+              syncedOnce = true;
+            }).finally(function(){
+              syncPromise = null;
+            });
+          }
+          await syncPromise;
         }
         return ok;
       }
+
+      async function settle(){
+        if(settling){ queued = true; return false; }
+        settling = true;
+        try{
+          return await doOneSettle();
+        } finally {
+          settling = false;
+          if(queued){
+            queued = false;
+            setTimeout(function(){ settle(); }, 0);
+          }
+        }
+      }
+
       var tm = setInterval(function(){
         tries++;
         settle().then(function(ok){ if(ok || tries >= maxTries) clearInterval(tm); });
