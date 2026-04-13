@@ -51,7 +51,7 @@
         var rebuildMeta = html.match(/<meta[^>]+name=["']tasun-rebuild-stamp["'][^>]+content=["']([^"']+)["']/i);
         var rebuildVar = html.match(/(?:window\.)?TASUN_REBUILD_STAMP\s*=\s*["']([^"']+)["']/i);
         function pick(){ for(var i=0;i<arguments.length;i++){ var s = norm(arguments[i]); if(s) return s; } return ''; }
-        return { htmlBuildStamp: pick(buildMeta && buildMeta[1], buildVar && buildVar[1]), htmlRebuildStamp: pick(rebuildMeta && rebuildVar && rebuildMeta[1], rebuildVar && rebuildVar[1]) };
+        return { htmlBuildStamp: pick(buildMeta && buildMeta[1], buildVar && buildVar[1]), htmlRebuildStamp: pick(rebuildMeta && rebuildMeta[1], rebuildVar && rebuildVar[1]) };
       }catch(_e){ return { htmlBuildStamp:'', htmlRebuildStamp:'' }; }
     }
 
@@ -2336,20 +2336,46 @@ function getPromptOptions(mode){
 
     async function cloudMerge(localPayload){
       var cfg = await loadCloudCfg();
-      var url = joinApiBase(cfg.apiBase, cfg.endpoints.merge);
-      var body = buildCloudEnvelope({ op:"merge", items: localPayload.items, counter: localPayload.counter });
+      var mergePath = (cfg && cfg.endpoints && cfg.endpoints.merge) ? cfg.endpoints.merge : "/api/merge";
+      var url = joinApiBase(cfg.apiBase, mergePath);
+
+      var payload = localPayload && typeof localPayload === "object" ? localPayload : {};
+      var inner = (payload.payload && typeof payload.payload === "object") ? payload.payload : payload;
+      var items = Array.isArray(payload.items) ? payload.items : (Array.isArray(inner.items) ? inner.items : (Array.isArray(inner.db) ? inner.db : []));
+      var counter = Number(payload.counter);
+      if(!Number.isFinite(counter)) counter = Number(inner.counter);
+      if(!Number.isFinite(counter)) counter = 0;
+
+      var body = buildCloudEnvelope({
+        op:"merge",
+        items: items,
+        db: items,
+        counter: counter,
+        since: Number(payload.since || 0) || 0,
+        partial: !!payload.partial,
+        clientId: norm(payload.clientId || state.clientId || getClientId())
+      });
+      body.client = Object.assign({}, body.client || {}, {
+        clientId: norm(payload.clientId || state.clientId || getClientId()),
+        since: Number(payload.since || 0) || 0,
+        partial: !!payload.partial
+      });
+
       var res = await fetch(addV(url), {
         method:"POST",
         headers: { "content-type":"application/json" },
         body: JSON.stringify(body)
       });
-      if(!res.ok) throw new Error("merge failed");
-      var json = await res.json();
+      if(!res.ok){
+        var t = await res.text().catch(function(){ return ""; });
+        throw new Error("merge failed" + (t ? (": " + String(t).slice(0,160)) : ""));
+      }
+      var json = await res.json().catch(function(){ return {}; });
       var un = unwrap(json);
-      var items = un && (un.items || un.db || (un.data && (un.data.items||un.data.db)) || (un.payload && (un.payload.items||un.payload.db)) || un.rows) || [];
-      var counter = un && (un.counter || (un.data && un.data.counter) || 0) || 0;
-      if(!Array.isArray(items)) items = [];
-      return { items: items, counter: Number(counter||0)||0 };
+      var outItems = un && (un.items || un.db || (un.data && (un.data.items||un.data.db)) || (un.payload && (un.payload.items||un.payload.db)) || un.rows) || [];
+      var outCounter = un && (un.counter || (un.data && un.data.counter) || (un.payload && un.payload.counter) || 0) || 0;
+      if(!Array.isArray(outItems)) outItems = [];
+      return { items: outItems, counter: Number(outCounter||0)||0 };
     }
 
         async function syncFromCloud(){
@@ -2426,7 +2452,8 @@ function getPromptOptions(mode){
         refresh();
         if(!silent) toast("雲端同步完成（增量）");
       }catch(e){
-        toast("雲端同步失敗：" + (e && e.message ? e.message : String(e)));
+        if(!silent) toast("雲端同步失敗：" + (e && e.message ? e.message : String(e)));
+        throw e;
       }
     }
 
