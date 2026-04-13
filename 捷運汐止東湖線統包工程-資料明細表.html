@@ -1363,6 +1363,24 @@
       }catch(e){}
       return out;
     }
+
+    function isSafeLegacyStorageKey(key){
+      key = norm(key).toLowerCase();
+      if(!key) return false;
+      var allow = [
+        PAGE_KEY,
+        'sxdh-detail-list',
+        'sxdh_detail_list',
+        'tasunsxdhdetaillist',
+        '捷運汐止東湖線統包工程-資料明細表'.toLowerCase(),
+        '捷運汐止東湖線統包工程-資料明細表.html'.toLowerCase()
+      ];
+      for(var i=0;i<allow.length;i++){
+        var t = norm(allow[i]).toLowerCase();
+        if(t && key.indexOf(t) >= 0) return true;
+      }
+      return false;
+    }
 // ✅ B方案：提供 TasunCloudKit mount() 必要的 resourceKey（避免 MOUNT_MISSING_KEY）
 window.TASUN_RESOURCE_KEY = window.TASUN_RESOURCE_KEY || PAGE_KEY;
 window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
@@ -2337,6 +2355,7 @@ window.__TASUN_REBUILD_STAMP__ = PAGE_REBUILD_STAMP;
         for(var j=0;j<keys.length;j++){
           var key = keys[j];
           if(key===DB_KEY || key===COUNTER_KEY || key===READ_MODE_KEY) continue;
+          if(!isSafeLegacyStorageKey(key)) continue;
           var raw = null;
           try{ raw = storage.getItem(key); }catch(e){ raw=null; }
           if(!raw || raw.length<2) continue;
@@ -2871,12 +2890,14 @@ function calcMaxDisplayChars(rows, key){
       if(c.authState==="unauth") return "未授權";
       if(c.authState==="forbidden") return "權限不足";
       if(c.authState==="expired") return "授權失敗";
+      if((c.authPending || c.authState==="checking") && c._checkingSince && (Date.now() - Number(c._checkingSince||0) > 6000)){
+        return hasWorkerTokenReady() ? "待同步" : "未授權";
+      }
       if(c.authPending || c.authState==="checking") return "檢查中";
       if(c.cfgOk && c.reachable===false) return "連線失敗";
       if(c.cfgOk && c.reachable===true && c.authState==="ok") return "已連線";
-      if(c.cfgOk && (c.reachable===null || c.reachable===undefined)) return "待同步";
-      if(c.cfgOk) return "待同步";
-      if(FORCE_API_BASE_LOCK || FORCE_API_BASE) return "檢查中";
+      if(c.cfgOk && (c.reachable===null || c.reachable===undefined)) return hasWorkerTokenReady() ? "待同步" : "未授權";
+      if(c.cfgOk) return hasWorkerTokenReady() ? "待同步" : "未授權";
       return "未設定";
     }
 
@@ -2905,12 +2926,18 @@ function calcMaxDisplayChars(rows, key){
           next.reachable = true;
           next.authState = "ok";
           next.authPending = false;
+          next._checkingSince = 0;
           if(!next.lastOkAt) next.lastOkAt = Date.now();
         }
 
         if(next.authState === "ok"){
           next.authPending = false;
+          next._checkingSince = 0;
           if(next.reachable === null || next.reachable === undefined) next.reachable = true;
+        }else if(next.authPending || next.authState === "checking"){
+          next._checkingSince = Number(prev._checkingSince || Date.now()) || Date.now();
+        }else{
+          next._checkingSince = 0;
         }
 
         state.cloud = next;
@@ -4177,7 +4204,7 @@ function getPromptOptions(mode){
         var localRows = canonicalizeRows((state.db||[]).map(ensureRowV1).filter(Boolean));
         var remoteBase = null;
         try{ hydrateCrossPageAuth(); }catch(e){}
-        remoteBase = await cloudReadWithFallbackKeys(cfg, PAGE_KEY, { allowFallback:true });
+        remoteBase = await cloudReadWithFallbackKeys(cfg, PAGE_KEY, { allowFallback:false, allowPrimaryEmptyReturn:true });
 
         // ✅ 只有正式 PAGE_KEY 沒資料時，才允許舊 key 補救並升級到正式 key。
         if(remoteBase && remoteBase.resourceKey && remoteBase.resourceKey !== PAGE_KEY && hasCloudPayloadRows(remoteBase)){
@@ -5027,6 +5054,17 @@ $("btnSave").addEventListener("click", async function(){
         try{ await refreshCloudAuthState(); }catch(e){}
         try{ await cloudHealth(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
+        try{
+          setTimeout(function(){
+            try{
+              var cc = state.cloud || {};
+              if(!cc.ok && (cc.authPending || cc.authState === "checking")){
+                if(hasWorkerTokenReady()) setCloudState({ authPending:false, authState:"ok", reachable:(cc.reachable===undefined?true:cc.reachable) }, true);
+                else setCloudState({ authPending:false, authState:"unauth", reachable:(cc.reachable===undefined?true:cc.reachable) }, true);
+              }
+            }catch(_e){}
+          }, 6500);
+        }catch(e){}
         // ✅ 開頁同步策略修正：只要雲端設定有效，就主動跑一次 reconcile；
         // 由 reconcile / ensureWorkerAuthorized 自行判斷已授權、未授權或連線失敗，
         // 避免頁面長時間停在「待同步」卻未真正嘗試同步。
