@@ -1217,9 +1217,6 @@
     // Constants / Keys
     // ---------------------------
     var PAGE_KEY = "sxdh-notes";
-    var PAGE_NAMESPACE = PAGE_KEY;
-    var STRICT_PAGE_NAMESPACE = false;
-
     var CLOUD_KEY_CANDIDATES = [
       "sxdh-notes",
       "捷運汐東線事項記錄.html",
@@ -2081,7 +2078,42 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
         var counter = Number(meta && meta.counter || 0) || 0;
         state.lastSyncAt = Number(meta && meta.lastSyncAt || 0) || 0;
         state.clientId = norm(meta && meta.clientId) || getClientId();
-        return { db: canonicalizeRows(rows||[]), counter: counter };
+
+        var safeRows = canonicalizeRows(rows||[]);
+        // ✅ 修訂：若 IndexedDB 只剩 meta / counter，但 rows 遺失，
+        // 不能直接回傳空資料，需回退讀取 localStorage 備援，避免出現「顯示 30 筆但表格全空白」。
+        if((!safeRows.length) && counter > 0){
+          try{
+            var packFallback = safeJSON(localStorage.getItem(DB_KEY));
+            var arrFallback = [];
+            var cFallback = counter;
+            if(packFallback && typeof packFallback === "object" && Array.isArray(packFallback.items) && packFallback.items.length){
+              arrFallback = packFallback.items;
+              cFallback = Number(packFallback.counter || counter || 0) || 0;
+            }else{
+              var legacyFallback = safeJSON(localStorage.getItem("tasunSxdhNotes_v1"));
+              if(Array.isArray(legacyFallback) && legacyFallback.length){
+                arrFallback = legacyFallback;
+                cFallback = Number(localStorage.getItem(COUNTER_KEY) || counter || 0) || 0;
+              }
+            }
+            if(arrFallback.length){
+              safeRows = canonicalizeRows((arrFallback||[]).map(ensureRowV1).filter(Boolean));
+              try{ await idbPutRows(PAGE_KEY, safeRows); }catch(_e){}
+              try{
+                await idbPutMeta({
+                  pageKey: PAGE_KEY,
+                  counter: cFallback,
+                  lastSyncAt: Number(state.lastSyncAt||0)||0,
+                  clientId: state.clientId || getClientId(),
+                  updatedAt: nowISO()
+                });
+              }catch(_e){}
+              return { db: safeRows, counter: cFallback };
+            }
+          }catch(_e){}
+        }
+        return { db: safeRows, counter: counter };
       }
 
       // 2) migrate from localStorage v1 / legacy
@@ -2109,14 +2141,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
       try{
         localStorage.setItem(DB_KEY, JSON.stringify({ items: arr, counter: c, rev: "", updatedAt: nowISO() }));
       }catch(e){}
-      if(!STRICT_PAGE_NAMESPACE){
-        arr = (arr||[]).map(function(x){
-          x = normalizeRow(x);
-          if(!x) return null;
-          return stampRowNamespace(x);
-        }).filter(Boolean);
-      }
-      return { db: canonicalizeRows((arr||[]).map(ensureRowV1).filter(Boolean)), counter: c };
+      return { db: canonicalizeRows(arr||[]), counter: c };
     }
 
     // 嘗試復原舊版本本機資料（不同 key / 舊備份格式），並合併回目前 db
@@ -2168,10 +2193,7 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
             date: norm(x.date || (x.createdAt? String(x.createdAt).slice(0,10):"") || ""),
             updatedAt: norm(x.updatedAt || x.updated || x.modifiedAt || x.ts || ""),
             rev: norm(x.rev || x.version || ""),
-            deleted: !!(x.deleted || x.isDeleted),
-            pageNs: PAGE_NAMESPACE,
-            pageKey: PAGE_NAMESPACE,
-            resourceKey: PAGE_NAMESPACE
+            deleted: !!(x.deleted || x.isDeleted)
           });
         }
         return out;
@@ -2804,8 +2826,6 @@ function calcMaxDisplayChars(rows, key){
     function ensureRowV1(r){
       r = normalizeRow(r);
       if(!r) return null;
-      if(!rowBelongsToCurrentPage(r)) return null;
-      r = stampRowNamespace(r);
 
       // mandatory fields per v1
       r.uid = norm(r.uid);
@@ -2848,7 +2868,6 @@ function calcMaxDisplayChars(rows, key){
       out.updatedAt = norm(out.updatedAt) || nowISO();
       out.rev = norm(out.rev || newer.rev || older.rev) || ("r"+Date.now().toString(16));
       out.pk = out.uid;
-      stampRowNamespace(out);
       return out;
     }
 
@@ -4772,7 +4791,7 @@ $("btnSave").addEventListener("click", async function(){
         try{
           var cfg = await loadCloudCfg();
           await ensureWorkerAuthorized(cfg);
-          var remote = await cloudReadWithFallbackKeys(cfg, PAGE_KEY, { allowFallback:false, allowPrimaryEmptyReturn:true });
+          var remote = await cloudReadWithFallbackKeys(cfg, PAGE_KEY);
           return { ok:true, count: Array.isArray(remote.db) ? remote.db.length : 0, payload: remote, keyCandidates:getCloudKeyCandidates(PAGE_KEY), cloud:Object.assign({}, state.cloud || {}) };
         }catch(e){
           return { ok:false, error: String(e && e.message || e), cloud:Object.assign({}, state.cloud || {}) };
