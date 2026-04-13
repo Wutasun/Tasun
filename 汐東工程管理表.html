@@ -59,6 +59,23 @@
       }
     }
 
+    async function fetchRemotePageBuildStamp(){
+      try{
+        var pageUrl = new URL(location.pathname, location.origin);
+        pageUrl.searchParams.set('_ts', String(Date.now()));
+        var res = await fetch(pageUrl.toString(), { cache:'no-store', credentials:'same-origin' });
+        if(!res.ok) return '';
+        var html = await res.text().catch(function(){ return ''; });
+        if(!html) return '';
+        var m = html.match(/<meta[^>]+name=["']tasun-build-stamp["'][^>]+content=["']([^"']+)["']/i)
+             || html.match(/var\s+PAGE_BUILD_STAMP\s*=\s*["']([^"']+)["']/i)
+             || html.match(/window\.__TASUN_PAGE_BUILD_STAMP__\s*=\s*["']([^"']+)["']/i);
+        return norm(m && m[1] || '');
+      }catch(_e){
+        return '';
+      }
+    }
+
     async function hardRefreshTo(version, buildStamp){
       var nextVer = norm(version) || norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '');
       try{
@@ -89,18 +106,18 @@
     async function ensureLatestVersionAndBuildStamp(){
       ensureWithV();
       var bundle = await fetchVersionBundle();
-      if(!bundle) return false;
-
       var curV = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || queryV() || '');
-      var latestV = norm(bundle.version);
-      var latestBS = norm(bundle.buildStamp);
+      var latestV = norm(bundle && bundle.version || '');
+      var latestBS = norm(bundle && bundle.buildStamp || '');
+      var remotePageBS = await fetchRemotePageBuildStamp();
       var needRefresh = false;
 
       if(latestV && latestV !== curV) needRefresh = true;
       if(latestBS && latestBS !== PAGE_BUILD_STAMP) needRefresh = true;
+      if(remotePageBS && remotePageBS !== PAGE_BUILD_STAMP) needRefresh = true;
 
       if(needRefresh){
-        await hardRefreshTo(latestV || curV, latestBS || PAGE_BUILD_STAMP);
+        await hardRefreshTo(latestV || curV, remotePageBS || latestBS || PAGE_BUILD_STAMP);
         return true;
       }
 
@@ -930,38 +947,33 @@ const AUTH_ENTRY_BUTTONS_KEY = "tasunAuthEntryButtons_v1";
     function resolveEntryButtons(){
       const store = sParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || '{}', {});
       const routes = sParse(localStorage.getItem(ROUTE_KEY) || '{}', {});
-      const stored = Array.isArray(store[ENTRY_FILE]) ? store[ENTRY_FILE] : [];
-      const storedByKey = new Map();
-      stored.forEach((x, i) => {
-        const k = String(x?.key || '').trim();
-        if(k) storedByKey.set(k, { item:x, index:i });
-      });
-
-      const merged = DEFAULT_ENTRY_BUTTONS.map((d, i) => {
-        const hit = storedByKey.get(d.key);
-        const item = normBtn(hit ? hit.item : d, d);
-        item.__order = hit ? hit.index : (1000 + i);
-        return item;
-      });
-
-      stored.forEach((x, i) => {
-        const k = String(x?.key || '').trim();
-        if(!k || DEFAULT_ENTRY_BUTTONS.some(d => d.key === k)) return;
-        const item = normBtn(x, { key: 'btn' + (i+1), name: 'btn' + (i+1), href:'', target:'', roles:["admin","write","read"] });
-        item.__order = i;
-        merged.push(item);
-      });
-
-      merged.sort((a,b) => Number(a.__order||0) - Number(b.__order||0));
-      return merged.map((item) => {
+      const raw = Array.isArray(store[ENTRY_FILE]) && store[ENTRY_FILE].length ? store[ENTRY_FILE] : DEFAULT_ENTRY_BUTTONS;
+      return raw.map((x, i) => {
+        const fallback = DEFAULT_ENTRY_BUTTONS[i] || DEFAULT_ENTRY_BUTTONS.find(d => d.key === x?.key) || { key: 'btn' + (i+1), name: 'btn' + (i+1), href:'', target:'', roles:["admin","write","read"] };
+        const item = normBtn(x, fallback);
         if(!item.href && routes && item.name && routes[item.name]) item.href = String(routes[item.name] || '').trim();
         if(item.key === 'xidong_auth' && !item.href) item.href = '權限表.html';
-        if(item.key === 'xidong_detail' && !item.href) item.href = '捷運汐止東湖線統包工程-資料明細表.html';
-        delete item.__order;
         return item;
       });
     }
+    function ensureDetailButtonDom(){
+      const leftGroup = document.querySelector('.grid .group');
+      const linkDB = $("linkDB");
+      const linkAuth = $("linkAuth");
+      let linkDetail = $("linkDetail");
+      if(!leftGroup || !linkDB || !linkAuth) return;
+      if(!linkDetail){
+        linkDetail = document.createElement('a');
+        linkDetail.className = 'navPill glassBtn';
+        linkDetail.href = '捷運汐止東湖線統包工程-資料明細表.html';
+        linkDetail.id = 'linkDetail';
+        linkDetail.innerHTML = '<span>捷運系東線資料明細表</span>';
+        leftGroup.insertBefore(linkDetail, linkAuth);
+      }
+    }
+
     function applyEntryButtons(){
+      ensureDetailButtonDom();
       const u = getCurrent();
       const role = String(u?.role || 'read').toLowerCase();
       const slots = [$("linkRecord"), $("linkDutyLite"), $("linkDB"), $("linkDetail"), $("linkAuth"), $("linkDropbox")];
@@ -1087,7 +1099,7 @@ const AUTH_ENTRY_BUTTONS_KEY = "tasunAuthEntryButtons_v1";
 
 <script>
 (function(){
-  var VER = window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || "20260406_tasun_v5_syncfix_v63";
+  var VER = window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || "";
   function withV(href){
     try{
       if(!href) return href;
