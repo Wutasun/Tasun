@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>捷運汐止東湖線統包工程-資料明細表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260409_tasun_v5_buildstamp_syncfix_r1">
+  <meta name="tasun-build-stamp" content="20260409_tasun_v5_buildstamp_sync_v69a">
   <script id="tasun-buildstamp-sync-standard">
   (function(){
     'use strict';
-    var PAGE_BUILD_STAMP = "20260409_tasun_v5_buildstamp_syncfix_r1";
+    var PAGE_BUILD_STAMP = "20260409_tasun_v5_buildstamp_sync_v69a";
     window.__TASUN_BUILD_STAMP__ = PAGE_BUILD_STAMP;
     window.__TASUN_PAGE_BUILD_STAMP__ = PAGE_BUILD_STAMP;
 
@@ -57,6 +57,38 @@
       }
     }
 
+    async function fetchRemotePageBuildStamp(){
+      try{
+        var pageUrl = new URL(location.pathname, location.origin);
+        pageUrl.searchParams.set('_pagebs', String(Date.now()));
+        var res = await fetch(pageUrl.toString(), { cache:'no-store', credentials:'same-origin' });
+        if(!res.ok) return { htmlBuildStamp:'', htmlRebuildStamp:'' };
+        var html = await res.text().catch(function(){ return ''; });
+        if(!html) return { htmlBuildStamp:'', htmlRebuildStamp:'' };
+
+        var buildMeta = html.match(/<meta[^>]+name=["']tasun-build-stamp["'][^>]+content=["']([^"']+)["']/i);
+        var buildVar = html.match(/var\s+PAGE_BUILD_STAMP\s*=\s*["']([^"']+)["']/i);
+        var rebuildMeta = html.match(/<meta[^>]+name=["']tasun-rebuild-stamp["'][^>]+content=["']([^"']+)["']/i);
+        var rebuildVar = html.match(/(?:window\.)?TASUN_REBUILD_STAMP\s*=\s*["']([^"']+)["']/i);
+        var rebuildComment = html.match(/TASUN_REBUILD_STAMP\s*[:=]\s*([^\n<]+)/i);
+
+        function pick(){
+          for(var i=0;i<arguments.length;i++){
+            var s = norm(arguments[i]);
+            if(s) return s;
+          }
+          return '';
+        }
+
+        var htmlBuildStamp = pick(buildMeta && buildMeta[1], buildVar && buildVar[1]);
+        var htmlRebuildStamp = pick(rebuildMeta && rebuildMeta[1], rebuildVar && rebuildVar[1], rebuildComment && rebuildComment[1]);
+        htmlRebuildStamp = norm(htmlRebuildStamp).replace(/["';>]/g,'').trim();
+        return { htmlBuildStamp: htmlBuildStamp, htmlRebuildStamp: htmlRebuildStamp };
+      }catch(_e){
+        return { htmlBuildStamp:'', htmlRebuildStamp:'' };
+      }
+    }
+
     async function hardRefreshTo(version, buildStamp){
       var nextVer = norm(version) || norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '');
       try{
@@ -92,13 +124,18 @@
       var curV = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || queryV() || '');
       var latestV = norm(bundle.version);
       var latestBS = norm(bundle.buildStamp);
+      var remotePage = await fetchRemotePageBuildStamp();
+      var remoteHtmlBS = norm(remotePage && remotePage.htmlBuildStamp);
+      var remoteRebuildStamp = norm(remotePage && remotePage.htmlRebuildStamp);
       var needRefresh = false;
 
       if(latestV && latestV !== curV) needRefresh = true;
       if(latestBS && latestBS !== PAGE_BUILD_STAMP) needRefresh = true;
+      if(remoteHtmlBS && remoteHtmlBS !== PAGE_BUILD_STAMP) needRefresh = true;
+      if(remoteRebuildStamp && remoteRebuildStamp !== norm(window.TASUN_REBUILD_STAMP || '')) needRefresh = true;
 
       if(needRefresh){
-        await hardRefreshTo(latestV || curV, latestBS || PAGE_BUILD_STAMP);
+        await hardRefreshTo(latestV || curV, latestBS || remoteHtmlBS || PAGE_BUILD_STAMP);
         return true;
       }
 
@@ -1251,6 +1288,8 @@
 window.TASUN_RESOURCE_KEY = window.TASUN_RESOURCE_KEY || PAGE_KEY;
 window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
 window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
+window.TASUN_REBUILD_STAMP = window.TASUN_REBUILD_STAMP || PAGE_BUILD_STAMP;
+window.__TASUN_REBUILD_STAMP__ = window.__TASUN_REBUILD_STAMP__ || window.TASUN_REBUILD_STAMP;
 
     function currentAppVer(){
       return String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || "").trim();
@@ -2086,9 +2125,14 @@ window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
         arr = pack.items;
         c = Number(pack.counter||0)||0;
       }else{
-        var legacy = safeJSON(localStorage.getItem("tasunSxdhNotes_v1"));
+        var legacy = null;
+        for(var li=0; li<LEGACY_DB_KEYS.length; li++){
+          var legacyPack = safeJSON(localStorage.getItem(LEGACY_DB_KEYS[li]));
+          if(Array.isArray(legacyPack)){ legacy = legacyPack; break; }
+          if(legacyPack && typeof legacyPack === "object" && Array.isArray(legacyPack.items)){ legacy = legacyPack.items; if(!c) c = Number(legacyPack.counter||0)||0; break; }
+        }
         arr = Array.isArray(legacy) ? legacy : [];
-        c = Number(localStorage.getItem(COUNTER_KEY)||"0");
+        c = Number(localStorage.getItem(COUNTER_KEY)||String(c||0))||0;
         if(!Number.isFinite(c) || c<0) c = 0;
       }
 
