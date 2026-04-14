@@ -26,33 +26,67 @@
     function now(){ return Date.now(); }
 
     async function fetchVersionBundle(){
+      function withTimeout(ms){
+        var ctrl = (typeof AbortController!=="undefined") ? new AbortController() : null;
+        var tm = null;
+        if(ctrl){ tm = setTimeout(function(){ try{ ctrl.abort(); }catch(_e){} }, ms); }
+        return { signal: ctrl ? ctrl.signal : undefined, clear: function(){ if(tm) clearTimeout(tm); } };
+      }
+      var guard = withTimeout(4500);
       try{
-        var res = await fetch('tasun-version.json?_=' + now(), { cache:'no-store', credentials:'same-origin' });
-        if(!res.ok) return null;
+        var res = await fetch('tasun-version.json?_=' + now(), {
+          cache:'no-store',
+          credentials:'same-origin',
+          signal: guard.signal
+        });
+        if(!res || !res.ok) return null;
         var data = await res.json().catch(function(){ return null; });
         if(!data) return null;
         var meta = data.meta || {};
         var version = norm(data.version || data.ver || data.appVer || data.app_version || data.APP_VER || data.cacheV || data.cache_v || meta.version || meta.ver || meta.appVer || meta.cacheV || '');
         var buildStamp = norm(data.buildStamp || data.build_stamp || data.pageBuildStamp || data.page_build_stamp || data.build || data.buildVersion || data.rebuildStamp || meta.buildStamp || meta.build_stamp || meta.pageBuildStamp || meta.rebuildStamp || '');
         return { version: version, buildStamp: buildStamp };
-      }catch(_e){ return null; }
+      }catch(_e){
+        return null;
+      }finally{
+        guard.clear();
+      }
     }
 
     async function fetchRemotePageBuildStampOnce(){
+      function withTimeout(ms){
+        var ctrl = (typeof AbortController!=="undefined") ? new AbortController() : null;
+        var tm = null;
+        if(ctrl){ tm = setTimeout(function(){ try{ ctrl.abort(); }catch(_e){} }, ms); }
+        return { signal: ctrl ? ctrl.signal : undefined, clear: function(){ if(tm) clearTimeout(tm); } };
+      }
+      var guard = withTimeout(5000);
       try{
         var pageUrl = new URL(location.pathname, location.origin);
         pageUrl.searchParams.set('__bs_probe', String(now()));
-        var res = await fetch(pageUrl.toString(), { cache:'no-store', credentials:'same-origin' });
-        if(!res.ok) return { htmlBuildStamp:'', htmlRebuildStamp:'' };
+        pageUrl.searchParams.set('v', norm(window.TASUN_APP_VER || queryV() || ''));
+        var res = await fetch(pageUrl.toString(), {
+          cache:'no-store',
+          credentials:'same-origin',
+          signal: guard.signal
+        });
+        if(!res || !res.ok) return { htmlBuildStamp:'', htmlRebuildStamp:'' };
         var html = await res.text().catch(function(){ return ''; });
         if(!html) return { htmlBuildStamp:'', htmlRebuildStamp:'' };
         var buildMeta = html.match(/<meta[^>]+name=["']tasun-build-stamp["'][^>]+content=["']([^"']+)["']/i);
         var buildVar = html.match(/var\s+PAGE_BUILD_STAMP\s*=\s*["']([^"']+)["']/i);
         var rebuildMeta = html.match(/<meta[^>]+name=["']tasun-rebuild-stamp["'][^>]+content=["']([^"']+)["']/i);
-        var rebuildVar = html.match(/(?:window\.)?TASUN_REBUILD_STAMP\s*=\s*["']([^"']+)["']/i);
+        var rebuildVar = html.match(/(?:window\.)?(?:__TASUN_REBUILD_STAMP__|TASUN_REBUILD_STAMP)\s*=\s*["']([^"']+)["']/i);
         function pick(){ for(var i=0;i<arguments.length;i++){ var s = norm(arguments[i]); if(s) return s; } return ''; }
-        return { htmlBuildStamp: pick(buildMeta && buildMeta[1], buildVar && buildVar[1]), htmlRebuildStamp: pick(rebuildMeta && rebuildMeta[1], rebuildVar && rebuildVar[1]) };
-      }catch(_e){ return { htmlBuildStamp:'', htmlRebuildStamp:'' }; }
+        return {
+          htmlBuildStamp: pick(buildMeta && buildMeta[1], buildVar && buildVar[1]),
+          htmlRebuildStamp: pick(rebuildMeta && rebuildMeta[1], rebuildVar && rebuildVar[1], buildMeta && buildMeta[1], buildVar && buildVar[1])
+        };
+      }catch(_e){
+        return { htmlBuildStamp:'', htmlRebuildStamp:'' };
+      }finally{
+        guard.clear();
+      }
     }
 
     async function hardRefreshTo(version, buildStamp){
@@ -1384,6 +1418,40 @@
       return { db: arr, counter: c };
     }
 
+
+    async function saveLocal(pack){
+      pack = (pack && typeof pack==="object") ? pack : {};
+      var rows = Array.isArray(pack.db) ? pack.db.map(ensureRowV1).filter(Boolean) : [];
+      var counter = Number(pack.counter || 0) || 0;
+      state.db = rows;
+      state.counter = counter;
+      if(!state.clientId) state.clientId = getClientId();
+
+      // localStorage single-pack backup
+      try{
+        localStorage.setItem(DB_KEY, JSON.stringify({
+          pageKey: PAGE_KEY,
+          items: rows,
+          counter: counter,
+          updatedAt: nowISO(),
+          clientId: state.clientId
+        }));
+      }catch(e){}
+
+      // IndexedDB canonical storage
+      try{
+        await idbPutRows(PAGE_KEY, rows);
+        await idbPutMeta({
+          pageKey: PAGE_KEY,
+          counter: counter,
+          lastSyncAt: Number(state.lastSyncAt || 0) || 0,
+          clientId: state.clientId,
+          updatedAt: nowISO()
+        });
+      }catch(e){}
+      return true;
+    }
+
     // 嘗試復原舊版本本機資料（不同 key / 舊備份格式），並合併回目前 db
     function recoverLegacyLocal(){
       // 嚴格停用跨 storage 舊資料模糊復原，避免誤把「捷運汐東線事項記錄.html」資料合併進本頁。
@@ -1534,43 +1602,37 @@ function getVisibleRows(){
 
 
     function buildDictsFromDb(){
+      // 依 Tasun v5：字典僅由本頁資料表欄位去重建立，不混入其他頁或額外來源
       var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
-      var trades = new Set(loadDict(TRADE_DICT_KEY));
-      var syss = new Set(loadDict(SYS_DICT_KEY));
-      var sources = new Set(loadDict(SOURCE_DICT_KEY));
+      var trades = uniqueOf(rows.map(function(r){ return r.trade; }));
+      var syss = uniqueOf(rows.map(function(r){ return r.sys; }));
+      var sources = uniqueOf(rows.map(function(r){ return r.source; }));
 
-      var map = loadMap(); // trade -> [sys]
-      for(var i=0;i<rows.length;i++){
-        var r = rows[i];
-        if(r.trade) trades.add(r.trade);
-        if(r.sys) syss.add(r.sys);
-        if(r.source) sources.add(r.source);
-        if(r.trade && r.sys){
-          map[r.trade] = map[r.trade] || [];
-          if(!map[r.trade].includes(r.sys)) map[r.trade].push(r.sys);
-        }
-      }
-      saveDict(TRADE_DICT_KEY, Array.from(trades).sort());
-      saveDict(SYS_DICT_KEY, Array.from(syss).sort());
-      saveDict(SOURCE_DICT_KEY, Array.from(sources).sort());
+      var map = {};
+      rows.forEach(function(r){
+        if(!r.trade || !r.sys) return;
+        map[r.trade] = map[r.trade] || [];
+        if(map[r.trade].indexOf(r.sys) < 0) map[r.trade].push(r.sys);
+      });
+      Object.keys(map).forEach(function(k){ map[k] = uniqueOf(map[k]); });
+
+      saveDict(TRADE_DICT_KEY, trades);
+      saveDict(SYS_DICT_KEY, syss);
+      saveDict(SOURCE_DICT_KEY, sources);
       saveMap(map);
+      TRADE_SYS_MAP = map;
     }
 
     // 修訂2：依工種取得系統清單（來源：工種-系統綁定表 + 本頁資料），並去重排序
     function collectSysForTrade(trade, dbArr){
+      // 僅取本頁表格中該工種已出現過、且不重複的系統
       trade = norm(trade);
-      var set = new Set();
-
-      // 來源1：工種-系統綁定表（指定工種）
-      var bound = (TRADE_SYS_MAP && trade && TRADE_SYS_MAP[trade]) ? TRADE_SYS_MAP[trade] : [];
-      for(var i=0;i<bound.length;i++){ if(bound[i]) set.add(String(bound[i])); }
-
-      // 來源2：本頁資料庫中該工種實際出現過的系統（補強：避免綁定表漏掉）
       var rows = (dbArr||[]).map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
-      for(var j=0;j<rows.length;j++){
-        if(rows[j].trade===trade && rows[j].sys) set.add(rows[j].sys);
+      var set = new Set();
+      for(var i=0;i<rows.length;i++){
+        if(trade && rows[i].trade!==trade) continue;
+        if(rows[i].sys) set.add(rows[i].sys);
       }
-
       return Array.from(set).sort();
     }
 
@@ -1796,25 +1858,20 @@ function getVisibleRows(){
 
 
     function rebuildFilterOptions(){
-      // build dicts first
       buildDictsFromDb();
 
       var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
 
-      // ✅ 主頁「工種」篩選：只顯示目前資料表工種不重複
+      // 主頁篩選：直接取本頁表格欄位不重複值
       var tradesTable = uniqueOf(rows.map(function(r){return r.trade;}));
       setOptions($("fTrade"), tradesTable, true, { includeAll:true });
 
-      // ✅ 主頁「系統」篩選：需與「目前搜尋/工種」顯示結果一致（避免下拉選單與列表不一致）
       var sysList;
       var ft = norm($("fTrade").value);
       if(ft){
-        var baseRows = getBaseRowsForSysFilter(); // 已套用 工種 + 搜尋（不含系統篩選）
+        var baseRows = getBaseRowsForSysFilter();
         sysList = uniqueOf(baseRows.map(function(r){ return r.sys; }));
-        // 若目前搜尋結果剛好 0 筆，仍保留「工種所屬系統」作為備援（避免空選單）
-        if(!sysList.length){
-          sysList = collectSysForTrade(ft, state.db);
-        }
+        if(!sysList.length) sysList = collectSysForTrade(ft, rows);
       }else{
         var q = norm($("qText").value).toLowerCase();
         var baseRows2 = rows.slice();
@@ -1822,28 +1879,24 @@ function getVisibleRows(){
           baseRows2 = baseRows2.filter(function(r){ return (r.text||"").toLowerCase().includes(q); });
         }
         sysList = uniqueOf(baseRows2.map(function(r){ return r.sys; }));
-        if(!sysList.length){
-          // 備援：字典 + 本頁資料
-          sysList = uniqueOf(rows.map(function(r){return r.sys;})).concat(loadDict(SYS_DICT_KEY));
-          sysList = uniqueOf(sysList);
-        }
       }
       setOptions($("fSys"), sysList, true, { includeAll:true });
 
-      // ✅「新增/編輯」視窗  工種：依字典不重複（若字典空，回退用表格不重複）
-      var tradeDict = uniqueOf(loadDict(TRADE_DICT_KEY));
-      if(!tradeDict.length) tradeDict = tradesTable.slice();
-      setOptions($("mTradeSel"), tradeDict, true, { includeBlank:true });
+      // 新增/編輯表單：下拉選項來源 = 本頁表格該欄不重複項目
+      // 為避免使用者在本次新增流程剛加入值時消失，保留目前欄位值作為臨時候選。
+      var curTrade = norm($("mTradeSel").value);
+      var curSys = norm($("mSysSel").value);
+      var curSource = norm($("mSourceSel").value);
 
-      // ✅「新增/編輯」視窗  系統：依字典工種所屬不重複系統（工種-系統綁定表 + 本頁資料）
-      var mTrade = norm($("mTradeSel").value);
-      var mSysList = mTrade ? collectSysForTrade(mTrade, state.db) : uniqueOf(loadDict(SYS_DICT_KEY));
-      setOptions($("mSysSel"), mSysList, true, { includeBlank:true });
+      var modalTrades = uniqueOf(tradesTable.concat(curTrade ? [curTrade] : []));
+      setOptions($("mTradeSel"), modalTrades, true);
 
-      // ✅ 出處：字典 + 本頁資料去重；輸入框的 datalist 由 mSourceSel 來填
-      var sources = uniqueOf(rows.map(function(r){return r.source;})).concat(loadDict(SOURCE_DICT_KEY));
-      sources = uniqueOf(sources);
-      setOptions($("mSourceSel"), sources, true, { includeBlank:true });
+      var modalSysList = curTrade ? collectSysForTrade(curTrade, rows) : uniqueOf(rows.map(function(r){ return r.sys; }));
+      if(curSys) modalSysList = uniqueOf(modalSysList.concat([curSys]));
+      setOptions($("mSysSel"), modalSysList, true);
+
+      var sources = uniqueOf(rows.map(function(r){ return r.source; }).concat(curSource ? [curSource] : []));
+      setOptions($("mSourceSel"), sources, true);
     }
 
     // when trade filter changes, system filter must be recomputed (修訂2), system filter must be recomputed (修訂2)
@@ -1881,8 +1934,10 @@ function getVisibleRows(){
     function onModalTradeChanged(){
       var t = norm($("mTradeSel").value);
       var curSys = norm($("mSysSel").value);
-      var list = t ? collectSysForTrade(t, state.db) : uniqueOf(loadDict(SYS_DICT_KEY));
-      setOptions($("mSysSel"), list, false, { includeBlank:true });
+      var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
+      var list = t ? collectSysForTrade(t, rows) : uniqueOf(rows.map(function(r){ return r.sys; }));
+      if(curSys) list = uniqueOf(list.concat([curSys]));
+      setOptions($("mSysSel"), list, false);
       if(curSys && list.includes(curSys)) $("mSysSel").value = curSys;
     }
 
@@ -2699,22 +2754,44 @@ function getPromptOptions(mode){
 });
 
 $("btnSave").addEventListener("click", async function(){
-        if(state.mode==="view"){ closeMask(); return; }
-        var existing = (state.mode==="edit") ? state.selectedUid : "";
-        var row = modalToRow(existing);
-        if(!row.text){ toast("請輸入資料內容"); return; }
-        if(!row.trade){ toast("請選擇工種"); return; }
-        // record trade-sys binding if both set
-        if(row.trade && row.sys){
-          TRADE_SYS_MAP[row.trade] = TRADE_SYS_MAP[row.trade] || [];
-          if(!TRADE_SYS_MAP[row.trade].includes(row.sys)) TRADE_SYS_MAP[row.trade].push(row.sys);
-          saveMap(TRADE_SYS_MAP);
+        try{
+          if(state.mode==="view"){ closeMask(); return; }
+          if(!(state.role==="admin" || state.role==="write")){
+            toast("目前權限不可儲存");
+            return;
+          }
+          var existing = (state.mode==="edit") ? state.selectedUid : "";
+          var row = modalToRow(existing);
+          if(!row){ toast("儲存資料格式錯誤"); return; }
+          if(!row.text){ toast("請輸入資料內容"); return; }
+          if(!row.trade){ toast("請選擇工種"); return; }
+
+          if(state.mode==="add"){
+            state.counter = Number(state.counter || 0) + 1;
+            row.id = state.counter;
+          }else{
+            var old = currentRowByUid(existing);
+            row.id = Number(old && old.id || 0) || 0;
+          }
+
+          // 僅依本頁表格內容建立下拉資料，不跨頁混用
+          if(row.trade && row.sys){
+            TRADE_SYS_MAP[row.trade] = TRADE_SYS_MAP[row.trade] || [];
+            if(TRADE_SYS_MAP[row.trade].indexOf(row.sys) < 0) TRADE_SYS_MAP[row.trade].push(row.sys);
+            saveMap(TRADE_SYS_MAP);
+          }
+
+          upsertRow(row);
+          state.selectedUid = row.uid;
+          await saveLocal({ db: state.db, counter: state.counter });
+          refresh();
+          closeMask();
+          toast("已儲存");
+          scheduleSync("save", true);
+        }catch(e){
+          console.error(e);
+          toast("儲存失敗：" + (e && e.message ? e.message : String(e)));
         }
-        upsertRow(row);
-        state.selectedUid = row.uid;
-        closeMask();
-        // ✅ 自動同步：不阻塞 UI（離線會自動重試）
-        scheduleSync("save", true);
       });
 
       $("btnDelete").addEventListener("click", async function(){
