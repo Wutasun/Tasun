@@ -1328,8 +1328,9 @@
 window.TASUN_RESOURCE_KEY = window.TASUN_RESOURCE_KEY || PAGE_KEY;
 window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
 window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
-window.TASUN_REBUILD_STAMP = window.TASUN_REBUILD_STAMP || PAGE_BUILD_STAMP;
-window.__TASUN_REBUILD_STAMP__ = window.__TASUN_REBUILD_STAMP__ || window.TASUN_REBUILD_STAMP;
+var PAGE_REBUILD_STAMP = norm(window.TASUN_REBUILD_STAMP || window.__TASUN_REBUILD_STAMP__ || window.__TASUN_PAGE_BUILD_STAMP__ || window.__TASUN_BUILD_STAMP__ || (document.querySelector('meta[name="tasun-rebuild-stamp"]')||{}).content || (document.querySelector('meta[name="tasun-build-stamp"]')||{}).content || "");
+window.TASUN_REBUILD_STAMP = PAGE_REBUILD_STAMP;
+window.__TASUN_REBUILD_STAMP__ = PAGE_REBUILD_STAMP;
 
     function currentAppVer(){
       var v = String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || "").trim();
@@ -3864,17 +3865,28 @@ function getPromptOptions(mode){
           const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
           const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
           const cfgOk = !!(cfg && isValidApiBase(apiBase));
+          if(!cfgOk){
+            setCloudState({ cfgOk:false, reachable:false, ok:false, authPending:false, authState:"unauth" }, true);
+            return false;
+          }
           const candidates = [];
           if(eps && eps.health) candidates.push(_joinUrl(apiBase, eps.health));
+          candidates.push(_joinUrl(apiBase, "/health"));
+          candidates.push(_joinUrl(apiBase, "/api/tasun/health"));
           candidates.push(_joinUrl(apiBase, "/api/ping"));
           candidates.push(_joinUrl(apiBase, "/api/tasun/ping"));
-          candidates.push(_joinUrl(apiBase, "/api/ping"));
 
           let reachable = false;
           for(const url of candidates){
             try{
               const r = await fetch(url, { method:"GET", credentials: getWorkerCredentialMode(cfg), cache:"no-store", headers: buildWorkerAuthHeaders({ accept:"application/json" }) });
-              if(r.ok){ reachable = true; break; }
+              if(r && (r.ok || r.status===401 || r.status===403)){ reachable = true; break; }
+            }catch(_e){}
+          }
+          if(!reachable){
+            try{
+              const me = await probeWorkerMe(cfg);
+              reachable = !!(me && typeof me.status === "number" && me.status > 0);
             }catch(_e){}
           }
           setCloudState({
@@ -3883,11 +3895,13 @@ function getPromptOptions(mode){
             ok: !!(state.cloud && state.cloud.ok),
             apiBase: apiBase,
             endpoints: eps || null,
+            authPending:false,
+            authState: reachable ? ((state.cloud && state.cloud.authState) || (hasWorkerTokenReady() ? "ok" : "unauth")) : "unauth",
             lastOkAt: reachable ? Date.now() : (state.cloud && state.cloud.lastOkAt ? state.cloud.lastOkAt : "")
           }, true);
           return reachable;
         }catch(_e){
-          setCloudState({ ok:false, reachable:false, cfgOk:false }, true);
+          setCloudState({ ok:false, reachable:false, cfgOk:false, authPending:false, authState:"unauth" }, true);
           return false;
         }
       }
