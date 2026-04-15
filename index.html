@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- TASUN_REBUILD_STAMP:index_v20260416_full_cleanup_r1 2026-04-16 00:00:00 (single-global-entry + triple-version-check + full-login-flicker-cleanup + hard-login-stop-r2) -->
+<!-- TASUN_REBUILD_STAMP:index_v20260416_full_cleanup_r1 2026-04-16 00:00:00 (single-global-entry + triple-version-check + full-login-flicker-cleanup) -->
 <html lang="zh-Hant">
 <head>
   <!-- Tasun v5 FINAL：版本/快取由 tasun-version.json 控制；腳本改為動態帶 v 載入 -->
@@ -63,10 +63,15 @@
     var G = window.__TASUN_GLOBALS__ = window.__TASUN_GLOBALS__ || {};
     G.PAGE_KEY = 'index';
     G.PAGE_FILE = 'index.html';
+    G.PAGE_URL = 'index.html';
     G.VERSION_URL = 'tasun-version.json';
+    G.VERSION_TIMEOUT_MS = 3500;
+    G.PAGE_TIMEOUT_MS = 3500;
+    G.TRIPLE_CHECK_LOCK_KEY = 'tasun_triple_check_lock_r5';
+    G.TRIPLE_CHECK_SEEN_KEY = 'tasun_triple_check_seen_r5';
+    G.LATEST_LOCK_KEY = 'tasun_force_latest_lock_r5';
+    G.LATEST_SEEN_KEY = 'tasun_force_latest_seen_r5';
     G.REBUILD_STAMP_REGEX = /TASUN_REBUILD_STAMP:([^\n>]*)/i;
-    G.LATEST_LOCK_KEY = 'tasun_force_latest_lock_r4';
-    G.LATEST_SEEN_KEY = 'tasun_force_latest_seen_r4';
     try{
       var html = String(document.documentElement && document.documentElement.outerHTML || '');
       var m = html.match(G.REBUILD_STAMP_REGEX);
@@ -164,6 +169,7 @@
   window.__TASUN_INDEX_READY__ = (async function () {
     'use strict';
 
+    const G = window.__TASUN_GLOBALS__ || {};
     const FALLBACK_VER = '';
     function normVer(s){ return (s===undefined||s===null) ? '' : String(s).trim(); }
     function addVer(url, ver){
@@ -206,7 +212,9 @@
 
     async function fetchLatestVersionText(){
       try{
-        const res = await fetch('tasun-version.json?_=' + Date.now(), { cache:'no-store', credentials:'same-origin' });
+        const ctrl = ('AbortController' in window) ? new AbortController() : null;
+        const timer = ctrl ? setTimeout(function(){ try{ ctrl.abort(); }catch(_e){} }, Number(G.VERSION_TIMEOUT_MS || 3500)) : 0;
+        const res = await fetch((G.VERSION_URL || 'tasun-version.json') + '?_=' + Date.now(), { cache:'no-store', credentials:'same-origin', signal: ctrl ? ctrl.signal : undefined }).finally(function(){ try{ if(timer) clearTimeout(timer); }catch(_e){} });
         if(!res.ok) return '';
         const data = await res.json().catch(()=>null);
         if(!data) return '';
@@ -246,7 +254,9 @@
 
     async function fetchRemotePageInfo(){
       try{
-        const res = await fetch('index.html?_=' + Date.now(), { cache:'no-store', credentials:'same-origin' });
+        const ctrl = ('AbortController' in window) ? new AbortController() : null;
+        const timer = ctrl ? setTimeout(function(){ try{ ctrl.abort(); }catch(_e){} }, Number(G.PAGE_TIMEOUT_MS || 3500)) : 0;
+        const res = await fetch((G.PAGE_URL || 'index.html') + '?_=' + Date.now(), { cache:'no-store', credentials:'same-origin', signal: ctrl ? ctrl.signal : undefined }).finally(function(){ try{ if(timer) clearTimeout(timer); }catch(_e){} });
         if(!res.ok) return { version:'', rebuildStamp:'', html:'' };
         const html = await res.text();
         const vm = html.match(/(?:__CACHE_V|TASUN_APP_VER|APP_VER)\s*[:=]\s*['"]([^'"]+)['"]/i);
@@ -264,8 +274,11 @@
 
     async function ensureLatestBuildSync(force){
       try{
-        const lockKey = 'tasun_triple_check_lock_v1';
+        const lockKey = String(G.TRIPLE_CHECK_LOCK_KEY || 'tasun_triple_check_lock_r5');
+        const seenKey = String(G.TRIPLE_CHECK_SEEN_KEY || 'tasun_triple_check_seen_r5');
         const now = Date.now();
+        let seen = null;
+        try{ seen = JSON.parse(sessionStorage.getItem(seenKey) || 'null'); }catch(_e){ seen = null; }
         if(!force){
           const prev = Number(sessionStorage.getItem(lockKey) || 0);
           if(prev && (now - prev) < 12000) return false;
@@ -281,15 +294,27 @@
         const versionMismatch = !!(latestVer && latestVer !== localVer);
         const rebuildMismatch = !!(remoteStamp && localStamp && remoteStamp !== localStamp);
 
-        if(versionMismatch || rebuildMismatch || pageMismatch){
-          const nextUrl = new URL(location.href);
-          const nextVer = latestVer || localVer;
-          if(nextVer) nextUrl.searchParams.set('v', nextVer);
-          nextUrl.searchParams.set('_', String(Date.now()));
-          if(remoteStamp) nextUrl.searchParams.set('_bs', remoteStamp);
-          location.replace(nextUrl.toString());
-          return true;
+        if(!(versionMismatch || rebuildMismatch || pageMismatch)) return false;
+
+        const nextVer = latestVer || localVer || '';
+        const signature = JSON.stringify({
+          nextVer: nextVer,
+          localVer: localVer,
+          localStamp: localStamp,
+          remoteStamp: remoteStamp,
+          pageMismatch: !!pageMismatch
+        });
+        if(seen && seen.signature === signature && (now - Number(seen.ts || 0)) < 15000){
+          return false;
         }
+        sessionStorage.setItem(seenKey, JSON.stringify({ signature: signature, ts: now }));
+
+        const nextUrl = new URL(location.href);
+        if(nextVer) nextUrl.searchParams.set('v', nextVer);
+        nextUrl.searchParams.set('_', String(Date.now()));
+        if(remoteStamp) nextUrl.searchParams.set('_bs', remoteStamp);
+        location.replace(nextUrl.toString());
+        return true;
       }catch(e){}
       return false;
     }
@@ -298,7 +323,7 @@
       const nv = normVer(nextVer);
       if(!nv) return false;
       try{
-        const LOCK_KEY = 'tasun_force_latest_lock_v1';
+        const LOCK_KEY = String(G.LATEST_LOCK_KEY || 'tasun_force_latest_lock_r5');
         const now = Date.now();
         const raw = sessionStorage.getItem(LOCK_KEY) || '';
         const lock = raw ? JSON.parse(raw) : null;
@@ -320,8 +345,8 @@
         }
       }catch(e){}
       try{
-        sessionStorage.setItem('tasun_force_latest_seen_v1', nv);
-        localStorage.setItem('tasun_force_latest_seen_v1', nv);
+        sessionStorage.setItem(String(G.LATEST_SEEN_KEY || 'tasun_force_latest_seen_r5'), nv);
+        localStorage.setItem(String(G.LATEST_SEEN_KEY || 'tasun_force_latest_seen_r5'), nv);
       }catch(e){}
       const nextUrl = new URL(location.href);
       nextUrl.searchParams.set('v', nv);
@@ -354,7 +379,7 @@
     window.__CACHE_V = latestVer || VER || curV || '';
     VER = latestVer || VER;
 
-    if (false && VER && (curV !== VER || vts)) {
+    if (VER && (curV !== VER || vts)) {
       url.searchParams.set('v', VER);
       url.searchParams.set('_', vts || String(Date.now()));
       location.replace(url.toString());
@@ -419,7 +444,6 @@
       window.addEventListener('orientationchange', onOrient, { passive:true });
       if(window.visualViewport){
         window.visualViewport.addEventListener('resize', onResize, { passive:true });
-        window.visualViewport.addEventListener('scroll', onResize, { passive:true });
       }
       document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible') calcVV(false); }, { passive:true });
     })();
@@ -714,7 +738,8 @@
       line-height:1;
     }
     .select-wrap.native-touch .select-menu{ display:none !important; }
-    .select-wrap.native-touch .select-display{ width:100%; display:flex; align-items:center; justify-content:flex-start; text-align:left; padding:clamp(1rem, 1.1vw, 1.18rem) 3rem clamp(1rem, 1.1vw, 1.18rem) 1.12rem; border-radius:999px; border:1px solid rgba(255,255,255,0.90); background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,252,244,0.06)), linear-gradient(180deg, rgba(255,244,220,0.02), rgba(255,214,132,0.01)); color: rgba(88,52,22,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.92); box-shadow: inset 0 1px 0 rgba(255,255,255,0.42), inset 0 0 0 1px rgba(255,250,236,0.08), 0 10px 18px rgba(58,36,12,0.05); cursor:pointer; user-select:none; position:relative; appearance:none; backdrop-filter:none; -webkit-backdrop-filter:none; font-size:15px; font-weight:900; z-index:1; }
+    .select-wrap.native-touch .select-display{ display:none !important; }
+    .select-wrap:not(.native-touch) .select-display{ width:100%; display:flex; align-items:center; justify-content:flex-start; text-align:left; padding:clamp(1rem, 1.1vw, 1.18rem) 3rem clamp(1rem, 1.1vw, 1.18rem) 1.12rem; border-radius:999px; border:1px solid rgba(255,255,255,0.90); background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,252,244,0.06)), linear-gradient(180deg, rgba(255,244,220,0.02), rgba(255,214,132,0.01)); color: rgba(88,52,22,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.92); box-shadow: inset 0 1px 0 rgba(255,255,255,0.42), inset 0 0 0 1px rgba(255,250,236,0.08), 0 10px 18px rgba(58,36,12,0.05); cursor:pointer; user-select:none; position:relative; appearance:none; backdrop-filter:none; -webkit-backdrop-filter:none; font-size:15px; font-weight:900; z-index:1; }
     .select-display::after{ content:'▾'; position:absolute; right:.88rem; top:50%; transform: translateY(-50%); opacity:.98; font-size:1.36rem; color: rgba(196,142,62,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.92), 0 6px 12px rgba(88,52,22,0.10); pointer-events:none; font-weight:900; }
     .select-menu{ position:absolute; left:0; right:0; top:calc(100% + 10px); max-height:280px; overflow:auto; border-radius:16px; border:1px solid rgba(246,211,122,0.62); background: rgba(8,5,3,0.98); box-shadow: 0 22px 60px rgba(0,0,0,0.46), 0 0 24px rgba(246,211,122,0.10); display:none; z-index:4005; padding:6px; }
     .select-menu.open{ display:block; }
@@ -1015,6 +1040,33 @@ main.hero,
 .user-bar,
 .site-title-wrapper,
 .nav-area,
+
+.site-title{
+  font-size: clamp(2.45rem, 3.7vw, 4.35rem) !important;
+  font-weight: 700 !important;
+  letter-spacing: .16em !important;
+  padding-left: .16em !important;
+  color: #ffe7a6 !important;
+  background: linear-gradient(180deg, #fff7d2 0%, #ffe8a8 28%, #f6c85e 58%, #b87918 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.92),
+    0 2px 0 rgba(255,239,188,0.86),
+    0 6px 14px rgba(86,48,8,0.24),
+    0 14px 24px rgba(56,32,10,0.26),
+    0 0 16px rgba(255,228,146,0.28) !important;
+  filter: drop-shadow(0 2px 0 rgba(255,255,255,0.30)) drop-shadow(0 10px 16px rgba(84,48,10,0.20)) !important;
+}
+@media (max-width: 900px){
+  .site-title{
+    font-size: clamp(2.35rem, 7.2vw, 3.5rem) !important;
+    letter-spacing: .12em !important;
+    padding-left: .12em !important;
+  }
+}
+
 .zen-words{
   z-index:2 !important;
 }
@@ -1098,7 +1150,7 @@ main.hero,
 .zw-top-axis,
 #zwTopAxis{
   position:absolute !important;
-  top:clamp(98px, 14vh, 164px) !important;
+  top:clamp(122px, 18vh, 212px) !important;
   left:50% !important;
   transform:translateX(-50%) !important;
   display:block !important;
@@ -1137,13 +1189,13 @@ main.hero,
   opacity:.92 !important;
   z-index:27 !important;
 }
-#zwLeft{ left:clamp(22px, 8vw, 110px) !important; }
-#zwRight{ right:clamp(22px, 8vw, 110px) !important; }
+#zwLeft{ left:clamp(140px, 18vw, 330px) !important; }
+#zwRight{ right:clamp(140px, 18vw, 330px) !important; }
 .zw-bottom-line,
 #zwBottomLine{
   position:absolute !important;
   left:50% !important;
-  bottom:clamp(22px, 5.2vh, 52px) !important;
+  bottom:clamp(112px, 16vh, 192px) !important;
   transform:translateX(-50%) !important;
   font-size:clamp(1.15rem, 2.0vw, 1.8rem) !important;
   letter-spacing:0.44em !important;
@@ -1191,52 +1243,17 @@ main.hero,
     0 0 16px rgba(255,214,146,0.20) !important;
 }
 @media (max-width: 900px){
-  .zw-top-axis,#zwTopAxis{ top:clamp(84px, 11vh, 118px) !important; }
-  #zwLeft{ left:14px !important; }
-  #zwRight{ right:14px !important; }
+  .zw-top-axis,#zwTopAxis{ top:clamp(112px, 16vh, 160px) !important; }
+  #zwLeft{ left:22px !important; }
+  #zwRight{ right:22px !important; }
   .zw-side-col,#zwLeft,#zwRight{
     font-size:clamp(1.0rem, 2.8vw, 1.36rem) !important;
     opacity:.82 !important;
   }
   .zw-bottom-line,#zwBottomLine{
-    bottom:clamp(16px, 4vh, 32px) !important;
+    bottom:clamp(86px, 12vh, 128px) !important;
     font-size:clamp(0.98rem, 2.8vw, 1.22rem) !important;
   }
-}
-
-
-
-/* ===== 2026-04-15 deep hard stop: lock login stage completely, no viewport drift ===== */
-body.locked,
-body.locked *{
-  scroll-behavior: auto !important;
-}
-body.locked #loginOverlay,
-body.locked .hero,
-body.locked .hero-inner,
-body.locked .lotus-stage,
-body.locked .zen-visual,
-body.locked #zenImg{
-  position: fixed !important;
-  inset: 0 !important;
-  width: 100vw !important;
-  height: 100vh !important;
-  min-height: 100vh !important;
-  max-height: 100vh !important;
-}
-body.locked #loginOverlay{
-  overflow: hidden !important;
-  overscroll-behavior: none !important;
-  touch-action: none !important;
-}
-body.locked #loginOverlay .login-box{
-  position: relative !important;
-  top: auto !important;
-  left: auto !important;
-  right: auto !important;
-  bottom: auto !important;
-  margin: 0 auto !important;
-  transform: none !important;
 }
 
 </style>
@@ -2403,7 +2420,6 @@ body.locked #loginOverlay .login-box{
         const o = opts || {};
         releaseBootUI();
         setUiLockState(false);
-        setUiLockState(false);
         try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){}
         if(loginSub) loginSub.textContent = '';
         __loginStageQuietedOnce = false;
@@ -2447,7 +2463,6 @@ body.locked #loginOverlay .login-box{
         if(msg) loginSub.textContent = msg;
         else if(loginSub) loginSub.textContent = '';
         try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){}
-        setUiLockState(true);
         if(loginError) loginError.textContent = '';
         if(passwordInput) passwordInput.value = '';
         populateUserSelect();
@@ -2997,6 +3012,7 @@ body.locked #loginOverlay .login-box{
           setSession({ username: u.username, level: finalRole });
 
           __tasunSaveLoginBridge(u.username, password, finalRole);
+          await __tasunBridgeWorkerTokenNow(u.username, password, finalRole);
 
           applyUser(
             Object.assign({}, u, { level: finalRole }),
@@ -3006,11 +3022,6 @@ body.locked #loginOverlay .login-box{
           loginError.textContent = '';
 
           if(passwordInput) passwordInput.value = '';
-
-          Promise.race([
-            __tasunBridgeWorkerTokenNow(u.username, password, finalRole),
-            new Promise(function(resolve){ setTimeout(function(){ resolve(false); }, 4000); })
-          ]).catch(function(){ return false; });
         }catch(err){
           var msg = (err && err.message ? err.message : String(err));
           if(/核心登入鏈未載入/.test(msg)) msg = '登入服務載入中，請稍後再試';
@@ -3036,7 +3047,20 @@ body.locked #loginOverlay .login-box{
         }
       }
       async function forceRefreshLatestOnVisible(opts){
-        return false;
+        const o = opts || {};
+        const now = Date.now();
+        if(__visibleRefreshBusy) return false;
+        if(!o.force && (now - __visibleRefreshTs) < 12000) return false;
+        if(isLoginStageActive()) return false;
+        __visibleRefreshBusy = true;
+        __visibleRefreshTs = now;
+        try{
+          return await ensureLatestBuildSync(!!o.force);
+        }catch(e){
+          return false;
+        }finally{
+          __visibleRefreshBusy = false;
+        }
       }
       document.addEventListener('visibilitychange', ()=>{
         if(document.visibilityState === 'visible'){
@@ -3048,7 +3072,12 @@ body.locked #loginOverlay .login-box{
         try{ if(cloudCtrl && cloudCtrl.pullNow) cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
         }
       }, { passive:true });
-
+      window.addEventListener('focus', ()=>{
+        if(isLoginStageActive()) return;
+        forceRefreshLatestOnVisible().catch(()=>{});
+        if(!CURRENT_USER) return;
+        try{ if(cloudCtrl && cloudCtrl.pullNow) cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
+      }, { passive:true });
       window.addEventListener('pageshow', ()=>{
         if(isLoginStageActive()) return;
         return;
@@ -3080,15 +3109,16 @@ body.locked #loginOverlay .login-box{
       }
     }
 
-    if(window.TasunLoader && typeof window.TasunLoader.ready === 'function'){
-      try{ window.TasunLoader.ready(runIndexApp, 8000); }catch(_e){}
-    }else if(window.TasunCore && typeof window.TasunCore.ready === 'function'){
-      try{ window.TasunCore.ready(runIndexApp, 8000); }catch(_e){}
-    }else{
-      setTimeout(runIndexApp, 0);
+    function bootIndexAppOnce(){
+      try{ runIndexApp(); }catch(_e){}
     }
-    setTimeout(()=>{ try{ runIndexApp(); }catch(_e){} }, 1200);
-  })();
+    if(window.TasunLoader && typeof window.TasunLoader.ready === 'function'){
+      try{ window.TasunLoader.ready(bootIndexAppOnce, 8000); }catch(_e){}
+    }else if(window.TasunCore && typeof window.TasunCore.ready === 'function'){
+      try{ window.TasunCore.ready(bootIndexAppOnce, 8000); }catch(_e){}
+    }else{
+      setTimeout(bootIndexAppOnce, 0);
+    }})();
   </script>
 <script>
 (function(){
@@ -3239,70 +3269,7 @@ body.locked #loginOverlay .login-box{
   }
 }
 </style>
-<script id="tasun-clean-stability">
-(function(){
-  function syncLoginStage(){
-    try{
-      var locked = !!(document.body && document.body.classList.contains('locked'));
-      var overlay = document.getElementById('loginOverlay');
-      var boot = document.getElementById('bootCover');
-      if(boot){
-        boot.hidden = true;
-        boot.style.display = 'none';
-      }
-      if(overlay){
-        overlay.style.display = locked ? 'flex' : 'none';
-      }
-    }catch(e){}
-  }
-
-  ['DOMContentLoaded','load','pageshow','focus'].forEach(function(ev){
-    window.addEventListener(ev, function(){
-      setTimeout(syncLoginStage, 40);
-      setTimeout(syncLoginStage, 180);
-    }, {passive:true});
-  });
-
-  document.addEventListener('visibilitychange', function(){
-    if(document.visibilityState === 'visible') setTimeout(syncLoginStage, 60);
-  }, {passive:true});
-
-  setTimeout(syncLoginStage, 20);
-  setTimeout(syncLoginStage, 250);
-})();
-</script>
-
-
-<script id="tasun-login-noflicker-stabilizer">
-(function(){
-  function syncStage(){
-    try{
-      var locked = !!(document.body && document.body.classList.contains('locked'));
-      var overlay = document.getElementById('loginOverlay');
-      var boot = document.getElementById('bootCover');
-      var inlineBoot = document.getElementById('loginBootInline');
-      if(boot){ boot.hidden = true; boot.style.display = 'none'; }
-      if(inlineBoot){ inlineBoot.hidden = true; inlineBoot.style.display = 'none'; }
-      if(overlay){ overlay.style.display = locked ? 'flex' : 'none'; }
-      if(document.body){ document.body.classList.remove('booting'); }
-    }catch(e){}
-  }
-  ['DOMContentLoaded','load','pageshow','focus'].forEach(function(ev){
-    window.addEventListener(ev, function(){
-      setTimeout(syncStage, 40);
-      setTimeout(syncStage, 180);
-    }, {passive:true});
-  });
-  document.addEventListener('visibilitychange', function(){
-    if(document.visibilityState === 'visible') setTimeout(syncStage, 60);
-  }, {passive:true});
-  setTimeout(syncStage, 20);
-  setTimeout(syncStage, 260);
-})();
-</script>
-
-
-<script id="tasun-authority-ui-stabilizer">
+<script id="tasun-ui-authority-stabilizer">
 (function(){
   function syncUi(){
     try{
@@ -3325,15 +3292,15 @@ body.locked #loginOverlay .login-box{
   }
   ['DOMContentLoaded','load','pageshow','focus'].forEach(function(ev){
     window.addEventListener(ev, function(){
-      setTimeout(syncUi, 40);
-      setTimeout(syncUi, 180);
+      setTimeout(syncUi, 32);
+      setTimeout(syncUi, 160);
     }, {passive:true});
   });
   document.addEventListener('visibilitychange', function(){
-    if(document.visibilityState === 'visible') setTimeout(syncUi, 60);
+    if(document.visibilityState === 'visible') setTimeout(syncUi, 48);
   }, {passive:true});
-  setTimeout(syncUi, 20);
-  setTimeout(syncUi, 260);
+  setTimeout(syncUi, 16);
+  setTimeout(syncUi, 220);
 })();
 </script>
 
