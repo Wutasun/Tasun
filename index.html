@@ -206,7 +206,9 @@
 
     async function fetchLatestVersionText(){
       try{
-        const res = await fetch('tasun-version.json?_=' + Date.now(), { cache:'no-store', credentials:'same-origin' });
+        const ctrl = ('AbortController' in window) ? new AbortController() : null;
+        const timer = ctrl ? setTimeout(function(){ try{ ctrl.abort(); }catch(_e){} }, 3500) : 0;
+        const res = await fetch('tasun-version.json?_=' + Date.now(), { cache:'no-store', credentials:'same-origin', signal: ctrl ? ctrl.signal : undefined }).finally(function(){ try{ if(timer) clearTimeout(timer); }catch(_e){} });
         if(!res.ok) return '';
         const data = await res.json().catch(()=>null);
         if(!data) return '';
@@ -246,7 +248,9 @@
 
     async function fetchRemotePageInfo(){
       try{
-        const res = await fetch('index.html?_=' + Date.now(), { cache:'no-store', credentials:'same-origin' });
+        const ctrl = ('AbortController' in window) ? new AbortController() : null;
+        const timer = ctrl ? setTimeout(function(){ try{ ctrl.abort(); }catch(_e){} }, 3500) : 0;
+        const res = await fetch('index.html?_=' + Date.now(), { cache:'no-store', credentials:'same-origin', signal: ctrl ? ctrl.signal : undefined }).finally(function(){ try{ if(timer) clearTimeout(timer); }catch(_e){} });
         if(!res.ok) return { version:'', rebuildStamp:'', html:'' };
         const html = await res.text();
         const vm = html.match(/(?:__CACHE_V|TASUN_APP_VER|APP_VER)\s*[:=]\s*['"]([^'"]+)['"]/i);
@@ -409,17 +413,13 @@
           const vv = window.visualViewport;
           const h = Math.round(vv ? vv.height : window.innerHeight);
           const w = Math.round(vv ? vv.width  : window.innerWidth);
-          const top = Math.round(vv ? vv.offsetTop : 0);
-          const bottom = Math.max(0, Math.round(window.innerHeight - (vv ? (vv.height + vv.offsetTop) : window.innerHeight)));
+          const top = 0;
+          const bottom = 0;
           root.style.setProperty('--vv-top', top + 'px');
           root.style.setProperty('--vv-bottom', bottom + 'px');
-          if(reset || !minH || Math.abs(w - lastW) > 180){
-            minH = h;
-            lastW = w;
-          }else{
-            minH = Math.min(minH, h);
-          }
-          root.style.setProperty('--appH', minH + 'px');
+          minH = h;
+          lastW = w;
+          root.style.setProperty('--appH', h + 'px');
           root.style.setProperty('--appHLive', h + 'px');
           root.style.setProperty('--appW', w + 'px');
         }catch(e){
@@ -437,7 +437,6 @@
       window.addEventListener('orientationchange', onOrient, { passive:true });
       if(window.visualViewport){
         window.visualViewport.addEventListener('resize', onResize, { passive:true });
-        window.visualViewport.addEventListener('scroll', onResize, { passive:true });
       }
       document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible') calcVV(false); }, { passive:true });
     })();
@@ -1235,6 +1234,35 @@ main.hero,
     bottom:clamp(16px, 4vh, 32px) !important;
     font-size:clamp(0.98rem, 2.8vw, 1.22rem) !important;
   }
+}
+
+
+/* ===== 2026-04-15 deep stability fix: stop login drift / stop viewport-linked mask movement ===== */
+html, body{
+  overscroll-behavior: none !important;
+}
+body.locked,
+body.locked html{
+  overflow: hidden !important;
+}
+body.locked .hero,
+body.locked .hero-inner,
+body.locked .lotus-stage,
+body.locked .zen-visual,
+body.locked #zenImg,
+body.locked #loginOverlay{
+  height: 100dvh !important;
+  min-height: 100dvh !important;
+}
+body.locked #loginOverlay{
+  top: 0 !important;
+  transform: none !important;
+  overflow: hidden !important;
+  touch-action: none !important;
+}
+body.locked #loginOverlay .login-box{
+  transform: none !important;
+  margin-top: 0 !important;
 }
 
 </style>
@@ -2907,13 +2935,16 @@ main.hero,
           const finalRole = String(role || 'read').trim().toLowerCase() || 'read';
           if(!user || !pass) return false;
           const apiBase = 'https://tasun-worker.wutasun.workers.dev';
+          const ctrl = ('AbortController' in window) ? new AbortController() : null;
+          const timer = ctrl ? setTimeout(function(){ try{ ctrl.abort(); }catch(_e){} }, 4000) : 0;
           const res = await fetch(apiBase + '/api/tasun/login', {
             method:'POST',
             cache:'no-store',
             credentials:'include',
             headers:{ 'content-type':'application/json', 'accept':'application/json' },
-            body: JSON.stringify({ username:user, password:pass, user:user, pass:pass })
-          });
+            body: JSON.stringify({ username:user, password:pass, user:user, pass:pass }),
+            signal: ctrl ? ctrl.signal : undefined
+          }).finally(function(){ try{ if(timer) clearTimeout(timer); }catch(_e){} });
           if(!res.ok) return false;
           const json = await res.json().catch(() => ({}));
           const token = String(
@@ -2991,9 +3022,7 @@ main.hero,
           const finalRole = String(u.level || u.role || inferRole(u.username, '') || 'read').trim().toLowerCase();
 
           setSession({ username: u.username, level: finalRole });
-
           __tasunSaveLoginBridge(u.username, password, finalRole);
-          await __tasunBridgeWorkerTokenNow(u.username, password, finalRole);
 
           applyUser(
             Object.assign({}, u, { level: finalRole }),
@@ -3001,8 +3030,12 @@ main.hero,
           );
 
           loginError.textContent = '';
-
           if(passwordInput) passwordInput.value = '';
+
+          Promise.race([
+            __tasunBridgeWorkerTokenNow(u.username, password, finalRole),
+            new Promise(function(resolve){ setTimeout(function(){ resolve(false); }, 4000); })
+          ]).catch(function(){ return false; });
         }catch(err){
           var msg = (err && err.message ? err.message : String(err));
           if(/核心登入鏈未載入/.test(msg)) msg = '登入服務載入中，請稍後再試';
@@ -3053,12 +3086,7 @@ main.hero,
         try{ if(cloudCtrl && cloudCtrl.pullNow) cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
         }
       }, { passive:true });
-      window.addEventListener('focus', ()=>{
-        if(isLoginStageActive()) return;
-        forceRefreshLatestOnVisible().catch(()=>{});
-        if(!CURRENT_USER) return;
-        try{ if(cloudCtrl && cloudCtrl.pullNow) cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
-      }, { passive:true });
+
       window.addEventListener('pageshow', ()=>{
         if(isLoginStageActive()) return;
         return;
