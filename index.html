@@ -264,8 +264,13 @@
 
     async function ensureLatestBuildSync(force){
       try{
-        const lockKey = 'tasun_triple_check_lock_v1';
+        const lockKey = 'tasun_triple_check_lock_v2';
+        const seenKey = 'tasun_triple_check_seen_v2';
         const now = Date.now();
+        const seenRaw = sessionStorage.getItem(seenKey) || '';
+        let seen = null;
+        try{ seen = seenRaw ? JSON.parse(seenRaw) : null; }catch(_e){ seen = null; }
+
         if(!force){
           const prev = Number(sessionStorage.getItem(lockKey) || 0);
           if(prev && (now - prev) < 12000) return false;
@@ -281,15 +286,28 @@
         const versionMismatch = !!(latestVer && latestVer !== localVer);
         const rebuildMismatch = !!(remoteStamp && localStamp && remoteStamp !== localStamp);
 
-        if(versionMismatch || rebuildMismatch || pageMismatch){
-          const nextUrl = new URL(location.href);
-          const nextVer = latestVer || localVer;
-          if(nextVer) nextUrl.searchParams.set('v', nextVer);
-          nextUrl.searchParams.set('_', String(Date.now()));
-          if(remoteStamp) nextUrl.searchParams.set('_bs', remoteStamp);
-          location.replace(nextUrl.toString());
-          return true;
+        if(!(versionMismatch || rebuildMismatch || pageMismatch)) return false;
+
+        const nextVer = latestVer || localVer || '';
+        const signature = JSON.stringify({
+          nextVer: nextVer,
+          localVer: localVer,
+          localStamp: localStamp,
+          remoteStamp: remoteStamp,
+          pageMismatch: !!pageMismatch
+        });
+
+        if(seen && seen.signature === signature && (now - Number(seen.ts || 0)) < 15000){
+          return false;
         }
+        sessionStorage.setItem(seenKey, JSON.stringify({ signature: signature, ts: now }));
+
+        const nextUrl = new URL(location.href);
+        if(nextVer) nextUrl.searchParams.set('v', nextVer);
+        nextUrl.searchParams.set('_', String(Date.now()));
+        if(remoteStamp) nextUrl.searchParams.set('_bs', remoteStamp);
+        location.replace(nextUrl.toString());
+        return true;
       }catch(e){}
       return false;
     }
@@ -347,7 +365,7 @@
     }catch(e){}
 
     const latestVer = normVer(await fetchLatestVersionText()) || '';
-    if(await ensureLatestBuildSync(true)) return;
+    // 避免首頁登入階段反覆強刷；改為登入後或回到前景時再做版本同步檢查。
 
     window.APP_VER = latestVer || VER;
     window.TASUN_APP_VER = latestVer || VER;
@@ -2383,7 +2401,6 @@ main.hero,
         const o = opts || {};
         releaseBootUI();
         setUiLockState(false);
-        setUiLockState(false);
         try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){}
         if(loginSub) loginSub.textContent = '';
         __loginStageQuietedOnce = false;
@@ -2427,7 +2444,6 @@ main.hero,
         if(msg) loginSub.textContent = msg;
         else if(loginSub) loginSub.textContent = '';
         try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){}
-        setUiLockState(true);
         if(loginError) loginError.textContent = '';
         if(passwordInput) passwordInput.value = '';
         populateUserSelect();
@@ -3074,14 +3090,16 @@ main.hero,
       }
     }
 
-    if(window.TasunLoader && typeof window.TasunLoader.ready === 'function'){
-      try{ window.TasunLoader.ready(runIndexApp, 8000); }catch(_e){}
-    }else if(window.TasunCore && typeof window.TasunCore.ready === 'function'){
-      try{ window.TasunCore.ready(runIndexApp, 8000); }catch(_e){}
-    }else{
-      setTimeout(runIndexApp, 0);
+    function bootIndexAppOnce(){
+      try{ runIndexApp(); }catch(_e){}
     }
-    setTimeout(()=>{ try{ runIndexApp(); }catch(_e){} }, 1200);
+    if(window.TasunLoader && typeof window.TasunLoader.ready === 'function'){
+      try{ window.TasunLoader.ready(bootIndexAppOnce, 8000); }catch(_e){}
+    }else if(window.TasunCore && typeof window.TasunCore.ready === 'function'){
+      try{ window.TasunCore.ready(bootIndexAppOnce, 8000); }catch(_e){}
+    }else{
+      setTimeout(bootIndexAppOnce, 0);
+    }
   })();
   </script>
 <script>
@@ -3233,74 +3251,12 @@ main.hero,
   }
 }
 </style>
-<script id="tasun-clean-stability">
+<script id="tasun-authority-ui-stabilizer-single">
 (function(){
-  function syncLoginStage(){
+  function syncUiOnce(){
     try{
-      var locked = !!(document.body && document.body.classList.contains('locked'));
-      var overlay = document.getElementById('loginOverlay');
-      var boot = document.getElementById('bootCover');
-      if(boot){
-        boot.hidden = true;
-        boot.style.display = 'none';
-      }
-      if(overlay){
-        overlay.style.display = locked ? 'flex' : 'none';
-      }
-    }catch(e){}
-  }
-
-  ['DOMContentLoaded','load','pageshow','focus'].forEach(function(ev){
-    window.addEventListener(ev, function(){
-      setTimeout(syncLoginStage, 40);
-      setTimeout(syncLoginStage, 180);
-    }, {passive:true});
-  });
-
-  document.addEventListener('visibilitychange', function(){
-    if(document.visibilityState === 'visible') setTimeout(syncLoginStage, 60);
-  }, {passive:true});
-
-  setTimeout(syncLoginStage, 20);
-  setTimeout(syncLoginStage, 250);
-})();
-</script>
-
-
-<script id="tasun-login-noflicker-stabilizer">
-(function(){
-  function syncStage(){
-    try{
-      var locked = !!(document.body && document.body.classList.contains('locked'));
-      var overlay = document.getElementById('loginOverlay');
-      var boot = document.getElementById('bootCover');
-      var inlineBoot = document.getElementById('loginBootInline');
-      if(boot){ boot.hidden = true; boot.style.display = 'none'; }
-      if(inlineBoot){ inlineBoot.hidden = true; inlineBoot.style.display = 'none'; }
-      if(overlay){ overlay.style.display = locked ? 'flex' : 'none'; }
-      if(document.body){ document.body.classList.remove('booting'); }
-    }catch(e){}
-  }
-  ['DOMContentLoaded','load','pageshow','focus'].forEach(function(ev){
-    window.addEventListener(ev, function(){
-      setTimeout(syncStage, 40);
-      setTimeout(syncStage, 180);
-    }, {passive:true});
-  });
-  document.addEventListener('visibilitychange', function(){
-    if(document.visibilityState === 'visible') setTimeout(syncStage, 60);
-  }, {passive:true});
-  setTimeout(syncStage, 20);
-  setTimeout(syncStage, 260);
-})();
-</script>
-
-
-<script id="tasun-authority-ui-stabilizer">
-(function(){
-  function syncUi(){
-    try{
-      var locked = !!(document.body && document.body.classList.contains('locked'));
+      var body = document.body;
+      var locked = !!(body && body.classList.contains('locked'));
       var overlay = document.getElementById('loginOverlay');
       var boot = document.getElementById('bootCover');
       var inlineBoot = document.getElementById('loginBootInline');
@@ -3311,23 +3267,15 @@ main.hero,
       if(overlay){ overlay.style.display = locked ? 'flex' : 'none'; }
       if(nav){ nav.style.display = locked ? 'none' : ''; }
       if(userBar){ userBar.style.display = locked ? 'none' : ''; }
-      if(document.body){
-        document.body.classList.remove('booting');
-        document.body.classList.remove('prehide');
-      }
+      if(body){ body.classList.remove('booting'); body.classList.remove('prehide'); }
     }catch(e){}
   }
-  ['DOMContentLoaded','load','pageshow','focus'].forEach(function(ev){
-    window.addEventListener(ev, function(){
-      setTimeout(syncUi, 40);
-      setTimeout(syncUi, 180);
-    }, {passive:true});
-  });
-  document.addEventListener('visibilitychange', function(){
-    if(document.visibilityState === 'visible') setTimeout(syncUi, 60);
-  }, {passive:true});
-  setTimeout(syncUi, 20);
-  setTimeout(syncUi, 260);
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', syncUiOnce, { once:true });
+  }else{
+    syncUiOnce();
+  }
+  window.addEventListener('pageshow', syncUiOnce, { passive:true });
 })();
 </script>
 
