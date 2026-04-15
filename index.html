@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- TASUN_REBUILD_STAMP:index_v52c 2026-03-27 00:00:00 (single-source-admin-auth-only + worker-token-bridge + child-page-sso-fix) -->
+<!-- TASUN_REBUILD_STAMP:index_v20260416_r2 2026-04-16 00:00:00 (single-global-entry + triple-version-check + local-login-fallback + responsive-login-form) -->
 <html lang="zh-Hant">
 <head>
   <!-- Tasun v5 FINAL：版本/快取由 tasun-version.json 控制；腳本改為動態帶 v 載入 -->
@@ -58,29 +58,54 @@
 
   <!-- removed missing guard script: tasun-v5-single-rule-guard.js -->
 
-  <meta name="tasun-rebuild-stamp" content="index_v20260416_rebuilt" />
   <script>
   (function(){
     var G = window.__TASUN_GLOBALS__ = window.__TASUN_GLOBALS__ || {};
     G.PAGE_KEY = 'index';
     G.PAGE_FILE = 'index.html';
     G.VERSION_URL = 'tasun-version.json';
-    G.LATEST_LOCK_KEY = 'tasun_force_latest_lock_rebuilt_v1';
-    G.LATEST_SEEN_KEY = 'tasun_force_latest_seen_rebuilt_v1';
+    G.REBUILD_STAMP_REGEX = /TASUN_REBUILD_STAMP:([^\n>]*)/i;
+    G.LATEST_LOCK_KEY = 'tasun_force_latest_lock_r4';
+    G.LATEST_SEEN_KEY = 'tasun_force_latest_seen_r4';
     try{
       var html = String(document.documentElement && document.documentElement.outerHTML || '');
-      var m = html.match(/TASUN_REBUILD_STAMP:([^\n>]*)/i);
-      G.CURRENT_REBUILD_STAMP = m ? String(m[1]).trim() : '';
-    }catch(e){
-      G.CURRENT_REBUILD_STAMP = '';
-    }
+      var m = html.match(G.REBUILD_STAMP_REGEX);
+      if(!m){
+        var meta = document.querySelector('meta[name="tasun-rebuild-stamp"]');
+        G.CURRENT_REBUILD_STAMP = meta ? String(meta.getAttribute('content') || '').trim() : '';
+      }else{
+        G.CURRENT_REBUILD_STAMP = String(m[1]).trim();
+      }
+    }catch(e){ G.CURRENT_REBUILD_STAMP = ''; }
   })();
   </script>
 
 </head>
 
-<body class="locked">
-<script>
+<body class="locked booting prehide">
+  <script>
+  (function(){
+    try{
+      window.addEventListener('DOMContentLoaded', function(){
+        setTimeout(function(){
+          try{
+            document.body.classList.remove('prehide');
+            var overlay = document.getElementById('loginOverlay');
+            if(overlay && document.body.classList.contains('locked')) overlay.style.display = 'flex';
+          }catch(e){}
+        }, 60);
+      }, { once:true });
+      setTimeout(function(){
+        try{
+          document.body.classList.remove('prehide');
+          var overlay = document.getElementById('loginOverlay');
+          if(overlay && document.body.classList.contains('locked')) overlay.style.display = 'flex';
+        }catch(e){}
+      }, 1800);
+    }catch(e){}
+  })();
+  </script>
+  <script>
   window.__TASUN_INDEX_READY__ = (async function () {
     'use strict';
 
@@ -124,23 +149,162 @@
       }
     }catch(e){}
 
+    async function fetchLatestVersionText(){
+      try{
+        const res = await fetch('tasun-version.json?_=' + Date.now(), { cache:'no-store', credentials:'same-origin' });
+        if(!res.ok) return '';
+        const data = await res.json().catch(()=>null);
+        if(!data) return '';
+        const cand = [
+          data.version, data.ver, data.appVer, data.app_ver, data.cacheV, data.cache_v,
+          data.build, data.buildVersion, data.release,
+          data.data && (data.data.version || data.data.ver || data.data.appVer || data.data.cacheV),
+          data.meta && (data.meta.version || data.meta.ver || data.meta.appVer || data.meta.cacheV)
+        ];
+        for(const v of cand){
+          const s = normVer(v);
+          if(s) return s;
+        }
+      }catch(e){}
+      return '';
+    }
+
+
+    function getLocalRebuildStamp(){
+      try{
+        const meta = document.querySelector('meta[name="tasun-rebuild-stamp"]');
+        if(meta){
+          const mv = normVer(meta.getAttribute('content'));
+          if(mv) return mv;
+        }
+      }catch(e){}
+      try{
+        const html = String(document.documentElement && document.documentElement.outerHTML || '');
+        const m = html.match(/TASUN_REBUILD_STAMP:([^\n>]*)/i);
+        if(m && m[1]) return normVer(m[1]);
+      }catch(e){}
+      try{
+        return normVer((window.__TASUN_GLOBALS__ || {}).CURRENT_REBUILD_STAMP || '');
+      }catch(e){}
+      return '';
+    }
+
+    async function fetchRemotePageInfo(){
+      try{
+        const res = await fetch('index.html?_=' + Date.now(), { cache:'no-store', credentials:'same-origin' });
+        if(!res.ok) return { version:'', rebuildStamp:'', html:'' };
+        const html = await res.text();
+        const vm = html.match(/(?:__CACHE_V|TASUN_APP_VER|APP_VER)\s*[:=]\s*['"]([^'"]+)['"]/i);
+        const mm = html.match(/<meta\s+name=["']tasun-rebuild-stamp["']\s+content=["']([^"']+)["']/i);
+        const cm = html.match(/TASUN_REBUILD_STAMP:([^\n>]*)/i);
+        return {
+          version: normVer(vm && vm[1] ? vm[1] : ''),
+          rebuildStamp: normVer(mm && mm[1] ? mm[1] : (cm && cm[1] ? cm[1] : '')),
+          html: html
+        };
+      }catch(e){
+        return { version:'', rebuildStamp:'', html:'' };
+      }
+    }
+
+    async function ensureLatestBuildSync(force){
+      try{
+        const lockKey = 'tasun_triple_check_lock_v1';
+        const now = Date.now();
+        if(!force){
+          const prev = Number(sessionStorage.getItem(lockKey) || 0);
+          if(prev && (now - prev) < 12000) return false;
+        }
+        sessionStorage.setItem(lockKey, String(now));
+
+        const latestVer = normVer(await fetchLatestVersionText());
+        const localVer = normVer(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || curV || '');
+        const remote = await fetchRemotePageInfo();
+        const localStamp = getLocalRebuildStamp();
+        const remoteStamp = normVer(remote.rebuildStamp || '');
+        const pageMismatch = !!(remote.html && localStamp && remoteStamp && localStamp !== remoteStamp);
+        const versionMismatch = !!(latestVer && latestVer !== localVer);
+        const rebuildMismatch = !!(remoteStamp && localStamp && remoteStamp !== localStamp);
+
+        if(versionMismatch || rebuildMismatch || pageMismatch){
+          const nextUrl = new URL(location.href);
+          const nextVer = latestVer || localVer;
+          if(nextVer) nextUrl.searchParams.set('v', nextVer);
+          nextUrl.searchParams.set('_', String(Date.now()));
+          if(remoteStamp) nextUrl.searchParams.set('_bs', remoteStamp);
+          location.replace(nextUrl.toString());
+          return true;
+        }
+      }catch(e){}
+      return false;
+    }
+
+    async function hardRefreshToVersion(nextVer){
+      const nv = normVer(nextVer);
+      if(!nv) return false;
+      try{
+        const LOCK_KEY = 'tasun_force_latest_lock_v1';
+        const now = Date.now();
+        const raw = sessionStorage.getItem(LOCK_KEY) || '';
+        const lock = raw ? JSON.parse(raw) : null;
+        if(lock && lock.v === nv && (now - Number(lock.ts || 0)) < 15000){
+          return false;
+        }
+        sessionStorage.setItem(LOCK_KEY, JSON.stringify({ v:nv, ts:now }));
+      }catch(e){}
+      try{
+        if('caches' in window){
+          const names = await caches.keys().catch(()=>[]);
+          await Promise.all((names || []).map((n)=>caches.delete(n).catch(()=>false)));
+        }
+      }catch(e){}
+      try{
+        if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations){
+          const regs = await navigator.serviceWorker.getRegistrations().catch(()=>[]);
+          await Promise.all((regs || []).map((r)=>r.unregister().catch(()=>false)));
+        }
+      }catch(e){}
+      try{
+        sessionStorage.setItem('tasun_force_latest_seen_v1', nv);
+        localStorage.setItem('tasun_force_latest_seen_v1', nv);
+      }catch(e){}
+      const nextUrl = new URL(location.href);
+      nextUrl.searchParams.set('v', nv);
+      nextUrl.searchParams.set('_', String(Date.now()));
+      location.replace(nextUrl.toString());
+      return true;
+    }
+
     const url = new URL(location.href);
     const curV = normVer(url.searchParams.get('v'));
     let VER = normVer(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '') || curV || FALLBACK_VER;
+    const vts = (curV && /^\d{10,}$/.test(curV) && curV !== VER) ? curV : '';
 
     try{
       const path = String(url.pathname || '');
       if(/\/Tasun\/?$/i.test(path)){
         url.pathname = path.replace(/\/?$/, '/index.html').replace(/\/index\.html\/index\.html$/i, '/index.html');
         if(VER) url.searchParams.set('v', VER);
+        url.searchParams.set('_', String(Date.now()));
         location.replace(url.toString());
         return;
       }
     }catch(e){}
 
-    window.APP_VER = VER;
-    window.TASUN_APP_VER = VER;
-    window.__CACHE_V = VER || curV || '';
+    const latestVer = normVer(await fetchLatestVersionText()) || '';
+    if(await ensureLatestBuildSync(true)) return;
+
+    window.APP_VER = latestVer || VER;
+    window.TASUN_APP_VER = latestVer || VER;
+    window.__CACHE_V = latestVer || VER || curV || '';
+    VER = latestVer || VER;
+
+    if (VER && (curV !== VER || vts)) {
+      url.searchParams.set('v', VER);
+      url.searchParams.set('_', vts || String(Date.now()));
+      location.replace(url.toString());
+      return;
+    }
 
     window.__withV = function (u) {
       return addVer(u, window.__CACHE_V || VER || FALLBACK_VER);
@@ -443,18 +607,18 @@
     .login-boot-card{ width:100%; border-radius:18px; padding:12px 14px; text-align:center; background: linear-gradient(180deg, rgba(48,31,17,0.88), rgba(18,12,7,0.92)); border:1px solid rgba(246,211,122,0.44); box-shadow: 0 12px 32px rgba(0,0,0,0.30), inset 0 1px 0 rgba(255,255,255,0.05); }
     .login-boot-title{ font-size:1.10rem; margin-bottom:4px; }
     .login-boot-sub{ font-size:13px; color: rgba(255,232,175,0.92); letter-spacing:.06em; text-shadow: 0 7px 14px rgba(0,0,0,0.46); font-weight:900; }
-    .login-title{ font-size:1.64rem; margin-bottom:10px; text-align:center; position:relative; z-index:1; color: rgba(82,50,20,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.82), 0 10px 18px rgba(84,56,18,0.14), 0 0 10px rgba(255,248,232,0.24); }
-    .login-sub{ text-align:center; min-height:18px; font-size:14px; opacity:.98; margin-bottom:14px; color: rgba(74,46,20,0.98); letter-spacing:.06em; text-shadow: 0 1px 0 rgba(255,255,255,0.80), 0 8px 14px rgba(94,66,26,0.08); font-weight:900; position:relative; z-index:1; }
-    .login-field{ display:flex; flex-direction:column; gap:8px; margin:12px 0; }
-    .login-field label{ font-size:14px; letter-spacing:.12em; color: rgba(88,54,22,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.88), 0 6px 10px rgba(94,66,26,0.08); font-weight:900; position:relative; z-index:1; }
-    .login-pwd-wrapper{ display:flex; gap:10px; align-items:center; }
-    .login-pwd-input{ flex:1; padding:.78rem .96rem; border-radius:999px; border:1px solid rgba(255,255,255,0.90); background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,252,244,0.06)), linear-gradient(180deg, rgba(255,244,220,0.02), rgba(255,214,132,0.01)); color: rgba(88,52,22,0.98); caret-color: rgba(88,52,22,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.92); box-shadow: inset 0 1px 0 rgba(255,255,255,0.42), inset 0 0 0 1px rgba(255,250,236,0.08), 0 10px 18px rgba(58,36,12,0.05), 0 0 28px rgba(255,242,210,0.06); outline:none; font-size:15px; font-weight:900; position:relative; z-index:1; }
+    .login-title{ font-size:clamp(2.05rem, 2.8vw, 3.1rem); margin-bottom:clamp(14px, 1.4vw, 22px); text-align:center; position:relative; z-index:1; color: rgba(82,50,20,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.82), 0 10px 18px rgba(84,56,18,0.14), 0 0 10px rgba(255,248,232,0.24); }
+    .login-sub{ text-align:center; min-height:22px; font-size:clamp(15px, 1.05vw, 18px); opacity:.98; margin-bottom:clamp(16px, 1.4vw, 24px); color: rgba(74,46,20,0.98); letter-spacing:.06em; text-shadow: 0 1px 0 rgba(255,255,255,0.80), 0 8px 14px rgba(94,66,26,0.08); font-weight:900; position:relative; z-index:1; }
+    .login-field{ display:flex; flex-direction:column; gap:clamp(12px, 1.1vw, 18px); margin:clamp(16px, 1.2vw, 22px) 0; }
+    .login-field label{ font-size:clamp(19px, 1.55vw, 24px); line-height:1.35; letter-spacing:.08em; color: rgba(88,54,22,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.88), 0 6px 10px rgba(94,66,26,0.08); font-weight:900; position:relative; z-index:1; }
+    .login-pwd-wrapper{ display:flex; gap:14px; align-items:center; }
+    .login-pwd-input{ flex:1; padding:clamp(1rem, 1.15vw, 1.22rem) clamp(1.12rem, 1.25vw, 1.36rem); border-radius:999px; border:1px solid rgba(255,255,255,0.90); background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,252,244,0.06)), linear-gradient(180deg, rgba(255,244,220,0.02), rgba(255,214,132,0.01)); color: rgba(88,52,22,0.98); caret-color: rgba(88,52,22,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.92); box-shadow: inset 0 1px 0 rgba(255,255,255,0.42), inset 0 0 0 1px rgba(255,250,236,0.08), 0 10px 18px rgba(58,36,12,0.05), 0 0 28px rgba(255,242,210,0.06); outline:none; font-size:clamp(20px, 1.5vw, 24px); font-weight:900; position:relative; z-index:1; }
     .login-pwd-input:focus{ border-color: rgba(255,250,232,1); box-shadow: 0 0 0 2px rgba(255,240,198,0.18), 0 0 28px rgba(255,246,222,0.22), inset 0 1px 0 rgba(255,255,255,0.24); }
-    .btn-eye-login{ width:44px; height:44px; border-radius:999px; border:1px solid rgba(255,255,255,0.88); background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,244,220,0.04)); color: rgba(102,62,24,0.98); cursor:pointer; box-shadow: inset 0 1px 0 rgba(255,255,255,0.42), 0 10px 20px rgba(58,36,12,0.05), 0 0 20px rgba(255,244,214,0.06); text-shadow: 0 1px 0 rgba(255,255,255,0.86); font-weight:900; position:relative; z-index:1; }
-    .login-error{ min-height:18px; color: rgba(255,190,160,0.98); font-size:14px; letter-spacing:.06em; margin-top:6px; text-align:center; text-shadow: 0 8px 16px rgba(0,0,0,0.48); font-weight:900; }
-    .login-actions{ display:flex; gap:12px; justify-content:center; margin-top:14px; }
-    .btn-login, .btn-secondary{ border-radius:999px; padding:12px 18px; border:1px solid rgba(255,255,255,0.92); background: linear-gradient(180deg, rgba(255,255,255,0.20), rgba(255,232,175,0.07)), linear-gradient(135deg, rgba(255,255,255,0.12), rgba(255,255,255,0.03) 42%, rgba(255,238,198,0.08) 100%); cursor:pointer; letter-spacing:.12em; box-shadow: inset 0 1px 0 rgba(255,255,255,0.56), inset 0 0 0 1px rgba(255,250,236,0.10), 0 12px 28px rgba(58,36,12,0.10), 0 0 26px rgba(255,244,214,0.10); font-size:15px; font-weight:900; backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); color: rgba(92,58,24,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.92); position:relative; z-index:1; }
-    .select-wrap{ position:relative; width:100%; min-height:48px; }
+    .btn-eye-login{ width:clamp(52px, 3vw, 60px); height:clamp(52px, 3vw, 60px); border-radius:999px; border:1px solid rgba(255,255,255,0.88); background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,244,220,0.04)); color: rgba(102,62,24,0.98); cursor:pointer; box-shadow: inset 0 1px 0 rgba(255,255,255,0.42), 0 10px 20px rgba(58,36,12,0.05), 0 0 20px rgba(255,244,214,0.06); text-shadow: 0 1px 0 rgba(255,255,255,0.86); font-weight:900; position:relative; z-index:1; }
+    .login-error{ min-height:28px; color: rgba(255,190,160,0.98); font-size:clamp(15px, 1.05vw, 18px); letter-spacing:.06em; margin-top:6px; text-align:center; text-shadow: 0 8px 16px rgba(0,0,0,0.48); font-weight:900; }
+    .login-actions{ display:flex; gap:16px; justify-content:center; margin-top:clamp(18px, 1.4vw, 26px); }
+    .btn-login, .btn-secondary{ border-radius:999px; padding:clamp(13px, 1vw, 16px) clamp(22px, 1.7vw, 30px); border:1px solid rgba(255,255,255,0.92); background: linear-gradient(180deg, rgba(255,255,255,0.20), rgba(255,232,175,0.07)), linear-gradient(135deg, rgba(255,255,255,0.12), rgba(255,255,255,0.03) 42%, rgba(255,238,198,0.08) 100%); cursor:pointer; letter-spacing:.12em; box-shadow: inset 0 1px 0 rgba(255,255,255,0.56), inset 0 0 0 1px rgba(255,250,236,0.10), 0 12px 28px rgba(58,36,12,0.10), 0 0 26px rgba(255,244,214,0.10); font-size:clamp(18px, 1.35vw, 22px); font-weight:900; backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); color: rgba(92,58,24,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.92); position:relative; z-index:1; }
+    .select-wrap{ position:relative; width:100%; min-height:clamp(58px, 4.1vw, 68px); }
     .select-wrap select{ position:absolute; inset:0; opacity:0; pointer-events:none; z-index:4; -webkit-appearance:none; appearance:none; background:transparent; border:0; color:transparent; font-size:15px; font-weight:900; }
     .select-wrap.native-touch select{
       opacity:1;
@@ -466,14 +630,14 @@
       z-index:5;
       width:100%;
       height:100%;
-      padding:.78rem 3.10rem .78rem .96rem;
+      padding:clamp(1rem, 1.1vw, 1.18rem) 3.25rem clamp(1rem, 1.1vw, 1.18rem) 1.12rem;
       border-radius:999px;
       border:1px solid rgba(255,255,255,0.90);
       box-shadow:
         inset 0 1px 0 rgba(255,255,255,0.42),
         inset 0 0 0 1px rgba(255,250,236,0.08),
         0 10px 18px rgba(58,36,12,0.05);
-      font-size:15px;
+      font-size:clamp(20px, 1.5vw, 24px);
       font-weight:900;
       line-height:1.2;
       -webkit-appearance:none;
@@ -510,7 +674,7 @@
       line-height:1;
     }
     .select-wrap.native-touch .select-menu{ display:none !important; }
-    .select-wrap.native-touch .select-display{ width:100%; display:flex; align-items:center; justify-content:flex-start; text-align:left; padding:.78rem 2.90rem .78rem .96rem; border-radius:999px; border:1px solid rgba(255,255,255,0.90); background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,252,244,0.06)), linear-gradient(180deg, rgba(255,244,220,0.02), rgba(255,214,132,0.01)); color: rgba(88,52,22,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.92); box-shadow: inset 0 1px 0 rgba(255,255,255,0.42), inset 0 0 0 1px rgba(255,250,236,0.08), 0 10px 18px rgba(58,36,12,0.05); cursor:pointer; user-select:none; position:relative; appearance:none; backdrop-filter:none; -webkit-backdrop-filter:none; font-size:15px; font-weight:900; z-index:1; }
+    .select-wrap.native-touch .select-display{ width:100%; display:flex; align-items:center; justify-content:flex-start; text-align:left; padding:clamp(1rem, 1.1vw, 1.18rem) 3rem clamp(1rem, 1.1vw, 1.18rem) 1.12rem; border-radius:999px; border:1px solid rgba(255,255,255,0.90); background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,252,244,0.06)), linear-gradient(180deg, rgba(255,244,220,0.02), rgba(255,214,132,0.01)); color: rgba(88,52,22,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.92); box-shadow: inset 0 1px 0 rgba(255,255,255,0.42), inset 0 0 0 1px rgba(255,250,236,0.08), 0 10px 18px rgba(58,36,12,0.05); cursor:pointer; user-select:none; position:relative; appearance:none; backdrop-filter:none; -webkit-backdrop-filter:none; font-size:15px; font-weight:900; z-index:1; }
     .select-display::after{ content:'▾'; position:absolute; right:.88rem; top:50%; transform: translateY(-50%); opacity:.98; font-size:1.36rem; color: rgba(196,142,62,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.92), 0 6px 12px rgba(88,52,22,0.10); pointer-events:none; font-weight:900; }
     .select-menu{ position:absolute; left:0; right:0; top:calc(100% + 10px); max-height:280px; overflow:auto; border-radius:16px; border:1px solid rgba(246,211,122,0.62); background: rgba(8,5,3,0.98); box-shadow: 0 22px 60px rgba(0,0,0,0.46), 0 0 24px rgba(246,211,122,0.10); display:none; z-index:4005; padding:6px; }
     .select-menu.open{ display:block; }
@@ -610,13 +774,13 @@
       overflow:hidden;
     }
     .login-box{
-      width:min(38.2vw, 560px) !important;
-      min-width:min(460px, calc(100vw - 40px));
-      max-width:min(560px, calc(100vw - 40px));
-      max-height:min(76vh, 620px);
-      aspect-ratio:1.60 / 1;
+      width:min(44vw, 760px) !important;
+      min-width:min(560px, calc(100vw - 40px));
+      max-width:min(760px, calc(100vw - 40px));
+      max-height:min(84vh, 860px);
+      aspect-ratio:1.52 / 1;
       margin:0 auto !important;
-      padding:clamp(24px, 2.2vw, 34px) !important;
+      padding:clamp(30px, 2.8vw, 44px) !important;
       display:flex;
       flex-direction:column;
       justify-content:center;
@@ -641,12 +805,12 @@
         min-height:100dvh;
       }
       .login-box{
-        width:min(88vw, 560px) !important;
+        width:min(92vw, 640px) !important;
         min-width:0;
-        max-width:min(560px, calc(100vw - 28px));
+        max-width:min(640px, calc(100vw - 20px));
         max-height:none;
         aspect-ratio:auto;
-        padding:clamp(20px, 4.5vw, 28px) !important;
+        padding:clamp(22px, 5vw, 30px) !important;
       }
     }
 
@@ -746,13 +910,13 @@ body > main.hero,
   right:auto !important;
   bottom:auto !important;
   margin:0 auto !important;
-  width:clamp(480px, 38.2vw, 620px) !important;
-  max-width:min(620px, calc(100vw - 48px)) !important;
-  min-width:min(480px, calc(100vw - 48px)) !important;
-  aspect-ratio:1.62 / 1 !important;
-  max-height:min(78vh, 640px) !important;
+  width:clamp(540px, 44vw, 760px) !important;
+  max-width:min(760px, calc(100vw - 40px)) !important;
+  min-width:min(540px, calc(100vw - 40px)) !important;
+  aspect-ratio:1.52 / 1 !important;
+  max-height:min(84vh, 860px) !important;
   min-height:0 !important;
-  padding:clamp(26px, 2.2vw, 36px) !important;
+  padding:clamp(30px, 2.8vw, 44px) !important;
   display:flex !important;
   flex-direction:column !important;
   justify-content:center !important;
@@ -775,12 +939,12 @@ body > main.hero,
 }
 @media (max-width: 900px){
   .login-box{
-    width:min(88vw, 620px) !important;
+    width:min(92vw, 640px) !important;
     min-width:0 !important;
-    max-width:calc(100vw - 28px) !important;
+    max-width:calc(100vw - 20px) !important;
     aspect-ratio:auto !important;
     max-height:none !important;
-    padding:clamp(20px, 4.2vw, 30px) !important;
+    padding:clamp(22px, 5vw, 30px) !important;
   }
 }
 
@@ -1192,7 +1356,28 @@ main.hero,
         try{ if(bootCover) bootCover.hidden = true; }catch(e){}
         try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){}
       }
-            function applyUsernamePickerMode(){
+      function waitForLoginVisualReady(){
+        return Promise.resolve();
+      }
+      let __loginStageQuietedOnce = false;
+      function quiesceLoginStageNetwork(){
+        if(__loginStageQuietedOnce) return;
+        __loginStageQuietedOnce = true;
+        try{
+          if(document.body && document.body.classList.contains('locked')){
+            window.stop();
+          }
+        }catch(e){}
+      }
+
+      function isTouchPickerPreferred(){
+        try{
+          const hasTouch = ('ontouchstart' in window) || ((navigator.maxTouchPoints || 0) > 0) || ((navigator.msMaxTouchPoints || 0) > 0);
+          const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+          return !!(hasTouch || coarse);
+        }catch(e){ return false; }
+      }
+      function applyUsernamePickerMode(){
         try{
           const useNativeTouch = true; // 正式版：開頁直接可點原生下拉，不經中介動畫
           if(usernameWrap) usernameWrap.classList.toggle('native-touch', useNativeTouch);
@@ -1221,6 +1406,34 @@ main.hero,
 
       const D1_AUTH_TABLE_ENDPOINT_FULL  = '/api/auth/table';
       const D1_AUTH_TABLE_ENDPOINT_PUB   = '/api/auth/public';
+      function getApiBaseLocked(){
+        const v = String(localStorage.getItem('tasunApiBase_v1') || '').trim();
+        return String(v || 'https://tasun-worker.wutasun.workers.dev').replace(/\/+$/,'');
+      }
+      function getSharedWorkerToken(){
+        const keys = ['tasunCloudToken_v1','tasunCloudToken_v1__sxdh-notes','tasunCloudToken_v1__auth-table'];
+        for(const key of keys){
+          const v = String(localStorage.getItem(key) || sessionStorage.getItem(key) || '').trim();
+          if(v) return v;
+        }
+        return '';
+      }
+      function buildWorkerAuthHeaders(extra){
+        const headers = Object.assign({}, extra || {});
+        const bearer = getSharedWorkerToken();
+        if(bearer && !headers.Authorization) headers.Authorization = 'Bearer ' + bearer;
+        return headers;
+      }
+      function withNoCache(u){
+        try{
+          const url = new URL(u, location.href);
+          url.searchParams.set('_', String(Date.now()));
+          return url.toString();
+        }catch(_e){
+          const ts = Date.now();
+          return String(u || '') + (String(u || '').includes('?') ? '&' : '?') + '_=' + ts;
+        }
+      }
       async function d1GetJson(path){
         const url = withNoCache(getApiBaseLocked() + path);
         const res = await fetch(url, {
@@ -1289,7 +1502,6 @@ main.hero,
       function setUidMap(map){ try{ localStorage.setItem(INDEX_KEY_UID_MAP_KEY, JSON.stringify(map || {})); }catch(e){} }
       function ensureRowUidForKey(k){ const key = String(k||'').trim(); if(!key) return uuidV4(); const map = getUidMap(); if(map[key]) return map[key]; const uid = uuidV4(); map[key] = uid; setUidMap(map); return uid; }
       function buildCloudPayloadFromLocal(){
-        try{ dedupeIndexConfigStorage(); }catch(e){}
         const now = Date.now();
         const rows = [];
         const keys = CLOUD_KEYS.slice().sort((a,b)=>a.localeCompare(b,'zh-Hant'));
@@ -1400,7 +1612,6 @@ main.hero,
                       else localStorage.setItem(k, v == null ? '' : String(v));
                     }catch(e){}
                   });
-                  try{ dedupeIndexConfigStorage(); }catch(e){}
                   try{ onIndexConfigApplied(); }catch(e){}
                 }
                 return data;
@@ -1693,7 +1904,22 @@ main.hero,
         tasun: 'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba',
         wu: '8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92'
       };
-                  function repairKnownAuthSecrets(){
+      function findAuthCandidates(username){
+        const wanted = String(username || '').trim().toLowerCase();
+        if(!wanted) return [];
+        AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+        return AUTH_TABLE.filter(r => String(r.username || '').trim().toLowerCase() === wanted);
+      }
+      function pickLoginUserFromCandidates(candidates, passwordHash, passwordPlain){
+        const plain = String(passwordPlain || '').trim();
+        for(const u of candidates){
+          const storedHash = String(u.passHash || '').trim().toLowerCase();
+          const storedPlain = String(u.password || '').trim();
+          if((storedHash && passwordHash === storedHash) || (!!storedPlain && plain === storedPlain)) return u;
+        }
+        return null;
+      }
+      function repairKnownAuthSecrets(){
         try{
           const raw = localStorage.getItem(AUTH_KEY);
           const parsed = safeJsonParse(raw, null);
@@ -1749,14 +1975,55 @@ main.hero,
         }catch(e){}
       }
 
-      function authCore(){
-        return window.TasunAuthV4 || null;
-      }
-      function authCurrent(){
+      const COOKIE_NAME = 'tasun_session_v4';
+      const COOKIE_TTL_MS = 1000 * 60 * 60 * 12;
+      function _b64e(s){ try{ return btoa(unescape(encodeURIComponent(s))); }catch(_e){ return ''; } }
+      function _b64d(s){ try{ return decodeURIComponent(escape(atob(s))); }catch(_e){ return ''; } }
+      function setCookieSession(user){
         try{
-          const auth = authCore();
-          return (auth && typeof auth.getCurrent === 'function') ? auth.getCurrent() : null;
-        }catch(e){ return null; }
+          const now = Date.now();
+          const payload = { u: String(user?.username || user?.user || user?.name || '').trim(), r: String(user?.level || user?.role || '').trim().toLowerCase(), exp: now + COOKIE_TTL_MS, v: (window.__CACHE_V || window.TASUN_APP_VER || '') };
+          if(!payload.u) return;
+          const val = encodeURIComponent(_b64e(JSON.stringify(payload)));
+          document.cookie = `${COOKIE_NAME}=${val}; Path=/; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`;
+        }catch(_e){}
+      }
+      function clearCookieSession(){ try{ document.cookie = `${COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`; }catch(_e){} }
+      function getCookieSession(){
+        try{
+          const m = document.cookie.match(new RegExp('(?:^|; )' + COOKIE_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '=([^;]*)'));
+          if(!m) return null;
+          const raw = decodeURIComponent(m[1] || '');
+          const json = _b64d(raw);
+          const o = JSON.parse(json);
+          if(!o || !o.u) return null;
+          if(o.exp && Date.now() > Number(o.exp)) return null;
+          return { user: String(o.u), role: String(o.r || '').toLowerCase(), exp: Number(o.exp || 0) };
+        }catch(_e){ return null; }
+      }
+      function setSSO(user){
+        try{
+          const now = Date.now();
+          const payload = { name: user?.name || user?.user || user?.username || '', role: inferRole(user?.name || user?.user || user?.username || '', user?.role), at: now, exp: now + SSO_TTL_MS, v: (window.__CACHE_V || window.TASUN_APP_VER || ''), tabId: TAB_ID };
+          if(!payload.name) return;
+          sessionStorage.setItem(SSO_KEY, JSON.stringify(payload));
+          sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ name: payload.name, user: payload.name, role: payload.role }));
+          sessionStorage.setItem('tasunSsoTab_v1', '1');
+        }catch(_e){}
+      }
+      function getSSO(){
+        try{
+          const raw = sessionStorage.getItem(SSO_KEY);
+          if(!raw) return null;
+          const o = JSON.parse(raw);
+          if(!o || !o.name) return null;
+          if(o.exp && Date.now() > Number(o.exp)) return null;
+          return o;
+        }catch(_e){ return null; }
+      }
+      function clearSSO(){
+        try{ sessionStorage.removeItem(SSO_KEY); }catch(e){}
+        try{ sessionStorage.removeItem('tasunSsoTab_v1'); }catch(e){}
       }
       function setSession(user){
         const record = { user: user.username, role: String(user.level || '').toLowerCase(), t: Date.now(), tabId: TAB_ID };
@@ -1767,34 +2034,42 @@ main.hero,
           try{ localStorage.setItem(CHILD_INDEX_SESSION_KEY, '1'); }catch(_e){}
           sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: record.role }));
         }catch(e){}
+        setCookieSession(user);
+        setSSO({ name: user.username, role: user.level });
         try{
-          const auth = authCore();
-          if(auth && typeof auth.setCurrent === 'function'){
-            auth.setCurrent({ username:user.username, user:user.username, name:user.username, role:record.role, token:String(user.token || '') });
-          }
-        }catch(e){}
+          const ssoV1 = { name:user.username, user:user.username, role:record.role, at:Date.now(), exp:Date.now() + SSO_TTL_MS, v:(window.__CACHE_V || window.TASUN_APP_VER || '') };
+          sessionStorage.setItem('tasunSso_v1', JSON.stringify(ssoV1));
+          localStorage.setItem('tasunSso_v1', JSON.stringify(ssoV1));
+          sessionStorage.setItem('tasunSso_v2', JSON.stringify(ssoV1));
+          localStorage.setItem('tasunSso_v2', JSON.stringify(ssoV1));
+          sessionStorage.setItem('tasunSession_v1', JSON.stringify({ user:user.username, name:user.username, role:record.role, level:record.role, at:new Date().toISOString() }));
+          localStorage.setItem('tasunSession_v1', JSON.stringify({ user:user.username, name:user.username, role:record.role, level:record.role, at:new Date().toISOString() }));
+        }catch(_e){}
         broadcastAuthState('login', { user: user.username, role: record.role });
       }
       function clearSession(opts){
         const silent = !!(opts && opts.silent);
         try{ sessionStorage.removeItem(SESSION_KEY); sessionStorage.removeItem(INDEX_SESSION_KEY); sessionStorage.removeItem(CHILD_INDEX_SESSION_KEY); sessionStorage.removeItem(CURRENT_KEY); }catch(e){}
         try{ localStorage.removeItem(CHILD_INDEX_SESSION_KEY); }catch(_e){}
-        try{
-          const auth = authCore();
-          if(auth && typeof auth.logout === 'function') auth.logout();
-        }catch(e){}
+        clearCookieSession();
+        clearSSO();
         if(!silent) broadcastAuthState('logout', null);
       }
       function getSession(){
-        const cur = authCurrent();
-        if(cur && cur.username){
-          return { user: String(cur.username || cur.user || '').trim(), role: String(cur.role || '').trim().toLowerCase(), t: Date.now(), source: 'TasunAuthV4' };
-        }
         const obj = safeJsonParse(sessionStorage.getItem(SESSION_KEY) || 'null', null);
         if(obj && typeof obj === 'object'){
           const u = String(obj.user || '').trim();
           const r = String(obj.role || '').trim().toLowerCase();
           if(u) return { user: u, role: r, t: Number(obj.t || 0), source: 'sessionStorage' };
+        }
+        const ck = getCookieSession();
+        if(ck && ck.user){
+          try{
+            sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: ck.user, role: ck.role, t: Date.now(), tabId: TAB_ID }));
+            sessionStorage.setItem(INDEX_SESSION_KEY, '1');
+            sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: ck.user, role: ck.role }));
+          }catch(_e){}
+          return { user: ck.user, role: ck.role, t: Date.now(), source: 'cookie' };
         }
         return null;
       }
@@ -1806,98 +2081,6 @@ main.hero,
       let ROUTES = loadRoutes();
       let NAV_ARR = loadNavButtonsSeedIfMissing();
       let CURRENT_USER = null;
-
-      function dedupeAuthTableStorage(){
-        try{
-          const raw = localStorage.getItem(AUTH_KEY);
-          const parsed = safeJsonParse(raw || 'null', null);
-          const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
-          if(!Array.isArray(arr)) return false;
-          const seen = new Set();
-          const dedup = [];
-          for(let i = arr.length - 1; i >= 0; i--){
-            const row = arr[i];
-            const key = String(row?.user ?? row?.username ?? row?.name ?? row?.account ?? '').trim().toLowerCase();
-            if(!key || seen.has(key)) continue;
-            seen.add(key);
-            dedup.unshift(row);
-          }
-          const before = JSON.stringify(arr);
-          const after = JSON.stringify(dedup);
-          if(before !== after){
-            localStorage.setItem(AUTH_KEY, after);
-            return true;
-          }
-        }catch(e){}
-        return false;
-      }
-      function dedupeNavButtonsStorage(){
-        try{
-          const raw = localStorage.getItem(NAV_KEY);
-          const arr = safeJsonParse(raw || 'null', null);
-          if(!Array.isArray(arr)) return false;
-          const out = [];
-          const seen = new Set();
-          arr.forEach((row, idx) => {
-            const sourceId = String(row?.sourceId || '').trim();
-            const label = String(row?.label || '').trim();
-            const href = String(row?.href || '').trim();
-            const sig = [sourceId, label, href].join('||').toLowerCase();
-            if(!label || !href || !sig || seen.has(sig)) return;
-            seen.add(sig);
-            out.push({
-              id:`btn${out.length+1}`,
-              sourceId: sourceId || `btn${idx+1}`,
-              label,
-              href,
-              target: String(row?.target || '').trim(),
-              roles: Array.isArray(row?.roles) ? row.roles.slice() : ['admin','write','read']
-            });
-          });
-          const trimmed = out.slice(0, LEGACY_BUTTON_KEYS.length);
-          const before = JSON.stringify(arr);
-          const after = JSON.stringify(trimmed);
-          if(before !== after){
-            localStorage.setItem(NAV_KEY, after);
-            return true;
-          }
-        }catch(e){}
-        return false;
-      }
-      function dedupeRoutesStorage(){
-        try{
-          const routes = applyFixedRoutes(safeJsonParse(localStorage.getItem(ROUTE_KEY) || 'null', null));
-          const normalized = JSON.stringify(routes, null, 2);
-          const before = String(localStorage.getItem(ROUTE_KEY) || '');
-          if(before !== normalized){
-            localStorage.setItem(ROUTE_KEY, normalized);
-            return true;
-          }
-        }catch(e){}
-        return false;
-      }
-      function dedupePermMatrixStorage(){
-        try{
-          const pm = safeJsonParse(localStorage.getItem(PERM_MATRIX_KEY) || 'null', null);
-          if(!pm || typeof pm !== 'object') return false;
-          const normalized = JSON.stringify(pm);
-          const reparsed = safeJsonParse(normalized, null);
-          const after = JSON.stringify(reparsed);
-          if(normalized !== after){
-            localStorage.setItem(PERM_MATRIX_KEY, after);
-            return true;
-          }
-        }catch(e){}
-        return false;
-      }
-      function dedupeIndexConfigStorage(){
-        let changed = false;
-        try{ changed = dedupeAuthTableStorage() || changed; }catch(e){}
-        try{ changed = dedupeNavButtonsStorage() || changed; }catch(e){}
-        try{ changed = dedupeRoutesStorage() || changed; }catch(e){}
-        try{ changed = dedupePermMatrixStorage() || changed; }catch(e){}
-        return changed;
-      }
 
       function isRoleAllowed(cfg, level){
         const roles = Array.isArray(cfg?.roles) ? cfg.roles : ['admin','write','read'];
@@ -1923,29 +2106,82 @@ main.hero,
 
           var cur = CURRENT_USER || null;
           if(!cur){
-            try{
-              var auth = authCore();
-              cur = auth && typeof auth.getCurrent === 'function' ? auth.getCurrent() : null;
-            }catch(_e){ cur = null; }
+            try{ cur = JSON.parse(sessionStorage.getItem(CURRENT_KEY) || localStorage.getItem(CURRENT_KEY) || 'null'); }catch(_e){ cur = null; }
           }
           var username = String((cur && (cur.username || cur.user || cur.name)) || '').trim();
           var role = String((cur && (cur.level || cur.role)) || '').trim().toLowerCase() || inferRole(username, '');
-
-          if(username){
+          if(!username){
             try{
-              var auth = authCore();
-              if(auth && typeof auth.setCurrent === 'function'){
-                auth.setCurrent({ username:username, user:username, name:username, role:role, token:String((cur && cur.token) || '') });
+              var sso = JSON.parse(sessionStorage.getItem('tasunSso_v2') || localStorage.getItem('tasunSso_v2') || sessionStorage.getItem('tasunSso_v1') || localStorage.getItem('tasunSso_v1') || 'null');
+              if(sso && sso.name){
+                username = String(sso.name || sso.user || '').trim();
+                role = String(sso.role || '').trim().toLowerCase() || inferRole(username, '');
               }
             }catch(_e){}
-            try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: username, role: role })); }catch(_e){}
+          }
+
+          var payload = { user: username, name: username, username: username, role: role, level: role, at: new Date().toISOString() };
+          if(username){
+            try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+            try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+            try{ sessionStorage.setItem('tasunSession_v1', JSON.stringify(payload)); }catch(_e){}
+            try{ localStorage.setItem('tasunSession_v1', JSON.stringify(payload)); }catch(_e){}
+            try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(payload)); }catch(_e){}
+            try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(payload)); }catch(_e){}
+            try{
+              var ssoPayload = { name:username, user:username, role:role, at:Date.now(), exp:Date.now() + SSO_TTL_MS, v:(window.__CACHE_V || window.TASUN_APP_VER || '') };
+              sessionStorage.setItem('tasunSso_v1', JSON.stringify(ssoPayload));
+              localStorage.setItem('tasunSso_v1', JSON.stringify(ssoPayload));
+              sessionStorage.setItem('tasunSso_v2', JSON.stringify(ssoPayload));
+              localStorage.setItem('tasunSso_v2', JSON.stringify(ssoPayload));
+            }catch(_e){}
           }
 
           try{ sessionStorage.setItem(INDEX_SESSION_KEY, '1'); }catch(_e){}
           try{ localStorage.setItem(INDEX_SESSION_KEY, '1'); }catch(_e){}
           try{ sessionStorage.setItem(CHILD_INDEX_SESSION_KEY, '1'); }catch(_e){}
           try{ localStorage.setItem(CHILD_INDEX_SESSION_KEY, '1'); }catch(_e){}
+          try{ sessionStorage.setItem('tasunIndexSessionAuthed_v2', '1'); }catch(_e){}
+          try{ localStorage.setItem('tasunIndexSessionAuthed_v2', '1'); }catch(_e){}
+          try{ sessionStorage.setItem('tasunSsoTab_v1', '1'); }catch(_e){}
+
+          var tokenKeys = ['tasunCloudToken_v1','tasunCloudToken_v1__index','tasunCloudToken_v1__auth-table','tasunCloudToken_v1__sxdh-notes','tasunBearerToken_v1','tasunAccessToken_v1','tasunAuthToken_v1','tasunSessionToken_v1','tasun_token','tasunToken','tasun_auth_token','authToken','access_token','token','x-api-key','tasunApiKey_v1'];
+          var token = '';
+          for(var i=0;i<tokenKeys.length;i++){
+            token = String(sessionStorage.getItem(tokenKeys[i]) || localStorage.getItem(tokenKeys[i]) || '').trim();
+            if(token) break;
+          }
+          if(token){
+            tokenKeys.forEach(function(k){
+              try{ sessionStorage.setItem(k, token); }catch(_e){}
+              try{ localStorage.setItem(k, token); }catch(_e){}
+            });
+            if(username){
+              try{
+                var bridge = JSON.parse(sessionStorage.getItem('tasunSessionBridge_v1') || localStorage.getItem('tasunSessionBridge_v1') || '{}') || {};
+                bridge.user = username; bridge.name = username; bridge.username = username; bridge.role = role; bridge.level = role;
+                bridge.token = token; bridge.accessToken = token; bridge.authToken = token; bridge.bearer = token; bridge.at = new Date().toISOString();
+                sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge));
+                localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge));
+              }catch(_e){}
+            }
+          }
+
+          var pass = '';
+          try{
+            pass = String(sessionStorage.getItem('tasunLastLoginPass_v1__' + username) || localStorage.getItem('tasunLastLoginPass_v1__' + username) || sessionStorage.getItem('tasunLastLoginPass_v1') || localStorage.getItem('tasunLastLoginPass_v1') || '').trim();
+          }catch(_e){}
+          if(pass){
+            try{ sessionStorage.setItem('tasunLastLoginPass_v1', pass); }catch(_e){}
+            try{ localStorage.setItem('tasunLastLoginPass_v1', pass); }catch(_e){}
+            if(username){
+              try{ sessionStorage.setItem('tasunLastLoginPass_v1__' + username, pass); }catch(_e){}
+              try{ localStorage.setItem('tasunLastLoginPass_v1__' + username, pass); }catch(_e){}
+            }
+          }
+
           try{ sessionStorage.setItem('tasun_next_path_v1', target); }catch(_e){}
+          try{ localStorage.setItem('tasun_next_path_v1', target); }catch(_e){}
           return true;
         }catch(_err){
           console.warn('persistChildPageBridgeForTarget failed', _err);
@@ -2036,12 +2272,11 @@ main.hero,
       }
       function onIndexConfigApplied(){
         try{
-          try{ dedupeIndexConfigStorage(); }catch(_e){}
           try{ migrateAuthToHashedIfNeeded(); }catch(_e){}
           ROUTES = loadRoutes();
           NAV_ARR = loadNavButtonsSeedIfMissing();
           AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-          try{ if(document.body && document.body.classList.contains('locked')) populateUserSelect(); }catch(e){}
+          try{ if(loginOverlay && loginOverlay.style.display === 'flex') populateUserSelect(); }catch(e){}
           buildMainButtonsDOM();
           if(CURRENT_USER){
             const refreshed = AUTH_TABLE.find(r => String(r.username||'') === String(CURRENT_USER.username||''));
@@ -2051,17 +2286,12 @@ main.hero,
         }catch(e){}
       }
 
-      function setUiLockState(locked){
-        try{
-          if(!document.body) return;
-          document.body.classList.toggle('locked', !!locked);
-        }catch(e){}
-      }
       function forceLogoutAndShowLogin(msg){
         clearSession();
         CURRENT_USER = null;
-        setUiLockState(true);
+        document.body.classList.add('locked');
         try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){}
+        if(loginOverlay) loginOverlay.style.display = 'flex';
         if(loginSub) loginSub.textContent = msg || '';
         if(loginError) loginError.textContent = '';
         if(passwordInput) passwordInput.value = '';
@@ -2074,9 +2304,11 @@ main.hero,
       function applyUser(user, opts){
         const o = opts || {};
         releaseBootUI();
-        setUiLockState(false);
+        document.body.classList.remove('locked');
+        if(loginOverlay) loginOverlay.style.display = 'none';
         try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){}
         if(loginSub) loginSub.textContent = '';
+        __loginStageQuietedOnce = false;
         CURRENT_USER = user;
         try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: user.level })); }catch(e){}
         const t = `目前使用者：${user.username} (${user.level})`;
@@ -2094,13 +2326,30 @@ main.hero,
         scheduleAll();
         if(!o.skipBroadcast){ broadcastAuthState('state', { user: user.username, role: String(user.level||'').toLowerCase() }); }
       }
+      function canSilentReenterFromSession(){
+        try{
+          if(sessionStorage.getItem(INDEX_SESSION_KEY) !== '1') return false;
+          const sess = getSession();
+          if(!sess || !sess.user) return false;
+          const u = AUTH_TABLE.find(r => r.username === sess.user);
+          if(!u) return false;
+          if(String(u.level||'').toLowerCase() !== String(sess.role||'').toLowerCase()) return false;
+          return true;
+        }catch(e){ return false; }
+      }
+      function tryRestoreLogin(){
+        // index.html 必須先顯示登入表，不能靠既有 cookie / session / 廣播自動跳過登入。
+        // 子頁若需要 SSO，仍由子頁自己的守門程式處理。
+        return false;
+      }
       function showLogin(msg){
         try{ clearSession({ silent:true }); }catch(e){}
         CURRENT_USER = null;
         if(msg) loginSub.textContent = msg;
         else if(loginSub) loginSub.textContent = '';
         try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){}
-        setUiLockState(true);
+        document.body.classList.add('locked');
+        if(loginOverlay) loginOverlay.style.display = 'flex';
         if(loginError) loginError.textContent = '';
         if(passwordInput) passwordInput.value = '';
         populateUserSelect();
@@ -2312,23 +2561,57 @@ main.hero,
         const left = [], right = [];
         visible.forEach((btn, i) => (i % 2 === 0 ? left : right).push(btn));
         const topSafe = topBound, bottomSafe = bottomBound, availY = Math.max(1, bottomSafe - topSafe);
-        const centerGap = clamp(W * 0.16, 180, 260);
-        const sideMaxW = Math.max(280, Math.floor((W - centerGap) / 2) - 40);
-        const btnW = clamp(Math.floor(W * 0.26), 340, Math.min(560, sideMaxW));
+        const deskKeepout = computeLotusKeepout(rect, stageRect, topBound, bottomBound, false);
+        const edgePad = clamp(Math.round(W * 0.030), 40, 84);
+        const zenGap = clamp(Math.round(W * 0.020), 26, 54);
+        const lotusGap = clamp(Math.round(W * 0.022), 28, 58);
+
+        const leftZenRect = (typeof zwLeft !== 'undefined' && zwLeft) ? zwLeft.getBoundingClientRect() : null;
+        const rightZenRect = (typeof zwRight !== 'undefined' && zwRight) ? zwRight.getBoundingClientRect() : null;
+        const leftZenLimit = leftZenRect ? Math.round((leftZenRect.right - rect.left) + zenGap) : edgePad;
+        const rightZenLimit = rightZenRect ? Math.round((rightZenRect.left - rect.left) - zenGap) : (W - edgePad);
+
+        const keepoutLeftLimit = deskKeepout ? Math.round(deskKeepout.left - lotusGap) : Math.round(W * 0.5 - 140);
+        const keepoutRightLimit = deskKeepout ? Math.round(deskKeepout.right + lotusGap) : Math.round(W * 0.5 + 140);
+        const columnMaxWLeft = Math.max(240, keepoutLeftLimit - leftZenLimit);
+        const columnMaxWRight = Math.max(240, rightZenLimit - keepoutRightLimit);
+        const btnW = clamp(Math.floor(Math.min(W * 0.215, columnMaxWLeft, columnMaxWRight)), 260, 360);
         navArea.style.setProperty('--btnW', btnW + 'px');
+
         const maxRows = Math.max(left.length, right.length);
-        const gapBase = clamp(Math.round(H * 0.045), 16, 26);
-        const hBase = clamp(Math.round(H * 0.118), 74, 112);
+        const gapBase = clamp(Math.round(H * 0.050), 18, 30);
+        const hBase = clamp(Math.round(H * 0.110), 72, 98);
         const need = maxRows*hBase + Math.max(0, (maxRows-1)*gapBase);
-        const s = clamp(availY / need, 0.66, 1.0);
-        const gapY = Math.max(14, Math.round(gapBase * s));
-        const btnH = Math.max(64, Math.round(hBase * s));
+        const s = clamp(availY / need, 0.68, 1.0);
+        const gapY = Math.max(18, Math.round(gapBase * s));
+        const btnH = Math.max(66, Math.round(hBase * s));
         navArea.style.setProperty('--btnGap', gapY + 'px');
         navArea.style.setProperty('--btnH', btnH + 'px');
-        navArea.style.setProperty('--btnScale', String(clamp((btnH / 92) * 0.98, 0.62, 1.00)));
-        const xPad = 28, leftX = xPad, rightX = Math.max(leftX + btnW + 12, W - xPad - btnW);
-        function placeColumn(btns, isLeft){ const rows = btns.length; if(!rows) return; const total = rows*btnH + Math.max(0, (rows-1)*gapY); const slack = Math.max(0, availY - total); const y0 = topSafe + Math.min(52, Math.round(slack * 0.22)); let y = y0; for(const btn of btns){ btn.style.top = Math.round(y) + 'px'; if(isLeft){ btn.style.left = Math.round(leftX) + 'px'; btn.style.right = ''; } else { btn.style.right = Math.round(W - (rightX + btnW)) + 'px'; btn.style.left = ''; } y += btnH + gapY; } }
-        placeColumn(left, true); placeColumn(right, false);
+        navArea.style.setProperty('--btnScale', String(clamp((btnH / 92) * 0.98, 0.62, 0.96)));
+
+        const leftX = Math.max(edgePad, leftZenLimit);
+        const rightX = Math.min(W - edgePad - btnW, rightZenLimit - btnW);
+        function placeColumn(btns, isLeft){
+          const rows = btns.length;
+          if(!rows) return;
+          const total = rows*btnH + Math.max(0, (rows-1)*gapY);
+          const slack = Math.max(0, availY - total);
+          const y0 = topSafe + Math.min(56, Math.round(slack * 0.24));
+          let y = y0;
+          for(const btn of btns){
+            btn.style.top = Math.round(y) + 'px';
+            if(isLeft){
+              btn.style.left = Math.round(leftX) + 'px';
+              btn.style.right = '';
+            } else {
+              btn.style.right = Math.round(W - (rightX + btnW)) + 'px';
+              btn.style.left = '';
+            }
+            y += btnH + gapY;
+          }
+        }
+        placeColumn(left, true);
+        placeColumn(right, false);
       }
 
       let _userActiveIndex = -1, _typeBuf = '', _typeTimer = 0;
@@ -2450,22 +2733,135 @@ main.hero,
       buildMainButtonsDOM();
       updateReleaseButtonVisibility();
       showLogin();
+      setTimeout(() => { try{ if(document.body && document.body.classList.contains('locked')) quiesceLoginStageNetwork(); }catch(e){} }, 1200);
       if(zenImg) zenImg.addEventListener('load', () => { scheduleAll(); }, { once:false });
       requestAnimationFrame(() => { document.body.classList.remove('booting'); scheduleAll(); onFontsReady(() => scheduleAll()); });
 
-      async function coreLoginViaAuthChain(username, password){
-        const auth = authCore();
-        const wrap = window.TasunCloudWrapV4 || null;
-        if(!auth || typeof auth.login !== 'function') throw new Error('核心登入鏈未載入');
-        let apiBase = '';
-        try{
-          if(wrap && typeof wrap.load === 'function') apiBase = await wrap.load();
-          else apiBase = String(window.TASUN_API_BASE || '');
-        }catch(e){
-          apiBase = String(window.TASUN_API_BASE || '');
+      async function verifyUserPassword(username, password){
+        const wanted = String(username || '').trim().toLowerCase();
+        const plain = String(password || '').trim();
+        if(!wanted || !plain) return null;
+        const pwHash = (await sha256Hex(plain)).toLowerCase();
+        const candidates = AUTH_TABLE.filter(r => String(r.username || '').trim().toLowerCase() === wanted);
+        for(const u of candidates){
+          const storedHash = String(u.passHash || '').trim().toLowerCase();
+          const storedPlain = String(u.password || u.pass || '').trim();
+          if((storedHash && pwHash === storedHash) || (!!storedPlain && plain === storedPlain)) return u;
         }
-        const cur = await auth.login({ username, password, apiBase });
-        return cur || authCurrent() || null;
+        const fallbackHash = String(DEFAULT_AUTH_HASH[wanted] || '').trim().toLowerCase();
+        if(fallbackHash && pwHash === fallbackHash){
+          const matched = candidates[0] || { username: username, level: inferRole(username, '') };
+          return Object.assign({}, matched, {
+            username: String(matched.username || username).trim(),
+            level: String(matched.level || matched.role || inferRole(username, '')).trim().toLowerCase() || 'read',
+            passHash: fallbackHash
+          });
+        }
+        return null;
+      }
+
+
+
+      function __tasunSaveLoginBridge(username, password, role){
+        try{
+          const nowIso = new Date().toISOString();
+          const u = String(username || '').trim();
+          const p = String(password || '');
+          const r = String(role || '').trim().toLowerCase() || 'read';
+
+          if(!u) return false;
+
+          const userObj = {
+            user: u,
+            name: u,
+            role: r,
+            at: nowIso
+          };
+
+          const bridgeObj = {
+            user: u,
+            name: u,
+            role: r,
+            at: nowIso
+          };
+
+          try{ sessionStorage.setItem('tasunCurrentUser_v1', JSON.stringify(userObj)); }catch(e){}
+          try{ localStorage.setItem('tasunCurrentUser_v1', JSON.stringify(userObj)); }catch(e){}
+          try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridgeObj)); }catch(e){}
+          try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridgeObj)); }catch(e){}
+          try{ sessionStorage.setItem('tasunIndexSession_v1', '1'); }catch(e){}
+          try{ localStorage.setItem('tasunIndexSession_v1', '1'); }catch(e){}
+
+          if(p){
+            try{ sessionStorage.setItem('tasunLastLoginPass_v1', p); }catch(e){}
+            try{ localStorage.setItem('tasunLastLoginPass_v1', p); }catch(e){}
+            try{ sessionStorage.setItem('tasunLastLoginPass_v1__' + u, p); }catch(e){}
+            try{ localStorage.setItem('tasunLastLoginPass_v1__' + u, p); }catch(e){}
+          }
+
+          return true;
+        }catch(err){
+          console.warn('save login bridge failed', err);
+          return false;
+        }
+      }
+
+      async function __tasunBridgeWorkerTokenNow(username, password, role){
+        try{
+          const user = String(username || '').trim();
+          const pass = String(password || '').trim();
+          const finalRole = String(role || 'read').trim().toLowerCase() || 'read';
+          if(!user || !pass) return false;
+          const apiBase = 'https://tasun-worker.wutasun.workers.dev';
+          const res = await fetch(apiBase + '/api/tasun/login', {
+            method:'POST',
+            cache:'no-store',
+            credentials:'include',
+            headers:{ 'content-type':'application/json', 'accept':'application/json' },
+            body: JSON.stringify({ username:user, password:pass, user:user, pass:pass })
+          });
+          if(!res.ok) return false;
+          const json = await res.json().catch(() => ({}));
+          const token = String(
+            json.token || json.accessToken || json.authToken || json.bearer || json.workerToken || json.cloudToken || json.apiKey ||
+            ((json.auth || {}).token || (json.auth || {}).accessToken || (json.auth || {}).authToken || (json.auth || {}).bearer || (json.auth || {}).apiKey) ||
+            ((json.session || {}).token || (json.session || {}).accessToken || (json.session || {}).authToken || (json.session || {}).bearer || (json.session || {}).apiKey) ||
+            ((json.data || {}).token || (json.data || {}).accessToken || (json.data || {}).authToken || (json.data || {}).bearer || (json.data || {}).apiKey) ||
+            ((json.payload || {}).token || (json.payload || {}).accessToken || (json.payload || {}).authToken || (json.payload || {}).bearer || (json.payload || {}).apiKey) ||
+            ''
+          ).trim();
+          if(!token) return false;
+
+          const tokenKeys = [
+            'tasunCloudToken_v1',
+            'tasunCloudToken_v1__index',
+            'tasunCloudToken_v1__auth-table',
+            'tasunBearerToken_v1',
+            'tasunAccessToken_v1',
+            'tasunAuthToken_v1',
+            'tasunSessionToken_v1',
+            'tasun_token',
+            'tasunToken',
+            'tasun_auth_token',
+            'authToken',
+            'access_token',
+            'token',
+            'x-api-key',
+            'tasunApiKey_v1'
+          ];
+          tokenKeys.forEach((k) => {
+            try{ sessionStorage.setItem(k, token); }catch(e){}
+            try{ localStorage.setItem(k, token); }catch(e){}
+          });
+
+          const bridge = { user:user, name:user, role:finalRole, token:token, accessToken:token, authToken:token, bearer:token, at:new Date().toISOString() };
+          try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge)); }catch(e){}
+          try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge)); }catch(e){}
+          return true;
+        }catch(err){
+          console.warn('worker token bridge failed', err);
+          return false;
+        }
       }
 
       loginForm.addEventListener('submit', async (e) => {
@@ -2489,23 +2885,34 @@ main.hero,
           repairKnownAuthSecrets();
           AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
 
-          const authCur = await coreLoginViaAuthChain(username, password);
-          const matched = AUTH_TABLE.find(r => String(r.username || '').trim().toLowerCase() === String(username).trim().toLowerCase()) || null;
-          const finalRole = String((matched && (matched.level || matched.role)) || (authCur && authCur.role) || inferRole(username, '') || 'read').trim().toLowerCase();
-          const finalUser = Object.assign({}, matched || {}, {
-            username: String((matched && matched.username) || (authCur && (authCur.username || authCur.user || authCur.name)) || username).trim(),
-            level: finalRole,
-            token: String((authCur && authCur.token) || '').trim()
-          });
+          const u = await verifyUserPassword(username, password);
+          if(!u){
+            const exists = AUTH_TABLE.some(r =>
+              String(r.username || '').trim().toLowerCase() === String(username).trim().toLowerCase()
+            );
+            loginError.textContent = exists ? '密碼錯誤' : '查無此使用者（請到「系統 / 權限」新增）';
+            return;
+          }
 
-          setSession({ username: finalUser.username, level: finalRole, token: finalUser.token });
+          const finalRole = String(u.level || u.role || inferRole(u.username, '') || 'read').trim().toLowerCase();
 
-          applyUser(finalUser, { skipBroadcast:true });
+          setSession({ username: u.username, level: finalRole });
+
+          __tasunSaveLoginBridge(u.username, password, finalRole);
+          await __tasunBridgeWorkerTokenNow(u.username, password, finalRole);
+
+          applyUser(
+            Object.assign({}, u, { level: finalRole }),
+            { skipBroadcast:true }
+          );
 
           loginError.textContent = '';
+
           if(passwordInput) passwordInput.value = '';
         }catch(err){
-          loginError.textContent = '登入失敗：' + (err && err.message ? err.message : String(err));
+          var msg = (err && err.message ? err.message : String(err));
+          if(/核心登入鏈未載入/.test(msg)) msg = '登入服務載入中，請稍後再試';
+          loginError.textContent = '登入失敗：' + msg;
         }
       });
       btnForceRelogin.addEventListener('click', () => { clearSession(); loginSub.textContent = '請重新輸入密碼登入'; loginError.textContent = ''; if(passwordInput) passwordInput.value = ''; try{ if(passwordInput) passwordInput.focus(); }catch(e){} scheduleAll(); });
@@ -2516,6 +2923,52 @@ main.hero,
       if(btnRelease) btnRelease.addEventListener('click', triggerAdminRelease);
       window.addEventListener('resize', () => scheduleAll(), { passive:true });
       if(window.visualViewport) window.visualViewport.addEventListener('resize', () => scheduleAll(), { passive:true });
+      let __visibleRefreshBusy = false;
+      let __visibleRefreshTs = 0;
+      function isLoginStageActive(){
+        try{
+          if(document.body && document.body.classList.contains('locked')) return true;
+          return !!(loginOverlay && getComputedStyle(loginOverlay).display !== 'none');
+        }catch(e){
+          return !!(loginOverlay && loginOverlay.style.display === 'flex');
+        }
+      }
+      async function forceRefreshLatestOnVisible(opts){
+        const o = opts || {};
+        const now = Date.now();
+        if(__visibleRefreshBusy) return false;
+        if(!o.force && (now - __visibleRefreshTs) < 12000) return false;
+        if(isLoginStageActive()) return false;
+        __visibleRefreshBusy = true;
+        __visibleRefreshTs = now;
+        try{
+          return await ensureLatestBuildSync(!!o.force);
+        }catch(e){
+          return false;
+        }finally{
+          __visibleRefreshBusy = false;
+        }
+      }
+      document.addEventListener('visibilitychange', ()=>{
+        if(document.visibilityState === 'visible'){
+          scheduleAll();
+          if(isLoginStageActive()) return;
+          forceRefreshLatestOnVisible().catch(()=>{});
+          if(!CURRENT_USER){ return; }
+          if(!CURRENT_USER) return;
+        try{ if(cloudCtrl && cloudCtrl.pullNow) cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
+        }
+      }, { passive:true });
+      window.addEventListener('focus', ()=>{
+        if(isLoginStageActive()) return;
+        forceRefreshLatestOnVisible().catch(()=>{});
+        if(!CURRENT_USER) return;
+        try{ if(cloudCtrl && cloudCtrl.pullNow) cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
+      }, { passive:true });
+      window.addEventListener('pageshow', ()=>{
+        if(isLoginStageActive()) return;
+        return;
+      }, { passive:true });
       window.addEventListener('storage', (e)=>{
         if(!e) return;
         if(e.key === '__tasun_auth_sync__' && e.newValue){
@@ -2523,7 +2976,7 @@ main.hero,
             const msg = JSON.parse(e.newValue);
             if(msg && msg.tabId !== TAB_ID){
               if(msg.kind === 'logout'){ CURRENT_USER = null; forceLogoutAndShowLogin('已於其他分頁登出'); }
-              else if(msg.kind === 'login' || msg.kind === 'state'){ try{ scheduleAll(); }catch(__e){} }
+              else if(msg.kind === 'login' || msg.kind === 'state'){ tryRestoreLogin(); }
             }
           }catch(_e){}
           return;
@@ -2537,7 +2990,7 @@ main.hero,
             const msg = ev && ev.data;
             if(!msg || msg.tabId === TAB_ID) return;
             if(msg.kind === 'logout'){ CURRENT_USER = null; forceLogoutAndShowLogin('已於其他分頁登出'); }
-            else if(msg.kind === 'login' || msg.kind === 'state'){ try{ scheduleAll(); }catch(__e){} }
+            else if(msg.kind === 'login' || msg.kind === 'state'){ tryRestoreLogin(); }
           }catch(e){}
         };
       }
@@ -2554,130 +3007,2438 @@ main.hero,
   })();
   </script>
 
-
-  <style id="tasun-v5-single-authority-rebuilt">
-    body.prehide .hero{
-      opacity:1 !important;
-      visibility:visible !important;
-      pointer-events:auto !important;
-    }
-    .hero, .hero-inner, .lotus-stage, .zen-visual, #zenImg{
-      visibility:visible !important;
-      opacity:1 !important;
-    }
-    .lotus-stage{
-      background-image:url('佛教禪意主視覺.png');
-      background-size:cover;
-      background-position:center center;
-      background-repeat:no-repeat;
-    }
-    #bootCover{
-      display:none !important;
-      opacity:0 !important;
-      pointer-events:none !important;
-    }
-    #loginOverlay{
-      position:fixed !important;
-      inset:0 !important;
-      align-items:center !important;
-      justify-content:center !important;
-      z-index:9999 !important;
-    }
-    body.locked #loginOverlay{
-      display:flex !important;
-    }
-    body:not(.locked) #loginOverlay{
-      display:none !important;
-    }
-  </style>
-
-  
-<script id="tasun-v5-single-authority-rebuilt-script">
+  <script>
   (function(){
-    'use strict';
-    function withVFallback(path){
+    function forceLoginOverlay(){
       try{
-        return (typeof window.__withV === 'function') ? window.__withV(path) : path;
-      }catch(e){
-        return path;
-      }
-    }
-    function syncAuthority(){
-      try{
-        var body = document.body;
-        var locked = !!(body && body.classList.contains('locked'));
-        var hero = document.querySelector('.hero');
-        var inner = document.getElementById('heroInner');
-        var lotus = document.getElementById('lotusStage');
-        var img = document.getElementById('zenImg');
         var overlay = document.getElementById('loginOverlay');
-        var boot = document.getElementById('bootCover');
-
-        if(body){
-          body.classList.remove('prehide');
-          body.classList.remove('booting');
-        }
-        if(hero){
-          hero.style.opacity = '1';
-          hero.style.visibility = 'visible';
-        }
-        if(inner){
-          inner.style.opacity = '1';
-          inner.style.visibility = 'visible';
-        }
-        if(lotus){
-          lotus.style.display = 'block';
-          lotus.style.opacity = '1';
-          lotus.style.visibility = 'visible';
-          lotus.style.backgroundImage = "url('" + withVFallback('佛教禪意主視覺.png') + "')";
-          lotus.style.backgroundSize = 'cover';
-          lotus.style.backgroundPosition = 'center center';
-          lotus.style.backgroundRepeat = 'no-repeat';
-        }
-        if(img){
-          var base = img.getAttribute('data-base') || '佛教禪意主視覺.png';
-          if(!img.getAttribute('src') || img.getAttribute('src') === '#'){
-            img.src = withVFallback(base);
-          }
-          if(!img.dataset.fallbackBound){
-            img.dataset.fallbackBound = '1';
-            img.onerror = function(){
-              try{ this.style.opacity = '0'; }catch(e){}
-            };
-          }
-          img.style.display = 'block';
-          img.style.opacity = '1';
-          img.style.visibility = 'visible';
-        }
-        if(boot){
-          boot.hidden = true;
-          boot.style.display = 'none';
-          boot.style.opacity = '0';
-          boot.style.pointerEvents = 'none';
-        }
-        if(overlay){
-          overlay.style.display = locked ? 'flex' : 'none';
-          overlay.setAttribute('aria-hidden', locked ? 'false' : 'true');
-        }
+        if(!overlay) return;
+        var hidden = getComputedStyle(overlay).display === 'none';
+        var bodyLocked = document.body && document.body.classList.contains('locked');
+        var hasVisibleNav = !!document.querySelector('.nav-area .nav-btn[style*="display: flex"]');
+        if(bodyLocked && hidden && !hasVisibleNav){ overlay.style.display = 'flex'; document.body.classList.add('locked'); }
       }catch(e){}
     }
-
-    ['DOMContentLoaded','load','pageshow','focus'].forEach(function(ev){
-      window.addEventListener(ev, function(){
-        setTimeout(syncAuthority, 40);
-        setTimeout(syncAuthority, 220);
-      }, { passive:true });
-    });
-    document.addEventListener('visibilitychange', function(){
-      if(document.visibilityState === 'visible'){
-        setTimeout(syncAuthority, 60);
-      }
-    }, { passive:true });
-
-    setTimeout(syncAuthority, 20);
-    setTimeout(syncAuthority, 300);
-    setTimeout(syncAuthority, 1200);
+    window.addEventListener('error', function(){ setTimeout(forceLoginOverlay, 30); });
+    document.addEventListener('DOMContentLoaded', function(){ setTimeout(forceLoginOverlay, 900); });
+    window.addEventListener('load', function(){ setTimeout(forceLoginOverlay, 1200); });
   })();
   </script>
+
+
+  <!-- Tasun v5 正式收斂：首頁登入後同步橋接 Worker token 到子頁 -->
+  <script>
+(function(){
+  'use strict';
+  if (window.__TASUN_INDEX_WORKER_TOKEN_BRIDGE_PATCH_V1__) return;
+  window.__TASUN_INDEX_WORKER_TOKEN_BRIDGE_PATCH_V1__ = true;
+
+  var API_BASE = 'https://tasun-worker.wutasun.workers.dev';
+  var CURRENT_KEY = 'tasunCurrentUser_v1';
+  var LAST_LOGIN_PASS_KEY = 'tasunLastLoginPass_v1';
+  var SESSION_KEY = 'tasunSessionLogin_v2';
+  var TOKEN_KEYS = [
+    'tasunCloudToken_v1',
+    'tasunCloudToken_v1__index',
+    'tasunCloudToken_v1__auth-table',
+    'tasunBearerToken_v1',
+    'tasunAccessToken_v1',
+    'tasunAuthToken_v1',
+    'tasunSessionToken_v1',
+    'tasun_token',
+    'tasunToken',
+    'tasun_auth_token',
+    'authToken',
+    'access_token',
+    'token',
+    'x-api-key',
+    'tasunApiKey_v1'
+  ];
+
+  function norm(v){ return String(v == null ? '' : v).trim(); }
+  function nowISO(){ try{ return new Date().toISOString(); }catch(e){ return ''; } }
+  function safeParse(raw){ try{ return JSON.parse(raw); }catch(e){ return null; } }
+  function readStorage(storage, key){ try{ return storage.getItem(key) || ''; }catch(e){ return ''; } }
+  function writeStorage(storage, key, value){ try{ storage.setItem(key, value); }catch(e){} }
+  function removeStorage(storage, key){ try{ storage.removeItem(key); }catch(e){} }
+  function readCookie(name){
+    try{
+      var esc = String(name || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      var m = document.cookie.match(new RegExp('(?:^|; )' + esc + '=([^;]*)'));
+      return m ? decodeURIComponent(m[1] || '') : '';
+    }catch(e){ return ''; }
+  }
+  function readJSONKeys(keys){
+    keys = Array.isArray(keys) ? keys : [];
+    for(var i=0;i<keys.length;i++){
+      var raw = readStorage(sessionStorage, keys[i]) || readStorage(localStorage, keys[i]);
+      if(!raw) continue;
+      var js = safeParse(raw);
+      if(js && typeof js === 'object') return js;
+    }
+    return null;
+  }
+  function getCurrentUser(){
+    var js = readJSONKeys([CURRENT_KEY, SESSION_KEY, 'tasunSessionBridge_v1', 'tasunSso_v2', 'tasunSso_v1', 'tasunCurrentUser_v2']);
+    if(js && typeof js === 'object'){
+      var user = norm(js.user || js.name || js.username || js.account);
+      if(user) return { user:user, role:norm(js.role || js.level || 'read') || 'read' };
+    }
+    try{
+      if(window.TasunAuthV4 && typeof window.TasunAuthV4.getCurrentUser === 'function'){
+        var u = window.TasunAuthV4.getCurrentUser();
+        var user2 = norm(u && (u.user || u.name || u.username));
+        if(user2) return { user:user2, role:norm(u.role || u.level || 'read') || 'read' };
+      }
+    }catch(e){}
+    return null;
+  }
+  function getLastPass(user){
+    user = norm(user);
+    return norm(
+      (user ? readStorage(sessionStorage, LAST_LOGIN_PASS_KEY + '__' + user) : '') ||
+      (user ? readStorage(localStorage,  LAST_LOGIN_PASS_KEY + '__' + user) : '') ||
+      readStorage(sessionStorage, LAST_LOGIN_PASS_KEY) ||
+      readStorage(localStorage, LAST_LOGIN_PASS_KEY)
+    );
+  }
+  function extractToken(obj){
+    if(!obj || typeof obj !== 'object') return '';
+    return norm(
+      obj.token || obj.accessToken || obj.authToken || obj.bearer || obj.workerToken || obj.cloudToken || obj.apiKey ||
+      (obj.auth && (obj.auth.token || obj.auth.accessToken || obj.auth.authToken || obj.auth.bearer || obj.auth.apiKey)) ||
+      (obj.session && (obj.session.token || obj.session.accessToken || obj.session.authToken || obj.session.bearer || obj.session.apiKey)) ||
+      (obj.data && (obj.data.token || obj.data.accessToken || obj.data.authToken || obj.data.bearer || obj.data.apiKey)) ||
+      (obj.payload && (obj.payload.token || obj.payload.accessToken || obj.payload.authToken || obj.payload.bearer || obj.payload.apiKey)) ||
+      ''
+    );
+  }
+  function getAnyToken(){
+    for(var i=0;i<TOKEN_KEYS.length;i++){
+      var v = norm(readStorage(sessionStorage, TOKEN_KEYS[i]) || readStorage(localStorage, TOKEN_KEYS[i]));
+      if(v) return v;
+    }
+    var bridge = readJSONKeys(['tasunSessionBridge_v1', 'tasunSso_v2', 'tasunSso_v1', CURRENT_KEY, SESSION_KEY]);
+    var t = extractToken(bridge);
+    if(t) return t;
+    try{
+      if(window.TasunAuthV4 && typeof window.TasunAuthV4.getToken === 'function'){
+        t = norm(window.TasunAuthV4.getToken() || '');
+        if(t) return t;
+      }
+    }catch(e){}
+    try{
+      var ga = window.TasunGlobalAuth || window.tasunGlobalAuth || window.TASUN_AUTH || null;
+      if(ga){
+        t = norm(ga.token || ga.accessToken || ga.authToken || ga.apiKey || (typeof ga.getToken === 'function' ? ga.getToken() : '') || '');
+        if(t) return t;
+      }
+    }catch(e){}
+    return norm(readCookie('tasun_bearer_token') || readCookie('tasun_token') || readCookie('token') || readCookie('tasun_auth_token'));
+  }
+  function bridgeToken(token, user, role, password){
+    token = norm(token);
+    user = norm(user);
+    role = norm(role || 'read') || 'read';
+    if(!token || !user) return false;
+    for(var i=0;i<TOKEN_KEYS.length;i++){
+      writeStorage(sessionStorage, TOKEN_KEYS[i], token);
+      writeStorage(localStorage, TOKEN_KEYS[i], token);
+    }
+    var bridge = { user:user, name:user, role:role, token:token, accessToken:token, authToken:token, bearer:token, at:nowISO() };
+    writeStorage(sessionStorage, 'tasunSessionBridge_v1', JSON.stringify(bridge));
+    writeStorage(localStorage, 'tasunSessionBridge_v1', JSON.stringify(bridge));
+    writeStorage(sessionStorage, CURRENT_KEY, JSON.stringify({ user:user, name:user, role:role, at:nowISO() }));
+    writeStorage(localStorage, CURRENT_KEY, JSON.stringify({ user:user, name:user, role:role, at:nowISO() }));
+    if(password){
+      writeStorage(sessionStorage, LAST_LOGIN_PASS_KEY, password);
+      writeStorage(localStorage, LAST_LOGIN_PASS_KEY, password);
+      writeStorage(sessionStorage, LAST_LOGIN_PASS_KEY + '__' + user, password);
+      writeStorage(localStorage, LAST_LOGIN_PASS_KEY + '__' + user, password);
+    }
+    return true;
+  }
+  function clearBridgedToken(){
+    for(var i=0;i<TOKEN_KEYS.length;i++){
+      removeStorage(sessionStorage, TOKEN_KEYS[i]);
+      removeStorage(localStorage, TOKEN_KEYS[i]);
+    }
+    try{
+      var js = safeParse(readStorage(sessionStorage, 'tasunSessionBridge_v1')) || safeParse(readStorage(localStorage, 'tasunSessionBridge_v1'));
+      if(js && typeof js === 'object'){
+        delete js.token; delete js.accessToken; delete js.authToken; delete js.bearer; delete js.workerToken; delete js.cloudToken; delete js.apiKey;
+        writeStorage(sessionStorage, 'tasunSessionBridge_v1', JSON.stringify(js));
+        writeStorage(localStorage, 'tasunSessionBridge_v1', JSON.stringify(js));
+      }
+    }catch(e){}
+  }
+  async function workerLogin(user, password, role){
+    user = norm(user); password = norm(password); role = norm(role || 'read') || 'read';
+    if(!user || !password) return '';
+    var res = await fetch(API_BASE + '/api/tasun/login', {
+      method:'POST',
+      cache:'no-store',
+      credentials:'include',
+      headers:{ 'content-type':'application/json', 'accept':'application/json' },
+      body: JSON.stringify({ username:user, password:password, user:user, pass:password })
+    });
+    if(!res.ok){
+      var txt = await res.text().catch(function(){ return ''; });
+      throw new Error('worker login failed: ' + res.status + ' ' + String(txt).slice(0,200));
+    }
+    var json = await res.json().catch(function(){ return {}; });
+    var token = extractToken(json);
+    if(token) bridgeToken(token, user, norm(json.role || role) || role, password);
+    return token;
+  }
+  function syncExistingTokenBridge(){
+    var cur = getCurrentUser();
+    if(!cur || !cur.user) return false;
+    var token = getAnyToken();
+    if(!token) return false;
+    return bridgeToken(token, cur.user, cur.role, '');
+  }
+  var pendingCred = null;
+  var inflight = false;
+  async function ensureWorkerBridgeFromCred(cred){
+    if(inflight) return false;
+    inflight = true;
+    try{
+      cred = cred || pendingCred || {};
+      var user = norm(cred.user);
+      var role = norm(cred.role || 'read') || 'read';
+      var pass = norm(cred.pass) || getLastPass(user);
+      if(!user){
+        var cur = getCurrentUser();
+        user = norm(cur && cur.user);
+        role = norm((cur && cur.role) || role || 'read') || 'read';
+      }
+      if(!user || !pass) return false;
+      var token = getAnyToken();
+      if(token){ bridgeToken(token, user, role, pass); return true; }
+      token = await workerLogin(user, pass, role).catch(function(){ return ''; });
+      return !!token;
+    }finally{
+      inflight = false;
+    }
+  }
+  function queueEnsureBridge(cred, delay){
+    pendingCred = cred || pendingCred;
+    window.setTimeout(function(){ ensureWorkerBridgeFromCred(pendingCred).catch(function(){}); }, Number(delay || 0));
+  }
+
+  function installSubmitPatch(){
+    var form = document.getElementById('loginForm');
+    var usernameSel = document.getElementById('username');
+    var passwordInput = document.getElementById('password');
+    if(!form || !usernameSel || !passwordInput) return false;
+    form.addEventListener('submit', function(){
+      pendingCred = {
+        user: norm(usernameSel.value),
+        pass: String(passwordInput.value || ''),
+        role: norm((getCurrentUser() || {}).role || 'read') || 'read'
+      };
+      queueEnsureBridge(pendingCred, 80);
+      queueEnsureBridge(pendingCred, 500);
+      queueEnsureBridge(pendingCred, 1200);
+    }, true);
+    return true;
+  }
+  function installLogoutPatch(){
+    ['btnLogout','btnSwitchUser','btnForceRelogin'].forEach(function(id){
+      var el = document.getElementById(id);
+      if(!el) return;
+      el.addEventListener('click', function(){ clearBridgedToken(); }, true);
+    });
+  }
+  function boot(){
+    installSubmitPatch();
+    installLogoutPatch();
+    // 首頁登入畫面階段禁止自動橋接/自動登入，避免背景持續運作造成卡頓。
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
+  else boot();
+})();
+
+  </script>
+
+<script>
+(function(){
+  var VER = window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || "";
+  function withV(href){
+    try{
+      if(!href) return href;
+      if(/^https?:\/\//i.test(href) || /^mailto:/i.test(href) || /^tel:/i.test(href)) return href;
+      var u = new URL(href, location.href);
+      if(u.origin !== location.origin) return href;
+      u.searchParams.set('v', VER);
+      return u.pathname + u.search + u.hash;
+    }catch(e){ return href; }
+  }
+  function persistNavBridgeToChild(targetHref){
+    try{
+      var href = String(targetHref || '').trim();
+      if(!href || /^https?:\/\//i.test(href) || /^mailto:/i.test(href) || /^tel:/i.test(href)) return false;
+      var cur = JSON.parse(sessionStorage.getItem('tasunCurrentUser_v1') || localStorage.getItem('tasunCurrentUser_v1') || 'null');
+      var u = String((cur && (cur.user || cur.name || cur.username)) || '').trim();
+      var r = String((cur && (cur.role || cur.level)) || '').trim().toLowerCase() || 'read';
+      if(u){
+        var row = { user:u, name:u, username:u, role:r, level:r, at:new Date().toISOString() };
+        try{ sessionStorage.setItem('tasunCurrentUser_v1', JSON.stringify(row)); }catch(e){}
+        try{ localStorage.setItem('tasunCurrentUser_v1', JSON.stringify(row)); }catch(e){}
+        try{ sessionStorage.setItem('tasunSession_v1', JSON.stringify(row)); }catch(e){}
+        try{ localStorage.setItem('tasunSession_v1', JSON.stringify(row)); }catch(e){}
+        try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(row)); }catch(e){}
+        try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(row)); }catch(e){}
+      }
+      try{ sessionStorage.setItem('tasunIndexSession_v1', '1'); }catch(e){}
+      try{ localStorage.setItem('tasunIndexSession_v1', '1'); }catch(e){}
+      try{ sessionStorage.setItem('tasun_next_path_v1', href); }catch(e){}
+      try{ localStorage.setItem('tasun_next_path_v1', href); }catch(e){}
+      return true;
+    }catch(e){ return false; }
+  }
+  function syncBridge(){
+    try{
+      var cur = JSON.parse(sessionStorage.getItem('tasunCurrentUser_v1') || localStorage.getItem('tasunCurrentUser_v1') || 'null');
+      if(cur && cur.user){
+        sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(cur));
+        localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(cur));
+      }
+    }catch(e){}
+    var tokenKeys = ['tasunCloudToken_v1','tasunCloudToken_v1__sxdh-notes','tasunCloudToken_v1__auth-table','tasunBearerToken_v1','tasunAccessToken_v1','tasunAuthToken_v1','tasunSessionToken_v1','tasun_token','tasunToken','tasun_auth_token','authToken','access_token','token','x-api-key','tasunApiKey_v1'];
+    try{
+      var token = '';
+      for(var i=0;i<tokenKeys.length;i++){
+        token = String(sessionStorage.getItem(tokenKeys[i]) || localStorage.getItem(tokenKeys[i]) || '').trim();
+        if(token) break;
+      }
+      if(token){
+        tokenKeys.forEach(function(k){
+          try{ sessionStorage.setItem(k, token); }catch(e){}
+          try{ localStorage.setItem(k, token); }catch(e){}
+        });
+      }
+    }catch(e){}
+  }
+  function patchAnchors(){
+    document.querySelectorAll('a[href]').forEach(function(a){
+      var href = a.getAttribute('href') || '';
+      if(!href || href === '#' || /^https?:\/\//i.test(href) || /^mailto:/i.test(href) || /^tel:/i.test(href) || a.target === '_blank') return;
+      a.setAttribute('href', withV(href));
+      a.addEventListener('click', function(ev){
+        try{
+          persistNavBridgeToChild(href);
+          if(!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href) && !/^tel:/i.test(href)){
+            ev.preventDefault();
+            try{ sessionStorage.setItem('tasun_child_jump_lock_v1', href); }catch(_e){}
+            try{ localStorage.setItem('tasun_child_jump_lock_v1', href); }catch(_e){}
+            window.location.assign(withV(href));
+          }
+        }catch(e){}
+      }, true);
+    });
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function(){ syncBridge(); patchAnchors(); }, {once:true});
+  else { syncBridge(); patchAnchors(); }
+})();
+</script>
+
+
+
+<style id="tasun-v5-bright-stage-zen-words-fix">
+/* ===== Tasun v5 hotfix: brighter full stage + visible zen words during login ===== */
+html, body{
+  background: radial-gradient(1200px 760px at 50% 10%, rgba(255,247,226,0.82) 0, rgba(255,238,196,0.30) 34%, rgba(0,0,0,0) 72%),
+              radial-gradient(980px 560px at 50% 94%, rgba(255,214,132,0.22) 0, rgba(0,0,0,0) 74%),
+              linear-gradient(180deg, #6a5037 0%, #4f3724 34%, #352214 68%, #1e120a 100%) !important;
+}
+.hero-inner{
+  background:
+    radial-gradient(1200px 840px at 50% 18%, rgba(255,248,226,0.30) 0%, rgba(255,235,196,0.14) 34%, rgba(0,0,0,0) 72%),
+    radial-gradient(980px 720px at 50% 74%, rgba(255,224,156,0.18) 0%, rgba(255,208,132,0.08) 34%, rgba(0,0,0,0) 70%),
+    linear-gradient(180deg, rgba(80,56,34,0.06) 0%, rgba(56,36,20,0.03) 42%, rgba(22,12,6,0.06) 100%) !important;
+}
+.hero-inner::before{
+  content:'';
+  position:absolute;
+  inset:0;
+  pointer-events:none;
+  z-index:2;
+  background:
+    radial-gradient(58% 46% at 50% 46%, rgba(255,247,224,0.24) 0%, rgba(255,230,185,0.11) 30%, rgba(0,0,0,0) 72%),
+    linear-gradient(90deg, rgba(255,238,208,0.20) 0%, rgba(255,236,198,0.09) 11%, rgba(255,232,190,0.02) 22%, rgba(255,232,190,0.02) 78%, rgba(255,236,198,0.09) 89%, rgba(255,238,208,0.20) 100%),
+    linear-gradient(180deg, rgba(255,250,236,0.10) 0%, rgba(0,0,0,0) 26%, rgba(0,0,0,0) 76%, rgba(255,226,162,0.08) 100%) !important;
+  mix-blend-mode: screen;
+}
+.hero-inner::after{
+  content:'';
+  position:absolute;
+  inset:0;
+  pointer-events:none;
+  z-index:2;
+  background:
+    radial-gradient(42% 34% at 50% 60%, rgba(255,236,190,0.18) 0%, rgba(255,216,148,0.09) 34%, rgba(0,0,0,0) 76%),
+    radial-gradient(130% 100% at 50% 50%, rgba(255,252,242,0.06) 0%, rgba(0,0,0,0) 70%) !important;
+}
+#zenImg{
+  filter: brightness(1.18) contrast(1.12) saturate(1.10) !important;
+}
+.lotus-stage,
+.zen-visual,
+#zenImg{
+  z-index:1 !important;
+}
+.spotlight{
+  position:absolute !important;
+  inset:-8% -10% -2% -10% !important;
+  pointer-events:none !important;
+  z-index:3 !important;
+  background:
+    radial-gradient(42% 30% at 50% 60%, rgba(255,246,220,0.24) 0%, rgba(255,224,166,0.12) 28%, rgba(0,0,0,0) 74%),
+    radial-gradient(30% 18% at 50% 53%, rgba(255,255,255,0.18) 0%, rgba(255,246,226,0.08) 38%, rgba(0,0,0,0) 74%),
+    radial-gradient(128% 92% at 50% 50%, rgba(255,242,214,0.06) 0%, rgba(0,0,0,0) 72%) !important;
+  mix-blend-mode:screen;
+}
+#loginOverlay{
+  background: transparent !important;
+}
+#loginOverlay .login-box{
+  z-index:100000 !important;
+}
+.site-title-wrapper{
+  position:absolute !important;
+  top:clamp(18px, 3vh, 34px) !important;
+  left:50% !important;
+  transform:translateX(-50%) !important;
+  z-index:90010 !important;
+  display:flex !important;
+  justify-content:center !important;
+  width:auto !important;
+  pointer-events:none !important;
+}
+.site-title{
+  display:block !important;
+  color:rgba(112,76,30,0.96) !important;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.92), 0 0 12px rgba(255,244,220,0.30), 0 12px 24px rgba(56,32,10,0.18) !important;
+  opacity:1 !important;
+  visibility:visible !important;
+}
+.zen-words{
+  position:absolute !important;
+  inset:0 !important;
+  z-index:90008 !important;
+  display:block !important;
+  pointer-events:none !important;
+  visibility:visible !important;
+  opacity:1 !important;
+}
+.zw-top-axis,#zwTopAxis{
+  position:absolute !important;
+  top:clamp(92px, 14vh, 164px) !important;
+  left:50% !important;
+  transform:translateX(-50%) !important;
+  display:block !important;
+  visibility:visible !important;
+  opacity:1 !important;
+  z-index:90009 !important;
+}
+.zw-axis-text,#zwAxisText{
+  display:inline-block !important;
+  font-size:clamp(2.2rem, 4.6vw, 4.2rem) !important;
+  letter-spacing:0.36em !important;
+  padding-left:0.36em !important;
+  color:rgba(112,78,34,0.88) !important;
+  text-shadow:0 1px 0 rgba(255,255,255,0.92), 0 0 14px rgba(255,244,220,0.26), 0 14px 24px rgba(66,42,14,0.18) !important;
+  visibility:visible !important;
+  opacity:1 !important;
+}
+.zw-side-col,#zwLeft,#zwRight{
+  position:absolute !important;
+  top:50% !important;
+  transform:translateY(-50%) !important;
+  writing-mode:vertical-rl !important;
+  text-orientation:upright !important;
+  letter-spacing:0.24em !important;
+  font-size:clamp(1.26rem, 1.9vw, 1.86rem) !important;
+  color:rgba(112,82,38,0.78) !important;
+  text-shadow:0 1px 0 rgba(255,255,255,0.88), 0 8px 18px rgba(66,42,14,0.16) !important;
+  display:block !important;
+  visibility:visible !important;
+  opacity:.96 !important;
+  z-index:90009 !important;
+}
+#zwLeft{ left:clamp(22px, 8vw, 110px) !important; }
+#zwRight{ right:clamp(22px, 8vw, 110px) !important; }
+.zw-bottom-line,#zwBottomLine{
+  position:absolute !important;
+  left:50% !important;
+  bottom:clamp(22px, 5.2vh, 52px) !important;
+  transform:translateX(-50%) !important;
+  font-size:clamp(1.12rem, 2vw, 1.76rem) !important;
+  letter-spacing:0.44em !important;
+  padding-left:0.44em !important;
+  color:rgba(116,84,40,0.84) !important;
+  text-shadow:0 1px 0 rgba(255,255,255,0.90), 0 10px 18px rgba(66,42,14,0.14) !important;
+  display:block !important;
+  visibility:visible !important;
+  opacity:.98 !important;
+  z-index:90009 !important;
+}
+@media (max-width: 900px){
+  .zw-top-axis,#zwTopAxis{ top:clamp(82px, 11vh, 118px) !important; }
+  #zwLeft{ left:14px !important; }
+  #zwRight{ right:14px !important; }
+  .zw-side-col,#zwLeft,#zwRight{ font-size:clamp(0.98rem, 2.8vw, 1.32rem) !important; opacity:.88 !important; }
+  .zw-bottom-line,#zwBottomLine{ bottom:clamp(16px, 4vh, 32px) !important; font-size:clamp(0.96rem, 2.8vw, 1.18rem) !important; }
+}
+</style>
+
+
+<style id="tasun-v5-stage-buttons-title-zen-final-fix">
+/* ===== Tasun v5 final visual + buttons fix ===== */
+:root{
+  --stage-side-fade: rgba(255,238,208,0.16);
+}
+.hero-inner{
+  background:
+    radial-gradient(1200px 760px at 50% 18%, rgba(255,248,228,0.34) 0%, rgba(255,236,198,0.16) 34%, rgba(0,0,0,0) 72%),
+    radial-gradient(980px 720px at 50% 74%, rgba(255,224,158,0.22) 0%, rgba(255,208,132,0.10) 36%, rgba(0,0,0,0) 72%),
+    linear-gradient(90deg, rgba(255,238,208,0.20) 0%, rgba(255,236,198,0.10) 8%, rgba(255,234,194,0.04) 16%, rgba(255,234,194,0.04) 84%, rgba(255,236,198,0.10) 92%, rgba(255,238,208,0.20) 100%),
+    linear-gradient(180deg, rgba(88,60,34,0.05) 0%, rgba(60,38,18,0.025) 42%, rgba(28,14,8,0.05) 100%) !important;
+}
+.hero-inner::before{
+  z-index:2 !important;
+  background:
+    radial-gradient(60% 48% at 50% 46%, rgba(255,249,232,0.28) 0%, rgba(255,236,196,0.12) 30%, rgba(0,0,0,0) 74%),
+    linear-gradient(90deg, rgba(255,246,220,0.18) 0%, rgba(255,240,206,0.08) 8%, rgba(255,234,190,0.02) 16%, rgba(255,234,190,0.02) 84%, rgba(255,240,206,0.08) 92%, rgba(255,246,220,0.18) 100%),
+    linear-gradient(180deg, rgba(255,250,236,0.12) 0%, rgba(0,0,0,0) 28%, rgba(0,0,0,0) 76%, rgba(255,226,162,0.08) 100%) !important;
+}
+.hero-inner::after{
+  z-index:2 !important;
+  background:
+    radial-gradient(44% 36% at 50% 60%, rgba(255,240,200,0.20) 0%, rgba(255,220,152,0.10) 36%, rgba(0,0,0,0) 78%),
+    radial-gradient(130% 100% at 50% 50%, rgba(255,252,242,0.08) 0%, rgba(0,0,0,0) 72%) !important;
+}
+#zenImg{
+  filter: brightness(1.08) contrast(1.08) saturate(1.08) drop-shadow(0 0 8px rgba(255,244,216,0.10)) !important;
+}
+.spotlight{
+  z-index:3 !important;
+  background:
+    radial-gradient(42% 30% at 50% 60%, rgba(255,248,228,0.14) 0%, rgba(255,228,170,0.07) 28%, rgba(0,0,0,0) 74%),
+    radial-gradient(30% 18% at 50% 53%, rgba(255,255,255,0.10) 0%, rgba(255,246,226,0.05) 38%, rgba(0,0,0,0) 76%),
+    radial-gradient(128% 92% at 50% 50%, rgba(255,242,214,0.03) 0%, rgba(0,0,0,0) 72%) !important;
+}
+.lotus-stage::after{
+  content:'';
+  position:absolute;
+  inset:20% 20% 10% 20%;
+  pointer-events:none;
+  z-index:4;
+  background:
+    radial-gradient(42% 38% at 50% 54%, rgba(255,252,238,0.10) 0%, rgba(255,236,196,0.05) 34%, rgba(0,0,0,0) 74%),
+    radial-gradient(32% 20% at 50% 66%, rgba(255,214,132,0.07) 0%, rgba(0,0,0,0) 72%);
+  mix-blend-mode:screen;
+  filter: blur(4px);
+}
+.site-title-wrapper{
+  top:clamp(18px, 2.3vh, 28px) !important;
+  z-index:90020 !important;
+}
+.site-title{
+  font-size:clamp(2.1rem, 3.2vw, 3.4rem) !important;
+  font-weight:700 !important;
+  letter-spacing:0.16em !important;
+  padding-left:0.16em !important;
+  color:rgba(118,76,28,0.99) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.98),
+    0 0 10px rgba(255,244,220,0.42),
+    0 8px 16px rgba(104,64,18,0.18),
+    0 14px 26px rgba(66,42,14,0.18) !important;
+  filter: drop-shadow(0 2px 3px rgba(255,246,228,0.22));
+}
+.zw-top-axis,#zwTopAxis{
+  top:clamp(34%, 35.8vh, 43.5%) !important;
+  z-index:90018 !important;
+  width:min(62vw, 680px) !important;
+  display:flex !important;
+  justify-content:center !important;
+}
+.zw-axis-text,#zwAxisText{
+  font-size:clamp(1.58rem, 3.08vw, 2.92rem) !important;
+  letter-spacing:0.30em !important;
+  padding-left:0.30em !important;
+  font-weight:700 !important;
+  color:rgba(110,78,38,0.94) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.97),
+    0 0 10px rgba(255,244,220,0.22),
+    0 8px 14px rgba(96,60,18,0.12),
+    0 12px 20px rgba(66,42,14,0.12) !important;
+}
+.zw-side-col,#zwLeft,#zwRight,.zw-bottom-line,#zwBottomLine{
+  font-weight:700 !important;
+  color:rgba(110,80,38,0.84) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.94),
+    0 0 10px rgba(255,244,220,0.24),
+    0 8px 16px rgba(66,42,14,0.12),
+    0 12px 18px rgba(66,42,14,0.10) !important;
+}
+.zw-side-col,#zwLeft,#zwRight{
+  top:56% !important;
+  font-size:clamp(1.58rem, 2.26vw, 2.00rem) !important;
+  line-height:1.18 !important;
+  opacity:1 !important;
+}
+#zwLeft{ left:clamp(84px, 12vw, 170px) !important; }
+#zwRight{ right:clamp(84px, 12vw, 170px) !important; }
+.zw-bottom-line,#zwBottomLine{
+  bottom:clamp(22px, 4.4vh, 42px) !important;
+  font-size:clamp(1.58rem, 2.26vw, 2.00rem) !important;
+  letter-spacing:0.34em !important;
+  padding-left:0.34em !important;
+  opacity:1 !important;
+}
+.nav-area{
+  position:absolute !important;
+  inset:0 !important;
+  z-index:90030 !important;
+  pointer-events:none !important;
+}
+.nav-btn{
+  position:absolute !important;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  min-width:200px;
+  max-width:440px;
+  height:var(--btnH,80px) !important;
+  width:var(--btnW,360px) !important;
+  padding:0 22px !important;
+  border-radius:999px !important;
+  border:1px solid rgba(255,248,230,0.82) !important;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,244,214,0.06) 44%, rgba(124,80,30,0.10) 100%),
+    linear-gradient(135deg, rgba(255,255,255,0.12), rgba(255,255,255,0.03) 42%, rgba(255,236,196,0.06) 100%) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.62),
+    inset 0 -10px 18px rgba(108,64,18,0.08),
+    0 16px 34px rgba(46,28,10,0.18),
+    0 0 28px rgba(255,228,166,0.14) !important;
+  backdrop-filter: blur(6px) saturate(1.12) !important;
+  -webkit-backdrop-filter: blur(6px) saturate(1.12) !important;
+  text-decoration:none !important;
+  pointer-events:auto !important;
+  opacity:1 !important;
+  visibility:visible !important;
+}
+.nav-btn span{
+  display:block !important;
+  width:100%;
+  text-align:center;
+  font-size:clamp(1.14rem, calc(1.02rem + 0.56vw), 1.82rem) !important;
+  line-height:1.16 !important;
+  letter-spacing:.08em;
+  color:rgba(84,46,12,0.99) !important;
+  font-weight:700 !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.99),
+    0 0 12px rgba(255,248,232,0.46),
+    0 2px 4px rgba(255,244,220,0.26),
+    0 10px 16px rgba(66,42,14,0.10) !important;
+  filter: drop-shadow(0 0 1px rgba(255,250,242,0.40));
+}
+.user-bar{
+  z-index:90025 !important;
+}
+@media (max-width: 900px){
+  .site-title{ font-size:clamp(1.72rem, 5vw, 2.5rem) !important; }
+  .zw-top-axis,#zwTopAxis{ top:clamp(31%, 34.2vh, 38.5%) !important; width:min(76vw, 560px) !important; }
+  .zw-axis-text,#zwAxisText{ font-size:clamp(1.24rem, 3.86vw, 2.08rem) !important; letter-spacing:0.24em !important; padding-left:0.24em !important; }
+  .zw-side-col,#zwLeft,#zwRight{ font-size:clamp(1.12rem, 3.26vw, 1.40rem) !important; top:54% !important; }
+  .zw-bottom-line,#zwBottomLine{ font-size:clamp(1.12rem, 3.26vw, 1.40rem) !important; letter-spacing:0.24em !important; padding-left:0.24em !important; }
+  #zwLeft{ left:16px !important; }
+  #zwRight{ right:16px !important; }
+  .nav-btn span{
+    font-size:clamp(1.02rem, calc(0.96rem + 0.76vw), 1.44rem) !important;
+    color:rgba(80,42,10,0.99) !important;
+    text-shadow:
+      0 1px 0 rgba(255,255,255,0.99),
+      0 0 10px rgba(255,248,232,0.46),
+      0 8px 14px rgba(66,42,14,0.10) !important;
+  }
+}
+</style>
+<script id="tasun-v5-buttons-fallback-script">
+(function(){
+  function applyButtonsFallback(){
+    try{
+      var navArea = document.getElementById('navArea');
+      if(!navArea) return;
+      var btns = Array.from(navArea.querySelectorAll('.nav-btn'));
+      if(!btns.length) return;
+      var bodyLocked = !!(document.body && document.body.classList.contains('locked'));
+      var loginOverlay = document.getElementById('loginOverlay');
+      var loginShowing = !!(loginOverlay && getComputedStyle(loginOverlay).display !== 'none');
+      if(bodyLocked || loginShowing){
+        btns.forEach(function(btn){
+          btn.style.display = 'none';
+          btn.style.opacity = '0';
+          btn.style.visibility = 'hidden';
+          btn.style.pointerEvents = 'none';
+        });
+        return;
+      }
+      var userRaw = sessionStorage.getItem('tasunCurrentUser_v1') || localStorage.getItem('tasunCurrentUser_v1') || '{}';
+      var user = {};
+      try{ user = JSON.parse(userRaw) || {}; }catch(e){}
+      var role = String(user.role || user.level || '').trim().toLowerCase();
+      if(!role){
+        var sessRaw = sessionStorage.getItem('tasunSessionLogin_v2') || '{}';
+        try{ var sess = JSON.parse(sessRaw) || {}; role = String(sess.role || '').trim().toLowerCase(); }catch(e){}
+      }
+      if(!role) return;
+      btns.forEach(function(btn){
+        var isSystem = btn.id === 'systemBtn' || btn.dataset.sourceId === 'auth';
+        btn.style.display = (isSystem && role !== 'admin') ? 'none' : 'flex';
+      });
+      if (typeof window.scheduleAll === 'function') { try{ window.scheduleAll(); }catch(e){} }
+    }catch(e){}
+  }
+  document.addEventListener('DOMContentLoaded', function(){ setTimeout(applyButtonsFallback, 400); setTimeout(applyButtonsFallback, 1200); });
+  window.addEventListener('load', function(){ setTimeout(applyButtonsFallback, 300); setTimeout(applyButtonsFallback, 1500); });
+  window.addEventListener('storage', function(){ setTimeout(applyButtonsFallback, 120); });
+})();
+</script>
+
+
+<style id="tasun-v5-login-stage-20260408-fix">
+/* ===== Tasun v5 login stage targeted fix ===== */
+body.locked .login-cloud-btn{
+  display:none !important;
+}
+body.locked #navArea,
+body.locked .nav-area{
+  pointer-events:none !important;
+}
+body.locked #navArea .nav-btn,
+body.locked .nav-area .nav-btn{
+  display:none !important;
+  opacity:0 !important;
+  visibility:hidden !important;
+  pointer-events:none !important;
+}
+.login-cloud-btn{
+  position:fixed;
+  top:clamp(14px,2.2vh,24px);
+  left:clamp(12px,1.6vw,24px);
+  z-index:100050;
+  min-width:clamp(160px,18vw,340px);
+  height:clamp(46px,5.6vh,58px);
+  padding:0 clamp(20px,2vw,34px);
+  align-items:center;
+  justify-content:center;
+  border-radius:999px;
+  border:1px solid rgba(255,248,232,0.90);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.34), rgba(255,244,220,0.16) 48%, rgba(180,118,42,0.16) 100%),
+    linear-gradient(135deg, rgba(255,255,255,0.18), rgba(255,255,255,0.04) 44%, rgba(255,236,196,0.05) 100%);
+  color:rgba(116,72,22,0.98);
+  text-decoration:none;
+  font-size:clamp(1.08rem,1.4vw,1.52rem);
+  font-weight:700;
+  letter-spacing:.12em;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.96),
+    0 0 10px rgba(255,244,220,0.30),
+    0 10px 16px rgba(66,42,14,0.12);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.78),
+    inset 0 -10px 18px rgba(126,76,20,0.08),
+    0 14px 34px rgba(48,28,8,0.18),
+    0 0 28px rgba(255,228,166,0.18);
+  backdrop-filter: blur(8px) saturate(1.16);
+  -webkit-backdrop-filter: blur(8px) saturate(1.16);
+  display:none;
+}
+body:not(.locked) .login-cloud-btn{display:none !important;}
+.login-cloud-btn:hover{
+  transform:translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.84),
+    inset 0 -10px 18px rgba(126,76,20,0.10),
+    0 18px 40px rgba(48,28,8,0.22),
+    0 0 34px rgba(255,228,166,0.22);
+}
+
+#zenImg{
+  filter: brightness(1.30) contrast(1.24) saturate(1.20) drop-shadow(0 0 24px rgba(255,245,222,0.28)) !important;
+}
+.hero-inner{
+  background:
+    radial-gradient(1180px 760px at 50% 16%, rgba(255,249,232,0.38) 0%, rgba(255,236,198,0.18) 32%, rgba(0,0,0,0) 72%),
+    radial-gradient(980px 760px at 50% 74%, rgba(255,224,160,0.26) 0%, rgba(255,210,138,0.12) 36%, rgba(0,0,0,0) 74%),
+    linear-gradient(90deg, rgba(255,242,214,0.22) 0%, rgba(255,238,206,0.10) 10%, rgba(255,234,194,0.03) 18%, rgba(255,234,194,0.03) 82%, rgba(255,238,206,0.10) 90%, rgba(255,242,214,0.22) 100%),
+    linear-gradient(180deg, rgba(92,62,36,0.08) 0%, rgba(60,38,18,0.04) 42%, rgba(24,14,8,0.10) 100%) !important;
+}
+.hero-inner::before{
+  background:
+    radial-gradient(62% 50% at 50% 46%, rgba(255,250,236,0.32) 0%, rgba(255,238,202,0.14) 30%, rgba(0,0,0,0) 74%),
+    linear-gradient(90deg, rgba(255,246,220,0.22) 0%, rgba(255,240,206,0.08) 10%, rgba(255,234,190,0.02) 18%, rgba(255,234,190,0.02) 82%, rgba(255,240,206,0.08) 90%, rgba(255,246,220,0.22) 100%),
+    linear-gradient(180deg, rgba(255,250,236,0.14) 0%, rgba(0,0,0,0) 28%, rgba(0,0,0,0) 76%, rgba(255,226,162,0.10) 100%) !important;
+}
+.spotlight{
+  background:
+    radial-gradient(44% 32% at 50% 60%, rgba(255,248,228,0.30) 0%, rgba(255,228,170,0.16) 30%, rgba(0,0,0,0) 76%),
+    radial-gradient(32% 20% at 50% 53%, rgba(255,255,255,0.26) 0%, rgba(255,246,226,0.12) 40%, rgba(0,0,0,0) 78%),
+    radial-gradient(128% 92% at 50% 50%, rgba(255,242,214,0.10) 0%, rgba(0,0,0,0) 74%) !important;
+}
+.lotus-stage::after{
+  inset:18% 18% 8% 18% !important;
+  background:
+    radial-gradient(44% 40% at 50% 56%, rgba(255,252,238,0.30) 0%, rgba(255,236,196,0.14) 34%, rgba(0,0,0,0) 76%),
+    radial-gradient(34% 22% at 50% 66%, rgba(255,214,132,0.18) 0%, rgba(0,0,0,0) 72%) !important;
+  filter:blur(3px);
+}
+
+#loginOverlay .login-box{
+  width:clamp(500px,39vw,640px) !important;
+  aspect-ratio:1.56 / 1 !important;
+  max-height:min(74vh,620px) !important;
+  padding:clamp(26px,2.15vw,36px) clamp(28px,2.3vw,38px) clamp(22px,1.8vw,30px) !important;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.42), rgba(255,250,240,0.24) 18%, rgba(255,238,198,0.16) 52%, rgba(214,160,82,0.11) 84%, rgba(136,82,28,0.08) 100%),
+    linear-gradient(135deg, rgba(255,255,255,0.28), rgba(255,255,255,0.08) 28%, rgba(255,238,198,0.14) 58%, rgba(255,255,255,0.16) 100%),
+    radial-gradient(460px 250px at 50% 0%, rgba(255,255,255,0.48), rgba(255,250,236,0.22) 34%, rgba(0,0,0,0) 76%),
+    radial-gradient(760px 360px at 50% 116%, rgba(255,222,146,0.18), rgba(0,0,0,0) 72%) !important;
+  box-shadow:
+    inset 0 2px 0 rgba(255,255,255,0.96),
+    inset 0 0 0 1px rgba(255,248,232,0.30),
+    inset 0 -32px 64px rgba(190,132,48,0.14),
+    inset 0 -62px 102px rgba(82,46,10,0.10),
+    0 28px 60px rgba(48,26,6,0.24),
+    0 52px 132px rgba(92,54,14,0.24),
+    0 0 180px rgba(255,232,175,0.40),
+    0 0 300px rgba(255,214,118,0.20) !important;
+  backdrop-filter: blur(10px) saturate(1.20) !important;
+  -webkit-backdrop-filter: blur(10px) saturate(1.20) !important;
+}
+#loginOverlay .login-title{
+  font-size:clamp(2.0rem,2.3vw,2.9rem) !important;
+  margin-bottom:clamp(14px,1.1vw,20px) !important;
+  color:rgba(102,62,22,0.98) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.96),
+    0 0 14px rgba(255,244,220,0.32),
+    0 12px 20px rgba(84,56,18,0.14) !important;
+}
+#loginOverlay .login-field{
+  margin:clamp(8px,.7vw,12px) 0 !important;
+}
+#loginOverlay .login-field label{
+  display:inline-flex;
+  align-items:center;
+  align-self:flex-start;
+  margin-left:clamp(8px,.7vw,12px);
+  padding:4px 10px 4px 8px;
+  font-size:clamp(1.02rem,1.12vw,1.18rem) !important;
+  letter-spacing:.10em;
+  color:rgba(112,70,24,0.98) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.98),
+    0 0 10px rgba(255,246,226,0.28),
+    0 8px 14px rgba(94,66,26,0.10) !important;
+}
+#loginOverlay .login-pwd-wrapper{ gap:12px; }
+#loginOverlay .login-pwd-input,
+#loginOverlay .select-wrap.native-touch select,
+#loginOverlay .select-wrap.native-touch .select-display,
+#loginOverlay .select-display{
+  min-height:56px;
+  padding-top:.88rem !important;
+  padding-bottom:.88rem !important;
+  font-size:clamp(1.00rem,1.05vw,1.10rem) !important;
+}
+#loginOverlay .btn-eye-login{
+  width:48px;
+  height:48px;
+}
+#loginOverlay .login-actions{
+  margin-top:clamp(10px,.9vw,14px) !important;
+  padding-top:2px;
+  transform:translateY(-6px);
+}
+#loginOverlay .btn-login,
+#loginOverlay .btn-secondary{
+  padding:12px 20px !important;
+  font-size:clamp(1.00rem,1.02vw,1.10rem) !important;
+}
+
+#zwLeft,
+#zwRight,
+#zwBottomLine{
+  font-size:clamp(1.62rem,2.35vw,2.30rem) !important;
+  color:rgba(112,78,34,0.94) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.98),
+    0 0 12px rgba(255,244,220,0.28),
+    0 10px 18px rgba(96,60,18,0.14),
+    0 14px 22px rgba(66,42,14,0.12) !important;
+}
+#zwLeft{
+  left:clamp(72px,8.8vw,168px) !important;
+  top:56% !important;
+}
+#zwRight{
+  right:clamp(72px,8.8vw,168px) !important;
+  top:56% !important;
+}
+#zwBottomLine{
+  bottom:clamp(34px,5.2vh,64px) !important;
+  left:50% !important;
+}
+
+@media (max-width: 900px){
+  .login-cloud-btn{
+    min-width:140px;
+    height:44px;
+    font-size:1rem;
+    padding:0 18px;
+  }
+  #loginOverlay .login-box{
+    width:min(90vw,640px) !important;
+    max-width:calc(100vw - 28px) !important;
+    min-width:0 !important;
+    aspect-ratio:auto !important;
+    padding:22px 22px 20px !important;
+  }
+  #loginOverlay .login-title{ font-size:clamp(1.7rem,5vw,2.2rem) !important; }
+  #zwLeft{ left:18px !important; top:54.6% !important; }
+  #zwRight{ right:18px !important; top:54.6% !important; }
+  #zwLeft,#zwRight{ font-size:clamp(1.12rem,3.2vw,1.42rem) !important; }
+  #zwBottomLine{ bottom:22px !important; font-size:clamp(1.04rem,3vw,1.32rem) !important; }
+}
+</style>
+
+
+
+
+<style id="tasun-v5-login-spacing-micro-adjust-20260409">
+/* ===== Tasun v5 login spacing micro adjust ===== */
+#loginOverlay .login-box{
+  padding-top: clamp(36px, 3.0vw, 52px) !important;
+  padding-bottom: clamp(20px, 1.8vw, 28px) !important;
+}
+#loginOverlay .login-title{
+  margin-top: clamp(8px, 0.8vw, 14px) !important;
+  margin-bottom: clamp(18px, 1.35vw, 24px) !important;
+}
+#loginOverlay .login-actions{
+  margin-top: clamp(8px, 0.75vw, 12px) !important;
+  margin-bottom: clamp(8px, 0.75vw, 14px) !important;
+}
+@media (max-width: 900px){
+  #loginOverlay .login-box{
+    padding-top: clamp(30px, 6vw, 42px) !important;
+    padding-bottom: clamp(18px, 3vw, 24px) !important;
+  }
+  #loginOverlay .login-title{
+    margin-top: 4px !important;
+    margin-bottom: 16px !important;
+  }
+  #loginOverlay .login-actions{
+    margin-top: 8px !important;
+    margin-bottom: 6px !important;
+  }
+}
+</style>
+
+
+<style id="tasun-v5-login-panel-fine-tune-20260410">
+/* ===== Tasun v5 login panel fine tune: title down, buttons up, tighter field spacing ===== */
+#loginOverlay .login-box{
+  padding-top: clamp(40px, 3.2vw, 56px) !important;
+  padding-bottom: clamp(14px, 1.2vw, 20px) !important;
+}
+#loginOverlay .login-title{
+  margin-top: clamp(14px, 1.1vw, 20px) !important;
+  margin-bottom: clamp(16px, 1.1vw, 22px) !important;
+  padding: 0.10em 0.34em 0.16em !important;
+  border-radius: 999px !important;
+  background: linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,245,220,0.04)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.42),
+    0 0 14px rgba(255,244,220,0.16) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.98),
+    0 0 10px rgba(255,246,228,0.32),
+    0 8px 16px rgba(120,82,34,0.12),
+    0 14px 24px rgba(66,42,14,0.14) !important;
+}
+#loginOverlay .login-field{
+  margin: clamp(6px, 0.55vw, 10px) 0 !important;
+  gap: clamp(5px, 0.4vw, 8px) !important;
+}
+#loginOverlay .login-field + .login-field{
+  margin-top: clamp(2px, 0.18vw, 4px) !important;
+}
+#loginOverlay .login-field label{
+  margin-left: clamp(10px, 0.8vw, 14px) !important;
+  margin-right: clamp(10px, 0.8vw, 14px) !important;
+  padding: 4px 12px 5px 10px !important;
+  border-radius: 999px !important;
+  background: linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,244,220,0.05)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.46),
+    0 0 10px rgba(255,244,220,0.14) !important;
+}
+#loginOverlay .select-wrap.native-touch select,
+#loginOverlay .select-wrap.native-touch .select-display,
+#loginOverlay .select-display,
+#loginOverlay .login-pwd-input{
+  min-height: 52px !important;
+}
+#loginOverlay .login-pwd-wrapper{
+  gap: 10px !important;
+}
+#loginOverlay .login-actions{
+  margin-top: clamp(2px, 0.18vw, 4px) !important;
+  margin-bottom: 0 !important;
+  padding-top: 0 !important;
+  transform: translateY(-16px) !important;
+}
+#loginOverlay .btn-login,
+#loginOverlay .btn-secondary{
+  min-height: 50px !important;
+}
+@media (max-width: 900px){
+  #loginOverlay .login-box{
+    padding-top: clamp(34px, 6.4vw, 46px) !important;
+    padding-bottom: clamp(12px, 2.2vw, 18px) !important;
+  }
+  #loginOverlay .login-title{
+    margin-top: 10px !important;
+    margin-bottom: 14px !important;
+    padding: 0.10em 0.28em 0.14em !important;
+  }
+  #loginOverlay .login-field{
+    margin: 6px 0 !important;
+    gap: 6px !important;
+  }
+  #loginOverlay .login-field label{
+    margin-left: 8px !important;
+    margin-right: 8px !important;
+    padding: 3px 10px 4px 8px !important;
+  }
+  #loginOverlay .login-actions{
+    margin-top: 0 !important;
+    transform: translateY(-12px) !important;
+  }
+}
+</style>
+
+<style id="tasun-v5-login-block-upshift-20260410b">
+/* ===== Tasun v5 login block upshift: move form area closer to title ===== */
+#loginOverlay .login-box{
+  padding-top: clamp(32px, 2.6vw, 46px) !important;
+}
+#loginOverlay .login-title{
+  margin-top: clamp(6px, 0.45vw, 10px) !important;
+  margin-bottom: clamp(10px, 0.72vw, 14px) !important;
+}
+#loginOverlay .login-sub{
+  min-height: 4px !important;
+  margin-bottom: 2px !important;
+}
+#loginOverlay #loginForm{
+  margin-top: 0 !important;
+  transform: translateY(-10px) !important;
+}
+#loginOverlay .login-field:first-child{
+  margin-top: 0 !important;
+}
+@media (max-width: 900px){
+  #loginOverlay .login-box{
+    padding-top: clamp(28px, 5.4vw, 38px) !important;
+  }
+  #loginOverlay .login-title{
+    margin-top: 4px !important;
+    margin-bottom: 8px !important;
+  }
+  #loginOverlay .login-sub{
+    min-height: 2px !important;
+    margin-bottom: 0 !important;
+  }
+  #loginOverlay #loginForm{
+    transform: translateY(-8px) !important;
+  }
+}
+</style>
+
+
+<style id="tasun-v5-login-crystal-panel-20260410-fix">
+/* ===== Tasun v5 targeted fix: crystal-clear transparent login panel ===== */
+#loginOverlay{
+  background: transparent !important;
+}
+#loginOverlay .login-box{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,252,244,0.22) 18%, rgba(255,248,236,0.16) 38%, rgba(255,240,214,0.11) 64%, rgba(210,156,78,0.09) 100%),
+    linear-gradient(135deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.10) 24%, rgba(255,245,224,0.10) 52%, rgba(255,255,255,0.14) 100%),
+    radial-gradient(120% 82% at 50% 0%, rgba(255,255,255,0.42) 0%, rgba(255,250,238,0.18) 26%, rgba(255,244,222,0.08) 48%, rgba(0,0,0,0) 76%),
+    radial-gradient(120% 100% at 50% 118%, rgba(255,226,160,0.14) 0%, rgba(255,212,132,0.08) 28%, rgba(0,0,0,0) 72%) !important;
+  border: 1px solid rgba(255,255,255,0.96) !important;
+  box-shadow:
+    inset 0 2px 0 rgba(255,255,255,0.94),
+    inset 0 0 0 1px rgba(255,250,240,0.34),
+    inset 0 20px 38px rgba(255,255,255,0.12),
+    inset 0 -22px 48px rgba(190,132,48,0.10),
+    inset 0 -56px 92px rgba(82,46,10,0.10),
+    0 14px 30px rgba(60,34,10,0.16),
+    0 32px 72px rgba(78,44,10,0.18),
+    0 0 0 1px rgba(255,248,232,0.18),
+    0 0 78px rgba(255,238,196,0.28),
+    0 0 170px rgba(255,220,138,0.16) !important;
+  backdrop-filter: blur(12px) saturate(1.22) brightness(1.04) !important;
+  -webkit-backdrop-filter: blur(12px) saturate(1.22) brightness(1.04) !important;
+  overflow: hidden !important;
+}
+#loginOverlay .login-box::before{
+  content:'';
+  position:absolute;
+  inset:-24% -18%;
+  pointer-events:none;
+  background:
+    radial-gradient(42% 20% at 50% 7%, rgba(255,255,255,0.56) 0%, rgba(255,250,236,0.24) 36%, rgba(0,0,0,0) 76%),
+    radial-gradient(66% 34% at 50% 44%, rgba(255,246,226,0.16) 0%, rgba(255,226,168,0.10) 34%, rgba(0,0,0,0) 72%),
+    linear-gradient(135deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.00) 32%, rgba(255,244,216,0.10) 58%, rgba(255,255,255,0.14) 100%);
+  mix-blend-mode: screen;
+  filter: blur(5px);
+  opacity: 1;
+}
+#loginOverlay .login-box::after{
+  content:'';
+  position:absolute;
+  inset:0;
+  border-radius:inherit;
+  pointer-events:none;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.42) 0%, rgba(255,255,255,0.16) 14%, rgba(255,255,255,0.00) 38%),
+    linear-gradient(90deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.05) 18%, rgba(255,255,255,0.00) 50%, rgba(255,244,220,0.06) 76%, rgba(255,255,255,0.16) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.64),
+    inset 0 -12px 24px rgba(134,86,28,0.06),
+    inset 0 0 24px rgba(255,248,232,0.08);
+}
+#loginOverlay .login-title,
+#loginOverlay .login-field label,
+#loginOverlay .login-sub,
+#loginOverlay .login-error,
+#loginOverlay .btn-login,
+#loginOverlay .btn-secondary,
+#loginOverlay .select-display,
+#loginOverlay .login-pwd-input,
+#loginOverlay .btn-eye-login{
+  position: relative;
+  z-index: 2;
+}
+#loginOverlay .login-title{
+  color: rgba(108,66,24,0.99) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.96),
+    0 0 10px rgba(255,248,232,0.30),
+    0 10px 18px rgba(90,58,18,0.12) !important;
+}
+#loginOverlay .login-field label{
+  color: rgba(108,68,24,0.98) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.96),
+    0 5px 10px rgba(98,64,22,0.08) !important;
+}
+#loginOverlay .select-display,
+#loginOverlay .select-wrap.native-touch select,
+#loginOverlay .login-pwd-input{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,252,244,0.11)),
+    linear-gradient(135deg, rgba(255,255,255,0.12), rgba(255,240,210,0.06) 52%, rgba(255,255,255,0.08)) !important;
+  border: 1px solid rgba(255,255,255,0.94) !important;
+  color: rgba(86,52,20,0.99) !important;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.94) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.54),
+    inset 0 0 0 1px rgba(255,250,236,0.10),
+    0 10px 18px rgba(60,36,12,0.06),
+    0 0 24px rgba(255,246,222,0.08) !important;
+  backdrop-filter: blur(5px) saturate(1.10) !important;
+  -webkit-backdrop-filter: blur(5px) saturate(1.10) !important;
+}
+#loginOverlay .select-display:hover,
+#loginOverlay .select-wrap.native-touch select:hover,
+#loginOverlay .login-pwd-input:hover{
+  border-color: rgba(255,250,236,0.98) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.60),
+    inset 0 0 0 1px rgba(255,250,236,0.12),
+    0 12px 22px rgba(60,36,12,0.08),
+    0 0 28px rgba(255,246,222,0.14) !important;
+}
+#loginOverlay .select-display:focus,
+#loginOverlay .select-wrap.native-touch select:focus,
+#loginOverlay .login-pwd-input:focus{
+  border-color: rgba(255,252,240,1) !important;
+  box-shadow:
+    0 0 0 2px rgba(255,244,214,0.18),
+    0 0 30px rgba(255,244,214,0.18),
+    inset 0 1px 0 rgba(255,255,255,0.34) !important;
+}
+#loginOverlay .btn-eye-login{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,244,220,0.08)),
+    linear-gradient(135deg, rgba(255,255,255,0.14), rgba(255,236,196,0.06)) !important;
+  border: 1px solid rgba(255,255,255,0.92) !important;
+  color: rgba(110,68,24,0.98) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.54),
+    0 10px 18px rgba(58,36,12,0.06),
+    0 0 20px rgba(255,244,214,0.10) !important;
+}
+#loginOverlay .btn-login,
+#loginOverlay .btn-secondary{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.28), rgba(255,240,204,0.14) 56%, rgba(212,152,66,0.08) 100%),
+    linear-gradient(135deg, rgba(255,255,255,0.20), rgba(255,255,255,0.05) 42%, rgba(255,236,196,0.05) 100%) !important;
+  border: 1px solid rgba(255,255,255,0.95) !important;
+  color: rgba(100,62,22,0.99) !important;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.96) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.66),
+    inset 0 -8px 14px rgba(158,102,32,0.06),
+    0 12px 24px rgba(58,36,12,0.10),
+    0 0 24px rgba(255,240,204,0.12) !important;
+  backdrop-filter: blur(5px) saturate(1.08) !important;
+  -webkit-backdrop-filter: blur(5px) saturate(1.08) !important;
+}
+#loginOverlay .btn-login:hover,
+#loginOverlay .btn-secondary:hover{
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.72),
+    inset 0 -8px 16px rgba(158,102,32,0.08),
+    0 16px 28px rgba(58,36,12,0.12),
+    0 0 30px rgba(255,240,204,0.18) !important;
+}
+#loginOverlay .login-error:not(:empty){
+  background: linear-gradient(180deg, rgba(255,248,232,0.68), rgba(255,228,178,0.28)) !important;
+  border: 1px solid rgba(255,220,160,0.66) !important;
+  color: rgba(176,78,20,0.98) !important;
+}
+</style>
+
+
+<style id="tasun-v5-login-panel-input-depth-fix">
+/* ===== Tasun v5 targeted fix: darker panel + stronger raised input fields ===== */
+#loginOverlay .login-box{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.24) 0%, rgba(255,251,242,0.15) 16%, rgba(255,238,198,0.11) 44%, rgba(176,122,52,0.10) 78%, rgba(84,50,18,0.12) 100%),
+    linear-gradient(135deg, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0.04) 26%, rgba(255,236,196,0.07) 56%, rgba(255,255,255,0.08) 100%),
+    radial-gradient(440px 220px at 50% 2%, rgba(255,255,255,0.24), rgba(255,248,230,0.10) 34%, rgba(0,0,0,0) 74%),
+    radial-gradient(760px 360px at 50% 118%, rgba(255,214,132,0.10), rgba(0,0,0,0) 72%) !important;
+  box-shadow:
+    inset 0 2px 0 rgba(255,255,255,0.78),
+    inset 0 0 0 1px rgba(255,246,226,0.16),
+    inset 0 -26px 56px rgba(150,94,28,0.12),
+    inset 0 -54px 96px rgba(70,40,12,0.12),
+    0 24px 56px rgba(46,26,8,0.18),
+    0 42px 110px rgba(80,46,14,0.18),
+    0 0 120px rgba(255,222,150,0.18) !important;
+}
+#loginOverlay .select-display,
+#loginOverlay .select-wrap.native-touch select,
+#loginOverlay .login-pwd-input{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.34) 0%, rgba(255,251,242,0.22) 18%, rgba(246,232,206,0.14) 100%),
+    linear-gradient(135deg, rgba(255,255,255,0.16) 0%, rgba(255,248,232,0.08) 44%, rgba(226,190,134,0.08) 100%) !important;
+  border: 1.5px solid rgba(132,84,34,0.70) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.78),
+    inset 0 0 0 1px rgba(255,247,226,0.24),
+    inset 0 -10px 18px rgba(170,116,42,0.12),
+    0 6px 0 rgba(120,74,26,0.18),
+    0 14px 28px rgba(78,46,16,0.16),
+    0 0 18px rgba(255,242,214,0.06) !important;
+  color: rgba(78,46,16,0.99) !important;
+}
+#loginOverlay .select-display:hover,
+#loginOverlay .select-wrap.native-touch select:hover,
+#loginOverlay .login-pwd-input:hover{
+  border-color: rgba(120,74,28,0.82) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.82),
+    inset 0 0 0 1px rgba(255,247,226,0.28),
+    inset 0 -10px 18px rgba(170,116,42,0.14),
+    0 7px 0 rgba(120,74,26,0.20),
+    0 16px 30px rgba(78,46,16,0.18),
+    0 0 18px rgba(255,242,214,0.03) !important;
+}
+#loginOverlay .select-display:focus,
+#loginOverlay .select-wrap.native-touch select:focus,
+#loginOverlay .login-pwd-input:focus{
+  border-color: rgba(112,68,24,0.92) !important;
+  box-shadow:
+    0 0 0 2px rgba(184,132,62,0.18),
+    0 8px 0 rgba(116,70,24,0.20),
+    0 18px 34px rgba(78,46,16,0.20),
+    inset 0 1px 0 rgba(255,255,255,0.84),
+    inset 0 0 0 1px rgba(255,247,226,0.26) !important;
+}
+#loginOverlay .btn-eye-login{
+  border: 1.5px solid rgba(132,84,34,0.72) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.74),
+    inset 0 -8px 14px rgba(170,116,42,0.10),
+    0 5px 0 rgba(120,74,26,0.16),
+    0 12px 22px rgba(78,46,16,0.14) !important;
+}
+</style>
+
+
+<style id="tasun-v5-zen-word-position-fix-20260410">
+/* 只修正禪字位置：左右靠近蓮花花瓣，底部文字上移到花瓣上 */
+#zwLeft{
+  left:clamp(250px, 28vw, 500px) !important;
+  top:58% !important;
+}
+#zwRight{
+  right:clamp(250px, 28vw, 500px) !important;
+  top:58% !important;
+}
+#zwBottomLine{
+  bottom:clamp(64px, 10.5vh, 132px) !important;
+  left:50% !important;
+}
+@media (max-width: 1200px){
+  #zwLeft{ left:clamp(150px, 16vw, 280px) !important; top:59% !important; }
+  #zwRight{ right:clamp(150px, 16vw, 280px) !important; top:59% !important; }
+  #zwBottomLine{ bottom:clamp(46px, 8.6vh, 96px) !important; }
+}
+@media (max-width: 900px){
+  #zwLeft{ left:clamp(26px, 7vw, 64px) !important; top:60% !important; }
+  #zwRight{ right:clamp(26px, 7vw, 64px) !important; top:60% !important; }
+  #zwBottomLine{ bottom:clamp(26px, 6vh, 54px) !important; }
+}
+</style>
+
+
+<style id="tasun-v5-user-fix-20260410">
+/* user fix: lighter side background, smaller side buttons, clearer lotus */
+.hero-inner{
+  background:
+    radial-gradient(1200px 760px at 50% 18%, rgba(255,248,228,0.26) 0%, rgba(255,236,198,0.11) 34%, rgba(0,0,0,0) 72%),
+    radial-gradient(980px 720px at 50% 74%, rgba(255,224,158,0.14) 0%, rgba(255,208,132,0.06) 36%, rgba(0,0,0,0) 72%),
+    linear-gradient(90deg, rgba(255,238,208,0.12) 0%, rgba(255,236,198,0.06) 8%, rgba(255,234,194,0.02) 16%, rgba(255,234,194,0.02) 84%, rgba(255,236,198,0.06) 92%, rgba(255,238,208,0.12) 100%),
+    linear-gradient(180deg, rgba(88,60,34,0.04) 0%, rgba(60,38,18,0.02) 42%, rgba(28,14,8,0.04) 100%) !important;
+}
+.hero-inner::before{
+  background:
+    radial-gradient(60% 48% at 50% 46%, rgba(255,249,232,0.18) 0%, rgba(255,236,196,0.07) 30%, rgba(0,0,0,0) 74%),
+    linear-gradient(90deg, rgba(255,246,220,0.10) 0%, rgba(255,240,206,0.04) 8%, rgba(255,234,190,0.01) 16%, rgba(255,234,190,0.01) 84%, rgba(255,240,206,0.04) 92%, rgba(255,246,220,0.10) 100%),
+    linear-gradient(180deg, rgba(255,250,236,0.06) 0%, rgba(0,0,0,0) 28%, rgba(0,0,0,0) 76%, rgba(255,226,162,0.04) 100%) !important;
+}
+.hero-inner::after{
+  background:
+    radial-gradient(44% 36% at 50% 60%, rgba(255,240,200,0.12) 0%, rgba(255,220,152,0.05) 36%, rgba(0,0,0,0) 78%),
+    radial-gradient(130% 100% at 50% 50%, rgba(255,252,242,0.04) 0%, rgba(0,0,0,0) 72%) !important;
+}
+#zenImg{
+  filter: brightness(1.02) contrast(1.04) saturate(1.04) drop-shadow(0 0 4px rgba(255,244,216,0.08)) !important;
+}
+.spotlight{
+  background:
+    radial-gradient(42% 30% at 50% 60%, rgba(255,248,228,0.10) 0%, rgba(255,228,170,0.04) 28%, rgba(0,0,0,0) 74%),
+    radial-gradient(30% 18% at 50% 53%, rgba(255,255,255,0.07) 0%, rgba(255,246,226,0.03) 38%, rgba(0,0,0,0) 76%),
+    radial-gradient(128% 92% at 50% 50%, rgba(255,242,214,0.02) 0%, rgba(0,0,0,0) 72%) !important;
+}
+.lotus-stage::after{
+  background:
+    radial-gradient(42% 38% at 50% 54%, rgba(255,252,238,0.06) 0%, rgba(255,236,196,0.03) 34%, rgba(0,0,0,0) 74%),
+    radial-gradient(32% 20% at 50% 66%, rgba(255,214,132,0.04) 0%, rgba(0,0,0,0) 72%) !important;
+  filter: blur(2px) !important;
+}
+:root{ --btnW: 340px !important; }
+.nav-btn{
+  max-width: 400px !important;
+  width: var(--btnW,340px) !important;
+  height: var(--btnH,74px) !important;
+}
+.nav-btn span{
+  font-size: clamp(1.00rem, calc(0.96rem + 0.42vw), 1.52rem) !important;
+}
+#zwLeft{ left: clamp(88px, 12vw, 180px) !important; }
+#zwRight{ right: clamp(88px, 12vw, 180px) !important; }
+</style>
+
+
+<style id="tasun-v5-side-light-and-zen-reposition-fix-20260410b">
+/* 只修正：左右暗部提亮、禪字移到指定位置；其餘不變 */
+.hero-inner{
+  background:
+    radial-gradient(30% 42% at 14% 52%, rgba(255,238,208,0.18) 0%, rgba(255,230,196,0.10) 34%, rgba(0,0,0,0) 72%),
+    radial-gradient(30% 42% at 86% 52%, rgba(255,238,208,0.18) 0%, rgba(255,230,196,0.10) 34%, rgba(0,0,0,0) 72%),
+    radial-gradient(1200px 760px at 50% 18%, rgba(255,248,228,0.34) 0%, rgba(255,236,198,0.16) 34%, rgba(0,0,0,0) 72%),
+    radial-gradient(980px 720px at 50% 74%, rgba(255,224,158,0.22) 0%, rgba(255,208,132,0.10) 36%, rgba(0,0,0,0) 72%),
+    linear-gradient(90deg, rgba(255,240,214,0.18) 0%, rgba(255,236,198,0.11) 10%, rgba(255,234,194,0.05) 18%, rgba(255,234,194,0.05) 82%, rgba(255,236,198,0.11) 90%, rgba(255,240,214,0.18) 100%),
+    linear-gradient(180deg, rgba(88,60,34,0.035) 0%, rgba(60,38,18,0.018) 42%, rgba(28,14,8,0.035) 100%) !important;
+}
+.hero-inner::before{
+  background:
+    radial-gradient(32% 50% at 12% 54%, rgba(255,245,220,0.12) 0%, rgba(255,236,198,0.06) 30%, rgba(0,0,0,0) 74%),
+    radial-gradient(32% 50% at 88% 54%, rgba(255,245,220,0.12) 0%, rgba(255,236,198,0.06) 30%, rgba(0,0,0,0) 74%),
+    radial-gradient(60% 48% at 50% 46%, rgba(255,249,232,0.28) 0%, rgba(255,236,196,0.12) 30%, rgba(0,0,0,0) 74%),
+    linear-gradient(90deg, rgba(255,246,220,0.18) 0%, rgba(255,240,206,0.08) 8%, rgba(255,234,190,0.02) 16%, rgba(255,234,190,0.02) 84%, rgba(255,240,206,0.08) 92%, rgba(255,246,220,0.18) 100%),
+    linear-gradient(180deg, rgba(255,250,236,0.12) 0%, rgba(0,0,0,0) 28%, rgba(0,0,0,0) 76%, rgba(255,226,162,0.08) 100%) !important;
+}
+#zwLeft{
+  left:clamp(360px, 23vw, 470px) !important;
+  top:58% !important;
+}
+#zwRight{
+  right:clamp(360px, 23vw, 470px) !important;
+  top:58% !important;
+}
+#zwBottomLine{
+  bottom:clamp(112px, 15.5vh, 190px) !important;
+  left:50% !important;
+}
+@media (max-width: 1400px){
+  #zwLeft{ left:clamp(240px, 18vw, 360px) !important; top:58.5% !important; }
+  #zwRight{ right:clamp(240px, 18vw, 360px) !important; top:58.5% !important; }
+  #zwBottomLine{ bottom:clamp(88px, 12.5vh, 142px) !important; }
+}
+@media (max-width: 1100px){
+  #zwLeft{ left:clamp(150px, 14vw, 250px) !important; top:59% !important; }
+  #zwRight{ right:clamp(150px, 14vw, 250px) !important; top:59% !important; }
+  #zwBottomLine{ bottom:clamp(60px, 9vh, 98px) !important; }
+}
+@media (max-width: 900px){
+  #zwLeft{ left:clamp(30px, 7vw, 70px) !important; top:60% !important; }
+  #zwRight{ right:clamp(30px, 7vw, 70px) !important; top:60% !important; }
+  #zwBottomLine{ bottom:clamp(30px, 6vh, 58px) !important; }
+}
+</style>
+
+
+
+
+<style id="tasun-v5-title-buttons-zen-unity-fix-20260410">
+/* ===== Tasun v5 targeted fix: title bigger + brighter button text + zen unity ===== */
+.site-title{
+  font-size: clamp(2.55rem, 3.95vw, 4.35rem) !important;
+  letter-spacing: 0.18em !important;
+  padding-left: 0.18em !important;
+  color: rgba(122, 78, 26, 0.995) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.99),
+    0 0 12px rgba(255,244,220,0.46),
+    0 8px 18px rgba(120,76,22,0.20),
+    0 16px 28px rgba(72,46,14,0.20) !important;
+  filter: drop-shadow(0 2px 4px rgba(255,248,232,0.24));
+}
+.nav-btn span{
+  color: rgba(150, 98, 26, 0.998) !important;
+  font-weight: 700 !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.995),
+    0 0 12px rgba(255,246,226,0.34),
+    0 8px 16px rgba(126,78,22,0.18),
+    0 12px 20px rgba(66,42,14,0.14) !important;
+  -webkit-text-stroke: 0.12px rgba(118,72,18,0.22);
+}
+.nav-btn{
+  border-color: rgba(255,248,232,0.86) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.72),
+    inset 0 -10px 18px rgba(108,64,18,0.08),
+    0 16px 34px rgba(46,28,10,0.16),
+    0 0 30px rgba(255,228,166,0.18) !important;
+}
+.zw-top-axis,
+#zwTopAxis{
+  top: clamp(138px, 23.5vh, 310px) !important;
+  z-index: 90018 !important;
+}
+.zw-axis-text,
+#zwAxisText{
+  font-size: clamp(1.58rem, 2.28vw, 2.12rem) !important;
+  letter-spacing: 0.42em !important;
+  padding-left: 0.42em !important;
+  line-height: 1.08 !important;
+  font-weight: 700 !important;
+  color: rgba(114, 82, 36, 0.86) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.95),
+    0 0 10px rgba(255,244,220,0.24),
+    0 8px 16px rgba(96,60,18,0.12),
+    0 12px 20px rgba(66,42,14,0.10) !important;
+}
+.zw-side-col,
+#zwLeft,
+#zwRight,
+.zw-bottom-line,
+#zwBottomLine{
+  color: rgba(114,82,38,0.82) !important;
+  font-weight: 700 !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.95),
+    0 0 10px rgba(255,244,220,0.22),
+    0 8px 15px rgba(66,42,14,0.11),
+    0 12px 18px rgba(66,42,14,0.09) !important;
+}
+.zw-side-col,
+#zwLeft,
+#zwRight{
+  font-size: clamp(1.52rem, 2.22vw, 2.12rem) !important;
+}
+.zw-bottom-line,
+#zwBottomLine{
+  font-size: clamp(1.52rem, 2.18vw, 2.08rem) !important;
+  bottom: clamp(34px, 8.2vh, 96px) !important;
+}
+@media (max-width: 900px){
+  .site-title{
+    font-size: clamp(2.02rem, 6.2vw, 3.05rem) !important;
+  }
+  .zw-top-axis,
+  #zwTopAxis{
+    top: clamp(122px, 21.5vh, 220px) !important;
+  }
+  .zw-axis-text,
+  #zwAxisText{
+    font-size: clamp(1.18rem, 3.8vw, 1.48rem) !important;
+    letter-spacing: 0.34em !important;
+    padding-left: 0.34em !important;
+  }
+  .zw-side-col,
+  #zwLeft,
+  #zwRight{
+    font-size: clamp(1.10rem, 3.4vw, 1.42rem) !important;
+  }
+  .zw-bottom-line,
+  #zwBottomLine{
+    font-size: clamp(1.10rem, 3.35vw, 1.40rem) !important;
+    bottom: clamp(24px, 6.4vh, 56px) !important;
+  }
+}
+</style>
+
+
+<style id="tasun-v5-mobile-nav-overlap-fix">
+/* ===== Tasun v5 mobile nav overlap fix: buttons auto scale + auto position ===== */
+@media (max-width: 900px){
+  .nav-area{
+    inset: 0 !important;
+    z-index: 90030 !important;
+  }
+  .nav-area.grid2,
+  .nav-area.grid3,
+  .nav-area.stack,
+  .nav-area.sides{
+    --btnW: min(40vw, 300px) !important;
+    --btnH: clamp(54px, 8.2vh, 72px) !important;
+    --btnGap: clamp(8px, 1.8vh, 14px) !important;
+    --midGap: clamp(26px, 8vw, 68px) !important;
+    --btnColGap: clamp(8px, 2vw, 12px) !important;
+  }
+  .nav-btn{
+    width: min(var(--btnW), 40vw) !important;
+    max-width: min(var(--btnW), 40vw) !important;
+    min-width: 0 !important;
+    height: var(--btnH) !important;
+    padding: 0 clamp(10px, 2vw, 18px) !important;
+  }
+  .nav-btn span{
+    font-size: clamp(0.96rem, 2.35vw, 1.22rem) !important;
+    line-height: 1.1 !important;
+    letter-spacing: .05em !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+}
+@media (max-width: 680px){
+  .nav-area.grid2,
+  .nav-area.grid3,
+  .nav-area.stack,
+  .nav-area.sides{
+    --btnW: min(39vw, 252px) !important;
+    --btnH: clamp(50px, 7.8vh, 66px) !important;
+    --btnGap: clamp(8px, 1.6vh, 12px) !important;
+    --midGap: clamp(20px, 6vw, 40px) !important;
+    --btnColGap: clamp(6px, 2vw, 10px) !important;
+  }
+  .nav-btn{
+    width: min(var(--btnW), 39vw) !important;
+    max-width: min(var(--btnW), 39vw) !important;
+  }
+  .nav-btn span{
+    font-size: clamp(0.90rem, 2.5vw, 1.08rem) !important;
+  }
+}
+@media (max-width: 520px){
+  .nav-area{
+    padding: 0 !important;
+  }
+  .nav-area.grid2,
+  .nav-area.grid3,
+  .nav-area.stack,
+  .nav-area.sides{
+    --btnW: min(41vw, 210px) !important;
+    --btnH: clamp(46px, 7.4vh, 60px) !important;
+    --btnGap: clamp(7px, 1.4vh, 10px) !important;
+    --midGap: clamp(16px, 6vw, 30px) !important;
+    --btnColGap: clamp(6px, 2vw, 10px) !important;
+  }
+  .nav-btn{
+    width: min(var(--btnW), 41vw) !important;
+    max-width: min(var(--btnW), 41vw) !important;
+    border-radius: 999px !important;
+  }
+  .nav-btn span{
+    font-size: clamp(0.84rem, 3.0vw, 1.00rem) !important;
+    line-height: 1.08 !important;
+    letter-spacing: .03em !important;
+    -webkit-text-stroke: 0.55px rgba(112,68,18,0.92) !important;
+  }
+  #zwLeft{ left: 8px !important; }
+  #zwRight{ right: 8px !important; }
+}
+</style>
+
+<script id="tasun-v5-mobile-nav-overlap-fix-script">
+(function(){
+  function rebalanceMobileNav(){
+    try{
+      var navArea = document.getElementById('navArea');
+      if(!navArea) return;
+      var btns = Array.prototype.slice.call(navArea.querySelectorAll('.nav-btn')).filter(function(btn){
+        return window.getComputedStyle(btn).display !== 'none';
+      });
+      var w = window.innerWidth || document.documentElement.clientWidth || 0;
+      var h = window.innerHeight || document.documentElement.clientHeight || 0;
+      if(!btns.length || w > 900) return;
+      var maxW = (w <= 520) ? Math.floor(w * 0.41) : (w <= 680 ? Math.floor(w * 0.39) : Math.floor(w * 0.40));
+      var btnH = (w <= 520)
+        ? Math.max(46, Math.min(60, Math.round(h * 0.074)))
+        : (w <= 680 ? Math.max(50, Math.min(66, Math.round(h * 0.078))) : Math.max(54, Math.min(72, Math.round(h * 0.082))));
+      btns.forEach(function(btn){
+        btn.style.width = maxW + 'px';
+        btn.style.maxWidth = maxW + 'px';
+        btn.style.minWidth = '0px';
+        btn.style.height = btnH + 'px';
+      });
+    }catch(e){}
+  }
+  document.addEventListener('DOMContentLoaded', function(){ setTimeout(rebalanceMobileNav, 180); }, { once:true });
+  window.addEventListener('load', function(){ setTimeout(rebalanceMobileNav, 260); }, { once:true });
+  window.addEventListener('resize', rebalanceMobileNav, { passive:true });
+  window.addEventListener('orientationchange', function(){ setTimeout(rebalanceMobileNav, 120); }, { passive:true });
+  if(window.visualViewport){
+    window.visualViewport.addEventListener('resize', rebalanceMobileNav, { passive:true });
+  }
+})();
+</script>
+
+
+<style id="tasun-v5-zen-nav-hotfix-20260411b">
+/* ===== Tasun v5 hotfix 2026-04-11b: unified zen words + robust nav layout ===== */
+:root{
+  --tasun-zen-unified-size: clamp(1.02rem, 1.95vw, 1.62rem);
+}
+#loginCloudBtn{ display:none !important; }
+body.locked #loginCloudBtn{ display:none !important; }
+
+.zen-words,
+#zwTopAxis,
+#zwLeft,
+#zwRight,
+#zwBottomLine{
+  z-index: 90040 !important;
+}
+#zwTopAxis,
+#zwBottomLine,
+#zwLeft,
+#zwRight{
+  position:absolute !important;
+  margin:0 !important;
+  padding:0 !important;
+  opacity:1 !important;
+  visibility:visible !important;
+  color: rgba(108,78,38,0.92) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.96),
+    0 0 10px rgba(255,244,220,0.26),
+    0 8px 16px rgba(66,42,14,0.14) !important;
+  font-weight:700 !important;
+}
+#zwAxisText,
+#zwLeft,
+#zwRight,
+#zwBottomLine{
+  font-size: var(--tasun-zen-unified-size) !important;
+}
+#zwAxisText{
+  letter-spacing: .34em !important;
+  padding-left: .34em !important;
+  line-height:1 !important;
+}
+#zwBottomLine{
+  letter-spacing: .32em !important;
+  padding-left: .32em !important;
+  line-height:1 !important;
+  transform: translateX(-50%) !important;
+}
+#zwLeft,
+#zwRight{
+  writing-mode: vertical-rl !important;
+  text-orientation: upright !important;
+  letter-spacing: .18em !important;
+  line-height:1.02 !important;
+  transform: translateY(-50%) !important;
+}
+
+#navArea{
+  z-index: 90060 !important;
+}
+#navArea .nav-btn{
+  opacity:1 !important;
+  visibility:visible !important;
+  pointer-events:auto !important;
+}
+body.locked #navArea .nav-btn{
+  display:none !important;
+}
+body:not(.locked) #navArea .nav-btn{
+  display:flex;
+}
+body:not(.locked) #userBar{
+  display:flex;
+}
+
+@media (max-width: 900px){
+  :root{
+    --tasun-zen-unified-size: clamp(0.98rem, 3.3vw, 1.22rem);
+  }
+  #zwAxisText{ letter-spacing:.22em !important; padding-left:.22em !important; }
+  #zwBottomLine{ letter-spacing:.22em !important; padding-left:.22em !important; }
+  #zwLeft,#zwRight{ letter-spacing:.12em !important; }
+}
+</style>
+
+<script id="tasun-v5-zen-nav-hotfix-20260411b-script">
+(function(){
+  'use strict';
+  function clamp(n,a,b){ return Math.max(a, Math.min(b, n)); }
+  function raf(fn){ var r=0; return function(){ try{ cancelAnimationFrame(r); }catch(e){} r=requestAnimationFrame(fn); }; }
+  function getRole(){
+    try{
+      var raw = sessionStorage.getItem('tasunCurrentUser_v1') || localStorage.getItem('tasunCurrentUser_v1') || sessionStorage.getItem('tasunSessionLogin_v2') || localStorage.getItem('tasunSessionLogin_v2') || '';
+      if(!raw) return '';
+      var js = JSON.parse(raw) || {};
+      return String(js.role || js.level || '').trim().toLowerCase();
+    }catch(e){ return ''; }
+  }
+  function isUnlocked(){
+    try{
+      var bodyLocked = !!(document.body && document.body.classList.contains('locked'));
+      var overlay = document.getElementById('loginOverlay');
+      var showing = !!(overlay && getComputedStyle(overlay).display !== 'none');
+      return !bodyLocked && !showing;
+    }catch(e){ return false; }
+  }
+  function ensureNavVisible(){
+    try{
+      var nav = document.getElementById('navArea');
+      if(!nav) return;
+      var btns = Array.from(nav.querySelectorAll('.nav-btn'));
+      if(!btns.length) return;
+      var unlocked = isUnlocked();
+      var role = getRole();
+      btns.forEach(function(btn){
+        var isSystem = btn.id === 'systemBtn' || btn.dataset.sourceId === 'auth';
+        if(!unlocked){
+          btn.style.display = 'none';
+          return;
+        }
+        if(isSystem && role !== 'admin'){
+          btn.style.display = 'none';
+          return;
+        }
+        btn.style.display = 'flex';
+        btn.style.opacity = '1';
+        btn.style.visibility = 'visible';
+        btn.style.pointerEvents = 'auto';
+      });
+      var cloud = document.getElementById('loginCloudBtn');
+      if(cloud) cloud.style.display = 'none';
+    }catch(e){}
+  }
+  function layoutZenWords(){
+    try{
+      var hero = document.getElementById('heroInner');
+      var top = document.getElementById('zwTopAxis');
+      var axisText = document.getElementById('zwAxisText');
+      var left = document.getElementById('zwLeft');
+      var right = document.getElementById('zwRight');
+      var bottom = document.getElementById('zwBottomLine');
+      if(!hero || !top || !axisText || !left || !right || !bottom) return;
+      var rect = hero.getBoundingClientRect();
+      var W = Math.max(1, rect.width), H = Math.max(1, rect.height);
+      var portrait = H > W;
+
+      var cx = W * 0.5;
+      var lotusTop = portrait ? H * 0.33 : H * 0.34;
+      var lotusBottom = portrait ? H * 0.82 : H * 0.84;
+      var lotusMidY = (lotusTop + lotusBottom) / 2;
+      var halfW = portrait ? W * 0.215 : W * 0.205;
+      var sideGap = portrait ? 8 : 10;
+      var topGap = portrait ? 12 : 10;
+      var bottomGap = portrait ? 8 : 8;
+
+      top.style.left = Math.round(cx) + 'px';
+      top.style.top = Math.round(lotusTop - topGap - 18) + 'px';
+      top.style.transform = 'translateX(-50%)';
+      axisText.style.fontSize = getComputedStyle(document.documentElement).getPropertyValue('--tasun-zen-unified-size');
+
+      left.style.left = Math.round(cx - halfW - sideGap) + 'px';
+      left.style.top = Math.round(lotusMidY) + 'px';
+      left.style.transform = 'translate(-100%, -50%)';
+
+      right.style.left = Math.round(cx + halfW + sideGap) + 'px';
+      right.style.top = Math.round(lotusMidY) + 'px';
+      right.style.transform = 'translateY(-50%)';
+
+      bottom.style.left = Math.round(cx) + 'px';
+      bottom.style.top = Math.round(lotusBottom + bottomGap) + 'px';
+      bottom.style.bottom = 'auto';
+      bottom.style.transform = 'translateX(-50%)';
+    }catch(e){}
+  }
+  function layoutButtons(){
+    try{
+      ensureNavVisible();
+      if(!isUnlocked()) return;
+      var hero = document.getElementById('heroInner');
+      var nav = document.getElementById('navArea');
+      if(!hero || !nav) return;
+      var btns = Array.from(nav.querySelectorAll('.nav-btn')).filter(function(btn){ return getComputedStyle(btn).display !== 'none'; });
+      if(!btns.length) return;
+      var rect = hero.getBoundingClientRect();
+      var W = Math.max(1, rect.width), H = Math.max(1, rect.height);
+      var portrait = H > W;
+      var isPhone = W <= 900 || Math.min(W,H) <= 520;
+      btns.forEach(function(btn){
+        btn.style.position = 'absolute';
+        btn.style.right = 'auto';
+        btn.style.bottom = 'auto';
+        btn.style.transform = 'none';
+        btn.style.minWidth = '0';
+      });
+      if(isPhone){
+        var topStart = portrait ? H * 0.365 : H * 0.33;
+        var bottomStop = portrait ? H * 0.80 : H * 0.77;
+        var n = btns.length;
+        var avail = Math.max(220, bottomStop - topStart);
+        var gap = clamp(Math.round(avail * 0.040), 10, 18);
+        var btnH = Math.floor((avail - gap * (n - 1)) / n);
+        btnH = clamp(btnH, 56, portrait ? 88 : 72);
+        var need = btnH * n + gap * (n - 1);
+        if(need > avail){
+          gap = clamp(Math.floor((avail - btnH * n) / Math.max(1, n - 1)), 8, 14);
+          need = btnH * n + gap * (n - 1);
+        }
+        var startY = Math.round(topStart + Math.max(0, (avail - need) / 2));
+        var btnW = portrait ? clamp(Math.round(W * 0.46), 210, 320) : clamp(Math.round(W * 0.29), 220, 330);
+        var x = Math.round((W - btnW) / 2);
+        btns.forEach(function(btn, i){
+          btn.style.left = x + 'px';
+          btn.style.top = Math.round(startY + i * (btnH + gap)) + 'px';
+          btn.style.width = btnW + 'px';
+          btn.style.maxWidth = btnW + 'px';
+          btn.style.height = btnH + 'px';
+          btn.style.display = 'flex';
+        });
+        btns.forEach(function(btn){
+          var span = btn.querySelector('span');
+          if(span){
+            span.style.whiteSpace = 'nowrap';
+            span.style.overflow = 'hidden';
+            span.style.textOverflow = 'ellipsis';
+            span.style.fontSize = portrait ? 'clamp(1.00rem, 3.3vw, 1.36rem)' : 'clamp(0.98rem, 2.2vw, 1.16rem)';
+            span.style.lineHeight = '1.12';
+          }
+        });
+      }else{
+        var leftBtns = [], rightBtns = [];
+        btns.forEach(function(btn, i){ (i % 2 === 0 ? leftBtns : rightBtns).push(btn); });
+        var topY = Math.round(H * 0.30);
+        var gapY = 24;
+        var btnH2 = clamp(Math.round(H * 0.074), 66, 86);
+        var btnW2 = clamp(Math.round(W * 0.24), 300, 430);
+        var leftX = Math.round(W * 0.02);
+        var rightX = Math.round(W - btnW2 - W * 0.02);
+        function place(col, x){
+          col.forEach(function(btn, idx){
+            btn.style.left = x + 'px';
+            btn.style.top = Math.round(topY + idx * (btnH2 + gapY)) + 'px';
+            btn.style.width = btnW2 + 'px';
+            btn.style.maxWidth = btnW2 + 'px';
+            btn.style.height = btnH2 + 'px';
+            btn.style.display = 'flex';
+          });
+        }
+        var leftNeed = leftBtns.length ? (leftBtns.length * btnH2 + (leftBtns.length - 1) * gapY) : 0;
+        var rightNeed = rightBtns.length ? (rightBtns.length * btnH2 + (rightBtns.length - 1) * gapY) : 0;
+        var maxNeed = Math.max(leftNeed, rightNeed);
+        var bottomLimit = Math.round(H * 0.78);
+        if(topY + maxNeed > bottomLimit){
+          var availY2 = Math.max(220, bottomLimit - topY);
+          btnH2 = clamp(Math.floor((availY2 - gapY * Math.max(0, Math.max(leftBtns.length, rightBtns.length) - 1)) / Math.max(1, Math.max(leftBtns.length, rightBtns.length))), 62, 82);
+        }
+        place(leftBtns, leftX);
+        place(rightBtns, rightX);
+        btns.forEach(function(btn){
+          var span = btn.querySelector('span');
+          if(span){
+            span.style.fontSize = 'clamp(1.00rem, 1.18vw, 1.46rem)';
+            span.style.lineHeight = '1.12';
+            span.style.whiteSpace = 'nowrap';
+          }
+        });
+      }
+    }catch(e){}
+  }
+  function run(){
+    layoutZenWords();
+    layoutButtons();
+  }
+  var schedule = raf(run);
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', function(){ setTimeout(run, 120); setTimeout(run, 420); setTimeout(run, 900); }, {once:true});
+  }else{
+    setTimeout(run, 80); setTimeout(run, 320); setTimeout(run, 900);
+  }
+  window.addEventListener('load', function(){ setTimeout(run, 120); setTimeout(run, 520); setTimeout(run, 1200); }, {once:true});
+  window.addEventListener('resize', schedule, {passive:true});
+  window.addEventListener('orientationchange', function(){ setTimeout(run, 180); }, {passive:true});
+  if(window.visualViewport) window.visualViewport.addEventListener('resize', schedule, {passive:true});
+  document.addEventListener('visibilitychange', function(){ if(document.visibilityState === 'visible') setTimeout(run, 120); }, {passive:true});
+  try{
+    var mo = new MutationObserver(function(){ schedule(); });
+    setTimeout(function(){
+      var nav = document.getElementById('navArea');
+      var hero = document.getElementById('heroInner');
+      var body = document.body;
+      if(nav) mo.observe(nav, {childList:true, subtree:true, attributes:true, attributeFilter:['style','class']});
+      if(hero) mo.observe(hero, {attributes:true, attributeFilter:['style','class']});
+      if(body) mo.observe(body, {attributes:true, attributeFilter:['class']});
+    }, 240);
+  }catch(e){}
+})();
+</script>
+
+
+
+<style id="tasun-v5-user-request-fix-20260412">
+/* ===== 2026-04-12 使用者指定修正：首頁禪字/按鍵/手機標題 ===== */
+:root{
+  --tasun-zen-word-size-desktop: clamp(1.72rem, 2.34vw, 2.18rem);
+  --tasun-zen-word-size-mobile: clamp(1.28rem, 4.2vw, 1.64rem);
+}
+.site-title-wrapper,
+.site-title{
+  white-space: nowrap !important;
+}
+.site-title{
+  line-height: 1 !important;
+}
+#zwTopAxis,
+#zwLeft,
+#zwRight,
+#zwBottomLine{
+  z-index: 90040 !important;
+}
+#zwAxisText,
+#zwLeft,
+#zwRight,
+#zwBottomLine{
+  font-size: var(--tasun-zen-word-size-desktop) !important;
+  font-weight: 700 !important;
+  line-height: 1.1 !important;
+  color: rgba(112,80,36,0.96) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.96),
+    0 0 10px rgba(255,244,220,0.24),
+    0 8px 16px rgba(66,42,14,0.10) !important;
+}
+#zwAxisText{
+  letter-spacing: .34em !important;
+  padding-left: .34em !important;
+}
+#zwLeft,
+#zwRight{
+  writing-mode: vertical-rl !important;
+  text-orientation: upright !important;
+  letter-spacing: .16em !important;
+}
+#zwBottomLine{
+  letter-spacing: .24em !important;
+  padding-left: .24em !important;
+  white-space: nowrap !important;
+}
+@media (max-width: 900px){
+  .site-title-wrapper{
+    top: clamp(20px, 4.2vh, 36px) !important;
+    width: auto !important;
+    max-width: calc(100vw - 34px) !important;
+  }
+  .site-title{
+    font-size: clamp(2.05rem, 5.8vw, 2.9rem) !important;
+    letter-spacing: .10em !important;
+    padding-left: .10em !important;
+    white-space: nowrap !important;
+    word-break: keep-all !important;
+  }
+  #zwAxisText,
+  #zwLeft,
+  #zwRight,
+  #zwBottomLine{
+    font-size: var(--tasun-zen-word-size-mobile) !important;
+  }
+}
+</style>
+
+<script id="tasun-v5-user-request-fix-script-20260412">
+(function(){
+  function q(id){ return document.getElementById(id); }
+  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+  function px(v){ return Math.round(v) + 'px'; }
+
+  function layoutZenWords(){
+    try{
+      var hero = q('heroInner');
+      var stage = q('lotusStage') || hero;
+      var top = q('zwTopAxis');
+      var topText = q('zwAxisText');
+      var left = q('zwLeft');
+      var right = q('zwRight');
+      var bottom = q('zwBottomLine');
+      var nav = q('navArea');
+      var titleWrap = q('titleWrap');
+      if(!hero || !stage || !top || !topText || !left || !right || !bottom || !nav || !titleWrap) return;
+
+      var heroRect = hero.getBoundingClientRect();
+      var stageRect = stage.getBoundingClientRect();
+      var w = Math.max(1, heroRect.width);
+      var h = Math.max(1, heroRect.height);
+      var isMobile = window.innerWidth <= 900;
+
+      var lotusCx = stageRect.left - heroRect.left + stageRect.width * 0.5;
+      var lotusCy = stageRect.top - heroRect.top + stageRect.height * (isMobile ? 0.63 : 0.61);
+      var lotusHalfW = stageRect.width * (isMobile ? 0.27 : 0.22);
+      var lotusHalfH = stageRect.height * (isMobile ? 0.17 : 0.15);
+      var petalPadX = isMobile ? 6 : 8;
+      var petalPadY = isMobile ? 6 : 8;
+
+      var titleRect = titleWrap.getBoundingClientRect();
+      var titleBottom = titleRect.bottom - heroRect.top;
+
+      var visibleBtns = Array.prototype.slice.call(nav.querySelectorAll('.nav-btn')).filter(function(btn){
+        return window.getComputedStyle(btn).display !== 'none';
+      });
+      var firstBtnTop = null, lastBtnBottom = null;
+      visibleBtns.forEach(function(btn){
+        var r = btn.getBoundingClientRect();
+        var t = r.top - heroRect.top;
+        var b = r.bottom - heroRect.top;
+        if(firstBtnTop === null || t < firstBtnTop) firstBtnTop = t;
+        if(lastBtnBottom === null || b > lastBtnBottom) lastBtnBottom = b;
+      });
+
+      var fontPx = isMobile ? clamp(w * 0.043, 20, 28) : clamp(w * 0.0195, 26, 38);
+      topText.style.fontSize = px(fontPx);
+      left.style.fontSize = px(fontPx);
+      right.style.fontSize = px(fontPx);
+      bottom.style.fontSize = px(fontPx);
+
+      // 先清掉舊定位，取得最新尺寸
+      [top,left,right,bottom].forEach(function(el){
+        el.style.left=''; el.style.right=''; el.style.top=''; el.style.bottom='';
+        if(el!==top) el.style.transform = 'none';
+      });
+      top.style.transform = 'translateX(-50%)';
+
+      var topRect = top.getBoundingClientRect();
+      var leftRect = left.getBoundingClientRect();
+      var rightRect = right.getBoundingClientRect();
+      var bottomRect = bottom.getBoundingClientRect();
+
+      var topSpace = isMobile ? clamp(h * 0.032, 20, 34) : clamp(h * 0.018, 14, 26);
+      var bottomSpace = isMobile ? clamp(h * 0.030, 18, 34) : clamp(h * 0.015, 12, 22);
+      var sideOffset = isMobile ? clamp(w * 0.010, 4, 10) : clamp(w * 0.008, 6, 12);
+
+      var targetTopY = lotusCy - lotusHalfH - topRect.height - topSpace;
+      if(isMobile && firstBtnTop !== null){
+        targetTopY = Math.min(targetTopY, firstBtnTop - topRect.height - topSpace);
+      }
+      var minTopY = titleBottom + (isMobile ? 26 : 18);
+      targetTopY = Math.max(minTopY, targetTopY);
+
+      var targetBottomY = lotusCy + lotusHalfH + bottomSpace;
+      if(isMobile && lastBtnBottom !== null){
+        targetBottomY = Math.max(targetBottomY, lastBtnBottom + bottomSpace);
+      }
+      var maxBottomY = h - bottomRect.height - (isMobile ? 26 : 20);
+      targetBottomY = clamp(targetBottomY, minTopY + topRect.height + 20, maxBottomY);
+
+      var sideCenterY = lotusCy;
+      var leftX = lotusCx - lotusHalfW - leftRect.width - sideOffset;
+      var rightX = lotusCx + lotusHalfW + sideOffset;
+
+      leftX = clamp(leftX, isMobile ? 4 : 10, Math.max(isMobile ? 4 : 10, lotusCx - leftRect.width - 2));
+      rightX = clamp(rightX, lotusCx + 2, w - rightRect.width - (isMobile ? 4 : 10));
+
+      top.style.left = px(lotusCx);
+      top.style.top = px(targetTopY);
+      left.style.left = px(leftX);
+      left.style.top = px(sideCenterY - leftRect.height / 2);
+      right.style.left = px(rightX);
+      right.style.top = px(sideCenterY - rightRect.height / 2);
+      bottom.style.left = '50%';
+      bottom.style.transform = 'translateX(-50%)';
+      bottom.style.top = px(targetBottomY);
+      bottom.style.bottom = 'auto';
+
+      left.style.opacity = '1';
+      right.style.opacity = '1';
+      top.style.opacity = '1';
+      bottom.style.opacity = '1';
+    }catch(e){}
+  }
+
+  function layoutDesktopButtons(){
+    try{
+      if(window.innerWidth <= 900) return;
+      var nav = q('navArea');
+      var hero = q('heroInner');
+      var userBar = q('userBar');
+      var titleWrap = q('titleWrap');
+      var top = q('zwTopAxis');
+      var bottom = q('zwBottomLine');
+      if(!nav || !hero) return;
+      var btns = Array.prototype.slice.call(nav.querySelectorAll('.nav-btn')).filter(function(btn){
+        return window.getComputedStyle(btn).display !== 'none';
+      });
+      if(!btns.length) return;
+      var leftBtns = [], rightBtns = [];
+      btns.forEach(function(btn, i){ (i % 2 === 0 ? leftBtns : rightBtns).push(btn); });
+      var rect = hero.getBoundingClientRect();
+      var ub = userBar ? userBar.getBoundingClientRect() : null;
+      var tw = titleWrap ? titleWrap.getBoundingClientRect() : null;
+      var tp = top ? top.getBoundingClientRect() : null;
+      var bt = bottom ? bottom.getBoundingClientRect() : null;
+      var topBound = Math.max(ub ? ub.bottom - rect.top + 10 : 0, tw ? tw.bottom - rect.top + 12 : 0, tp ? tp.bottom - rect.top + 18 : 100);
+      var bottomBound = bt ? bt.top - rect.top - 18 : rect.height - 36;
+      var avail = Math.max(180, bottomBound - topBound);
+      var rows = Math.max(leftBtns.length, rightBtns.length);
+      var gap = 18;
+      var btnH = clamp((avail - gap * (rows - 1)) / rows, 72, 84);
+      gap = clamp((avail - btnH * rows) / Math.max(1, rows - 1), 18, 28);
+      var btnW = clamp(rect.width * 0.23, 300, 360);
+      var leftX = clamp(rect.width * 0.03, 18, 60);
+      var rightX = rect.width - leftX - btnW;
+      function place(col, x, useRight){
+        if(!col.length) return;
+        var total = col.length * btnH + (col.length - 1) * gap;
+        var startY = topBound + Math.max(0, (avail - total) * 0.30);
+        col.forEach(function(btn, idx){
+          btn.style.width = px(btnW);
+          btn.style.height = px(btnH);
+          btn.style.top = px(startY + idx * (btnH + gap));
+          btn.style.left = useRight ? 'auto' : px(x);
+          btn.style.right = useRight ? px(rect.width - x - btnW) : 'auto';
+        });
+      }
+      place(leftBtns, leftX, false);
+      place(rightBtns, rightX, true);
+    }catch(e){}
+  }
+
+  function runAll(){
+    layoutZenWords();
+    layoutDesktopButtons();
+  }
+
+  window.addEventListener('resize', runAll, {passive:true});
+  window.addEventListener('load', function(){ setTimeout(runAll, 60); setTimeout(runAll, 360); });
+  document.addEventListener('DOMContentLoaded', function(){ setTimeout(runAll, 120); setTimeout(runAll, 600); });
+  if(window.visualViewport){
+    window.visualViewport.addEventListener('resize', runAll, {passive:true});
+    window.visualViewport.addEventListener('scroll', runAll, {passive:true});
+  }
+  setInterval(runAll, 900);
+})();
+</script>
+
+
+<style id="tasun-v5-user-request-fix-20260412-r3">
+:root{
+  --tasun-r3-zen-side-size-desktop: clamp(2.05rem, 2.4vw, 2.72rem);
+  --tasun-r3-zen-topbot-size-desktop: clamp(2.05rem, 2.4vw, 2.72rem);
+  --tasun-r3-zen-side-size-mobile: clamp(1.92rem, 5.0vw, 2.44rem);
+  --tasun-r3-zen-topbot-size-mobile: clamp(1.92rem, 5.0vw, 2.44rem);
+}
+#zwTopAxis,
+#zwLeft,
+#zwRight,
+#zwBottomLine{
+  z-index: 90060 !important;
+}
+#zwAxisText,
+#zwLeft,
+#zwRight,
+#zwBottomLine{
+  font-weight: 700 !important;
+  color: rgba(112,80,36,0.96) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.96),
+    0 0 10px rgba(255,244,220,0.24),
+    0 8px 16px rgba(66,42,14,0.10) !important;
+}
+#zwAxisText,
+#zwBottomLine{ white-space: nowrap !important; }
+#zwLeft,
+#zwRight{
+  writing-mode: vertical-rl !important;
+  text-orientation: upright !important;
+}
+@media (max-width: 900px){
+  #zwAxisText,
+  #zwLeft,
+  #zwRight,
+  #zwBottomLine{
+    line-height: 1.04 !important;
+  }
+}
+</style>
+
+<script id="tasun-v5-user-request-fix-script-20260412-r3">
+(function(){
+  function q(id){ return document.getElementById(id); }
+  function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
+  function px(v){ return Math.round(v) + 'px'; }
+
+  function layoutZenWordsR3(){
+    try{
+      var hero = q('heroInner');
+      var stage = q('lotusStage') || hero;
+      var top = q('zwTopAxis');
+      var topText = q('zwAxisText');
+      var left = q('zwLeft');
+      var right = q('zwRight');
+      var bottom = q('zwBottomLine');
+      var titleWrap = q('titleWrap');
+      if(!hero || !stage || !top || !topText || !left || !right || !bottom) return;
+
+      var rect = hero.getBoundingClientRect();
+      var stageRect = stage.getBoundingClientRect();
+      var mobile = window.matchMedia('(max-width: 900px)').matches;
+
+      var cx = stageRect.left - rect.left + stageRect.width * 0.5;
+      var cy = stageRect.top - rect.top + stageRect.height * (mobile ? 0.602 : 0.588);
+      var halfW = stageRect.width * (mobile ? 0.208 : 0.214);
+      var halfH = stageRect.height * (mobile ? 0.152 : 0.182);
+      var sideGap = clamp(stageRect.width * (mobile ? 0.010 : 0.008), 4, 10);
+      var topGap = clamp(stageRect.height * (mobile ? 0.004 : 0.003), 2, 6);
+      var bottomGap = clamp(stageRect.height * (mobile ? 0.002 : 0.0015), 1, 4);
+
+      var titleBottom = titleWrap ? (titleWrap.getBoundingClientRect().bottom - rect.top) : 0;
+      var topY = clamp(cy - halfH - topGap, titleBottom + (mobile ? 52 : 72), rect.height - 120);
+      var bottomY = clamp(cy + halfH + bottomGap, titleBottom + 160, rect.height - (mobile ? 64 : 42));
+      var leftX = clamp(cx - halfW - sideGap, 18, rect.width - 40);
+      var rightX = clamp(cx + halfW + sideGap, 18, rect.width - 18);
+
+      top.style.position = 'absolute';
+      top.style.left = px(cx);
+      top.style.top = px(topY);
+      top.style.right = 'auto';
+      top.style.bottom = 'auto';
+      top.style.width = 'auto';
+      top.style.transform = 'translate(-50%, -100%)';
+      top.style.display = 'flex';
+      top.style.justifyContent = 'center';
+      top.style.alignItems = 'center';
+      topText.style.fontSize = mobile ? 'var(--tasun-r3-zen-topbot-size-mobile)' : 'var(--tasun-r3-zen-topbot-size-desktop)';
+      topText.style.letterSpacing = mobile ? '.24em' : '.30em';
+      topText.style.paddingLeft = mobile ? '.24em' : '.30em';
+      topText.style.lineHeight = '1';
+
+      left.style.position = 'absolute';
+      left.style.left = px(leftX);
+      left.style.top = px(cy);
+      left.style.right = 'auto';
+      left.style.bottom = 'auto';
+      left.style.transform = 'translate(-100%, -50%)';
+      left.style.fontSize = mobile ? 'var(--tasun-r3-zen-side-size-mobile)' : 'var(--tasun-r3-zen-side-size-desktop)';
+      left.style.letterSpacing = '.12em';
+      left.style.lineHeight = '1.04';
+
+      right.style.position = 'absolute';
+      right.style.left = px(rightX);
+      right.style.top = px(cy);
+      right.style.right = 'auto';
+      right.style.bottom = 'auto';
+      right.style.transform = 'translate(0, -50%)';
+      right.style.fontSize = mobile ? 'var(--tasun-r3-zen-side-size-mobile)' : 'var(--tasun-r3-zen-side-size-desktop)';
+      right.style.letterSpacing = '.12em';
+      right.style.lineHeight = '1.04';
+
+      bottom.style.position = 'absolute';
+      bottom.style.left = px(cx);
+      bottom.style.top = px(bottomY);
+      bottom.style.right = 'auto';
+      bottom.style.bottom = 'auto';
+      bottom.style.transform = 'translate(-50%, 0)';
+      bottom.style.fontSize = mobile ? 'var(--tasun-r3-zen-topbot-size-mobile)' : 'var(--tasun-r3-zen-topbot-size-desktop)';
+      bottom.style.letterSpacing = mobile ? '.24em' : '.30em';
+      bottom.style.paddingLeft = mobile ? '.24em' : '.30em';
+      bottom.style.lineHeight = '1';
+    }catch(e){}
+  }
+
+  function layoutDesktopButtonsR3(){
+    try{
+      if(window.matchMedia('(max-width: 900px)').matches) return;
+      var navArea = q('navArea');
+      var hero = q('heroInner');
+      if(!navArea || !hero) return;
+      var visible = Array.from(navArea.querySelectorAll('.nav-btn')).filter(function(btn){
+        var cs = getComputedStyle(btn);
+        return cs.display !== 'none' && cs.visibility !== 'hidden';
+      });
+      if(!visible.length) return;
+
+      var rect = hero.getBoundingClientRect();
+      var titleWrap = q('titleWrap');
+      var topText = q('zwTopAxis');
+      var topBound = 250;
+      if(titleWrap) topBound = Math.max(topBound, Math.round(titleWrap.getBoundingClientRect().bottom - rect.top + 120));
+      if(topText) topBound = Math.max(topBound, Math.round(topText.getBoundingClientRect().bottom - rect.top + 70));
+
+      var bottomBound = rect.height - 150;
+      var leftBtns = [], rightBtns = [];
+      visible.forEach(function(btn, idx){ (idx % 2 === 0 ? leftBtns : rightBtns).push(btn); });
+
+      var cols = Math.max(leftBtns.length, rightBtns.length);
+      var avail = Math.max(220, bottomBound - topBound);
+      var btnH = clamp(Math.round(rect.height * 0.095), 74, 82);
+      var gap = clamp(Math.round((avail - cols * btnH) / Math.max(1, cols - 1)), 18, 28);
+      var total = cols * btnH + Math.max(0, cols - 1) * gap;
+      if(total > avail){
+        gap = 18;
+        btnH = clamp(Math.floor((avail - Math.max(0, cols - 1) * gap) / Math.max(1, cols)), 68, 80);
+        total = cols * btnH + Math.max(0, cols - 1) * gap;
+      }
+      var startY = topBound + Math.max(0, Math.round((avail - total) * 0.24));
+      var btnW = clamp(Math.round(rect.width * 0.23), 300, 360);
+      var leftX = clamp(Math.round(rect.width * 0.02), 20, 40);
+      var rightX = rect.width - leftX - btnW;
+
+      function place(btns, x, useRight){
+        btns.forEach(function(btn, idx){
+          btn.style.position = 'absolute';
+          btn.style.width = px(btnW);
+          btn.style.height = px(btnH);
+          btn.style.top = px(startY + idx * (btnH + gap));
+          if(useRight){
+            btn.style.left = 'auto';
+            btn.style.right = px(rect.width - x - btnW);
+          }else{
+            btn.style.left = px(x);
+            btn.style.right = 'auto';
+          }
+        });
+      }
+      place(leftBtns, leftX, false);
+      place(rightBtns, rightX, true);
+    }catch(e){}
+  }
+
+  async function forceLatestBuildR3(){
+    try{
+      if(window.__tasun_force_latest_build_r3_busy__) return;
+      window.__tasun_force_latest_build_r3_busy__ = true;
+      var G = window.__TASUN_GLOBALS__ || {};
+      var pageFile = String(G.PAGE_FILE || 'index.html');
+      var versionUrl = String(G.VERSION_URL || 'tasun-version.json');
+      var stampRegex = G.REBUILD_STAMP_REGEX || /TASUN_REBUILD_STAMP:([^\n>]*)/i;
+      var liveVer = String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '').trim();
+      var liveStamp = String((G.CURRENT_REBUILD_STAMP || '')).trim();
+      if(!liveStamp){
+        try{
+          var liveMatch = String(document.documentElement.outerHTML || '').match(stampRegex);
+          liveStamp = liveMatch ? String(liveMatch[1]).trim() : '';
+          G.CURRENT_REBUILD_STAMP = liveStamp;
+        }catch(_e){}
+      }
+      var latestRes = await fetch(pageFile + '?_=' + Date.now(), { cache:'no-store', credentials:'same-origin' });
+      var latestText = latestRes.ok ? await latestRes.text() : '';
+      var latestMatch = latestText ? latestText.match(stampRegex) : null;
+      var latestStamp = latestMatch ? String(latestMatch[1]).trim() : '';
+      var latestVerRes = await fetch(versionUrl + '?_=' + Date.now(), { cache:'no-store', credentials:'same-origin' });
+      var latestVerJson = latestVerRes.ok ? await latestVerRes.json().catch(function(){ return null; }) : null;
+      var latestVer = String(
+        (latestVerJson && (latestVerJson.version || latestVerJson.ver || latestVerJson.appVer || latestVerJson.app_ver || latestVerJson.cacheV || latestVerJson.cache_v || latestVerJson.build || latestVerJson.buildVersion || latestVerJson.release)) || ''
+      ).trim();
+      var needReload = false;
+      if(latestVer && latestVer !== liveVer) needReload = true;
+      if(latestStamp && liveStamp && latestStamp !== liveStamp) needReload = true;
+      if(needReload){
+        var lockKey = String(G.LATEST_LOCK_KEY || 'tasun_force_latest_lock_r4');
+        var raw = '';
+        try{ raw = sessionStorage.getItem(lockKey) || ''; }catch(_e){}
+        var lock = null;
+        try{ lock = raw ? JSON.parse(raw) : null; }catch(_e){ lock = null; }
+        var now = Date.now();
+        if(lock && lock.v === latestVer && lock.s === latestStamp && (now - Number(lock.ts || 0)) < 15000) return;
+        try{ sessionStorage.setItem(lockKey, JSON.stringify({ ts:now, v:latestVer || '', s:latestStamp || '' })); }catch(_e){}
+        var u = new URL(location.href);
+        if(latestVer) u.searchParams.set('v', latestVer);
+        u.searchParams.set('_', String(now));
+        location.replace(u.toString());
+        return;
+      }
+    }catch(e){}
+    finally{ window.__tasun_force_latest_build_r3_busy__ = false; }
+  }
+
+  function runAll(){
+    layoutZenWordsR3();
+    layoutDesktopButtonsR3();
+  }
+
+  window.addEventListener('resize', runAll, { passive:true });
+  window.addEventListener('load', function(){ setTimeout(runAll, 60); setTimeout(runAll, 260); setTimeout(runAll, 900); setTimeout(forceLatestBuildR3, 120); });
+  document.addEventListener('DOMContentLoaded', function(){ setTimeout(runAll, 100); setTimeout(runAll, 400); setTimeout(forceLatestBuildR3, 220); });
+  document.addEventListener('visibilitychange', function(){ if(document.visibilityState === 'visible'){ runAll(); forceLatestBuildR3(); } }, { passive:true });
+  window.addEventListener('focus', function(){ runAll(); forceLatestBuildR3(); }, { passive:true });
+  if(window.visualViewport){
+    window.visualViewport.addEventListener('resize', runAll, { passive:true });
+    window.visualViewport.addEventListener('scroll', runAll, { passive:true });
+  }
+})();
+</script>
+
 </body>
 </html>
