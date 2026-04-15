@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- TASUN_REBUILD_STAMP:index_v20260416_full_cleanup_r1 2026-04-16 00:00:00 (single-global-entry + triple-version-check + full-login-flicker-cleanup) -->
+<!-- TASUN_REBUILD_STAMP:index_v20260416_full_cleanup_r1 2026-04-16 00:00:00 (single-global-entry + triple-version-check + full-login-flicker-cleanup + hard-login-stop-r2) -->
 <html lang="zh-Hant">
 <head>
   <!-- Tasun v5 FINAL：版本/快取由 tasun-version.json 控制；腳本改為動態帶 v 載入 -->
@@ -206,9 +206,7 @@
 
     async function fetchLatestVersionText(){
       try{
-        const ctrl = ('AbortController' in window) ? new AbortController() : null;
-        const timer = ctrl ? setTimeout(function(){ try{ ctrl.abort(); }catch(_e){} }, 3500) : 0;
-        const res = await fetch('tasun-version.json?_=' + Date.now(), { cache:'no-store', credentials:'same-origin', signal: ctrl ? ctrl.signal : undefined }).finally(function(){ try{ if(timer) clearTimeout(timer); }catch(_e){} });
+        const res = await fetch('tasun-version.json?_=' + Date.now(), { cache:'no-store', credentials:'same-origin' });
         if(!res.ok) return '';
         const data = await res.json().catch(()=>null);
         if(!data) return '';
@@ -248,9 +246,7 @@
 
     async function fetchRemotePageInfo(){
       try{
-        const ctrl = ('AbortController' in window) ? new AbortController() : null;
-        const timer = ctrl ? setTimeout(function(){ try{ ctrl.abort(); }catch(_e){} }, 3500) : 0;
-        const res = await fetch('index.html?_=' + Date.now(), { cache:'no-store', credentials:'same-origin', signal: ctrl ? ctrl.signal : undefined }).finally(function(){ try{ if(timer) clearTimeout(timer); }catch(_e){} });
+        const res = await fetch('index.html?_=' + Date.now(), { cache:'no-store', credentials:'same-origin' });
         if(!res.ok) return { version:'', rebuildStamp:'', html:'' };
         const html = await res.text();
         const vm = html.match(/(?:__CACHE_V|TASUN_APP_VER|APP_VER)\s*[:=]\s*['"]([^'"]+)['"]/i);
@@ -268,13 +264,8 @@
 
     async function ensureLatestBuildSync(force){
       try{
-        const lockKey = 'tasun_triple_check_lock_v2';
-        const seenKey = 'tasun_triple_check_seen_v2';
+        const lockKey = 'tasun_triple_check_lock_v1';
         const now = Date.now();
-        const seenRaw = sessionStorage.getItem(seenKey) || '';
-        let seen = null;
-        try{ seen = seenRaw ? JSON.parse(seenRaw) : null; }catch(_e){ seen = null; }
-
         if(!force){
           const prev = Number(sessionStorage.getItem(lockKey) || 0);
           if(prev && (now - prev) < 12000) return false;
@@ -290,28 +281,15 @@
         const versionMismatch = !!(latestVer && latestVer !== localVer);
         const rebuildMismatch = !!(remoteStamp && localStamp && remoteStamp !== localStamp);
 
-        if(!(versionMismatch || rebuildMismatch || pageMismatch)) return false;
-
-        const nextVer = latestVer || localVer || '';
-        const signature = JSON.stringify({
-          nextVer: nextVer,
-          localVer: localVer,
-          localStamp: localStamp,
-          remoteStamp: remoteStamp,
-          pageMismatch: !!pageMismatch
-        });
-
-        if(seen && seen.signature === signature && (now - Number(seen.ts || 0)) < 15000){
-          return false;
+        if(versionMismatch || rebuildMismatch || pageMismatch){
+          const nextUrl = new URL(location.href);
+          const nextVer = latestVer || localVer;
+          if(nextVer) nextUrl.searchParams.set('v', nextVer);
+          nextUrl.searchParams.set('_', String(Date.now()));
+          if(remoteStamp) nextUrl.searchParams.set('_bs', remoteStamp);
+          location.replace(nextUrl.toString());
+          return true;
         }
-        sessionStorage.setItem(seenKey, JSON.stringify({ signature: signature, ts: now }));
-
-        const nextUrl = new URL(location.href);
-        if(nextVer) nextUrl.searchParams.set('v', nextVer);
-        nextUrl.searchParams.set('_', String(Date.now()));
-        if(remoteStamp) nextUrl.searchParams.set('_bs', remoteStamp);
-        location.replace(nextUrl.toString());
-        return true;
       }catch(e){}
       return false;
     }
@@ -369,14 +347,14 @@
     }catch(e){}
 
     const latestVer = normVer(await fetchLatestVersionText()) || '';
-    // 避免首頁登入階段反覆強刷；改為登入後或回到前景時再做版本同步檢查。
+    if(await ensureLatestBuildSync(true)) return;
 
     window.APP_VER = latestVer || VER;
     window.TASUN_APP_VER = latestVer || VER;
     window.__CACHE_V = latestVer || VER || curV || '';
     VER = latestVer || VER;
 
-    if (VER && (curV !== VER || vts)) {
+    if (false && VER && (curV !== VER || vts)) {
       url.searchParams.set('v', VER);
       url.searchParams.set('_', vts || String(Date.now()));
       location.replace(url.toString());
@@ -413,13 +391,17 @@
           const vv = window.visualViewport;
           const h = Math.round(vv ? vv.height : window.innerHeight);
           const w = Math.round(vv ? vv.width  : window.innerWidth);
-          const top = 0;
-          const bottom = 0;
+          const top = Math.round(vv ? vv.offsetTop : 0);
+          const bottom = Math.max(0, Math.round(window.innerHeight - (vv ? (vv.height + vv.offsetTop) : window.innerHeight)));
           root.style.setProperty('--vv-top', top + 'px');
           root.style.setProperty('--vv-bottom', bottom + 'px');
-          minH = h;
-          lastW = w;
-          root.style.setProperty('--appH', h + 'px');
+          if(reset || !minH || Math.abs(w - lastW) > 180){
+            minH = h;
+            lastW = w;
+          }else{
+            minH = Math.min(minH, h);
+          }
+          root.style.setProperty('--appH', minH + 'px');
           root.style.setProperty('--appHLive', h + 'px');
           root.style.setProperty('--appW', w + 'px');
         }catch(e){
@@ -437,6 +419,7 @@
       window.addEventListener('orientationchange', onOrient, { passive:true });
       if(window.visualViewport){
         window.visualViewport.addEventListener('resize', onResize, { passive:true });
+        window.visualViewport.addEventListener('scroll', onResize, { passive:true });
       }
       document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible') calcVV(false); }, { passive:true });
     })();
@@ -534,21 +517,6 @@
         }
         return true;
       }
-      function waitUntilUnlocked(){
-        let checks = 0;
-        const tick = function(){
-          checks++;
-          try{
-            if(document.body && !document.body.classList.contains('locked')){
-              startNow();
-              return;
-            }
-          }catch(e){}
-          if(checks < 60) setTimeout(tick, 500);
-        };
-        setTimeout(tick, 2500);
-      }
-      waitUntilUnlocked();
       return { startNow };
     })();
   })();
@@ -1237,32 +1205,38 @@ main.hero,
 }
 
 
-/* ===== 2026-04-15 deep stability fix: stop login drift / stop viewport-linked mask movement ===== */
-html, body{
-  overscroll-behavior: none !important;
-}
+
+/* ===== 2026-04-15 deep hard stop: lock login stage completely, no viewport drift ===== */
 body.locked,
-body.locked html{
-  overflow: hidden !important;
+body.locked *{
+  scroll-behavior: auto !important;
 }
+body.locked #loginOverlay,
 body.locked .hero,
 body.locked .hero-inner,
 body.locked .lotus-stage,
 body.locked .zen-visual,
-body.locked #zenImg,
-body.locked #loginOverlay{
-  height: 100dvh !important;
-  min-height: 100dvh !important;
+body.locked #zenImg{
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  min-height: 100vh !important;
+  max-height: 100vh !important;
 }
 body.locked #loginOverlay{
-  top: 0 !important;
-  transform: none !important;
   overflow: hidden !important;
+  overscroll-behavior: none !important;
   touch-action: none !important;
 }
 body.locked #loginOverlay .login-box{
+  position: relative !important;
+  top: auto !important;
+  left: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  margin: 0 auto !important;
   transform: none !important;
-  margin-top: 0 !important;
 }
 
 </style>
@@ -2429,6 +2403,7 @@ body.locked #loginOverlay .login-box{
         const o = opts || {};
         releaseBootUI();
         setUiLockState(false);
+        setUiLockState(false);
         try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){}
         if(loginSub) loginSub.textContent = '';
         __loginStageQuietedOnce = false;
@@ -2472,6 +2447,7 @@ body.locked #loginOverlay .login-box{
         if(msg) loginSub.textContent = msg;
         else if(loginSub) loginSub.textContent = '';
         try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){}
+        setUiLockState(true);
         if(loginError) loginError.textContent = '';
         if(passwordInput) passwordInput.value = '';
         populateUserSelect();
@@ -2935,16 +2911,13 @@ body.locked #loginOverlay .login-box{
           const finalRole = String(role || 'read').trim().toLowerCase() || 'read';
           if(!user || !pass) return false;
           const apiBase = 'https://tasun-worker.wutasun.workers.dev';
-          const ctrl = ('AbortController' in window) ? new AbortController() : null;
-          const timer = ctrl ? setTimeout(function(){ try{ ctrl.abort(); }catch(_e){} }, 4000) : 0;
           const res = await fetch(apiBase + '/api/tasun/login', {
             method:'POST',
             cache:'no-store',
             credentials:'include',
             headers:{ 'content-type':'application/json', 'accept':'application/json' },
-            body: JSON.stringify({ username:user, password:pass, user:user, pass:pass }),
-            signal: ctrl ? ctrl.signal : undefined
-          }).finally(function(){ try{ if(timer) clearTimeout(timer); }catch(_e){} });
+            body: JSON.stringify({ username:user, password:pass, user:user, pass:pass })
+          });
           if(!res.ok) return false;
           const json = await res.json().catch(() => ({}));
           const token = String(
@@ -3022,6 +2995,7 @@ body.locked #loginOverlay .login-box{
           const finalRole = String(u.level || u.role || inferRole(u.username, '') || 'read').trim().toLowerCase();
 
           setSession({ username: u.username, level: finalRole });
+
           __tasunSaveLoginBridge(u.username, password, finalRole);
 
           applyUser(
@@ -3030,6 +3004,7 @@ body.locked #loginOverlay .login-box{
           );
 
           loginError.textContent = '';
+
           if(passwordInput) passwordInput.value = '';
 
           Promise.race([
@@ -3061,20 +3036,7 @@ body.locked #loginOverlay .login-box{
         }
       }
       async function forceRefreshLatestOnVisible(opts){
-        const o = opts || {};
-        const now = Date.now();
-        if(__visibleRefreshBusy) return false;
-        if(!o.force && (now - __visibleRefreshTs) < 12000) return false;
-        if(isLoginStageActive()) return false;
-        __visibleRefreshBusy = true;
-        __visibleRefreshTs = now;
-        try{
-          return await ensureLatestBuildSync(!!o.force);
-        }catch(e){
-          return false;
-        }finally{
-          __visibleRefreshBusy = false;
-        }
+        return false;
       }
       document.addEventListener('visibilitychange', ()=>{
         if(document.visibilityState === 'visible'){
@@ -3118,16 +3080,14 @@ body.locked #loginOverlay .login-box{
       }
     }
 
-    function bootIndexAppOnce(){
-      try{ runIndexApp(); }catch(_e){}
-    }
     if(window.TasunLoader && typeof window.TasunLoader.ready === 'function'){
-      try{ window.TasunLoader.ready(bootIndexAppOnce, 8000); }catch(_e){}
+      try{ window.TasunLoader.ready(runIndexApp, 8000); }catch(_e){}
     }else if(window.TasunCore && typeof window.TasunCore.ready === 'function'){
-      try{ window.TasunCore.ready(bootIndexAppOnce, 8000); }catch(_e){}
+      try{ window.TasunCore.ready(runIndexApp, 8000); }catch(_e){}
     }else{
-      setTimeout(bootIndexAppOnce, 0);
+      setTimeout(runIndexApp, 0);
     }
+    setTimeout(()=>{ try{ runIndexApp(); }catch(_e){} }, 1200);
   })();
   </script>
 <script>
@@ -3279,12 +3239,74 @@ body.locked #loginOverlay .login-box{
   }
 }
 </style>
-<script id="tasun-authority-ui-stabilizer-single">
+<script id="tasun-clean-stability">
 (function(){
-  function syncUiOnce(){
+  function syncLoginStage(){
     try{
-      var body = document.body;
-      var locked = !!(body && body.classList.contains('locked'));
+      var locked = !!(document.body && document.body.classList.contains('locked'));
+      var overlay = document.getElementById('loginOverlay');
+      var boot = document.getElementById('bootCover');
+      if(boot){
+        boot.hidden = true;
+        boot.style.display = 'none';
+      }
+      if(overlay){
+        overlay.style.display = locked ? 'flex' : 'none';
+      }
+    }catch(e){}
+  }
+
+  ['DOMContentLoaded','load','pageshow','focus'].forEach(function(ev){
+    window.addEventListener(ev, function(){
+      setTimeout(syncLoginStage, 40);
+      setTimeout(syncLoginStage, 180);
+    }, {passive:true});
+  });
+
+  document.addEventListener('visibilitychange', function(){
+    if(document.visibilityState === 'visible') setTimeout(syncLoginStage, 60);
+  }, {passive:true});
+
+  setTimeout(syncLoginStage, 20);
+  setTimeout(syncLoginStage, 250);
+})();
+</script>
+
+
+<script id="tasun-login-noflicker-stabilizer">
+(function(){
+  function syncStage(){
+    try{
+      var locked = !!(document.body && document.body.classList.contains('locked'));
+      var overlay = document.getElementById('loginOverlay');
+      var boot = document.getElementById('bootCover');
+      var inlineBoot = document.getElementById('loginBootInline');
+      if(boot){ boot.hidden = true; boot.style.display = 'none'; }
+      if(inlineBoot){ inlineBoot.hidden = true; inlineBoot.style.display = 'none'; }
+      if(overlay){ overlay.style.display = locked ? 'flex' : 'none'; }
+      if(document.body){ document.body.classList.remove('booting'); }
+    }catch(e){}
+  }
+  ['DOMContentLoaded','load','pageshow','focus'].forEach(function(ev){
+    window.addEventListener(ev, function(){
+      setTimeout(syncStage, 40);
+      setTimeout(syncStage, 180);
+    }, {passive:true});
+  });
+  document.addEventListener('visibilitychange', function(){
+    if(document.visibilityState === 'visible') setTimeout(syncStage, 60);
+  }, {passive:true});
+  setTimeout(syncStage, 20);
+  setTimeout(syncStage, 260);
+})();
+</script>
+
+
+<script id="tasun-authority-ui-stabilizer">
+(function(){
+  function syncUi(){
+    try{
+      var locked = !!(document.body && document.body.classList.contains('locked'));
       var overlay = document.getElementById('loginOverlay');
       var boot = document.getElementById('bootCover');
       var inlineBoot = document.getElementById('loginBootInline');
@@ -3295,15 +3317,23 @@ body.locked #loginOverlay .login-box{
       if(overlay){ overlay.style.display = locked ? 'flex' : 'none'; }
       if(nav){ nav.style.display = locked ? 'none' : ''; }
       if(userBar){ userBar.style.display = locked ? 'none' : ''; }
-      if(body){ body.classList.remove('booting'); body.classList.remove('prehide'); }
+      if(document.body){
+        document.body.classList.remove('booting');
+        document.body.classList.remove('prehide');
+      }
     }catch(e){}
   }
-  if(document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', syncUiOnce, { once:true });
-  }else{
-    syncUiOnce();
-  }
-  window.addEventListener('pageshow', syncUiOnce, { passive:true });
+  ['DOMContentLoaded','load','pageshow','focus'].forEach(function(ev){
+    window.addEventListener(ev, function(){
+      setTimeout(syncUi, 40);
+      setTimeout(syncUi, 180);
+    }, {passive:true});
+  });
+  document.addEventListener('visibilitychange', function(){
+    if(document.visibilityState === 'visible') setTimeout(syncUi, 60);
+  }, {passive:true});
+  setTimeout(syncUi, 20);
+  setTimeout(syncUi, 260);
 })();
 </script>
 
