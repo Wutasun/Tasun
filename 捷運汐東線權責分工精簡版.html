@@ -14,7 +14,8 @@
     var PAGE_KEY = '捷運汐東線權責分工精簡版.html';
     var VERSION_JSON = 'tasun-version.json';
     var REBUILD_STAMP_FILE = 'TASUN_REBUILD_STAMP';
-    var CHECK_INTERVAL_MS = 8000;
+    var CHECK_INTERVAL_MS = 15000;
+    var RELOAD_LOCK_MS = 30000;
     var state = window.__TASUN_SYNC_STATE__ = window.__TASUN_SYNC_STATE__ || {};
     if(state.booted) return;
     state.booted = true;
@@ -24,7 +25,15 @@
     window.__TASUN_PAGE_KEY__ = PAGE_KEY;
 
     function norm(v){ return (v===undefined || v===null) ? '' : String(v).trim(); }
+    function now(){ return Date.now(); }
     function queryV(){ try{ return norm(new URL(location.href).searchParams.get('v')); }catch(_e){ return ''; } }
+    function storageGet(key){
+      try{ return norm(sessionStorage.getItem(key) || localStorage.getItem(key) || ''); }catch(_e){ return ''; }
+    }
+    function storageSet(key, value){
+      try{ sessionStorage.setItem(key, value); }catch(_e){}
+      try{ localStorage.setItem(key, value); }catch(_e){}
+    }
     function ensureWithV(){
       if(typeof window.__withV === 'function') return;
       window.__withV = function(url){
@@ -44,12 +53,13 @@
     }
     ensureWithV();
 
-    function canonicalPageUrl(version, buildStamp){
+    function canonicalPageUrl(version, buildStamp, marker){
       var u = new URL(PAGE_KEY, location.href);
       var vv = norm(version) || norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || queryV() || '');
       if(vv) u.searchParams.set('v', vv);
-      u.searchParams.set('_', String(Date.now()));
+      u.searchParams.set('_', String(now()));
       if(buildStamp) u.searchParams.set('_bs', buildStamp);
+      if(marker) u.searchParams.set('_tsync', marker);
       return u.toString();
     }
 
@@ -65,7 +75,7 @@
 
     async function fetchVersionBundle(){
       try{
-        var res = await fetch(VERSION_JSON + '?_=' + Date.now(), { cache:'no-store', credentials:'same-origin' });
+        var res = await fetch(VERSION_JSON + '?_=' + now(), { cache:'no-store', credentials:'same-origin' });
         if(!res.ok) return null;
         var data = await res.json().catch(function(){ return null; });
         if(!data) return null;
@@ -97,7 +107,12 @@
       var title = '';
       var mt = text.match(/<title>([^<]+)<\/title>/i);
       title = norm(mt && mt[1]);
-      var body = text.replace(/\s+/g, ' ').slice(0, 24000);
+      var body = text
+        .replace(/_=[^&"'\s>]*/g, '_=X')
+        .replace(/_tsync=[^&"'\s>]*/g, '_tsync=X')
+        .replace(/_bs=[^&"'\s>]*/g, '_bs=X')
+        .replace(/\s+/g, ' ')
+        .slice(0, 24000);
       var hash = 2166136261;
       for(var i=0;i<body.length;i++){
         hash ^= body.charCodeAt(i);
@@ -107,7 +122,7 @@
     }
 
     async function fetchRemotePageMeta(version){
-      var url = canonicalPageUrl(version, 'probe');
+      var url = canonicalPageUrl(version, 'probe', 'probe');
       var html = await fetchText(url);
       var meta = extractRemoteHtmlMeta(html);
       meta.url = url;
@@ -115,13 +130,41 @@
     }
 
     async function fetchRebuildStamp(){
-      var stamp = await fetchText(REBUILD_STAMP_FILE + '?_=' + Date.now());
+      var stamp = await fetchText(REBUILD_STAMP_FILE + '?_=' + now());
       return norm(stamp);
     }
 
-    async function hardRefreshTo(version, buildStamp){
+    function getTargetKey(version, buildStamp, fingerprint){
+      return [norm(version), norm(buildStamp), norm(fingerprint)].join('|');
+    }
+
+    function setAppliedTarget(version, buildStamp, fingerprint){
+      storageSet('tasun_latest_applied_target_v1', getTargetKey(version, buildStamp, fingerprint));
+      storageSet('tasun_latest_applied_build_v1', norm(buildStamp));
+      storageSet('tasun_latest_applied_version_v1', norm(version));
+      if(fingerprint) storageSet('tasun_latest_applied_fp_v1', norm(fingerprint));
+    }
+
+    function getPendingTarget(){
+      return {
+        key: storageGet('tasun_pending_target_v1'),
+        at: Number(storageGet('tasun_pending_target_at_v1') || '0') || 0
+      };
+    }
+
+    function clearPendingTarget(){
+      storageSet('tasun_pending_target_v1', '');
+      storageSet('tasun_pending_target_at_v1', '0');
+    }
+
+    async function hardRefreshTo(version, buildStamp, fingerprint){
+      var targetKey = getTargetKey(version, buildStamp, fingerprint);
+      var pending = getPendingTarget();
       if(state.reloading) return true;
+      if(pending.key && pending.key === targetKey && (now() - pending.at) < RELOAD_LOCK_MS) return false;
       state.reloading = true;
+      storageSet('tasun_pending_target_v1', targetKey);
+      storageSet('tasun_pending_target_at_v1', String(now()));
       var nextVer = norm(version) || norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '');
       try{
         if('caches' in window){
@@ -135,11 +178,7 @@
           await Promise.all((regs || []).map(function(r){ return r.unregister().catch(function(){ return false; }); }));
         }
       }catch(_e){}
-      try{ if(nextVer) sessionStorage.setItem('tasun_force_latest_seen_v1', nextVer); }catch(_e){}
-      try{ if(nextVer) localStorage.setItem('tasun_force_latest_seen_v1', nextVer); }catch(_e){}
-      try{ if(buildStamp) sessionStorage.setItem('tasun_force_latest_build_stamp_v1', buildStamp); }catch(_e){}
-      try{ if(buildStamp) localStorage.setItem('tasun_force_latest_build_stamp_v1', buildStamp); }catch(_e){}
-      location.replace(canonicalPageUrl(nextVer, buildStamp || PAGE_BUILD_STAMP));
+      location.replace(canonicalPageUrl(nextVer, buildStamp || PAGE_BUILD_STAMP, 'refresh'));
       return true;
     }
 
@@ -153,38 +192,47 @@
         var remoteMeta = await fetchRemotePageMeta(bundle && bundle.version);
 
         var curV = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || queryV() || '');
-        var latestV = norm(bundle && bundle.version);
-        var latestBS = norm((bundle && bundle.buildStamp) || rebuildStamp || remoteMeta.buildStamp);
+        var latestV = norm(bundle && bundle.version) || curV;
         var remoteBS = norm(remoteMeta.buildStamp);
-        var localFP = extractRemoteHtmlMeta(document.documentElement.outerHTML).fingerprint;
+        var latestBS = norm((bundle && bundle.buildStamp) || rebuildStamp || remoteBS || PAGE_BUILD_STAMP);
         var remoteFP = norm(remoteMeta.fingerprint);
-        var latestTitle = norm(remoteMeta.title || document.title);
-
-        var needRefresh = false;
-        if(latestV && latestV !== curV) needRefresh = true;
-        if(latestBS && latestBS !== PAGE_BUILD_STAMP) needRefresh = true;
-        if(remoteBS && remoteBS !== PAGE_BUILD_STAMP) needRefresh = true;
-        if(remoteFP && localFP && remoteFP !== localFP) needRefresh = true;
+        var targetKey = getTargetKey(latestV, latestBS, remoteFP);
+        var appliedKey = storageGet('tasun_latest_applied_target_v1');
+        var pending = getPendingTarget();
 
         if(latestV){
           window.__CACHE_V = latestV;
           window.TASUN_APP_VER = latestV;
           window.APP_VER = latestV;
         }
+
+        if(pending.key && pending.key === targetKey && curV === latestV && PAGE_BUILD_STAMP === latestBS){
+          clearPendingTarget();
+          setAppliedTarget(latestV, latestBS, remoteFP);
+        }
+
         window.__TASUN_REMOTE_PAGE_META__ = {
           reason: norm(reason),
           version: latestV,
           bundleBuildStamp: latestBS,
           remoteBuildStamp: remoteBS,
           remoteFingerprint: remoteFP,
-          localFingerprint: localFP,
-          title: latestTitle,
+          appliedTarget: appliedKey,
+          targetKey: targetKey,
           checkedAt: new Date().toISOString()
         };
 
+        var needRefresh = false;
+        if(latestV && latestV !== curV) needRefresh = true;
+        if(latestBS && latestBS !== PAGE_BUILD_STAMP) needRefresh = true;
+        if(remoteBS && latestBS && remoteBS !== latestBS) needRefresh = true;
+        if(remoteFP && appliedKey && appliedKey !== targetKey && latestV === curV && latestBS === PAGE_BUILD_STAMP) needRefresh = true;
+
         if(needRefresh){
-          return await hardRefreshTo(latestV || curV, latestBS || remoteBS || PAGE_BUILD_STAMP);
+          return await hardRefreshTo(latestV || curV, latestBS || PAGE_BUILD_STAMP, remoteFP);
         }
+
+        setAppliedTarget(latestV || curV, latestBS || PAGE_BUILD_STAMP, remoteFP);
         return false;
       }catch(_e){
         return false;
@@ -196,7 +244,10 @@
     function installStabilityCorrector(){
       if(state.correctorInstalled) return;
       state.correctorInstalled = true;
-      var runner = function(reason){ ensureLatestVersionAndBuildStamp(reason).catch(function(){}); };
+      var runner = function(reason){
+        if(document.visibilityState === 'hidden' && reason === 'interval') return;
+        ensureLatestVersionAndBuildStamp(reason).catch(function(){});
+      };
       document.addEventListener('DOMContentLoaded', function(){ runner('DOMContentLoaded'); }, { passive:true });
       window.addEventListener('load', function(){ runner('load'); }, { passive:true });
       window.addEventListener('pageshow', function(){ runner('pageshow'); }, { passive:true });
@@ -2016,7 +2067,7 @@
     <th rowspan="2" style="width:6%;">階段</th>
     <th rowspan="2" style="width:8%;">工作重點</th>
     <th rowspan="2" style="width:24%;">工程項目</th>
-    <th colspan="5" style="width:25%;">權責單位</th>
+    <th colspan="5" style="width:25%;">權責</th>
     <th colspan="4" style="width:20%;">核定期限</th>
     <th colspan="4" style="width:20%;">罰則</th>
     <th colspan="4" style="width:24%;">說明</th>
