@@ -367,6 +367,24 @@
   })();
   </script>
 
+<script id="raci-page-global-entry">
+(function(){
+  'use strict';
+  var G = window.__TASUN_GLOBALS__ = Object.assign(window.__TASUN_GLOBALS__ || {}, {});
+  G.RACI_PAGE = Object.assign({
+    DB_KEY: 'tasunRACI_Simple_v2',
+    LEGACY_DB_KEY: 'tasunRACI_Simple_v1',
+    COUNTER_KEY: 'tasunRACI_Simple_counter_v2',
+    LEGACY_COUNTER_KEY: 'tasunRACI_Simple_counter_v1',
+    CURRENT_KEY: 'tasunCurrentUser_v1',
+    AUTH_KEY: 'tasunAuthTable_v1',
+    SESSION_WATCH_MS: 3000,
+    DEDUPE_KEY_FIELDS: ['stage','focus','project','dueHandle','dueReview','dueVerify','dueApprove'],
+    MOBILE_BREAKPOINT: 920
+  }, G.RACI_PAGE || {});
+})();
+</script>
+
   <script>document.write('<script src="tasun-version-loader.js?_=' + Date.now() + '"><\/script>');</script>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet">
 <!-- ✅ 先走 CDN（jsDelivr），若載入失敗程式內會自動改用 unpkg 再試一次 -->
@@ -2428,6 +2446,15 @@
 </style>
 
 
+
+<style id="raciMobileSearchToggle_v1">
+  .mobileFilterToggle{ display:none; margin-bottom:10px; }
+  @media (max-width: 920px){
+    .mobileFilterToggle{ display:inline-flex !important; align-self:flex-start; }
+    body.mobile-filters-collapsed #controlsWrap{ display:none !important; }
+  }
+</style>
+
 </head>
 
 <body>
@@ -2472,7 +2499,8 @@
     </div>
 
     <div class="panel">
-      <div class="controls">
+      <button class="btn ghost small mobileFilterToggle" id="btnMobileFilters" type="button">搜尋／篩選</button>
+      <div class="controls" id="controlsWrap">
         
         <div class="field">
           <div class="label crystalGold">工程項目</div>
@@ -2690,15 +2718,11 @@
 (() => {
   'use strict';
 
-  const CFG = window.__TASUN_RACI_CFG__ = Object.assign(window.__TASUN_RACI_CFG__ || {}, {
-    DB_KEY: 'tasunRACI_Simple_v2',
-    LEGACY_DB_KEY: 'tasunRACI_Simple_v1',
-    COUNTER_KEY: 'tasunRACI_Simple_counter_v2',
-    LEGACY_COUNTER_KEY: 'tasunRACI_Simple_counter_v1',
-    CURRENT_KEY: 'tasunCurrentUser_v1',
-    AUTH_KEY: 'tasunAuthTable_v1',
-    SESSION_WATCH_MS: 3000
-  });
+  const CFG = window.__TASUN_RACI_CFG__ = Object.assign(
+    {},
+    (window.__TASUN_GLOBALS__ && window.__TASUN_GLOBALS__.RACI_PAGE) || {},
+    window.__TASUN_RACI_CFG__ || {}
+  );
 
   const FIELD_IDS = {
     stage: 'mStage',
@@ -2770,6 +2794,81 @@
   const escHtml = (s) => String(s ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
   const asciiLike = (s) => /^[\x00-\x7F\s]+$/.test(norm(s));
   const applyAsciiTight = (el) => { if(el) el.classList.toggle('ascii-tight', asciiLike(el.value || el.textContent || '')); };
+
+  let isDirty = false;
+
+  function stableKeyOf(row){
+    const keys = Array.isArray(CFG.DEDUPE_KEY_FIELDS) ? CFG.DEDUPE_KEY_FIELDS : ['stage','focus','project','dueHandle','dueReview','dueVerify','dueApprove'];
+    return keys.map(k => norm(row && row[k])).join('｜').toLowerCase();
+  }
+
+  function dedupeRows(rows){
+    const map = new Map();
+    (Array.isArray(rows) ? rows : []).forEach((raw) => {
+      const row = normalizeRow(raw);
+      const key = stableKeyOf(row);
+      if(!key.replace(/｜/g,'')) return;
+      const prev = map.get(key);
+      if(!prev){
+        map.set(key, row);
+        return;
+      }
+      const prevId = Number(prev.id) || 0;
+      const rowId = Number(row.id) || 0;
+      map.set(key, rowId >= prevId ? row : prev);
+    });
+    return Array.from(map.values()).sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
+  }
+
+  function dedupeAndPersist(){
+    const before = Array.isArray(db) ? db.length : 0;
+    db = dedupeRows(db);
+    saveDB();
+    return { before, after: db.length, removed: Math.max(0, before - db.length) };
+  }
+
+  async function runSyncCheckpoint(reason){
+    const result = dedupeAndPersist();
+    window.__TASUN_RACI_LAST_SYNC__ = {
+      reason: norm(reason),
+      at: new Date().toISOString(),
+      removed: result.removed,
+      count: result.after
+    };
+    return result;
+  }
+
+  function markDirty(flag){
+    isDirty = !!flag;
+    window.__TASUN_RACI_DIRTY__ = isDirty;
+  }
+
+  function currentModalRow(){
+    const row = blankRow();
+    for(const [field, inputId] of Object.entries(FIELD_IDS)){ row[field] = norm($(inputId).value); }
+    return row;
+  }
+
+  function hasModalContent(){
+    const row = currentModalRow();
+    return Object.keys(FIELD_IDS).some((field) => !!norm(row[field]));
+  }
+
+  async function attemptCloseModal(){
+    if($('mask').style.display !== 'flex'){ return true; }
+    if(!isDirty && !hasModalContent()){
+      closeModal(true);
+      return true;
+    }
+    if(!isDirty){
+      closeModal(true);
+      return true;
+    }
+    const yes = confirm('表單尚未儲存，是否先儲存？\n按「確定」先儲存並關閉；按「取消」返回表單。');
+    if(!yes) return false;
+    const ok = await saveItem(true);
+    return !!ok;
+  }
 
   function go(href){
     const h = (typeof window.__withV === 'function') ? window.__withV(href) : href;
@@ -2996,15 +3095,17 @@
         arr = legacy ? JSON.parse(legacy) : [];
       }
     }catch(_){ arr = []; }
-    db = Array.isArray(arr) ? arr.map(normalizeRow) : [];
+    db = dedupeRows(Array.isArray(arr) ? arr.map(normalizeRow) : []);
     if(!localStorage.getItem(CFG.COUNTER_KEY)){
       const legacyCounter = Number(localStorage.getItem(CFG.LEGACY_COUNTER_KEY) || 0);
       const maxId = db.reduce((m, r) => Math.max(m, Number(r.id) || 0), 0);
       localStorage.setItem(CFG.COUNTER_KEY, String(Math.max(legacyCounter, maxId)));
     }
+    localStorage.setItem(CFG.DB_KEY, JSON.stringify(db));
   }
 
   function saveDB(){
+    db = dedupeRows(db);
     localStorage.setItem(CFG.DB_KEY, JSON.stringify(db));
   }
 
@@ -3248,18 +3349,25 @@
     setModalEditable(editable);
     for(const [field, inputId] of Object.entries(FIELD_IDS)){ $(inputId).value = row[field] || ''; applyAsciiTight($(inputId)); }
     refreshModalMenus();
+    markDirty(false);
     $('mask').style.display = 'flex';
   }
 
-  function closeModal(){ $('mask').style.display = 'none'; editingId = null; }
+  function closeModal(force){
+    if(!force && isDirty) return;
+    $('mask').style.display = 'none';
+    editingId = null;
+    markDirty(false);
+  }
 
-  function saveItem(){
+  async function saveItem(closeAfterSave){
     validateSession();
-    if(!currentUser || !currentUser.user){ openLoginModal(); return; }
-    if(!canWrite()){ toast('唯讀權限不可儲存'); return; }
+    if(!currentUser || !currentUser.user){ openLoginModal(); return false; }
+    if(!canWrite()){ toast('唯讀權限不可儲存'); return false; }
     const row = blankRow();
     for(const [field, inputId] of Object.entries(FIELD_IDS)){ row[field] = norm($(inputId).value); }
-    if(!row.project){ toast('工程項目不可空白'); $('mProject').focus(); return; }
+    if(!row.project){ toast('工程項目不可空白'); $('mProject').focus(); return false; }
+    await runSyncCheckpoint('before-save');
     if(editingId != null){
       const idx = db.findIndex(x => Number(x.id) === Number(editingId));
       if(idx >= 0) db[idx] = Object.assign({ id: editingId }, row);
@@ -3270,22 +3378,28 @@
       selectedId = id;
     }
     saveDB();
-    closeModal();
+    await runSyncCheckpoint('after-save');
+    if(closeAfterSave !== false) closeModal(true);
     render();
+    markDirty(false);
     toast('已儲存');
+    return true;
   }
 
-  function deleteItem(){
+  async function deleteItem(){
     validateSession();
-    if(!isAdmin()){ toast('僅 admin 可刪除'); return; }
-    if(editingId == null) return;
-    if(!confirm('確定刪除這筆資料？')) return;
+    if(!isAdmin()){ toast('僅 admin 可刪除'); return false; }
+    if(editingId == null) return false;
+    if(!confirm('確定刪除這筆資料？')) return false;
+    await runSyncCheckpoint('before-delete');
     db = db.filter(x => Number(x.id) !== Number(editingId));
     saveDB();
+    await runSyncCheckpoint('after-delete');
     if(Number(selectedId) === Number(editingId)) selectedId = null;
-    closeModal();
+    closeModal(true);
     render();
     toast('已刪除');
+    return true;
   }
 
   function locateHeaders(rows){
@@ -3310,6 +3424,7 @@
 
   async function importExcel(file){
     if(!canWrite()){ toast('唯讀不可上傳'); return; }
+    await runSyncCheckpoint('before-upload');
     const ok = await ensureXLSX();
     if(!ok){ toast('匯入功能載入失敗（請確認網路可連線）'); return; }
     const reader = new FileReader();
@@ -3343,6 +3458,7 @@
           add++;
         }
         saveDB();
+        await runSyncCheckpoint('after-upload');
         render();
         toast(`匯入完成：新增 ${add} 筆${skip ? `，略過 ${skip} 筆` : ''}`);
       }catch(err){
@@ -3355,6 +3471,7 @@
 
   async function downloadExcel(){
     if(!canWrite()){ toast('唯讀不可下載'); return; }
+    await runSyncCheckpoint('before-download');
     const ok = await ensureXLSX();
     if(!ok){ toast('Excel 功能載入失敗（請確認網路可連線）'); return; }
     const rows = filteredRows();
@@ -3391,6 +3508,7 @@
     const d = new Date();
     const stamp = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
     XLSX.writeFile(wb, `捷運汐東線權責分工精簡版_${stamp}.xlsx`);
+    await runSyncCheckpoint('after-download');
     toast(`已下載 Excel（${rows.length} 筆）`);
   }
 
@@ -3404,6 +3522,17 @@
       if(menuBtn){ go(menuBtn.getAttribute('data-href')); }
     });
 
+
+    const mobileBtn = $('btnMobileFilters');
+    if(mobileBtn){
+      mobileBtn.onclick = () => {
+        document.body.classList.toggle('mobile-filters-collapsed');
+      };
+      if(window.innerWidth <= Number(CFG.MOBILE_BREAKPOINT || 920)){
+        document.body.classList.add('mobile-filters-collapsed');
+      }
+    }
+
     $('btnClear').onclick = () => {
       ['fProject','fFocus','fStage','fUnit','fResponsibility'].forEach(id => { $(id).value = ''; applyAsciiTight($(id)); });
       render();
@@ -3415,11 +3544,19 @@
     $('btnUpload').onclick = () => { if(!canWrite()){ toast('唯讀不可上傳'); return; } $('fileInput').value = ''; $('fileInput').click(); };
     $('fileInput').addEventListener('change', () => { const f = $('fileInput').files?.[0]; if(f) importExcel(f); });
 
-    $('btnClose').onclick = closeModal;
-    $('btnCancel').onclick = closeModal;
-    $('btnSave').onclick = saveItem;
-    $('btnDelete').onclick = deleteItem;
-    $('mask').addEventListener('click', (e) => { if(e.target === $('mask')) closeModal(); });
+    $('btnClose').onclick = () => { attemptCloseModal(); };
+    $('btnCancel').onclick = () => { attemptCloseModal(); };
+    $('btnSave').onclick = () => { saveItem(true); };
+    $('btnDelete').onclick = () => { deleteItem(); };
+    $('mask').addEventListener('click', (e) => { if(e.target === $('mask')) attemptCloseModal(); });
+
+    Object.values(FIELD_IDS).forEach((id) => {
+      const node = $(id);
+      if(!node) return;
+      const mark = () => { if(!$('mask').style.display || $('mask').style.display !== 'flex') return; markDirty(true); };
+      node.addEventListener('input', mark);
+      node.addEventListener('change', mark);
+    });
 
     $('tbody').addEventListener('click', (e) => {
       const viewBtn = e.target.closest('[data-act="view"]');
@@ -3437,7 +3574,7 @@
     window.addEventListener('keydown', (e) => {
       if(e.key === 'Escape'){
         if($('loginMask').classList.contains('show')) closeLoginModal();
-        else if($('mask').style.display === 'flex') closeModal();
+        else if($('mask').style.display === 'flex') { attemptCloseModal(); }
       }
       if(e.key === 'Enter'){
         if($('loginMask').classList.contains('show')) doLogin();
@@ -3446,9 +3583,10 @@
     $('loginUser').addEventListener('change', () => { if($('loginUser').value) $('loginPass').focus(); });
   }
 
-  function start(){
+  async function start(){
     if(!ensureLoggedIn()) return;
     loadDB();
+    await runSyncCheckpoint('open-before-render');
     initFilterCombos();
     initModalCombos();
     render();
@@ -3460,8 +3598,6 @@
 
 })();
 </script>
-
-  </script>
 
 <script>
 (function(){
