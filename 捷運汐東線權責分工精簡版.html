@@ -11,8 +11,17 @@
   (function(){
     'use strict';
     var PAGE_BUILD_STAMP = "20260409_tasun_v5_buildstamp_syncfix_r1";
+    var PAGE_KEY = '捷運汐東線權責分工精簡版.html';
+    var VERSION_JSON = 'tasun-version.json';
+    var REBUILD_STAMP_FILE = 'TASUN_REBUILD_STAMP';
+    var CHECK_INTERVAL_MS = 8000;
+    var state = window.__TASUN_SYNC_STATE__ = window.__TASUN_SYNC_STATE__ || {};
+    if(state.booted) return;
+    state.booted = true;
+
     window.__TASUN_BUILD_STAMP__ = PAGE_BUILD_STAMP;
     window.__TASUN_PAGE_BUILD_STAMP__ = PAGE_BUILD_STAMP;
+    window.__TASUN_PAGE_KEY__ = PAGE_KEY;
 
     function norm(v){ return (v===undefined || v===null) ? '' : String(v).trim(); }
     function queryV(){ try{ return norm(new URL(location.href).searchParams.get('v')); }catch(_e){ return ''; } }
@@ -35,9 +44,28 @@
     }
     ensureWithV();
 
+    function canonicalPageUrl(version, buildStamp){
+      var u = new URL(PAGE_KEY, location.href);
+      var vv = norm(version) || norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || queryV() || '');
+      if(vv) u.searchParams.set('v', vv);
+      u.searchParams.set('_', String(Date.now()));
+      if(buildStamp) u.searchParams.set('_bs', buildStamp);
+      return u.toString();
+    }
+
+    async function fetchText(url){
+      try{
+        var res = await fetch(url, { cache:'no-store', credentials:'same-origin' });
+        if(!res.ok) return '';
+        return await res.text();
+      }catch(_e){
+        return '';
+      }
+    }
+
     async function fetchVersionBundle(){
       try{
-        var res = await fetch('tasun-version.json?_=' + Date.now(), { cache:'no-store', credentials:'same-origin' });
+        var res = await fetch(VERSION_JSON + '?_=' + Date.now(), { cache:'no-store', credentials:'same-origin' });
         if(!res.ok) return null;
         var data = await res.json().catch(function(){ return null; });
         if(!data) return null;
@@ -52,13 +80,48 @@
           data.build || data.buildVersion || data.rebuildStamp ||
           meta.buildStamp || meta.build_stamp || meta.pageBuildStamp || meta.rebuildStamp || ''
         );
-        return { version: version, buildStamp: buildStamp };
+        return { version: version, buildStamp: buildStamp, raw: data };
       }catch(_e){
         return null;
       }
     }
 
+    function extractRemoteHtmlMeta(html){
+      var text = norm(html);
+      if(!text) return { buildStamp:'', title:'', fingerprint:'' };
+      var buildStamp = '';
+      var m1 = text.match(/<meta[^>]+name=["']tasun-build-stamp["'][^>]+content=["']([^"']+)/i);
+      var m2 = text.match(/__TASUN_PAGE_BUILD_STAMP__\s*=\s*["']([^"']+)/i);
+      var m3 = text.match(/PAGE_BUILD_STAMP\s*=\s*["']([^"']+)/i);
+      buildStamp = norm((m1 && m1[1]) || (m2 && m2[1]) || (m3 && m3[1]));
+      var title = '';
+      var mt = text.match(/<title>([^<]+)<\/title>/i);
+      title = norm(mt && mt[1]);
+      var body = text.replace(/\s+/g, ' ').slice(0, 24000);
+      var hash = 2166136261;
+      for(var i=0;i<body.length;i++){
+        hash ^= body.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return { buildStamp: buildStamp, title: title, fingerprint: (hash >>> 0).toString(16) };
+    }
+
+    async function fetchRemotePageMeta(version){
+      var url = canonicalPageUrl(version, 'probe');
+      var html = await fetchText(url);
+      var meta = extractRemoteHtmlMeta(html);
+      meta.url = url;
+      return meta;
+    }
+
+    async function fetchRebuildStamp(){
+      var stamp = await fetchText(REBUILD_STAMP_FILE + '?_=' + Date.now());
+      return norm(stamp);
+    }
+
     async function hardRefreshTo(version, buildStamp){
+      if(state.reloading) return true;
+      state.reloading = true;
       var nextVer = norm(version) || norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '');
       try{
         if('caches' in window){
@@ -76,52 +139,77 @@
       try{ if(nextVer) localStorage.setItem('tasun_force_latest_seen_v1', nextVer); }catch(_e){}
       try{ if(buildStamp) sessionStorage.setItem('tasun_force_latest_build_stamp_v1', buildStamp); }catch(_e){}
       try{ if(buildStamp) localStorage.setItem('tasun_force_latest_build_stamp_v1', buildStamp); }catch(_e){}
-
-      var u = new URL(location.href);
-      if(nextVer) u.searchParams.set('v', nextVer);
-      u.searchParams.set('_', String(Date.now()));
-      u.searchParams.set('_bs', encodeURIComponent(buildStamp || PAGE_BUILD_STAMP));
-      location.replace(u.toString());
+      location.replace(canonicalPageUrl(nextVer, buildStamp || PAGE_BUILD_STAMP));
       return true;
     }
 
-    async function ensureLatestVersionAndBuildStamp(){
+    async function ensureLatestVersionAndBuildStamp(reason){
+      if(state.checking || state.reloading) return false;
+      state.checking = true;
       ensureWithV();
-      var bundle = await fetchVersionBundle();
-      if(!bundle) return false;
+      try{
+        var bundle = await fetchVersionBundle();
+        var rebuildStamp = await fetchRebuildStamp();
+        var remoteMeta = await fetchRemotePageMeta(bundle && bundle.version);
 
-      var curV = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || queryV() || '');
-      var latestV = norm(bundle.version);
-      var latestBS = norm(bundle.buildStamp);
-      var needRefresh = false;
+        var curV = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || queryV() || '');
+        var latestV = norm(bundle && bundle.version);
+        var latestBS = norm((bundle && bundle.buildStamp) || rebuildStamp || remoteMeta.buildStamp);
+        var remoteBS = norm(remoteMeta.buildStamp);
+        var localFP = extractRemoteHtmlMeta(document.documentElement.outerHTML).fingerprint;
+        var remoteFP = norm(remoteMeta.fingerprint);
+        var latestTitle = norm(remoteMeta.title || document.title);
 
-      if(latestV && latestV !== curV) needRefresh = true;
-      if(latestBS && latestBS !== PAGE_BUILD_STAMP) needRefresh = true;
+        var needRefresh = false;
+        if(latestV && latestV !== curV) needRefresh = true;
+        if(latestBS && latestBS !== PAGE_BUILD_STAMP) needRefresh = true;
+        if(remoteBS && remoteBS !== PAGE_BUILD_STAMP) needRefresh = true;
+        if(remoteFP && localFP && remoteFP !== localFP) needRefresh = true;
 
-      if(needRefresh){
-        await hardRefreshTo(latestV || curV, latestBS || PAGE_BUILD_STAMP);
-        return true;
+        if(latestV){
+          window.__CACHE_V = latestV;
+          window.TASUN_APP_VER = latestV;
+          window.APP_VER = latestV;
+        }
+        window.__TASUN_REMOTE_PAGE_META__ = {
+          reason: norm(reason),
+          version: latestV,
+          bundleBuildStamp: latestBS,
+          remoteBuildStamp: remoteBS,
+          remoteFingerprint: remoteFP,
+          localFingerprint: localFP,
+          title: latestTitle,
+          checkedAt: new Date().toISOString()
+        };
+
+        if(needRefresh){
+          return await hardRefreshTo(latestV || curV, latestBS || remoteBS || PAGE_BUILD_STAMP);
+        }
+        return false;
+      }catch(_e){
+        return false;
+      }finally{
+        state.checking = false;
       }
+    }
 
-      if(latestV){
-        window.__CACHE_V = latestV;
-        window.TASUN_APP_VER = latestV;
-        window.APP_VER = latestV;
-      }
-      return false;
+    function installStabilityCorrector(){
+      if(state.correctorInstalled) return;
+      state.correctorInstalled = true;
+      var runner = function(reason){ ensureLatestVersionAndBuildStamp(reason).catch(function(){}); };
+      document.addEventListener('DOMContentLoaded', function(){ runner('DOMContentLoaded'); }, { passive:true });
+      window.addEventListener('load', function(){ runner('load'); }, { passive:true });
+      window.addEventListener('pageshow', function(){ runner('pageshow'); }, { passive:true });
+      window.addEventListener('focus', function(){ runner('focus'); }, { passive:true });
+      document.addEventListener('visibilitychange', function(){ if(document.visibilityState === 'visible') runner('visibilitychange'); }, { passive:true });
+      setInterval(function(){ runner('interval'); }, CHECK_INTERVAL_MS);
     }
 
     window.__TASUN_ENSURE_LATEST_BUILDSTAMP__ = ensureLatestVersionAndBuildStamp;
-
+    installStabilityCorrector();
     Promise.resolve(window.__TASUN_VERSION_READY__ || true).then(function(){
-      ensureLatestVersionAndBuildStamp().catch(function(){});
+      ensureLatestVersionAndBuildStamp('boot').catch(function(){});
     });
-
-    document.addEventListener('visibilitychange', function(){
-      if(document.visibilityState === 'visible') ensureLatestVersionAndBuildStamp().catch(function(){});
-    }, { passive:true });
-    window.addEventListener('focus', function(){ ensureLatestVersionAndBuildStamp().catch(function(){}); }, { passive:true });
-    window.addEventListener('pageshow', function(){ ensureLatestVersionAndBuildStamp().catch(function(){}); }, { passive:true });
   })();
   </script>
 
