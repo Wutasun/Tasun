@@ -1,8 +1,16 @@
-/* Tasun Boot v4-stable (minimal)
-   - 只做必要的啟動前檢查/小修正，不改 UI
-*/
-(function(){
+(function(global){
   'use strict';
-  // 防止某些環境 bfcache 回來造成事件未重新綁定：標記
-  try{ window.__TASUN_BOOT_AT__ = Date.now(); }catch(_){ }
-})();
+  try{ global.__TASUN_BOOT_AT__ = Date.now(); }catch(_e){}
+  function runStable(reason){
+    try{
+      if(typeof global.__TASUN_STABLE_CALIBRATOR__ === 'function'){
+        global.__TASUN_STABLE_CALIBRATOR__(reason);
+      }else if(typeof global.__TASUN_ENSURE_LATEST_BUILDSTAMP__ === 'function'){
+        Promise.resolve(global.__TASUN_ENSURE_LATEST_BUILDSTAMP__(reason)).catch(function(){});
+      }
+    }catch(_e){}
+  }
+  ['DOMContentLoaded','load','pageshow','focus'].forEach(function(ev){
+    global.addEventListener(ev, function(){ runStable(ev); }, { passive:true });
+  });
+})(window);
