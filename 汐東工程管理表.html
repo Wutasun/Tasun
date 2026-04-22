@@ -114,14 +114,10 @@
         if(String(data.targetKey) !== String(targetKey)) return true;
         if((now() - Number(data.at || 0)) > RELOAD_LOCK_MS) return true;
         return false;
-      }catch(_e){
-        return true;
-      }
+      }catch(_e){ return true; }
     }
     function markRefreshTarget(targetKey){
-      try{
-        sessionStorage.setItem(getRefreshGuardKey(), JSON.stringify({ targetKey:String(targetKey || ''), at:now() }));
-      }catch(_e){}
+      try{ sessionStorage.setItem(getRefreshGuardKey(), JSON.stringify({ targetKey:String(targetKey || ''), at:now() })); }catch(_e){}
     }
 
     async function fetchText(url){
@@ -188,9 +184,7 @@
              || html.match(/__TASUN_PAGE_BUILD_STAMP__\s*=\s*["']([^"']+)/i)
              || html.match(/PAGE_BUILD_STAMP\s*=\s*["']([^"']+)/i);
         return norm(m && m[1] || '');
-      }catch(_e){
-        return '';
-      }
+      }catch(_e){ return ''; }
     }
 
     async function hardRefreshTo(version, buildStamp){
@@ -217,17 +211,14 @@
         var latestV = norm(bundle && bundle.version || '') || curV;
         var rebuildStamp = await fetchRebuildStamp();
         var latestBS = norm(bundle && bundle.buildStamp || rebuildStamp || PAGE_BUILD_STAMP);
-
         if(!latestBS && (reason === 'boot' || reason === 'load')){
           latestBS = norm(await fetchRemotePageBuildStamp(latestV) || PAGE_BUILD_STAMP);
         }
-
         if(latestV){
           window.__CACHE_V = latestV;
           window.TASUN_APP_VER = latestV;
           window.APP_VER = latestV;
         }
-
         if((latestV && latestV !== curV) || (latestBS && latestBS !== PAGE_BUILD_STAMP)){
           return await hardRefreshTo(latestV, latestBS);
         }
@@ -240,23 +231,15 @@
     }
 
     window.__TASUN_ENSURE_LATEST_BUILDSTAMP__ = ensureLatestVersionAndBuildStamp;
-
-    function installLightweightChecks(){
-      window.addEventListener('load', function(){
-        ensureLatestVersionAndBuildStamp('load', true).catch(function(){});
-      }, { once:true, passive:true });
-
-      document.addEventListener('visibilitychange', function(){
-        if(document.visibilityState === 'visible'){
-          ensureLatestVersionAndBuildStamp('visibilitychange', false).catch(function(){});
-        }
-      }, { passive:true });
-    }
-
     Promise.resolve(window.__TASUN_VERSION_READY__ || true).then(function(){
       ensureLatestVersionAndBuildStamp('boot', true).catch(function(){});
     });
-    installLightweightChecks();
+    window.addEventListener('load', function(){
+      ensureLatestVersionAndBuildStamp('load', true).catch(function(){});
+    }, { once:true, passive:true });
+    document.addEventListener('visibilitychange', function(){
+      if(document.visibilityState === 'visible') ensureLatestVersionAndBuildStamp('visibilitychange', false).catch(function(){});
+    }, { passive:true });
   })();
   </script>
 
@@ -540,6 +523,27 @@
       background:rgba(118,24,24,.95); color:#fff4f4; font-size:13px; line-height:1.6;
       box-shadow:0 16px 34px rgba(0,0,0,.22);
     }
+    .loginBlocker{
+      position:fixed; inset:0; z-index:99998;
+      display:none; align-items:center; justify-content:center;
+      padding:24px; background:rgba(8,6,4,.74);
+      backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+    }
+    .loginBlocker.show{ display:flex; }
+    .loginBlockerCard{
+      width:min(520px, calc(100vw - 32px));
+      border-radius:24px; border:1px solid rgba(150,98,22,.26);
+      background:linear-gradient(180deg, rgba(255,255,255,.92), rgba(246,240,228,.82));
+      box-shadow:0 28px 68px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.72);
+      padding:28px 24px; text-align:center;
+    }
+    .loginBlockerTitle{
+      font-family:"Noto Serif TC","Noto Sans TC",serif; font-size:clamp(24px, 2.2vw, 32px);
+      font-weight:900; color:var(--goldDeep); letter-spacing:.08em; margin-bottom:10px;
+      text-shadow:0 2px 8px rgba(255,255,255,.36);
+    }
+    .loginBlockerText{ color:rgba(70,48,16,.88); font-size:15px; line-height:1.8; margin-bottom:18px; }
+    .loginBlockerActions{ display:flex; justify-content:center; }
     @media (max-width:860px){
       :root{--stageW:100%; --stagePadX:12px; --titleSize:clamp(22px, 5.4vw, 30px); --subSize:clamp(11px, 2.8vw, 14px); --btnSize:clamp(13px, 3.4vw, 15px); --chipSize:clamp(11px, 2.7vw, 13px);}
       .wrap{padding:12px}
@@ -570,6 +574,15 @@
   <div class="vehicleBG" aria-hidden="true"></div>
   <div class="mistFlow" aria-hidden="true"></div>
   <div class="domWarn" id="domWarn"></div>
+  <div class="loginBlocker" id="loginBlocker" aria-live="assertive">
+    <div class="loginBlockerCard">
+      <div class="loginBlockerTitle">未登入無法進入網頁</div>
+      <div class="loginBlockerText" id="loginBlockerText">請先登入 Tasun 首頁後再進入此頁。</div>
+      <div class="loginBlockerActions">
+        <button class="btn glassBtn goldText" id="loginBlockerBackBtn" type="button">返回首頁</button>
+      </div>
+    </div>
+  </div>
 
   <div class="wrap">
     <div class="stage">
@@ -632,7 +645,7 @@
       bar.style.display = 'block';
     }
     function ensureRequiredDom(){
-      var required = ['btnBack','btnSwitch','who','role','leftGroup','rightGroup','linkRecord','linkDutyLite','linkDB','linkDetail','linkAuth','linkDropbox','domWarn'];
+      var required = ['btnBack','btnSwitch','who','role','leftGroup','rightGroup','linkRecord','linkDutyLite','linkDB','linkDetail','linkAuth','linkDropbox','domWarn','loginBlocker','loginBlockerText','loginBlockerBackBtn'];
       var missing = required.filter(function(id){ return !$(id); });
       if(!missing.length) return true;
       showDomWarning('頁面缺少必要節點，已中止腳本綁定：' + missing.join('、'));
@@ -670,16 +683,106 @@
       document.documentElement.style.setProperty('--vehicle-bg', 'url("' + url + '")');
     }
 
+    function readCookie(name){
+      try{
+        var m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.$?*|{}()\[\]\/+^]/g,'\\$&') + '=([^;]*)'));
+        return m ? decodeURIComponent(m[1]) : '';
+      }catch(_e){ return ''; }
+    }
+
+    function decodeSessionCookie(raw){
+      try{
+        if(!raw) return null;
+        var txt = decodeURIComponent(escape(atob(String(raw))));
+        var js = safeParse(txt, null);
+        if(!js || typeof js !== 'object') return null;
+        var user = norm(js.user || js.name || js.username || js.account || js.u);
+        if(!user) return null;
+        return { name:user, user:user, username:user, role:inferRole(user, js.role || js.level || js.r), level:inferRole(user, js.role || js.level || js.r) };
+      }catch(_e){ return null; }
+    }
+
+    function getActiveSessionPayload(){
+      var keys = [CURRENT_KEY,'tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1','tasunSessionLogin_v2'];
+      for(var i=0;i<keys.length;i++){
+        try{
+          var raw = sessionStorage.getItem(keys[i]) || '';
+          if(!raw) continue;
+          var js = safeParse(raw, null);
+          if(js && typeof js === 'object'){
+            var user = norm(js.user || js.name || js.username || js.account);
+            if(user) return { name:user, user:user, username:user, role:inferRole(user, js.role || js.level), level:inferRole(user, js.role || js.level) };
+          }
+        }catch(_e){}
+      }
+      return decodeSessionCookie(readCookie('tasun_session_v4'));
+    }
+
+    function persistSessionPayload(payload){
+      if(!payload || !(payload.user || payload.name || payload.username)) return;
+      var user = norm(payload.user || payload.name || payload.username || payload.account);
+      var role = inferRole(user, payload.role || payload.level);
+      var data = { user:user, name:user, username:user, role:role, level:role, at:new Date().toISOString() };
+      try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(data)); }catch(_e){}
+      try{ sessionStorage.setItem('tasunSession_v1', JSON.stringify(data)); }catch(_e){}
+      try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(data)); }catch(_e){}
+      try{ sessionStorage.setItem('tasunSessionLogin_v2', JSON.stringify({ user:user, role:role, t:Date.now() })); }catch(_e){}
+      try{ sessionStorage.setItem('tasunIndexSession_v1', '1'); }catch(_e){}
+      try{ sessionStorage.setItem('tasunIndexSessionAuthed_v2', '1'); }catch(_e){}
+      try{
+        var sso = { name:user, user:user, role:role, at:Date.now(), exp:Date.now() + 1000*60*60*12, v:(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '') };
+        sessionStorage.setItem('tasunSso_v1', JSON.stringify(sso));
+        sessionStorage.setItem('tasunSso_v2', JSON.stringify(sso));
+      }catch(_e){}
+      try{
+        var cookiePayload = encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify({ u:user, r:role, exp:Date.now() + 1000*60*60*12, v:(window.__CACHE_V || '') }))))) ;
+        document.cookie = 'tasun_session_v4=' + cookiePayload + '; Path=/; SameSite=Lax' + (location.protocol === 'https:' ? '; Secure' : '');
+      }catch(_e){}
+      window.__TASUN_SSO_OK__ = true;
+      window.__TASUN_REQUIRE_LOGIN__ = false;
+    }
+
+    function showLoginBlocker(message){
+      var wrap = $('loginBlocker');
+      var textNode = $('loginBlockerText');
+      if(textNode) textNode.textContent = message || '未登入無法進入網頁';
+      if(wrap) wrap.classList.add('show');
+      try{ document.body.style.overflow = 'hidden'; }catch(_e){}
+    }
+
+    function hideLoginBlocker(){
+      var wrap = $('loginBlocker');
+      if(wrap) wrap.classList.remove('show');
+      try{ document.body.style.overflow = ''; }catch(_e){}
+    }
+
+    function ensureSessionAccess(){
+      var payload = getActiveSessionPayload();
+      if(payload && payload.user){
+        persistSessionPayload(payload);
+        hideLoginBlocker();
+        return payload;
+      }
+      showLoginBlocker('未登入無法進入網頁，請先登入 Tasun 首頁後再進入此頁。');
+      return null;
+    }
+
+    function bindLoginBlocker(){
+      var btn = $('loginBlockerBackBtn');
+      if(btn && !btn.__tasunBound){
+        btn.__tasunBound = true;
+        btn.addEventListener('click', function(){ location.href = withV('index.html'); });
+      }
+    }
+
     function getCurrent(){
-      var obj = safeParse(sessionStorage.getItem(CURRENT_KEY) || localStorage.getItem(CURRENT_KEY) || 'null', null) || {};
+      var obj = getActiveSessionPayload() || {};
       var name = obj.name || obj.user || obj.username || obj.account || '';
       return { name: name || '未登入', role: inferRole(name, obj.role || obj.level) };
     }
 
     function setCurrent(u){
-      var payload = { name:u.name, user:u.name, username:u.name, role:inferRole(u.name, u.role), level:inferRole(u.name, u.role) };
-      try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
-      try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+      persistSessionPayload({ name:u.name, user:u.name, username:u.name, role:inferRole(u.name, u.role), level:inferRole(u.name, u.role) });
     }
 
     function persistBridgeForNav(href){
@@ -723,6 +826,9 @@ function normalizeNameToken(v){
   return norm(v).replace(/[\s　]+/g, '').replace(/[／]/g, '/').toLowerCase();
 }
 
+function canonicalRecordName(){ return '捷運汐東線事項記錄'; }
+function canonicalRecordHref(){ return RECORD_FILE; }
+
 function isRecordLike(item){
   var key = norm(item && item.key).toLowerCase();
   var sourceId = norm(item && item.sourceId).toLowerCase();
@@ -732,7 +838,7 @@ function isRecordLike(item){
     || sourceId === 'xidong_record'
     || name === normalizeNameToken('捷運汐東線事項記錄')
     || name === normalizeNameToken('捷運汐東線事項紀錄')
-    || href === RECORD_FILE.toLowerCase()
+    || href === canonicalRecordHref().toLowerCase()
     || href === '捷運汐東線事項紀錄.html';
 }
 
@@ -755,7 +861,7 @@ function normalizeRouteHref(item){
   Object.keys(FIXED_ROUTE_ALIASES).forEach(function(alias){
     if(lowerHref === alias.toLowerCase()) href = FIXED_ROUTE_ALIASES[alias];
   });
-  if(isRecordLike(item)) href = RECORD_FILE;
+  if(isRecordLike(item)) href = canonicalRecordHref();
   if(isAuthLike(item) && !href) href = '權限表.html';
   return href;
 }
@@ -773,8 +879,8 @@ function normBtn(x, fallback){
   if(isRecordLike(item)){
     item.key = 'xidong_record';
     item.sourceId = 'xidong_record';
-    item.name = '捷運汐東線事項記錄';
-    item.href = RECORD_FILE;
+    item.name = canonicalRecordName();
+    item.href = canonicalRecordHref();
     item.target = '';
   }else if(isAuthLike(item)){
     item.key = item.key || 'xidong_auth';
@@ -797,7 +903,42 @@ function dedupeButtonsKeepOrder(list){
   });
 }
 
+function canonicalizeRouteStore(){
+  try{
+    var routes = safeParse(localStorage.getItem(ROUTE_KEY) || '{}', {});
+    if(!routes || typeof routes !== 'object') routes = {};
+    Object.keys(FIXED_ROUTE_ALIASES).forEach(function(alias){
+      routes[alias] = canonicalRecordHref();
+    });
+    routes[canonicalRecordName()] = canonicalRecordHref();
+    localStorage.setItem(ROUTE_KEY, JSON.stringify(routes));
+  }catch(_e){}
+}
+
+function canonicalizeEntryButtonStore(){
+  try{
+    var store = safeParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || '{}', {});
+    if(!store || typeof store !== 'object') store = {};
+    var raw = Array.isArray(store[ENTRY_FILE]) ? store[ENTRY_FILE] : [];
+    var normalized = dedupeButtonsKeepOrder(raw.map(function(x, i){
+      var fallback = DEFAULT_ENTRY_BUTTONS.find(function(d){ return d.key === (x && x.key); })
+        || DEFAULT_ENTRY_BUTTONS.find(function(d){ return d.sourceId === (x && x.sourceId); })
+        || DEFAULT_ENTRY_BUTTONS[i]
+        || { key:'btn' + (i+1), sourceId:'btn' + (i+1), name:'btn' + (i+1), href:'', target:'', roles:['admin','write','read'] };
+      return normBtn(x, fallback);
+    }));
+    if(normalized.length){
+      store[ENTRY_FILE] = normalized.map(function(item){
+        return { key:item.key, sourceId:item.sourceId, name:item.name, href:item.href, target:item.target, roles:Array.isArray(item.roles) ? item.roles.slice() : [] };
+      });
+      localStorage.setItem(AUTH_ENTRY_BUTTONS_KEY, JSON.stringify(store));
+    }
+  }catch(_e){}
+}
+
 function resolveEntryButtons(){
+  canonicalizeRouteStore();
+  canonicalizeEntryButtonStore();
   var store = safeParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || '{}', {});
   var routes = safeParse(localStorage.getItem(ROUTE_KEY) || '{}', {});
   var rawStore = Array.isArray(store[ENTRY_FILE]) && store[ENTRY_FILE].length ? store[ENTRY_FILE] : null;
@@ -823,8 +964,30 @@ function resolveEntryButtons(){
 
 function routeForItem(item){
   var normalized = normBtn(item, item);
-  if(isRecordLike(normalized)) return RECORD_FILE;
+  if(isRecordLike(normalized)) return canonicalRecordHref();
   return normalized.href || '#';
+}
+
+function forceRecordAnchorCanonical(){
+  var anchors = [$('linkRecord'), $('linkDutyLite'), $('linkDB'), $('linkDetail'), $('linkAuth'), $('linkDropbox')];
+  anchors.forEach(function(a){
+    if(!a) return;
+    var span = a.querySelector('span');
+    var looksRecord = isRecordLike({
+      key: a.dataset.itemKey,
+      sourceId: a.dataset.sourceId,
+      name: span ? span.textContent : '',
+      href: a.dataset.routeHref || a.getAttribute('href') || ''
+    });
+    if(!looksRecord) return;
+    if(span) span.textContent = canonicalRecordName();
+    a.dataset.itemKey = 'xidong_record';
+    a.dataset.sourceId = 'xidong_record';
+    a.dataset.routeHref = canonicalRecordHref();
+    a.setAttribute('href', withV(canonicalRecordHref()));
+    a.removeAttribute('target');
+    a.removeAttribute('rel');
+  });
 }
 
 function applyEntryButtons(){
@@ -864,6 +1027,7 @@ function applyEntryButtons(){
     if(target){ a.target = target; if(target === '_blank') a.rel = 'noopener'; }
     else { a.removeAttribute('target'); a.removeAttribute('rel'); }
   });
+  forceRecordAnchorCanonical();
 }
 
 function renderUser(){
@@ -881,7 +1045,7 @@ function renderUser(){
         if(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
         if(typeof e.button === 'number' && e.button !== 0) return;
         var routeHref = norm(a.dataset.routeHref || a.getAttribute('href') || '');
-        if(norm(a.dataset.itemKey || a.dataset.sourceId).toLowerCase() === 'xidong_record') routeHref = RECORD_FILE;
+        if(isRecordLike({ key:a.dataset.itemKey, sourceId:a.dataset.sourceId, name:(a.querySelector('span') ? a.querySelector('span').textContent : ''), href:routeHref })) routeHref = canonicalRecordHref();
         if(!routeHref || routeHref === '#') return;
         if(/^https?:\/\//i.test(routeHref) || /^mailto:/i.test(routeHref) || /^tel:/i.test(routeHref) || a.target === '_blank') return;
         e.preventDefault();
@@ -895,13 +1059,15 @@ function renderUser(){
 
     function start(){
       if(!ensureRequiredDom()) return;
+      bindLoginBlocker();
+      if(!ensureSessionAccess()) return;
       applyVehicleBg();
       renderUser();
       bindStableNavigate();
       window.addEventListener('storage', function(e){
         if(!e || !e.key) return;
         if(e.key === AUTH_ENTRY_BUTTONS_KEY || e.key === ROUTE_KEY || e.key === CURRENT_KEY){
-          renderUser();
+          if(ensureSessionAccess()) renderUser();
         }
       });
     }
