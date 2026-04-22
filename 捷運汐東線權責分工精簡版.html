@@ -4092,7 +4092,14 @@
     if(watchStarted) return;
     watchStarted = true;
     window.addEventListener('storage', (e) => {
-      if(e.key === CFG.AUTH_KEY || e.key === CFG.CURRENT_KEY) validateSession();
+      if(e.key === CFG.AUTH_KEY || e.key === CFG.CURRENT_KEY){
+        validateSession();
+        return;
+      }
+      if(e.key === CFG.DB_KEY || e.key === CFG.LEGACY_DB_KEY || e.key === CFG.COUNTER_KEY || e.key === CFG.LEGACY_COUNTER_KEY){
+        loadDB();
+        render();
+      }
     });
     setInterval(validateSession, CFG.SESSION_WATCH_MS);
   }
@@ -4157,7 +4164,7 @@
         arr = legacy ? JSON.parse(legacy) : [];
       }
     }catch(_){ arr = []; }
-    db = Array.isArray(arr) ? arr.map(normalizeRow) : [];
+    db = Array.isArray(arr) ? dedupeRows(arr.map(normalizeRow)) : [];
     if(!localStorage.getItem(CFG.COUNTER_KEY)){
       const legacyCounter = Number(localStorage.getItem(CFG.LEGACY_COUNTER_KEY) || 0);
       const maxId = db.reduce((m, r) => Math.max(m, Number(r.id) || 0), 0);
@@ -4166,6 +4173,7 @@
   }
 
   function saveDB(){
+    db = dedupeRows(db);
     localStorage.setItem(CFG.DB_KEY, JSON.stringify(db));
   }
 
@@ -4433,6 +4441,194 @@ function render(){
         (selectedId ? ` 已選取：<b style="color:var(--gold)">#${selectedId}</b>` : `（可點選列再按「編輯」）`);
   }
 
+  const MODAL_STATE = window.__TASUN_RACI_MODAL_STATE__ = window.__TASUN_RACI_MODAL_STATE__ || {
+    mode: 'view',
+    snapshot: '',
+    dirty: false
+  };
+
+  function modalFieldKeys(){
+    return Object.keys(FIELD_IDS);
+  }
+
+  function getRowSignature(row){
+    return modalFieldKeys().map((key) => norm(row && row[key])).join('｜').toLowerCase();
+  }
+
+  function dedupeRows(rows){
+    const seen = new Set();
+    const out = [];
+    (Array.isArray(rows) ? rows : []).forEach((raw) => {
+      const row = normalizeRow(raw);
+      const sig = getRowSignature(row);
+      if(!sig) return;
+      if(seen.has(sig)) return;
+      seen.add(sig);
+      out.push(row);
+    });
+    return out;
+  }
+
+  function getModalRow(){
+    const row = blankRow();
+    modalFieldKeys().forEach((key) => {
+      const el = $(FIELD_IDS[key]);
+      row[key] = norm(el ? ('value' in el ? el.value : el.textContent) : '');
+    });
+    if(editingId != null) row.id = Number(editingId) || null;
+    return normalizeRow(row);
+  }
+
+  function setModalRow(row){
+    const safe = normalizeRow(row || blankRow());
+    modalFieldKeys().forEach((key) => {
+      const el = $(FIELD_IDS[key]);
+      if(!el) return;
+      el.value = safe[key] || '';
+      applyAsciiTight(el);
+    });
+  }
+
+  function captureModalSnapshot(){
+    MODAL_STATE.snapshot = JSON.stringify(getModalRow());
+    MODAL_STATE.dirty = false;
+  }
+
+  function modalIsDirty(){
+    if($('mask').style.display !== 'flex') return false;
+    const now = JSON.stringify(getModalRow());
+    MODAL_STATE.dirty = (now !== MODAL_STATE.snapshot);
+    return MODAL_STATE.dirty;
+  }
+
+  function setModalEditable(editable){
+    modalFieldKeys().forEach((key) => {
+      const el = $(FIELD_IDS[key]);
+      if(!el) return;
+      if(editable){
+        el.removeAttribute('readonly');
+        el.removeAttribute('disabled');
+      }else{
+        if(el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') el.setAttribute('readonly', 'readonly');
+        else el.setAttribute('disabled', 'disabled');
+      }
+    });
+    document.querySelectorAll('.modalComboBtn').forEach((btn) => {
+      btn.disabled = !editable;
+      btn.style.display = editable ? '' : 'none';
+    });
+    $('btnSave').style.display = editable ? 'inline-block' : 'none';
+    $('btnDelete').style.display = (editable && editingId != null && isAdmin()) ? 'inline-block' : 'none';
+    $('btnCancel').textContent = editable ? '取消' : '關閉';
+  }
+
+  function hardCloseModal(){
+    $('mask').style.display = 'none';
+    MODAL_STATE.mode = 'view';
+    MODAL_STATE.snapshot = '';
+    MODAL_STATE.dirty = false;
+    closeMenus('.modalComboMenu');
+  }
+
+  function openModal(id, editable){
+    validateSession();
+    const wantEdit = !!editable;
+    if(wantEdit && !canWrite()){
+      toast('目前帳號不可新增或編輯');
+      return;
+    }
+    let row = blankRow();
+    if(id != null){
+      const found = db.find((item) => Number(item.id) === Number(id));
+      if(!found){
+        toast('找不到指定資料');
+        return;
+      }
+      row = normalizeRow(found);
+      selectedId = Number(found.id) || null;
+      editingId = Number(found.id) || null;
+    }else{
+      editingId = null;
+      row = blankRow();
+    }
+    MODAL_STATE.mode = wantEdit ? 'edit' : 'view';
+    $('mTitle').textContent = id == null ? (wantEdit ? '新增' : '查看') : (wantEdit ? '編輯' : '查看');
+    setModalRow(row);
+    setModalEditable(wantEdit);
+    $('mask').style.display = 'flex';
+    captureModalSnapshot();
+  }
+
+  function closeModal(forceClose){
+    if(forceClose === true){
+      hardCloseModal();
+      return;
+    }
+    if(MODAL_STATE.mode === 'edit' && modalIsDirty()){
+      const goSave = confirm('表單尚未儲存，是否先儲存？\n按「確定」先儲存後關閉；按「取消」直接關閉不儲存。');
+      if(goSave){
+        saveItem({ closeAfterSave:true });
+        return;
+      }
+    }
+    hardCloseModal();
+  }
+
+  function saveItem(options){
+    validateSession();
+    if(!canWrite()){
+      toast('目前帳號不可儲存');
+      return false;
+    }
+    const opts = options || {};
+    const isNewRow = (editingId == null);
+    const row = getModalRow();
+    if(!row.project){
+      toast('請至少輸入工程項目');
+      const projectEl = $('mProject');
+      if(projectEl) projectEl.focus();
+      return false;
+    }
+
+    if(editingId != null){
+      row.id = Number(editingId) || Number(row.id) || null;
+    }
+    if(row.id == null) row.id = nextCounter();
+
+    const nextDb = db.map((item) => normalizeRow(item));
+    const sameIdIndex = nextDb.findIndex((item) => Number(item.id) === Number(row.id));
+    if(sameIdIndex >= 0) nextDb[sameIdIndex] = row;
+    else nextDb.push(row);
+
+    const preserved = [];
+    const seen = new Set();
+    nextDb.forEach((item) => {
+      const normalized = normalizeRow(item);
+      const sig = getRowSignature(normalized);
+      if(!sig) return;
+      if(Number(normalized.id) === Number(row.id)){
+        preserved.push(normalized);
+        seen.add(sig);
+        return;
+      }
+      if(seen.has(sig)) return;
+      seen.add(sig);
+      preserved.push(normalized);
+    });
+
+    db = preserved.sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
+    saveDB();
+    loadDB();
+    selectedId = Number(row.id) || null;
+    editingId = Number(row.id) || null;
+    render();
+    captureModalSnapshot();
+    hardCloseModal();
+    toast(isNewRow ? '已新增' : '已儲存');
+    return true;
+  }
+
+
   function deleteItem(){
     validateSession();
     if(!isAdmin()){ toast('僅 admin 可刪除'); return; }
@@ -4441,7 +4637,7 @@ function render(){
     db = db.filter(x => Number(x.id) !== Number(editingId));
     saveDB();
     if(Number(selectedId) === Number(editingId)) selectedId = null;
-    closeModal();
+    closeModal(true);
     render();
     toast('已刪除');
   }
@@ -4615,6 +4811,12 @@ function render(){
       }
     });
     $('loginUser').addEventListener('change', () => { if($('loginUser').value) $('loginPass').focus(); });
+    modalFieldKeys().forEach((key) => {
+      const el = $(FIELD_IDS[key]);
+      if(!el || el.dataset.modalDirtyBound === '1') return;
+      el.dataset.modalDirtyBound = '1';
+      ['input','change'].forEach((evtName) => el.addEventListener(evtName, () => { modalIsDirty(); }));
+    });
   }
 
 
