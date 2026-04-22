@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>汐東工程管理表 · Tasun</title>
-  <meta name="tasun-build-stamp" content="20260422_tasun_v5_xidong_manager_linkfix_r1">
+  <meta name="tasun-build-stamp" content="20260422_tasun_v5_xidong_manager_stallfix_r2">
 
   <script id="tasun-github-pages-html-once-refresh-r6">
   (function(){
@@ -53,6 +53,7 @@
       RELOAD_LOCK_MS: 45000,
       MAX_REFRESH_ATTEMPTS: 2,
       FETCH_TIMEOUT_MS: 6000,
+      VERSION_CHECK_MIN_GAP_MS: 60000,
       ROUTE_KEY: 'tasunRoutes_v1',
       AUTH_ENTRY_BUTTONS_KEY: 'tasunAuthEntryButtons_v1',
       CURRENT_KEY: 'tasunCurrentUser_v1',
@@ -73,8 +74,9 @@
     var PAGE_KEY = String(G.PAGE_KEY || '汐東工程管理表.html').trim();
     var VERSION_JSON = String(G.VERSION_JSON || 'tasun-version.json').trim();
     var REBUILD_STAMP_FILE = String(G.REBUILD_STAMP_FILE || 'TASUN_REBUILD_STAMP').trim();
-    var CHECK_INTERVAL_MS = Number(G.CHECK_INTERVAL_MS || 20000) || 20000;
     var FETCH_TIMEOUT_MS = Number(G.FETCH_TIMEOUT_MS || 6000) || 6000;
+    var VERSION_CHECK_MIN_GAP_MS = Number(G.VERSION_CHECK_MIN_GAP_MS || 60000) || 60000;
+    var RELOAD_LOCK_MS = Number(G.RELOAD_LOCK_MS || 45000) || 45000;
     var state = window.__TASUN_SYNC_STATE__ = window.__TASUN_SYNC_STATE__ || {};
     if(state.xidongBooted) return;
     state.xidongBooted = true;
@@ -100,6 +102,28 @@
     }
     ensureWithV();
 
+    function getRefreshGuardKey(){
+      return 'tasun_xidong_refresh_guard_v1::' + PAGE_KEY;
+    }
+    function canRefreshTarget(targetKey){
+      try{
+        var raw = sessionStorage.getItem(getRefreshGuardKey()) || '';
+        if(!raw) return true;
+        var data = JSON.parse(raw);
+        if(!data || !data.targetKey) return true;
+        if(String(data.targetKey) !== String(targetKey)) return true;
+        if((now() - Number(data.at || 0)) > RELOAD_LOCK_MS) return true;
+        return false;
+      }catch(_e){
+        return true;
+      }
+    }
+    function markRefreshTarget(targetKey){
+      try{
+        sessionStorage.setItem(getRefreshGuardKey(), JSON.stringify({ targetKey:String(targetKey || ''), at:now() }));
+      }catch(_e){}
+    }
+
     async function fetchText(url){
       var ctl = null;
       var tm = null;
@@ -116,27 +140,41 @@
       }
     }
 
-    async function fetchVersionBundle(){
+    async function fetchJson(url){
+      var ctl = null;
+      var tm = null;
       try{
-        var res = await fetch(VERSION_JSON + '?_=' + now(), { cache:'no-store', credentials:'same-origin' });
+        ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        tm = setTimeout(function(){ try{ ctl && ctl.abort(); }catch(_e){} }, FETCH_TIMEOUT_MS);
+        var res = await fetch(url, { cache:'no-store', credentials:'same-origin', signal: ctl ? ctl.signal : undefined });
         if(!res.ok) return null;
-        var data = await res.json().catch(function(){ return null; });
-        if(!data) return null;
-        var meta = data.meta || {};
-        var version = norm(
-          data.version || data.ver || data.appVer || data.app_version || data.APP_VER ||
-          data.cacheV || data.cache_v || data.manualVersion || data.fallbackVersion ||
-          meta.version || meta.ver || meta.appVer || meta.cacheV || ''
-        );
-        var buildStamp = norm(
-          data.buildStamp || data.build_stamp || data.pageBuildStamp || data.page_build_stamp ||
-          data.build || data.buildVersion || data.rebuildStamp ||
-          meta.buildStamp || meta.build_stamp || meta.pageBuildStamp || meta.rebuildStamp || ''
-        );
-        return { version:version, buildStamp:buildStamp };
+        return await res.json().catch(function(){ return null; });
       }catch(_e){
         return null;
+      }finally{
+        try{ clearTimeout(tm); }catch(_e){}
       }
+    }
+
+    async function fetchVersionBundle(){
+      var data = await fetchJson(VERSION_JSON + '?_=' + now());
+      if(!data) return null;
+      var meta = data.meta || {};
+      var version = norm(
+        data.version || data.ver || data.appVer || data.app_version || data.APP_VER ||
+        data.cacheV || data.cache_v || data.manualVersion || data.fallbackVersion ||
+        meta.version || meta.ver || meta.appVer || meta.cacheV || ''
+      );
+      var buildStamp = norm(
+        data.buildStamp || data.build_stamp || data.pageBuildStamp || data.page_build_stamp ||
+        data.build || data.buildVersion || data.rebuildStamp ||
+        meta.buildStamp || meta.build_stamp || meta.pageBuildStamp || meta.rebuildStamp || ''
+      );
+      return { version:version, buildStamp:buildStamp };
+    }
+
+    async function fetchRebuildStamp(){
+      return norm(await fetchText(REBUILD_STAMP_FILE + '?_=' + now()));
     }
 
     async function fetchRemotePageBuildStamp(version){
@@ -155,11 +193,11 @@
       }
     }
 
-    async function fetchRebuildStamp(){
-      return norm(await fetchText(REBUILD_STAMP_FILE + '?_=' + now()));
-    }
-
     async function hardRefreshTo(version, buildStamp){
+      var targetKey = [norm(version), norm(buildStamp)].join('|');
+      if(!canRefreshTarget(targetKey)) return false;
+      markRefreshTarget(targetKey);
+      state.reloading = true;
       var u = new URL(location.href);
       if(version) u.searchParams.set('v', version);
       u.searchParams.set('_', String(now()));
@@ -168,23 +206,29 @@
       return true;
     }
 
-    async function ensureLatestVersionAndBuildStamp(reason){
+    async function ensureLatestVersionAndBuildStamp(reason, force){
       if(state.checking || state.reloading) return false;
+      if(!force && state.lastCheckAt && (now() - state.lastCheckAt) < VERSION_CHECK_MIN_GAP_MS) return false;
       state.checking = true;
+      state.lastCheckAt = now();
       try{
         var bundle = await fetchVersionBundle();
         var curV = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || queryV() || '');
         var latestV = norm(bundle && bundle.version || '') || curV;
         var rebuildStamp = await fetchRebuildStamp();
-        var remoteBS = await fetchRemotePageBuildStamp(latestV);
-        var latestBS = norm(bundle && bundle.buildStamp || rebuildStamp || remoteBS || PAGE_BUILD_STAMP);
+        var latestBS = norm(bundle && bundle.buildStamp || rebuildStamp || PAGE_BUILD_STAMP);
+
+        if(!latestBS && (reason === 'boot' || reason === 'load')){
+          latestBS = norm(await fetchRemotePageBuildStamp(latestV) || PAGE_BUILD_STAMP);
+        }
+
         if(latestV){
           window.__CACHE_V = latestV;
           window.TASUN_APP_VER = latestV;
           window.APP_VER = latestV;
         }
-        if((latestV && latestV !== curV) || (latestBS && latestBS !== PAGE_BUILD_STAMP) || (remoteBS && remoteBS !== PAGE_BUILD_STAMP)){
-          state.reloading = true;
+
+        if((latestV && latestV !== curV) || (latestBS && latestBS !== PAGE_BUILD_STAMP)){
           return await hardRefreshTo(latestV, latestBS);
         }
         return false;
@@ -196,15 +240,23 @@
     }
 
     window.__TASUN_ENSURE_LATEST_BUILDSTAMP__ = ensureLatestVersionAndBuildStamp;
+
+    function installLightweightChecks(){
+      window.addEventListener('load', function(){
+        ensureLatestVersionAndBuildStamp('load', true).catch(function(){});
+      }, { once:true, passive:true });
+
+      document.addEventListener('visibilitychange', function(){
+        if(document.visibilityState === 'visible'){
+          ensureLatestVersionAndBuildStamp('visibilitychange', false).catch(function(){});
+        }
+      }, { passive:true });
+    }
+
     Promise.resolve(window.__TASUN_VERSION_READY__ || true).then(function(){
-      ensureLatestVersionAndBuildStamp('boot').catch(function(){});
+      ensureLatestVersionAndBuildStamp('boot', true).catch(function(){});
     });
-    document.addEventListener('visibilitychange', function(){
-      if(document.visibilityState === 'visible') ensureLatestVersionAndBuildStamp('visibilitychange').catch(function(){});
-    }, { passive:true });
-    window.addEventListener('focus', function(){ ensureLatestVersionAndBuildStamp('focus').catch(function(){}); }, { passive:true });
-    window.addEventListener('pageshow', function(){ ensureLatestVersionAndBuildStamp('pageshow').catch(function(){}); }, { passive:true });
-    setInterval(function(){ if(document.visibilityState !== 'hidden') ensureLatestVersionAndBuildStamp('interval').catch(function(){}); }, CHECK_INTERVAL_MS);
+    installLightweightChecks();
   })();
   </script>
 
