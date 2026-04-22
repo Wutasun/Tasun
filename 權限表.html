@@ -343,32 +343,6 @@
   </script>
 
 
-  <script id="tasun-session-only-auth-cleanup-auth-table-r1">
-  (function(){
-    'use strict';
-    function readCookie(name){
-      try{
-        var m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.$?*|{}()\[\]\/+^]/g,'\\$&') + '=([^;]*)'));
-        return m ? decodeURIComponent(m[1]) : '';
-      }catch(_e){ return ''; }
-    }
-    function hasLiveSession(){
-      try{ if(sessionStorage.getItem('tasunSessionLogin_v2')) return true; }catch(_e){}
-      return !!readCookie('tasun_session_v4');
-    }
-    if(hasLiveSession()) return;
-    [
-      'tasunCurrentUser_v1','tasunSessionBridge_v1','tasunSession_v1','tasunSso_v1','tasunSso_v2',
-      'tasunIndexSession_v1','tasunIndexSessionAuthed_v2','tasun_next_path_v1'
-    ].forEach(function(k){
-      try{ sessionStorage.removeItem(k); }catch(_e){}
-      try{ localStorage.removeItem(k); }catch(_e){}
-    });
-    window.__TASUN_SSO_OK__ = false;
-    window.__TASUN_REQUIRE_LOGIN__ = true;
-  })();
-  </script>
-
   <style>
     :root{
       --gold:#f6d37a;
@@ -676,6 +650,13 @@
       opacity:.92;
     }
 
+    .domWarn{
+      display:none; position:fixed; left:12px; right:12px; top:12px; z-index:99999;
+      padding:12px 14px; border-radius:16px; border:1px solid rgba(190,92,92,.42);
+      background:rgba(118,24,24,.95); color:#fff4f4; font-size:13px; line-height:1.6;
+      box-shadow:0 16px 34px rgba(0,0,0,.22);
+    }
+
     .msg{
       margin-top: 10px;
       padding: 10px 12px;
@@ -689,7 +670,7 @@
     }
 
     .loginBlocker{
-      position:fixed; inset:0; z-index:99999;
+      position:fixed; inset:0; z-index:99998;
       display:none; align-items:center; justify-content:center;
       padding:24px;
       background:rgba(5,3,2,.76);
@@ -954,6 +935,7 @@
 </head>
 
 <body>
+  <div class="domWarn" id="domWarn"></div>
   <div class="loginBlocker" id="loginBlocker" aria-live="assertive">
     <div class="loginBlockerCard">
       <div class="loginBlockerTitle">未登入無法進入網頁</div>
@@ -1006,9 +988,9 @@
         <h1>Tasun 權限表</h1>
         <p>
           只有 <b>admin</b> 可以編輯；其他權限只能查看。<br>
-          ✅ 首頁按鍵採單一來源規則：以 localStorage <b>tasunNavButtons_v1</b> 為唯一正式來源。<br>
-          ✅ btn 欄位標題會直接抓取目前入口頁按鍵名稱（首頁以 <b>tasunNavButtons_v1</b>；其他頁維持動態入口按鍵）。<br>
-          ✅ admin 可在本頁「按鍵名稱設定」調整首頁按鍵排序，名稱與連結會一起移動，不會拆開。<br>
+          ✅ 入口頁按鍵設定採單一來源規則：首頁使用 <b>tasunNavButtons_v1</b>；其他入口頁使用 <b>tasunAuthEntryButtons_v1</b>。<br>
+          ✅ btn 欄位標題會直接抓取目前入口頁按鍵名稱與對應網址，切換入口頁後會自動重載。<br>
+          ✅ admin 可在本頁「按鍵名稱設定」調整目前入口頁的按鍵排序，名稱與連結會一起移動，不會拆開。<br>
           ✅ 永遠自動上雲端：本頁任何變更都會觸發 TasunCloudKit 自動同步（若已設定 Token）。<br>
           雲端模式（App folder）：<b>/權限表.json</b>
         </p>
@@ -1084,8 +1066,8 @@
           <div class="navGrid">
             <div class="navHint">
               說明：按鍵位置依目前入口頁動態展開，左側會顯示 <b>btn1～btnN</b>。右側為下拉式選單，選項會帶出「目前入口網頁按鍵名稱＋對應連結」。<br>
-              你在這裡調整的是「首頁入口按鍵的排序對應」，正式唯一來源是 localStorage：<b>tasunNavButtons_v1</b>；名稱與連結會一起移動，不會拆開。<br>
-              <b>tasunRoutes_v1 / tasunNavRoutes_v1</b> 只作同步鏡像，不再作為首頁判斷來源。
+              你在這裡調整的是「目前入口頁按鍵的排序對應」；首頁會寫入 <b>tasunNavButtons_v1</b>，其他入口頁會寫入 <b>tasunAuthEntryButtons_v1</b>；名稱與連結會一起移動，不會拆開。<br>
+              <b>tasunRoutes_v1 / tasunNavRoutes_v1</b> 只作同步鏡像，不再作為入口頁主判斷來源。
             </div>
             <div id="navRowsMount" class="navRowsMount"></div>
           </div>
@@ -1180,12 +1162,10 @@
   // 入口頁 → 按鍵定義（沒有定義的入口頁，會用 btn1~btn5 通用欄位顯示）
   const DEFAULT_ENTRY_BUTTONS = {
     '汐東工程管理表.html': [
-      { key:'xidong_record', sourceId:'xidong_record', name:'捷運汐東線事項記錄', href:'捷運汐東線事項記錄.html', target:'' },
-      { key:'xidong_duty',   sourceId:'xidong_duty',   name:'權責分工精簡版', href:'捷運汐東線權責分工精簡版.html', target:'' },
-      { key:'xidong_db',     sourceId:'xidong_db',     name:'捷運汐東線工程資料庫', href:'捷運汐止東湖線統包工程-資料庫.html', target:'' },
-      { key:'xidong_detail', sourceId:'xidong_detail', name:'捷運系東線資料明細表', href:'捷運汐止東湖線統包工程-資料明細表.html', target:'' },
-      { key:'xidong_auth',   sourceId:'xidong_auth',   name:'系統／權限', href:'權限表.html', target:'' },
-      { key:'xidong_cloud',  sourceId:'xidong_cloud',  name:'雲端檔案', href:'https://www.dropbox.com/scl/fo/glb4s65934h195bxuyuqm/AH5ClZ2u4MtPMvmgtfOUAa4?rlkey=tfxkpbpw8k9bctshx5xvuge8h&st=127vsul4&dl=0', target:'_blank' }
+      { key:'xidong_record', name:'捷運汐東線事項記錄' },
+      { key:'xidong_db',     name:'工程資料庫' },
+      { key:'xidong_auth',   name:'系統／權限' },
+      { key:'xidong_cloud',  name:'雲端檔案' }
     ],
     '工程資料庫.html': [
       { key:'db_reg',   name:'工程資料登錄' },
@@ -1262,6 +1242,30 @@
   const entryNameTag  = el('entryNameTag');
   const previewUserTag= el('previewUserTag');
   const previewGrid   = el('previewGrid');
+  const domWarn = el('domWarn');
+
+  function showDomWarning(message){
+    if(!domWarn) return;
+    domWarn.textContent = message;
+    domWarn.style.display = 'block';
+  }
+
+  function ensureRequiredDom(){
+    const requiredIds = [
+      'domWarn','msg','whoDesk','whoMobile','tbody','theadRow','cards','addBtn','saveLocalBtn',
+      'backBtnD','backBtnM','switchBtnD','switchBtnM','tokenBtnD','tokenBtnM','downloadBtnD','downloadBtnM',
+      'uploadBtnD','uploadBtnM','moreBtn','moreMenu','downloadTokenBtnD','downloadTokenBtnM',
+      'navPanel','navCloseBtn','navReloadBtn','navSaveBtn','navPanelTitle','navNameBtnD','navNameBtnM','navRowsMount',
+      'entrySelect','entryCustom','entryResetBtn','entryNameTag','previewUserTag','previewGrid',
+      'loginBlocker','loginBlockerText','loginBlockerBackBtn'
+    ];
+    const missing = requiredIds.filter(id => !el(id));
+    if(!missing.length) return true;
+    showDomWarning('頁面缺少必要節點，已中止腳本綁定：' + missing.join('、'));
+    console.warn('[Tasun][權限表] missing DOM nodes:', missing);
+    return false;
+  }
+
 
   let auth = [];
   let btnMeta = [];
@@ -2150,6 +2154,7 @@ function safeJsonParse(s, fallback){
   function rebuildCurrentEntryOptions(){
     const items = Array.isArray(currentEntryButtons) && currentEntryButtons.length ? currentEntryButtons : buildFallbackButtons(Array.isArray(btnMeta) ? btnMeta.length : 5);
     currentEntryButtonOptions = items
+      .filter(it => !isSystemPermissionButton(it))
       .map((it, idx) => ({
         sourceId: String(it.sourceId || it.key || ('btn'+(idx+1))).trim() || ('btn'+(idx+1)),
         label: String(it.name || it.label || it.key || ('btn'+(idx+1))).trim() || ('btn'+(idx+1)),
@@ -2181,9 +2186,8 @@ function safeJsonParse(s, fallback){
       }
       currentEntryButtons = (Array.isArray(btnMeta) ? btnMeta : []).map(x => ({ ...x }));
     }
-    const orderButtons = Array.isArray(currentEntryButtons) ? currentEntryButtons.slice() : [];
-    btnMeta = orderButtons.filter(it => !isSystemPermissionButton(it));
-    currentEntryButtons = orderButtons;
+    btnMeta = (Array.isArray(btnMeta) ? btnMeta : []).filter(it => !isSystemPermissionButton(it));
+    currentEntryButtons = (Array.isArray(currentEntryButtons) ? currentEntryButtons : []).filter(it => !isSystemPermissionButton(it));
     rebuildCurrentEntryOptions();
     renderNavRows(currentEntryButtonOptions.length || btnMeta.length || 0);
     renderHeaders();
@@ -3193,9 +3197,7 @@ function safeJsonParse(s, fallback){
     navPanel.classList.add('show');
     Promise.resolve(refreshEntryButtonsBySelection()).then(() => {
       loadNavNamesIntoInputs();
-      if(resolveEntryValue() !== 'index.html'){
-        setMsg('目前入口不是 index.html；下方顯示的是該入口頁實際按鍵名稱與連結，僅供檢視，不會改動首頁排序。');
-      }
+      setMsg(`已切換入口網頁：${resolveEntryValue()}\n按鍵名稱設定已自動帶入目前入口頁的按鍵名稱與對應網址。`);
     });
   }
   function closeNavPanel(){ navPanel.classList.remove('show'); }
@@ -3209,17 +3211,12 @@ function safeJsonParse(s, fallback){
     const selects = getNavSelectControls();
     selects.forEach((sel, idx) => {
       if(!sel) return;
-      if(entry === 'index.html'){
-        const item = nav[idx] || {};
-        const sourceId = String(item.sourceId || list[idx]?.sourceId || `btn${idx+1}`).trim();
-        sel.value = sourceId;
-        if(String(sel.value || '').trim() !== sourceId){
-          const fallback = list[idx];
-          sel.value = fallback ? fallback.sourceId : sourceId;
-        }
-      }else{
-        const item = list[idx] || {};
-        sel.value = String(item.sourceId || '').trim();
+      const item = entry === 'index.html' ? (nav[idx] || {}) : (currentEntryButtons[idx] || list[idx] || {});
+      const fallbackItem = list[idx] || item || {};
+      const sourceId = String(item.sourceId || fallbackItem.sourceId || `btn${idx+1}`).trim();
+      sel.value = sourceId;
+      if(String(sel.value || '').trim() !== sourceId){
+        sel.value = String(fallbackItem.sourceId || sourceId).trim();
       }
       sel.dataset.prevValue = sel.value;
     });
@@ -3229,11 +3226,8 @@ function safeJsonParse(s, fallback){
 
   function saveNavNamesFromInputs(){
     if(!isAdmin){ setMsg('你不是 admin，不能儲存按鍵名稱。', true); return; }
-    if(resolveEntryValue() !== 'index.html'){
-      setMsg('目前入口不是 index.html；這裡僅顯示該入口頁按鍵名稱與連結，不寫回首頁排序。');
-      return;
-    }
 
+    const entry = resolveEntryValue();
     const sourceList = getNavSourceList();
     const sourceMap = new Map(sourceList.map(it => [String(it.sourceId || '').trim(), it]));
     const selects = getNavSelectControls();
@@ -3241,21 +3235,42 @@ function safeJsonParse(s, fallback){
     const updated = selects.map((sel, idx) => {
       const sourceId = String(sel?.value || '').trim() || (sourceList[idx]?.sourceId || `btn${idx+1}`);
       const src = sourceMap.get(sourceId) || sourceList[idx] || null;
-      return {
-        id: `btn${idx+1}`,
+      return normalizeEntryButtonItem({
+        key: `btn${idx+1}`,
         sourceId: String(src?.sourceId || sourceId).trim(),
-        label: String(src?.label || `btn${idx+1}`).trim(),
+        name: String(src?.label || src?.name || `btn${idx+1}`).trim(),
         href: String(src?.href || '').trim(),
         target: String(src?.target || '').trim(),
         roles: Array.isArray(src?.roles) ? src.roles.slice() : []
-      };
+      }, idx);
     });
 
-    writeNavButtons(updated);
+    if(entry === 'index.html'){
+      writeNavButtons(updated.map((item, idx) => ({
+        id: `btn${idx+1}`,
+        sourceId: item.sourceId,
+        label: item.name,
+        href: item.href,
+        target: item.target,
+        roles: Array.isArray(item.roles) ? item.roles.slice() : []
+      })));
+      setMsg('✅ 已儲存首頁按鍵排序並同步（名稱、連結網址、target 會一起移動）。\n其他分頁（例如首頁）會自動更新。');
+      return;
+    }
 
-    setMsg('✅ 已儲存按鍵排序並同步（名稱、連結網址、target 會一起移動）。\n其他分頁（例如首頁）會自動更新。');
+    saveEntryButtonsForEntry(entry, updated);
+    syncRoutesForEntryButtons(updated);
+    currentEntryButtons = updated.map((x, idx) => normalizeEntryButtonItem(x, idx));
+    btnMeta = currentEntryButtons.map(x => ({ ...x }));
+    rebuildCurrentEntryOptions();
+    renderHeaders();
+    renderTable();
+    renderCards();
+    renderEntryPreview();
+    refreshNavSelectOptions();
+    scheduleCloudPush('entry-nav-save');
+    setMsg(`✅ 已儲存 ${entry} 的按鍵排序並同步。\n之後此入口頁會依「按鍵名稱設定」的順序顯示，名稱與網址會一起移動。`);
   }
-
 
   navNameBtnD.addEventListener('click', openNavPanel);
   navNameBtnM.addEventListener('click', () => { closeMoreMenu(); openNavPanel(); });
@@ -3265,6 +3280,7 @@ function safeJsonParse(s, fallback){
 
   // 初始化
   async function load(){
+    if(!ensureRequiredDom()) return;
     const blockerBtn = document.getElementById('loginBlockerBackBtn');
     if(blockerBtn && !blockerBtn.__tasunBound){
       blockerBtn.__tasunBound = true;
