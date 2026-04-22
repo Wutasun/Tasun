@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>汐東工程管理表 · Tasun</title>
-  <meta name="tasun-build-stamp" content="20260422_tasun_v5_xidong_manager_stallfix_r2">
+  <meta name="tasun-build-stamp" content="20260422_tasun_v5_xidong_manager_linkfix_r1">
 
   <script id="tasun-github-pages-html-once-refresh-r6">
   (function(){
@@ -53,7 +53,6 @@
       RELOAD_LOCK_MS: 45000,
       MAX_REFRESH_ATTEMPTS: 2,
       FETCH_TIMEOUT_MS: 6000,
-      VERSION_CHECK_MIN_GAP_MS: 60000,
       ROUTE_KEY: 'tasunRoutes_v1',
       AUTH_ENTRY_BUTTONS_KEY: 'tasunAuthEntryButtons_v1',
       CURRENT_KEY: 'tasunCurrentUser_v1',
@@ -74,9 +73,8 @@
     var PAGE_KEY = String(G.PAGE_KEY || '汐東工程管理表.html').trim();
     var VERSION_JSON = String(G.VERSION_JSON || 'tasun-version.json').trim();
     var REBUILD_STAMP_FILE = String(G.REBUILD_STAMP_FILE || 'TASUN_REBUILD_STAMP').trim();
+    var CHECK_INTERVAL_MS = Number(G.CHECK_INTERVAL_MS || 20000) || 20000;
     var FETCH_TIMEOUT_MS = Number(G.FETCH_TIMEOUT_MS || 6000) || 6000;
-    var VERSION_CHECK_MIN_GAP_MS = Number(G.VERSION_CHECK_MIN_GAP_MS || 60000) || 60000;
-    var RELOAD_LOCK_MS = Number(G.RELOAD_LOCK_MS || 45000) || 45000;
     var state = window.__TASUN_SYNC_STATE__ = window.__TASUN_SYNC_STATE__ || {};
     if(state.xidongBooted) return;
     state.xidongBooted = true;
@@ -102,28 +100,6 @@
     }
     ensureWithV();
 
-    function getRefreshGuardKey(){
-      return 'tasun_xidong_refresh_guard_v1::' + PAGE_KEY;
-    }
-    function canRefreshTarget(targetKey){
-      try{
-        var raw = sessionStorage.getItem(getRefreshGuardKey()) || '';
-        if(!raw) return true;
-        var data = JSON.parse(raw);
-        if(!data || !data.targetKey) return true;
-        if(String(data.targetKey) !== String(targetKey)) return true;
-        if((now() - Number(data.at || 0)) > RELOAD_LOCK_MS) return true;
-        return false;
-      }catch(_e){
-        return true;
-      }
-    }
-    function markRefreshTarget(targetKey){
-      try{
-        sessionStorage.setItem(getRefreshGuardKey(), JSON.stringify({ targetKey:String(targetKey || ''), at:now() }));
-      }catch(_e){}
-    }
-
     async function fetchText(url){
       var ctl = null;
       var tm = null;
@@ -140,41 +116,27 @@
       }
     }
 
-    async function fetchJson(url){
-      var ctl = null;
-      var tm = null;
+    async function fetchVersionBundle(){
       try{
-        ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        tm = setTimeout(function(){ try{ ctl && ctl.abort(); }catch(_e){} }, FETCH_TIMEOUT_MS);
-        var res = await fetch(url, { cache:'no-store', credentials:'same-origin', signal: ctl ? ctl.signal : undefined });
+        var res = await fetch(VERSION_JSON + '?_=' + now(), { cache:'no-store', credentials:'same-origin' });
         if(!res.ok) return null;
-        return await res.json().catch(function(){ return null; });
+        var data = await res.json().catch(function(){ return null; });
+        if(!data) return null;
+        var meta = data.meta || {};
+        var version = norm(
+          data.version || data.ver || data.appVer || data.app_version || data.APP_VER ||
+          data.cacheV || data.cache_v || data.manualVersion || data.fallbackVersion ||
+          meta.version || meta.ver || meta.appVer || meta.cacheV || ''
+        );
+        var buildStamp = norm(
+          data.buildStamp || data.build_stamp || data.pageBuildStamp || data.page_build_stamp ||
+          data.build || data.buildVersion || data.rebuildStamp ||
+          meta.buildStamp || meta.build_stamp || meta.pageBuildStamp || meta.rebuildStamp || ''
+        );
+        return { version:version, buildStamp:buildStamp };
       }catch(_e){
         return null;
-      }finally{
-        try{ clearTimeout(tm); }catch(_e){}
       }
-    }
-
-    async function fetchVersionBundle(){
-      var data = await fetchJson(VERSION_JSON + '?_=' + now());
-      if(!data) return null;
-      var meta = data.meta || {};
-      var version = norm(
-        data.version || data.ver || data.appVer || data.app_version || data.APP_VER ||
-        data.cacheV || data.cache_v || data.manualVersion || data.fallbackVersion ||
-        meta.version || meta.ver || meta.appVer || meta.cacheV || ''
-      );
-      var buildStamp = norm(
-        data.buildStamp || data.build_stamp || data.pageBuildStamp || data.page_build_stamp ||
-        data.build || data.buildVersion || data.rebuildStamp ||
-        meta.buildStamp || meta.build_stamp || meta.pageBuildStamp || meta.rebuildStamp || ''
-      );
-      return { version:version, buildStamp:buildStamp };
-    }
-
-    async function fetchRebuildStamp(){
-      return norm(await fetchText(REBUILD_STAMP_FILE + '?_=' + now()));
     }
 
     async function fetchRemotePageBuildStamp(version){
@@ -193,11 +155,11 @@
       }
     }
 
+    async function fetchRebuildStamp(){
+      return norm(await fetchText(REBUILD_STAMP_FILE + '?_=' + now()));
+    }
+
     async function hardRefreshTo(version, buildStamp){
-      var targetKey = [norm(version), norm(buildStamp)].join('|');
-      if(!canRefreshTarget(targetKey)) return false;
-      markRefreshTarget(targetKey);
-      state.reloading = true;
       var u = new URL(location.href);
       if(version) u.searchParams.set('v', version);
       u.searchParams.set('_', String(now()));
@@ -206,29 +168,23 @@
       return true;
     }
 
-    async function ensureLatestVersionAndBuildStamp(reason, force){
+    async function ensureLatestVersionAndBuildStamp(reason){
       if(state.checking || state.reloading) return false;
-      if(!force && state.lastCheckAt && (now() - state.lastCheckAt) < VERSION_CHECK_MIN_GAP_MS) return false;
       state.checking = true;
-      state.lastCheckAt = now();
       try{
         var bundle = await fetchVersionBundle();
         var curV = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || queryV() || '');
         var latestV = norm(bundle && bundle.version || '') || curV;
         var rebuildStamp = await fetchRebuildStamp();
-        var latestBS = norm(bundle && bundle.buildStamp || rebuildStamp || PAGE_BUILD_STAMP);
-
-        if(!latestBS && (reason === 'boot' || reason === 'load')){
-          latestBS = norm(await fetchRemotePageBuildStamp(latestV) || PAGE_BUILD_STAMP);
-        }
-
+        var remoteBS = await fetchRemotePageBuildStamp(latestV);
+        var latestBS = norm(bundle && bundle.buildStamp || rebuildStamp || remoteBS || PAGE_BUILD_STAMP);
         if(latestV){
           window.__CACHE_V = latestV;
           window.TASUN_APP_VER = latestV;
           window.APP_VER = latestV;
         }
-
-        if((latestV && latestV !== curV) || (latestBS && latestBS !== PAGE_BUILD_STAMP)){
+        if((latestV && latestV !== curV) || (latestBS && latestBS !== PAGE_BUILD_STAMP) || (remoteBS && remoteBS !== PAGE_BUILD_STAMP)){
+          state.reloading = true;
           return await hardRefreshTo(latestV, latestBS);
         }
         return false;
@@ -240,23 +196,15 @@
     }
 
     window.__TASUN_ENSURE_LATEST_BUILDSTAMP__ = ensureLatestVersionAndBuildStamp;
-
-    function installLightweightChecks(){
-      window.addEventListener('load', function(){
-        ensureLatestVersionAndBuildStamp('load', true).catch(function(){});
-      }, { once:true, passive:true });
-
-      document.addEventListener('visibilitychange', function(){
-        if(document.visibilityState === 'visible'){
-          ensureLatestVersionAndBuildStamp('visibilitychange', false).catch(function(){});
-        }
-      }, { passive:true });
-    }
-
     Promise.resolve(window.__TASUN_VERSION_READY__ || true).then(function(){
-      ensureLatestVersionAndBuildStamp('boot', true).catch(function(){});
+      ensureLatestVersionAndBuildStamp('boot').catch(function(){});
     });
-    installLightweightChecks();
+    document.addEventListener('visibilitychange', function(){
+      if(document.visibilityState === 'visible') ensureLatestVersionAndBuildStamp('visibilitychange').catch(function(){});
+    }, { passive:true });
+    window.addEventListener('focus', function(){ ensureLatestVersionAndBuildStamp('focus').catch(function(){}); }, { passive:true });
+    window.addEventListener('pageshow', function(){ ensureLatestVersionAndBuildStamp('pageshow').catch(function(){}); }, { passive:true });
+    setInterval(function(){ if(document.visibilityState !== 'hidden') ensureLatestVersionAndBuildStamp('interval').catch(function(){}); }, CHECK_INTERVAL_MS);
   })();
   </script>
 
@@ -318,6 +266,32 @@
     try{ localStorage.setItem('tasunIndexSession_v1', '1'); }catch(_e){}
     try{ sessionStorage.setItem('tasunIndexSessionAuthed_v2', '1'); }catch(_e){}
     try{ localStorage.setItem('tasunIndexSessionAuthed_v2', '1'); }catch(_e){}
+  })();
+  </script>
+
+  <script id="tasun-session-only-auth-cleanup-xidong-r1">
+  (function(){
+    'use strict';
+    function readCookie(name){
+      try{
+        var m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.$?*|{}()\[\]\/+^]/g,'\\$&') + '=([^;]*)'));
+        return m ? decodeURIComponent(m[1]) : '';
+      }catch(_e){ return ''; }
+    }
+    function hasLiveSession(){
+      try{ if(sessionStorage.getItem('tasunSessionLogin_v2')) return true; }catch(_e){}
+      return !!readCookie('tasun_session_v4');
+    }
+    if(hasLiveSession()) return;
+    [
+      'tasunCurrentUser_v1','tasunSessionBridge_v1','tasunSession_v1','tasunSso_v1','tasunSso_v2',
+      'tasunIndexSession_v1','tasunIndexSessionAuthed_v2','tasun_next_path_v1'
+    ].forEach(function(k){
+      try{ sessionStorage.removeItem(k); }catch(_e){}
+      try{ localStorage.removeItem(k); }catch(_e){}
+    });
+    window.__TASUN_SSO_OK__ = false;
+    window.__TASUN_REQUIRE_LOGIN__ = true;
   })();
   </script>
 
@@ -540,6 +514,40 @@
       background:rgba(118,24,24,.95); color:#fff4f4; font-size:13px; line-height:1.6;
       box-shadow:0 16px 34px rgba(0,0,0,.22);
     }
+    .loginBlocker{
+      position:fixed; inset:0; z-index:99998;
+      display:none; align-items:center; justify-content:center;
+      padding:24px;
+      background:rgba(8,6,4,.74);
+      backdrop-filter:blur(10px);
+      -webkit-backdrop-filter:blur(10px);
+    }
+    .loginBlocker.show{ display:flex; }
+    .loginBlockerCard{
+      width:min(520px, calc(100vw - 32px));
+      border-radius:24px;
+      border:1px solid rgba(150,98,22,.26);
+      background:linear-gradient(180deg, rgba(255,255,255,.92), rgba(246,240,228,.82));
+      box-shadow:0 28px 68px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.72);
+      padding:28px 24px;
+      text-align:center;
+    }
+    .loginBlockerTitle{
+      font-family:"Noto Serif TC","Noto Sans TC",serif;
+      font-size:clamp(24px, 2.2vw, 32px);
+      font-weight:900;
+      color:var(--goldDeep);
+      letter-spacing:.08em;
+      margin-bottom:10px;
+      text-shadow:0 2px 8px rgba(255,255,255,.36);
+    }
+    .loginBlockerText{
+      color:rgba(70,48,16,.88);
+      font-size:15px;
+      line-height:1.8;
+      margin-bottom:18px;
+    }
+    .loginBlockerActions{ display:flex; justify-content:center; }
     @media (max-width:860px){
       :root{--stageW:100%; --stagePadX:12px; --titleSize:clamp(22px, 5.4vw, 30px); --subSize:clamp(11px, 2.8vw, 14px); --btnSize:clamp(13px, 3.4vw, 15px); --chipSize:clamp(11px, 2.7vw, 13px);}
       .wrap{padding:12px}
@@ -570,6 +578,15 @@
   <div class="vehicleBG" aria-hidden="true"></div>
   <div class="mistFlow" aria-hidden="true"></div>
   <div class="domWarn" id="domWarn"></div>
+  <div class="loginBlocker" id="loginBlocker" aria-live="assertive">
+    <div class="loginBlockerCard">
+      <div class="loginBlockerTitle">未登入無法進入網頁</div>
+      <div class="loginBlockerText" id="loginBlockerText">請先登入 Tasun 首頁後再進入此頁。</div>
+      <div class="loginBlockerActions">
+        <button class="btn glassBtn goldText" id="loginBlockerBackBtn" type="button">返回首頁</button>
+      </div>
+    </div>
+  </div>
 
   <div class="wrap">
     <div class="stage">
@@ -632,7 +649,7 @@
       bar.style.display = 'block';
     }
     function ensureRequiredDom(){
-      var required = ['btnBack','btnSwitch','who','role','leftGroup','rightGroup','linkRecord','linkDutyLite','linkDB','linkDetail','linkAuth','linkDropbox','domWarn'];
+      var required = ['btnBack','btnSwitch','who','role','leftGroup','rightGroup','linkRecord','linkDutyLite','linkDB','linkDetail','linkAuth','linkDropbox','domWarn','loginBlocker','loginBlockerText','loginBlockerBackBtn'];
       var missing = required.filter(function(id){ return !$(id); });
       if(!missing.length) return true;
       showDomWarning('頁面缺少必要節點，已中止腳本綁定：' + missing.join('、'));
@@ -658,11 +675,22 @@
     var DEFAULT_ENTRY_BUTTONS = [
       { key:'xidong_record', sourceId:'xidong_record', name:'捷運汐東線事項記錄', href:RECORD_FILE, target:'', roles:['admin','write','read'] },
       { key:'xidong_duty', sourceId:'xidong_duty', name:'權責分工精簡版', href:'捷運汐東線權責分工精簡版.html', target:'', roles:['admin','write','read'] },
-      { key:'xidong_db', sourceId:'xidong_db', name:'工程資料庫', href:'捷運汐止東湖線統包工程-資料庫.html', target:'', roles:['admin','write','read'] },
+      { key:'xidong_db', sourceId:'xidong_db', name:'捷運汐東線工程資料庫', href:'捷運汐止東湖線統包工程-資料庫.html', target:'', roles:['admin','write','read'] },
       { key:'xidong_detail', sourceId:'xidong_detail', name:'捷運系東線資料明細表', href:'捷運汐止東湖線統包工程-資料明細表.html', target:'', roles:['admin','write','read'] },
       { key:'xidong_auth', sourceId:'xidong_auth', name:'系統／權限', href:'權限表.html', target:'', roles:['admin'] },
       { key:'xidong_cloud', sourceId:'xidong_cloud', name:'雲端檔案', href:'https://www.dropbox.com/scl/fo/glb4s65934h195bxuyuqm/AH5ClZ2u4MtPMvmgtfOUAa4?rlkey=tfxkpbpw8k9bctshx5xvuge8h&st=127vsul4&dl=0', target:'_blank', roles:['admin','write','read'] }
     ];
+
+    function cloneFixedButton(item){
+      return {
+        key: norm(item && item.key),
+        sourceId: norm(item && (item.sourceId || item.key)),
+        name: norm(item && (item.name || item.label)),
+        href: normalizeRouteHref(item),
+        target: norm(item && item.target),
+        roles: Array.isArray(item && item.roles) ? item.roles.slice() : []
+      };
+    }
 
     function applyVehicleBg(){
       var file = String(G.VEHICLE_IMAGE || '捷運車輛.png');
@@ -670,40 +698,111 @@
       document.documentElement.style.setProperty('--vehicle-bg', 'url("' + url + '")');
     }
 
+    function readCookie(name){
+      try{
+        var m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.$?*|{}()\[\]\/+^]/g,'\\$&') + '=([^;]*)'));
+        return m ? decodeURIComponent(m[1]) : '';
+      }catch(_e){ return ''; }
+    }
+
+    function decodeSessionCookie(raw){
+      try{
+        if(!raw) return null;
+        var txt = decodeURIComponent(escape(atob(String(raw))));
+        var js = safeParse(txt, null);
+        if(!js || typeof js !== 'object') return null;
+        var user = norm(js.user || js.name || js.username || js.account || js.u);
+        if(!user) return null;
+        return { name:user, user:user, username:user, role:inferRole(user, js.role || js.level || js.r), level:inferRole(user, js.role || js.level || js.r) };
+      }catch(_e){ return null; }
+    }
+
+    function getActiveSessionPayload(){
+      var keys = ['tasunCurrentUser_v1','tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1'];
+      for(var i=0;i<keys.length;i++){
+        try{
+          var raw = sessionStorage.getItem(keys[i]) || '';
+          if(!raw) continue;
+          var js = safeParse(raw, null);
+          if(js && typeof js === 'object'){
+            var user = norm(js.user || js.name || js.username || js.account);
+            if(user){
+              return { name:user, user:user, username:user, role:inferRole(user, js.role || js.level), level:inferRole(user, js.role || js.level) };
+            }
+          }
+        }catch(_e){}
+      }
+      return decodeSessionCookie(readCookie('tasun_session_v4'));
+    }
+
+    function persistSessionPayload(payload){
+      if(!payload || !payload.user) return;
+      var user = norm(payload.user || payload.name || payload.username || payload.account);
+      var role = inferRole(user, payload.role || payload.level);
+      var data = { user:user, name:user, username:user, role:role, level:role, at:new Date().toISOString() };
+      try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(data)); }catch(_e){}
+      try{ sessionStorage.setItem('tasunSession_v1', JSON.stringify(data)); }catch(_e){}
+      try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(data)); }catch(_e){}
+      try{
+        var sso = { name:user, user:user, role:role, at:Date.now(), exp:Date.now() + 1000*60*60*12, v:(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '') };
+        sessionStorage.setItem('tasunSso_v1', JSON.stringify(sso));
+        sessionStorage.setItem('tasunSso_v2', JSON.stringify(sso));
+      }catch(_e){}
+      try{ sessionStorage.setItem('tasunIndexSession_v1', '1'); }catch(_e){}
+      try{ sessionStorage.setItem('tasunIndexSessionAuthed_v2', '1'); }catch(_e){}
+      try{ sessionStorage.setItem('tasunSessionLogin_v2', JSON.stringify({ user:user, role:role, t:Date.now() })); }catch(_e){}
+      try{
+        var cookiePayload = encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify({ u:user, r:role, exp:Date.now() + 1000*60*60*12, v:(window.__CACHE_V || '') })))));
+        document.cookie = 'tasun_session_v4=' + cookiePayload + '; Path=/; SameSite=Lax' + (location.protocol === 'https:' ? '; Secure' : '');
+      }catch(_e){}
+      window.__TASUN_SSO_OK__ = true;
+      window.__TASUN_REQUIRE_LOGIN__ = false;
+    }
+
     function getCurrent(){
-      var obj = safeParse(sessionStorage.getItem(CURRENT_KEY) || localStorage.getItem(CURRENT_KEY) || 'null', null) || {};
+      var obj = getActiveSessionPayload() || {};
       var name = obj.name || obj.user || obj.username || obj.account || '';
       return { name: name || '未登入', role: inferRole(name, obj.role || obj.level) };
     }
 
-    function setCurrent(u){
-      var payload = { name:u.name, user:u.name, username:u.name, role:inferRole(u.name, u.role), level:inferRole(u.name, u.role) };
-      try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
-      try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+    function showLoginBlocker(message){
+      var wrap = $('loginBlocker');
+      var textNode = $('loginBlockerText');
+      if(textNode) textNode.textContent = message || '未登入無法進入網頁';
+      if(wrap) wrap.classList.add('show');
+      try{ document.body.style.overflow = 'hidden'; }catch(_e){}
+    }
+
+    function hideLoginBlocker(){
+      var wrap = $('loginBlocker');
+      if(wrap) wrap.classList.remove('show');
+      try{ document.body.style.overflow = ''; }catch(_e){}
+    }
+
+    function ensureSessionAccess(){
+      var payload = getActiveSessionPayload();
+      if(payload && payload.user){
+        persistSessionPayload(payload);
+        hideLoginBlocker();
+        return payload;
+      }
+      showLoginBlocker('未登入無法進入網頁，請先登入 Tasun 首頁後再進入此頁。');
+      return null;
+    }
+
+    function bindLoginBlocker(){
+      var btn = $('loginBlockerBackBtn');
+      if(btn && !btn.__tasunBound){
+        btn.__tasunBound = true;
+        btn.addEventListener('click', function(){ location.href = withV('index.html'); });
+      }
     }
 
     function persistBridgeForNav(href){
       try{
         var cur = getCurrent();
-        var role = inferRole(cur.name, cur.role);
-        var payload = { user:cur.name, name:cur.name, username:cur.name, role:role, level:role, at:new Date().toISOString() };
-        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
-        try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
-        try{ sessionStorage.setItem('tasunSession_v1', JSON.stringify(payload)); }catch(_e){}
-        try{ localStorage.setItem('tasunSession_v1', JSON.stringify(payload)); }catch(_e){}
-        try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(payload)); }catch(_e){}
-        try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(payload)); }catch(_e){}
-        try{
-          var sso = { name:cur.name, user:cur.name, role:role, at:Date.now(), exp:Date.now() + 1000*60*60*12, v:(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '') };
-          sessionStorage.setItem('tasunSso_v1', JSON.stringify(sso));
-          localStorage.setItem('tasunSso_v1', JSON.stringify(sso));
-          sessionStorage.setItem('tasunSso_v2', JSON.stringify(sso));
-          localStorage.setItem('tasunSso_v2', JSON.stringify(sso));
-        }catch(_e){}
-        try{ sessionStorage.setItem('tasunIndexSession_v1', '1'); }catch(_e){}
-        try{ localStorage.setItem('tasunIndexSession_v1', '1'); }catch(_e){}
-        try{ sessionStorage.setItem('tasunIndexSessionAuthed_v2', '1'); }catch(_e){}
-        try{ localStorage.setItem('tasunIndexSessionAuthed_v2', '1'); }catch(_e){}
+        if(!cur || !cur.name || cur.name === '未登入') return;
+        persistSessionPayload({ user:cur.name, role:cur.role });
         try{ sessionStorage.setItem('tasun_next_path_v1', norm(href)); }catch(_e){}
         try{ localStorage.setItem('tasun_next_path_v1', norm(href)); }catch(_e){}
       }catch(_e){}
@@ -719,155 +818,114 @@
       location.href = withV(href);
     };
 
-function normalizeNameToken(v){
-  return norm(v).replace(/[\s　]+/g, '').replace(/[／]/g, '/').toLowerCase();
-}
-
-function isRecordLike(item){
-  var key = norm(item && item.key).toLowerCase();
-  var sourceId = norm(item && item.sourceId).toLowerCase();
-  var name = normalizeNameToken(item && (item.name || item.label));
-  var href = norm(item && item.href).toLowerCase();
-  return key === 'xidong_record'
-    || sourceId === 'xidong_record'
-    || name === normalizeNameToken('捷運汐東線事項記錄')
-    || name === normalizeNameToken('捷運汐東線事項紀錄')
-    || href === RECORD_FILE.toLowerCase()
-    || href === '捷運汐東線事項紀錄.html';
-}
-
-function isAuthLike(item){
-  var key = norm(item && item.key).toLowerCase();
-  var sourceId = norm(item && item.sourceId).toLowerCase();
-  var name = normalizeNameToken(item && (item.name || item.label));
-  var href = norm(item && item.href).toLowerCase();
-  return key === 'xidong_auth'
-    || sourceId === 'xidong_auth'
-    || name.indexOf(normalizeNameToken('系統/權限')) >= 0
-    || href === '權限表.html';
-}
-
-function normalizeRouteHref(item){
-  var name = norm(item && (item.name || item.label));
-  var href = norm(item && item.href);
-  var lowerHref = href.toLowerCase();
-  if(name in FIXED_ROUTE_ALIASES) href = FIXED_ROUTE_ALIASES[name];
-  Object.keys(FIXED_ROUTE_ALIASES).forEach(function(alias){
-    if(lowerHref === alias.toLowerCase()) href = FIXED_ROUTE_ALIASES[alias];
-  });
-  if(isRecordLike(item)) href = RECORD_FILE;
-  if(isAuthLike(item) && !href) href = '權限表.html';
-  return href;
-}
-
-function normBtn(x, fallback){
-  var f = fallback || {};
-  var item = {
-    key: norm(x && x.key || f.key),
-    sourceId: norm(x && x.sourceId || f.sourceId || x && x.key || f.key),
-    name: norm(x && (x.name || x.label) || f.name || f.key),
-    href: norm(x && x.href || f.href),
-    target: norm(x && x.target || f.target),
-    roles: Array.isArray(x && x.roles) && x.roles.length ? x.roles.slice() : (Array.isArray(f.roles) ? f.roles.slice() : [])
-  };
-  if(isRecordLike(item)){
-    item.key = 'xidong_record';
-    item.sourceId = 'xidong_record';
-    item.name = '捷運汐東線事項記錄';
-    item.href = RECORD_FILE;
-    item.target = '';
-  }else if(isAuthLike(item)){
-    item.key = item.key || 'xidong_auth';
-    item.sourceId = item.sourceId || 'xidong_auth';
-    item.name = item.name || '系統／權限';
-    item.href = item.href || '權限表.html';
-  }
-  item.href = normalizeRouteHref(item);
-  return item;
-}
-
-function dedupeButtonsKeepOrder(list){
-  var seen = Object.create(null);
-  return (Array.isArray(list) ? list : []).filter(function(item, idx){
-    var token = norm(item && (item.sourceId || item.key || item.name || item.href || ('slot' + idx))).toLowerCase();
-    if(!token) token = 'slot' + idx;
-    if(seen[token]) return false;
-    seen[token] = true;
-    return true;
-  });
-}
-
-function resolveEntryButtons(){
-  var store = safeParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || '{}', {});
-  var routes = safeParse(localStorage.getItem(ROUTE_KEY) || '{}', {});
-  var rawStore = Array.isArray(store[ENTRY_FILE]) && store[ENTRY_FILE].length ? store[ENTRY_FILE] : null;
-  var raw = rawStore || DEFAULT_ENTRY_BUTTONS;
-  var keyed = Object.create(null);
-  var ordered = [];
-  raw.forEach(function(x, i){
-    var fallback = DEFAULT_ENTRY_BUTTONS.find(function(d){ return d.key === (x && x.key); })
-      || DEFAULT_ENTRY_BUTTONS.find(function(d){ return d.sourceId === (x && x.sourceId); })
-      || DEFAULT_ENTRY_BUTTONS[i]
-      || { key:'btn' + (i+1), sourceId:'btn' + (i+1), name:'btn' + (i+1), href:'', target:'', roles:['admin','write','read'] };
-    var item = normBtn(x, fallback);
-    if(routes && item.name && routes[item.name]) item.href = normalizeRouteHref({ key:item.key, sourceId:item.sourceId, name:item.name, href:String(routes[item.name] || '') });
-    var token = norm(item.sourceId || item.key || item.name || ('slot' + i)).toLowerCase();
-    if(!keyed[token]){ keyed[token] = item; ordered.push(item); }
-  });
-  DEFAULT_ENTRY_BUTTONS.forEach(function(def){
-    var token = norm(def.sourceId || def.key || def.name).toLowerCase();
-    if(!keyed[token]) ordered.push(normBtn(def, def));
-  });
-  return dedupeButtonsKeepOrder(ordered).map(function(item){ return normBtn(item, item); });
-}
-
-function routeForItem(item){
-  var normalized = normBtn(item, item);
-  if(isRecordLike(normalized)) return RECORD_FILE;
-  return normalized.href || '#';
-}
-
-function applyEntryButtons(){
-  var u = getCurrent();
-  var role = norm(u.role || 'read').toLowerCase();
-  var slots = [$('linkRecord'), $('linkDutyLite'), $('linkDB'), $('linkDetail'), $('linkAuth'), $('linkDropbox')];
-  var visibleItems = resolveEntryButtons().filter(function(item){
-    var allowed = !Array.isArray(item.roles) || !item.roles.length || item.roles.indexOf(role) >= 0;
-    var authRestricted = isAuthLike(item) && role === 'read';
-    return allowed && !authRestricted;
-  });
-  slots.forEach(function(a, i){
-    var item = visibleItems[i];
-    if(!a || !item){
-      if(a){
-        a.style.display = 'none';
-        a.removeAttribute('href');
-        a.removeAttribute('target');
-        a.removeAttribute('rel');
-        delete a.dataset.itemKey;
-        delete a.dataset.sourceId;
-        delete a.dataset.routeHref;
-      }
-      return;
+    function normalizeRouteHref(item){
+      var name = norm(item && (item.name || item.label));
+      var href = norm(item && item.href);
+      var lowerHref = href.toLowerCase();
+      if(name in FIXED_ROUTE_ALIASES) href = FIXED_ROUTE_ALIASES[name];
+      Object.keys(FIXED_ROUTE_ALIASES).forEach(function(alias){
+        if(lowerHref === alias.toLowerCase()) href = FIXED_ROUTE_ALIASES[alias];
+      });
+      if(item && norm(item.key || item.sourceId).toLowerCase() === 'xidong_record') href = RECORD_FILE;
+      return href;
     }
-    var span = a.querySelector('span');
-    var rawHref = routeForItem(item);
-    var href = rawHref;
-    if(!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href) && !/^tel:/i.test(href)) href = withV(href);
-    a.style.display = 'flex';
-    if(span) span.textContent = item.name || item.key || ('按鍵' + (i+1));
-    a.setAttribute('href', href || '#');
-    a.dataset.itemKey = norm(item.key || '');
-    a.dataset.sourceId = norm(item.sourceId || item.key || '');
-    a.dataset.routeHref = rawHref;
-    var target = item.target || (/^https?:\/\//i.test(rawHref || '') ? '_blank' : '');
-    if(target){ a.target = target; if(target === '_blank') a.rel = 'noopener'; }
-    else { a.removeAttribute('target'); a.removeAttribute('rel'); }
-  });
-}
 
-function renderUser(){
+    function normBtn(x, fallback){
+      var f = fallback || {};
+      var item = {
+        key: norm(x && x.key || f.key),
+        sourceId: norm(x && (x.sourceId || x.key) || f.sourceId || f.key),
+        name: norm(x && (x.name || x.label) || f.name || f.key),
+        href: norm(x && x.href || f.href),
+        target: norm(x && x.target || f.target),
+        roles: Array.isArray(x && x.roles) && x.roles.length ? x.roles.slice() : (Array.isArray(f.roles) ? f.roles.slice() : [])
+      };
+      item.href = normalizeRouteHref(item);
+      return item;
+    }
 
+    function getFixedButtonByToken(token){
+      var t = norm(token).toLowerCase();
+      return DEFAULT_ENTRY_BUTTONS.find(function(def){
+        return norm(def.sourceId || def.key).toLowerCase() === t || norm(def.key).toLowerCase() === t;
+      }) || null;
+    }
+
+    function resolveEntryButtons(){
+      var store = safeParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || '{}', {});
+      var raw = Array.isArray(store[ENTRY_FILE]) ? store[ENTRY_FILE] : [];
+      var ordered = [];
+      var seen = Object.create(null);
+
+      raw.forEach(function(x, i){
+        var token = norm(x && (x.sourceId || x.key) || ('slot' + i));
+        var fixed = getFixedButtonByToken(token);
+        if(!fixed) return;
+        var sid = norm(fixed.sourceId || fixed.key).toLowerCase();
+        if(seen[sid]) return;
+        seen[sid] = true;
+        ordered.push(normBtn(fixed, fixed));
+      });
+
+      DEFAULT_ENTRY_BUTTONS.forEach(function(def){
+        var sid = norm(def.sourceId || def.key).toLowerCase();
+        if(seen[sid]) return;
+        seen[sid] = true;
+        ordered.push(normBtn(def, def));
+      });
+
+      return ordered;
+    }
+
+    function applyEntryButtons(){
+      var u = getCurrent();
+      var role = norm(u.role || 'read').toLowerCase();
+      var slots = [$('linkRecord'), $('linkDutyLite'), $('linkDB'), $('linkDetail'), $('linkAuth'), $('linkDropbox')];
+      var items = resolveEntryButtons();
+      slots.forEach(function(a, i){
+        var item = items[i];
+        if(!a || !item){
+          if(a){
+            a.style.display = 'none';
+            a.removeAttribute('href');
+            a.removeAttribute('target');
+            a.removeAttribute('rel');
+            delete a.dataset.routeHref;
+            delete a.dataset.itemKey;
+            delete a.dataset.sourceId;
+          }
+          return;
+        }
+        var allowed = !Array.isArray(item.roles) || !item.roles.length || item.roles.indexOf(role) >= 0;
+        var authRestricted = norm(item.sourceId || item.key).toLowerCase() === 'xidong_auth' && role === 'read';
+        if(!allowed || authRestricted){
+          a.style.display = 'none';
+          a.removeAttribute('href');
+          a.removeAttribute('target');
+          a.removeAttribute('rel');
+          delete a.dataset.routeHref;
+          delete a.dataset.itemKey;
+          delete a.dataset.sourceId;
+          return;
+        }
+        var rawHref = normalizeRouteHref(item);
+        if(norm(item.sourceId || item.key).toLowerCase() === 'xidong_record') rawHref = RECORD_FILE;
+        a.style.display = 'flex';
+        var span = a.querySelector('span');
+        if(span) span.textContent = item.name || item.key || ('按鍵' + (i+1));
+        a.dataset.routeHref = rawHref;
+        a.dataset.itemKey = norm(item.key || '');
+        a.dataset.sourceId = norm(item.sourceId || item.key || '');
+        var href = rawHref || '#';
+        if(!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href) && !/^tel:/i.test(href)) href = withV(href);
+        a.setAttribute('href', href || '#');
+        var target = item.target || (/^https?:\/\//i.test(rawHref || '') ? '_blank' : '');
+        if(target){ a.target = target; if(target === '_blank') a.rel = 'noopener'; }
+        else { a.removeAttribute('target'); a.removeAttribute('rel'); }
+      });
+    }
+
+    function renderUser(){
       var u = getCurrent();
       $('who').textContent = u.name;
       $('role').textContent = u.role;
@@ -881,7 +939,7 @@ function renderUser(){
         if(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
         if(typeof e.button === 'number' && e.button !== 0) return;
         var routeHref = norm(a.dataset.routeHref || a.getAttribute('href') || '');
-        if(norm(a.dataset.itemKey || a.dataset.sourceId).toLowerCase() === 'xidong_record') routeHref = RECORD_FILE;
+        if(norm(a.dataset.sourceId || a.dataset.itemKey).toLowerCase() === 'xidong_record') routeHref = RECORD_FILE;
         if(!routeHref || routeHref === '#') return;
         if(/^https?:\/\//i.test(routeHref) || /^mailto:/i.test(routeHref) || /^tel:/i.test(routeHref) || a.target === '_blank') return;
         e.preventDefault();
@@ -895,13 +953,15 @@ function renderUser(){
 
     function start(){
       if(!ensureRequiredDom()) return;
+      bindLoginBlocker();
+      if(!ensureSessionAccess()) return;
       applyVehicleBg();
       renderUser();
       bindStableNavigate();
       window.addEventListener('storage', function(e){
         if(!e || !e.key) return;
-        if(e.key === AUTH_ENTRY_BUTTONS_KEY || e.key === ROUTE_KEY || e.key === CURRENT_KEY){
-          renderUser();
+        if(e.key === AUTH_ENTRY_BUTTONS_KEY || e.key === CURRENT_KEY){
+          if(ensureSessionAccess()) renderUser();
         }
       });
     }
