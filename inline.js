@@ -1,2740 +1,4378 @@
+<!DOCTYPE html>
+<!-- TASUN_REBUILD_STAMP:index_v20260420_goldzen_authority_r41 2026-04-20 11:25:00 (github-pages-html-network-refresh-on-open-single-global-entry-triple-check-version-rebuild-remote-stabilizer-authority-clean) -->
+<html lang="zh-Hant">
+<head>
+  <!-- Tasun v5 FINAL：版本/快取由 tasun-version.json 控制；腳本改為動態帶 v 載入 -->
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Tasun 資料首頁 · 空無明</title>
+  <meta name="tasun-rebuild-stamp" content="index_v20260420_goldzen_authority_r41 2026-04-20 11:25:00 (github-pages-html-network-refresh-on-open-single-global-entry-triple-check-version-rebuild-remote-stabilizer-authority-clean)" />
+  <link rel="icon" href="data:,">
+  <meta name="color-scheme" content="dark light">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
 
+  <script id="tasun-github-pages-html-once-refresh-r5">
+(function(){
+  'use strict';
+  try{
+    var isGithubPages = /(?:^|\.)github\.io$/i.test(String(location.hostname || ''));
+    if(!isGithubPages) return;
+    var pageKey = String((location.pathname || '').replace(/\/+/g,'/'));
+    var guardKey = 'tasun_html_once_refresh::' + pageKey;
+    var now = Date.now();
+    var prev = 0;
+    try{ prev = Number(sessionStorage.getItem(guardKey) || 0); }catch(_e){ prev = 0; }
+
+    var url = new URL(location.href);
+    var hasRt = String(url.searchParams.get('_rt') || '').trim();
+    var hasCacheBust = String(url.searchParams.get('_') || '').trim();
+    var navEntry = (window.performance && performance.getEntriesByType) ? performance.getEntriesByType('navigation')[0] : null;
+    var navType = String((navEntry && navEntry.type) || '');
+
+    if(!hasRt && navType !== 'reload' && (!prev || (now - prev) > 15000)){
+      try{ sessionStorage.setItem(guardKey, String(now)); }catch(_e){}
+      url.searchParams.set('_rt', String(now));
+      url.searchParams.set('_', String(now));
+      location.replace(url.toString());
+      return;
+    }
+
+    if(hasRt || hasCacheBust){
+      try{ sessionStorage.setItem(guardKey, String(now)); }catch(_e){}
+    }
+  }catch(_e){}
+})();
+</script>
+
+  <script>
   (function(){
-    // 建立 __TASUN_READY__/__TASUN_WAIT__（後續 run() 會 push 進來）
-    var WAIT = window.__TASUN_READY__;
-    if(!WAIT || typeof WAIT !== "object"){
-      var _q = [], _ready = false, _resolve = null;
-      var _p = new Promise(function(res){ _resolve = res; });
-      WAIT = {
-        get ready(){ return _ready; },
-        push: function(fn){ if(typeof fn!=="function") return; _ready ? fn() : _q.push(fn); },
-        then: function(a,b){ return _p.then(a,b); },
-        flush: function(){
-          if(_ready) return;
-          _ready = true;
-          try{ _resolve(true); }catch(e){}
-          var list = _q.splice(0);
-          for(var i=0;i<list.length;i++){ try{ list[i](); }catch(e){} }
-        }
-      };
-      window.__TASUN_READY__ = WAIT;
-    }
-    window.__TASUN_WAIT__ = WAIT;
-
-    function norm(s){ return (s===undefined||s===null) ? "" : String(s).trim(); }
-    function pickVer(j){
-      if(!j || typeof j!=="object") return "";
-      // 兼容多種欄位命名
-      return norm(j.appVer || j.APP_VER || j.TASUN_APP_VER || j.ver || j.version || j.app_version || "");
-    }
-
-    async function loadJsonNoStore(url){
-      try{
-        var res = await fetch(url, { cache:"no-store", credentials:"omit" });
-        if(!res.ok) throw new Error("HTTP " + res.status);
-        return await res.json();
-      }catch(e){
-        return null;
+    console.log('[TASUN BUILD] index_v20260420_goldzen_authority_r40 2026-04-20 10:20:00');
+    try{
+      const dm = navigator.deviceMemory || 0;
+      const conn = navigator.connection || {};
+      const saveData = !!conn.saveData;
+      const reduceMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+      const lowMem = (dm && dm <= 4);
+      if(saveData || reduceMotion || lowMem){
+        document.documentElement.classList.add('perf-lite');
       }
-    }
-
-    function addV(src, APP){
-      return src + (src.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(APP);
-    }
-    function hasScript(id){ return !!document.querySelector('script[data-tasun-id="'+id+'"]'); }
-    function loadOnce(id, src){
-      return new Promise(function(resolve){
-        if(hasScript(id)) return resolve(true);
-        var s = document.createElement("script");
-        s.src = src; s.async = false; s.setAttribute("data-tasun-id", id);
-        s.onload = function(){ resolve(true); };
-        s.onerror = function(){ resolve(false); };
-        document.head.appendChild(s);
-      });
-    }
-
-    (async function(){
-      // 1) 讀取版本（版本檔走 no-store，避免卡舊）
-      var vUrl;
-      try{
-        vUrl = new URL("tasun-version.json", location.href);
-        vUrl.searchParams.set("_", String(Date.now()));
-      }catch(e){
-        vUrl = "tasun-version.json?_=" + Date.now();
-      }
-      var j = await loadJsonNoStore(String(vUrl));
-      var APP = pickVer(j);
-
-      // 若讀不到版本，就沿用 URL 的 v（若有）
-      try{
-        var u0 = new URL(location.href);
-        var cur0 = norm(u0.searchParams.get("v"));
-        if(!APP) APP = cur0;
-      }catch(e){}
-
-      if(APP) window.TASUN_APP_VER = APP;
-
-      // 2) 進站必鎖定最新版 ?v=APP_VER（避免不同裝置卡舊版）
-      //    ✅ 另外支援「使用者手動加 ?v=時間戳」作為防快取：會自動轉成 &_=時間戳，但仍維持 v=APP_VER
-      try{
-        if(APP){
-          var u = new URL(location.href);
-          var cur = norm(u.searchParams.get("v"));
-
-          // 若 v 看起來是時間戳（10+ 位數），視為 cache-buster，不當作版本號
-          var vts = "";
-          if(cur && /^\d{10,}$/.test(cur) && cur !== APP){
-            vts = cur;
-          }
-
-          var curKey = vts ? ("ts_" + vts) : (cur||"none");
-          var KEY = "tasun_force_v_once__sxdh_notes__" + curKey + "_to_" + APP;
-
-          // 需要替換成 APP_VER，並補上一個 cache-buster（_）
-          if((cur !== APP || vts) && !sessionStorage.getItem(KEY)){
-            sessionStorage.setItem(KEY, "1");
-            u.searchParams.set("v", APP);
-            u.searchParams.set("_", vts || String(Date.now()));
-            location.replace(u.toString());
-            return;
-          }
-        }
-      }catch(e){}
-
-// 3) 載入 tasun-core / tasun-boot（都帶 ?v=APP_VER）
-      try{
-        if(APP){
-          if(!window.TasunCore) await loadOnce("tasun-core", addV("tasun-core.js", APP));
-          await loadOnce("tasun-boot", addV("tasun-boot.js", APP));
-        }else{
-          // fallback：沒有版本時仍可載入（不帶 v）
-          if(!window.TasunCore) await loadOnce("tasun-core", "tasun-core.js");
-          await loadOnce("tasun-boot", "tasun-boot.js");
-        }
-      }catch(e){}
-
-      try{ if(!WAIT.ready) WAIT.flush(); }catch(e){}
-    })();
+    }catch(e){}
   })();
-  
 
+  </script>
 
-(function(){
-  window.DEFAULT_NETDISK_URL = "https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88";
-})();
-
-
-
-// iOS visualViewport / 100vh second-layer stabilization (no UI change)
-(function(){
-  var ua = navigator.userAgent || "";
-  var isIOS = /iP(ad|hone|od)/.test(ua) || (ua.indexOf("Mac")>-1 && ("ontouchend" in document));
-  if(!isIOS || !window.visualViewport) return;
-
-  var raf = 0;
-  function update(){
-    raf = 0;
-    var vv = window.visualViewport;
-    var ih = window.innerHeight || 0;
-
-    // Stable viewport height + offsets (address bar / keyboard)
-    var h = Math.round(vv.height || ih);
-    var top = Math.round(vv.offsetTop || 0);
-    var bottom = Math.round(ih - (vv.height + vv.offsetTop));
-    if(bottom < 0) bottom = 0;
-
-    var root = document.documentElement;
-    root.style.setProperty('--appH', h + 'px');
-    root.style.setProperty('--vv-top', top + 'px');
-    root.style.setProperty('--vv-bottom', bottom + 'px');
-  }
-  function schedule(){
-    if(raf) return;
-    raf = requestAnimationFrame(update);
-  }
-
-  window.visualViewport.addEventListener('resize', schedule, {passive:true});
-  window.visualViewport.addEventListener('scroll', schedule, {passive:true});
-  window.addEventListener('orientationchange', schedule, {passive:true});
-  window.addEventListener('pageshow', schedule, {passive:true});
-  document.addEventListener('focusin', schedule, {passive:true});
-  document.addEventListener('focusout', schedule, {passive:true});
-  schedule();
-})();
-
-
-
+  <script>
   (function(){
-    "use strict";
-
-    // ---------------------------
-    // Constants / Keys
-    // ---------------------------
-    var PAGE_KEY = "sxdh-notes";
-// ✅ B方案：提供 TasunCloudKit mount() 必要的 resourceKey（避免 MOUNT_MISSING_KEY）
-window.TASUN_RESOURCE_KEY = window.TASUN_RESOURCE_KEY || PAGE_KEY;
-window.TASUN_PAGE_KEY = window.TASUN_PAGE_KEY || PAGE_KEY;
-window.RESOURCE_KEY = window.RESOURCE_KEY || PAGE_KEY;
-
-    var APP_VER = (window.TASUN_APP_VER||"").toString().trim() || (function(){try{var u=new URL(location.href);return (u.searchParams.get("v")||"").trim();}catch(e){return ""}})() || "dev";
-    var RESOURCES_URL = "tasun-resources.json";
-
-    var DEFAULT_API_BASE = "https://tasun-worker.wutasun.workers.dev";
-    var DEFAULT_ENDPOINTS = { health:"/api/tasun/health", read:"/api/tasun/read", merge:"/api/tasun/merge" };
-    // === 前端 API Base 強制鎖定（穩定鎖定版）===
-    // 目的：避免 apiBase 變成空值或被 localStorage/資源檔覆寫，導致打到 https://wutasun.github.io/api/* 造成 404
-    // 只鎖定「API Base 與 endpoints」，不影響 x-api-key（token）設定。
-    var FORCE_API_BASE_LOCK = true;
-    var FORCE_API_BASE = "https://tasun-worker.wutasun.workers.dev";
-    var FORCE_ENDPOINTS = { health:"/api/tasun/health", read:"/api/tasun/read", merge:"/api/tasun/merge" };
-
-
-
-    // === 雲端設定視窗鎖定（只顯示、不可修改；外觀不變）===
-    var LOCK_CLOUD_CFG_UI = true;
-
-    var AUTH_KEY = "tasunAuthTable_v1";
-    var CURRENT_KEY = "tasunCurrentUser_v1";
-    var CLOUD_TOKEN_KEY = "tasunCloudToken_v1__" + PAGE_KEY;
-    var CLOUD_TOKEN_EXP_KEY = "tasunCloudTokenExp_v1__" + PAGE_KEY;
-
-    var DB_KEY = "tasunSxdhNotes_v1";
-    var COUNTER_KEY = "tasunSxdhNotes_counter_v1";
-    var READ_MODE_KEY  = "tasunSxdhNotes_readMode_v1";
-
-    var TRADE_DICT_KEY = "tasunSxdhNotes_tradeDict_v1";
-    var SYS_DICT_KEY   = "tasunSxdhNotes_sysDict_v1";
-    var SOURCE_DICT_KEY = "tasunSxdhNotes_sourceDict_v1";
-    var TRADE_SYS_MAP_KEY = "tasunSxdhNotes_tradeSysMap_v1";
-    var DB_SNAPSHOT_KEY = "tasunSxdhNotes_cloudSnapshot_v1";
-    var DB_SNAPSHOT_META_KEY = "tasunSxdhNotes_cloudSnapshotMeta_v1";
-    var DB_SNAPSHOT_SESSION_KEY = "tasunSxdhNotes_cloudSnapshot_session_v1";
-    var DB_SNAPSHOT_SESSION_META_KEY = "tasunSxdhNotes_cloudSnapshotMeta_session_v1";
-    var LEGACY_DB_KEYS = [
-      "tasunSxdhNotes_v1",
-      "tasunSxdhNotes_v2",
-      "tasunSxdhNotes_db_v1",
-      "tasunSxdhNotes_db_v2",
-      "tasunSxdhNotes_rows_v1",
-      "tasunSxdhNotes_rows_v2",
-      "tasunSxdhNotes_data_v1",
-      "tasunSxdhNotes_data_v2",
-      "tasunSxdhNotes_cloudSnapshot_v1",
-      "tasunSxdhNotes_cloudSnapshot_session_v1",
-      "tasunSxdhNotes",
-      "sxdh-notes",
-      "sxdh_notes",
-      "捷運汐東線事項記錄",
-      "捷運汐東線事項紀錄",
-      "捷運汐東線事項記錄_backup",
-      "捷運汐東線事項紀錄_backup"
-    ];
-
-    // Optional overrides
-    var API_BASE_LS_KEY = "tasunApiBase_v1";
-    var API_EP_LS_KEY   = "tasunApiEndpoints_v1__" + PAGE_KEY;
-
-    // ---------------------------
-    // IndexedDB (真正資料庫) v1
-    // ---------------------------
-    var IDB_NAME = "tasun_notes_idb_v1";
-    var IDB_VER  = 1;
-    var IDB_META_STORE = "meta";
-    var IDB_ROWS_STORE = "rows";
-    var IDB_OPS_STORE  = "ops";
-
-    var CLIENT_ID_KEY = "tasunClientId_v1";
-
-    // ---------------------------
-    // DOM helpers
-    // ---------------------------
-    function $(id){ return document.getElementById(id); }
-    function norm(s){ return (s===undefined||s===null) ? "" : String(s).trim(); }
-    function safeJSON(raw){ try{ return JSON.parse(raw); }catch(e){ return null; } }
-    function nowISO(){ return new Date().toISOString(); }
-    function todayISO(){ return new Date().toISOString().slice(0,10); }
-    function pad2(n){ return String(n).padStart(2,"0"); }
-    function fmtClock(ts){ if(!ts) return ""; var d = new Date(ts); return pad2(d.getHours())+":"+pad2(d.getMinutes())+":"+pad2(d.getSeconds()); }
-    function uuid(){ return "u" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2); }
-
-    // ---------------------------
-    // IndexedDB helpers
-    // ---------------------------
-    var _idb = null;
-
-    function getClientId(){
-      var cid = norm(localStorage.getItem(CLIENT_ID_KEY));
-      if(!cid){
-        cid = "c" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2);
-        localStorage.setItem(CLIENT_ID_KEY, cid);
+    try{
+      var s = document.createElement('script');
+      s.src = 'tasun-version-loader.js?_=' + Date.now();
+      s.async = false;
+      document.head.appendChild(s);
+    }catch(e){}
+  })();
+  </script>
+  <script>
+    (function(){
+      function norm(v){ return (v===undefined||v===null) ? '' : String(v).trim(); }
+      function queryV(){
+        try{ return norm(new URL(location.href).searchParams.get('v')); }catch(e){ return ''; }
       }
-      return cid;
-    }
+      var ver = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || queryV() || '');
+      if(ver){
+        window.APP_VER = ver;
+        window.TASUN_APP_VER = ver;
+      }
+    })();
+  </script>
 
-    function idbReqToPromise(req){
-      return new Promise(function(resolve,reject){
-        req.onsuccess = function(){ resolve(req.result); };
-        req.onerror = function(){ reject(req.error || new Error("IndexedDB error")); };
-      });
-    }
+  <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap" rel="stylesheet">
 
-    function idbTxDone(tx){
-      return new Promise(function(resolve,reject){
-        tx.oncomplete = function(){ resolve(true); };
-        tx.onerror = function(){ reject(tx.error || new Error("IndexedDB tx error")); };
-        tx.onabort = function(){ reject(tx.error || new Error("IndexedDB tx abort")); };
-      });
-    }
+  <!-- removed missing guard script: tasun-v5-single-rule-guard.js -->
 
-    async function openIDB(){
-      if(_idb) return _idb;
-      _idb = await new Promise(function(resolve,reject){
-        var req = indexedDB.open(IDB_NAME, IDB_VER);
-        req.onupgradeneeded = function(){
-          var db = req.result;
-          if(!db.objectStoreNames.contains(IDB_META_STORE)){
-            db.createObjectStore(IDB_META_STORE, { keyPath: "pageKey" });
-          }
-          if(!db.objectStoreNames.contains(IDB_ROWS_STORE)){
-            var rows = db.createObjectStore(IDB_ROWS_STORE, { keyPath: ["pageKey","uid"] });
-            rows.createIndex("by_page", "pageKey", { unique:false });
-            rows.createIndex("by_page_updatedAt", ["pageKey","updatedAt"], { unique:false });
-          }
-          if(!db.objectStoreNames.contains(IDB_OPS_STORE)){
-            var ops = db.createObjectStore(IDB_OPS_STORE, { keyPath: "opId", autoIncrement: true });
-            ops.createIndex("by_page", "pageKey", { unique:false });
-            ops.createIndex("by_page_ts", ["pageKey","ts"], { unique:false });
-          }
-        };
-        req.onsuccess = function(){ resolve(req.result); };
-        req.onerror = function(){ reject(req.error || new Error("IndexedDB open error")); };
-      });
-      return _idb;
-    }
-
-    async function idbGetMeta(pageKey){
-      var db = await openIDB();
-      var tx = db.transaction([IDB_META_STORE], "readonly");
-      var store = tx.objectStore(IDB_META_STORE);
-      var res = await idbReqToPromise(store.get(pageKey));
-      await idbTxDone(tx);
-      return res || null;
-    }
-
-    async function idbPutMeta(meta){
-      var db = await openIDB();
-      var tx = db.transaction([IDB_META_STORE], "readwrite");
-      tx.objectStore(IDB_META_STORE).put(meta);
-      await idbTxDone(tx);
-      return true;
-    }
-
-    async function idbGetAllRows(pageKey){
-      var db = await openIDB();
-      var tx = db.transaction([IDB_ROWS_STORE], "readonly");
-      var idx = tx.objectStore(IDB_ROWS_STORE).index("by_page");
-      var rows = await idbReqToPromise(idx.getAll(pageKey));
-      await idbTxDone(tx);
-      return (rows||[]).map(function(r){
-        if(!r) return null;
-        var out = Object.assign({}, r);
-        delete out.pageKey;
-        return out;
-      }).filter(Boolean);
-    }
-
-    async function idbPutRows(pageKey, rows){
-      var db = await openIDB();
-      var tx = db.transaction([IDB_ROWS_STORE], "readwrite");
-      var store = tx.objectStore(IDB_ROWS_STORE);
-      (rows||[]).forEach(function(r){
-        if(!r || !r.uid) return;
-        store.put(Object.assign({ pageKey: pageKey, uid: r.uid }, r));
-      });
-      await idbTxDone(tx);
-      return true;
-    }
-
-    async function idbAddOp(pageKey, uid){
-      uid = norm(uid);
-      if(!uid) return;
-      var db = await openIDB();
-      var tx = db.transaction([IDB_OPS_STORE], "readwrite");
-      tx.objectStore(IDB_OPS_STORE).add({ pageKey: pageKey, uid: uid, ts: Date.now() });
-      await idbTxDone(tx);
-    }
-
-    async function idbGetDirtyUids(pageKey, sinceTs){
-      var db = await openIDB();
-      var tx = db.transaction([IDB_OPS_STORE], "readonly");
-      var idx = tx.objectStore(IDB_OPS_STORE).index("by_page_ts");
-      var range = IDBKeyRange.bound([pageKey, Number(sinceTs||0)], [pageKey, Number.MAX_SAFE_INTEGER]);
-      var ops = await idbReqToPromise(idx.getAll(range));
-      await idbTxDone(tx);
-      var set = new Set();
-      (ops||[]).forEach(function(op){ if(op && op.uid) set.add(op.uid); });
-      return Array.from(set);
-    }
-
-    async function idbClearOps(pageKey){
-      var db = await openIDB();
-      var tx = db.transaction([IDB_OPS_STORE], "readwrite");
-      var store = tx.objectStore(IDB_OPS_STORE);
-      var idx = store.index("by_page");
-      var keys = await idbReqToPromise(idx.getAllKeys(pageKey));
-      keys.forEach(function(k){ store.delete(k); });
-      await idbTxDone(tx);
-      return true;
-    }
-
-    function markDirty(uid){
-      try{ idbAddOp(PAGE_KEY, uid); }catch(e){}
-      // ✅ 企業級最佳做法：任何變更都排程自動同步（去抖 + 互斥 + 離線重試）
-      try{ scheduleSync("dirty"); }catch(e){}
-    }
-
-    // ---------------------------
-    // Auto Sync (enterprise best practice)
-    // ---------------------------
-    var AUTO_SYNC = true;
-    var SYNC_DEBOUNCE_MS = 900;      // 變更後去抖
-    var SYNC_MIN_GAP_MS = 1500;      // 連續同步最小間隔
-    var SYNC_PERIODIC_MS = 2*60*1000;// 週期保底同步
-    var _sync = { timer:null, inFlight:false, pending:false, lastRun:0, lastReason:"" };
-
-    function scheduleSync(reason, immediate){
-      if(!AUTO_SYNC) return;
-      _sync.pending = true;
-      _sync.lastReason = reason || _sync.lastReason || "auto";
-      if(_sync.timer) clearTimeout(_sync.timer);
-      var now = Date.now();
-      var gap = Math.max(0, (SYNC_MIN_GAP_MS - (now - (_sync.lastRun||0))));
-      var wait = immediate ? Math.min(50, gap) : Math.max(SYNC_DEBOUNCE_MS, gap);
-      _sync.timer = setTimeout(function(){ _sync.timer=null; runAutoSync(); }, wait);
-    }
-
-    async function runAutoSync(){
-      if(!_sync.pending) return;
-      if(_sync.inFlight) { _sync.pending = true; return; }
-      _sync.inFlight = true;
-      _sync.pending = false;
+  <script>
+  (function(){
+    var G = window.__TASUN_GLOBALS__ = window.__TASUN_GLOBALS__ || {};
+    var C = G.CONSTS = G.CONSTS || {};
+    var R = G.RUNTIME = G.RUNTIME || {};
+    Object.assign(C, {
+      PAGE_KEY: 'index',
+      PAGE_FILE: 'index.html',
+      VERSION_URL: 'tasun-version.json',
+      REBUILD_STAMP_META_NAME: 'tasun-rebuild-stamp',
+      REBUILD_STAMP_REGEX: /TASUN_REBUILD_STAMP:([^\n>]*)/i,
+      TRIPLE_CHECK_LOCK_KEY: 'tasun_triple_check_lock_v4',
+      TRIPLE_CHECK_SEEN_KEY: 'tasun_triple_check_seen_v4',
+      TRIPLE_CHECK_COOLDOWN_MS: 12000,
+      FORCE_RELOAD_GUARD_MS: 20000,
+      FORCE_LATEST_LOCK_KEY: 'tasun_force_latest_lock_r5',
+      FORCE_LATEST_SEEN_KEY: 'tasun_force_latest_seen_r5',
+      HTML_NETWORK_REFRESH_KEY: 'tasun_html_network_refresh_v1',
+      HTML_NETWORK_REFRESH_GUARD_MS: 15000
+    });
+    G.PAGE_KEY = C.PAGE_KEY;
+    G.PAGE_FILE = C.PAGE_FILE;
+    G.VERSION_URL = C.VERSION_URL;
+    function readCurrentRebuildStamp(){
       try{
-        if(navigator && navigator.onLine===false){
-          // 離線：等恢復網路再同步
-          _sync.pending = true;
-          return;
-        }
-        await syncToCloud({ silent:true, reason:_sync.lastReason||"auto" });
-      }catch(e){
-        // 失敗：保留 pending，下次事件/週期再試
-        _sync.pending = true;
-      }finally{
-        _sync.lastRun = Date.now();
-        _sync.inFlight = false;
-        if(_sync.pending) scheduleSync("retry");
-      }
-    }
-
-    function toast(msg, ms){
-      var t = $("toast");
-      t.textContent = msg;
-      t.style.display = "block";
-      clearTimeout(toast._tm);
-      var dur = Number(ms);
-      if(!Number.isFinite(dur) || dur<=0) dur = 2600;
-      toast._tm = setTimeout(function(){ t.style.display="none"; }, dur);
-    }
-
-    function escHtml(s){
-      return (s ?? "").toString()
-        .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;").replaceAll("'","&#39;");
-    }
-
-    function addV(url){
-      if(!url) return url;
-      if(url.startsWith("http://") || url.startsWith("https://")){
-        try{ var u = new URL(url); u.searchParams.set("v", APP_VER); return u.toString(); }catch(e){ return url; }
-      }
-      return url + (url.indexOf("?")>=0 ? "&" : "?") + "v=" + encodeURIComponent(APP_VER);
-    }
-
-    // ---------------------------
-    // Auth
-    // ---------------------------
-    function ensureAuthTable(){
-      var t = safeJSON(localStorage.getItem(AUTH_KEY));
-      if(!t || typeof t !== "object"){
-        t = {
-          users: [
-            { user:"alex", pass:"alex", role:"admin", name:"alex" },
-            { user:"tasun", pass:"tasun", role:"write", name:"tasun" },
-            { user:"wu", pass:"wu", role:"read", name:"wu" }
-          ],
-          updatedAt: nowISO(),
-          rev: "seed"
-        };
-        localStorage.setItem(AUTH_KEY, JSON.stringify(t));
-      }
-      if(!Array.isArray(t.users)) t.users = [];
-      return t;
-    }
-
-    function getCurrentUser(){
-      var cur = safeJSON(localStorage.getItem(CURRENT_KEY));
-      if(cur && cur.user && cur.role) return cur;
-      cur = safeJSON(sessionStorage.getItem(CURRENT_KEY));
-      if(cur && cur.user && cur.role) return cur;
-      return null;
-    }
-
-    function setCurrentUser(u){
-      if(!u){
-        localStorage.removeItem(CURRENT_KEY);
-        try{ sessionStorage.removeItem(CURRENT_KEY); }catch(e){}
-      }else{
-        localStorage.setItem(CURRENT_KEY, JSON.stringify(u));
-        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(u)); }catch(e){}
-      }
-    }
-
-    function setCloudToken(token, exp){
-      token = norm(token);
-      if(!token){
-        try{ localStorage.removeItem(CLOUD_TOKEN_KEY); }catch(e){}
-        try{ sessionStorage.removeItem(CLOUD_TOKEN_KEY); }catch(e){}
-      }else{
-        try{ localStorage.setItem(CLOUD_TOKEN_KEY, token); }catch(e){}
-        try{ sessionStorage.setItem(CLOUD_TOKEN_KEY, token); }catch(e){}
-      }
-      if(exp===undefined || exp===null || exp===""){
-        try{ localStorage.removeItem(CLOUD_TOKEN_EXP_KEY); }catch(e){}
-        try{ sessionStorage.removeItem(CLOUD_TOKEN_EXP_KEY); }catch(e){}
-      }else{
-        var expStr = String(exp);
-        try{ localStorage.setItem(CLOUD_TOKEN_EXP_KEY, expStr); }catch(e){}
-        try{ sessionStorage.setItem(CLOUD_TOKEN_EXP_KEY, expStr); }catch(e){}
-      }
-    }
-
-    function getCloudToken(){
-      var t = "";
-      try{ t = norm(localStorage.getItem(CLOUD_TOKEN_KEY)); }catch(e){ t = ""; }
-      if(t) return t;
-      try{ t = norm(sessionStorage.getItem(CLOUD_TOKEN_KEY)); }catch(e){ t = ""; }
-      return t;
-    }
-
-    function getCloudTokenExp(){
-      var v = "";
-      try{ v = norm(localStorage.getItem(CLOUD_TOKEN_EXP_KEY)); }catch(e){ v = ""; }
-      if(!v){ try{ v = norm(sessionStorage.getItem(CLOUD_TOKEN_EXP_KEY)); }catch(e){ v = ""; } }
-      var n = Number(v||0);
-      return Number.isFinite(n) ? n : 0;
-    }
-
-    function clearCloudToken(){
-      setCloudToken("", "");
-    }
-
-    function hasUsableCloudToken(){
-      var t = getCloudToken();
-      if(!t) return false;
-      var exp = getCloudTokenExp();
-      if(exp && Date.now() > exp) return false;
-      return true;
-    }
-
-    function handleCloudUnauth(message){
-      clearCloudToken();
-      setCurrentUser(null);
-      try{ applyUser({ user:"—", role:"read", name:"—" }); }catch(e){}
-      try{ openLogin(); }catch(e){}
-      if(message) toast(message);
-    }
-
-    function roleRank(role){
-      if(role==="admin") return 3;
-      if(role==="write") return 2;
-      return 1;
-    }
-
-    // ---------------------------
-    // Cloud config
-    // ---------------------------
-    function parseJsonLenient(raw){
-      raw = (raw===undefined||raw===null) ? "" : String(raw);
-      try{ return JSON.parse(raw); }catch(e){}
-      try{
-        var cleaned = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/,\s*([}\]])/g, "$1");
-        return JSON.parse(cleaned);
-      }catch(e2){}
-      return null;
-    }
-
-    function normalizeEndpoints(ep){
-      ep = (ep && typeof ep==="object") ? ep : {};
-      return {
-        health: norm(ep.health || "/api/tasun/health") || "/api/tasun/health",
-        read:   norm(ep.read   || "/api/tasun/read") || "/api/tasun/read",
-        merge:  norm(ep.merge  || "/api/tasun/merge") || "/api/tasun/merge"
-      };
-    }
-
-    function joinApiBase(base, path){
-      base = norm(base).replace(/\/+$/,"");
-      path = norm(path);
-      if(!path) return base;
-      if(/^https?:\/\//i.test(path)) return path;
-      if(path.charAt(0)!="/") path = "/" + path;
-      return base + path;
-    }
-
-    function isValidApiBase(v){
-      v = norm(v);
-      if(!v) return false;
-      if(!/^https?:\/\//i.test(v)) return false;
-      if(/YOUR-WORKER-DOMAIN/i.test(v)) return false;
-      return true;
-    }
-
-    function getFileName(){
-      try{
-        var p = location.pathname || "";
-        var fn = p.split("/").pop() || "";
-        return decodeURIComponent(fn) || fn;
-      }catch(e){ return (location.pathname||"").split("/").pop() || ""; }
-    }
-
-    var _cloudCfgCache = null;
-
-    async function loadCloudCfg(){
-      if(_cloudCfgCache) return _cloudCfgCache;
-
-      // Start with defaults
-      var cfg = { apiBase: DEFAULT_API_BASE, endpoints: Object.assign({}, DEFAULT_ENDPOINTS), netDiskUrl: "https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88" };
-
-      // 1) resources.json (best)
-      try{
-        var res = await fetch(addV(RESOURCES_URL), { cache:"no-store" });
-        if(res && res.ok){
-          var text = await res.text();
-          var json = parseJsonLenient(text);
-          if(json && json.resources && typeof json.resources==="object"){
-            var fn = getFileName();
-            var r = json.resources;
-            var pick = r[fn] || r[PAGE_KEY] || r["*"] || null;
-            if(pick){
-              if(isValidApiBase(pick.apiBase)) cfg.apiBase = pick.apiBase;
-              if(pick.endpoints) cfg.endpoints = normalizeEndpoints(pick.endpoints);
-              if(pick.netDiskUrl) cfg.netDiskUrl = String(pick.netDiskUrl);
-              else if(pick.links && pick.links.netDiskUrl) cfg.netDiskUrl = String(pick.links.netDiskUrl);
-
-            }else{
-              if(isValidApiBase(json.apiBase)) cfg.apiBase = json.apiBase;
-              if(json.endpoints) cfg.endpoints = normalizeEndpoints(json.endpoints);
-              if(json.netDiskUrl) cfg.netDiskUrl = String(json.netDiskUrl);
-              else if(json.links && json.links.netDiskUrl) cfg.netDiskUrl = String(json.links.netDiskUrl);
-
-            }
-          }
-        }
-      }catch(e){ /* ignore */ }
-
-      // 2) local overrides (optional)
-      // ⚠️ 本版已啟用「前端 API Base 強制鎖定」：避免 apiBase/endpoint 被覆寫成空值或指向 GitHub Pages。
-      if(!FORCE_API_BASE_LOCK){
-        var ob = norm(localStorage.getItem(API_BASE_LS_KEY));
-        if(isValidApiBase(ob)) cfg.apiBase = ob;
-
-        var oe = safeJSON(localStorage.getItem(API_EP_LS_KEY));
-        if(oe) cfg.endpoints = normalizeEndpoints(Object.assign({}, cfg.endpoints, oe));
-      }
-
-      // ✅ 最終強制覆寫（穩定鎖定）
-      if(FORCE_API_BASE_LOCK){
-        cfg.apiBase = FORCE_API_BASE;
-        cfg.endpoints = Object.assign({}, cfg.endpoints, FORCE_ENDPOINTS);
-      }
-
-      _cloudCfgCache = cfg;
-
-      // ✅ 同步雲端設定狀態到提示列（不改 UI）
-      try{
-        state.cloud.apiBase = cfg.apiBase || "";
-        state.cloud.endpoints = cfg.endpoints || null;
-        state.cloud.cfgOk = !!(cfg && isValidApiBase(cfg.apiBase));
+        var html = String(document.documentElement && document.documentElement.outerHTML || '');
+        var m = html.match(C.REBUILD_STAMP_REGEX);
+        if(m && m[1]) return String(m[1]).trim();
       }catch(e){}
-
-      return cfg;
-    }
-
-    // ---------------------------
-    // Local data + dicts
-    // ---------------------------
-        async function loadDb(){
-      function tryArray(raw){
-        var parsed = safeJSON(raw);
-        return Array.isArray(parsed) ? parsed : [];
-      }
-
-      function tryPayloadRows(raw){
-        var parsed = safeJSON(raw);
-        if(!parsed) return [];
-        var payload = unwrap(parsed);
-        if(Array.isArray(payload)) return payload;
-        if(payload && typeof payload==="object"){
-          if(Array.isArray(payload.db)) return payload.db;
-          if(Array.isArray(payload.rows)) return payload.rows;
-          if(Array.isArray(payload.items)) return payload.items;
-          if(Array.isArray(payload.records)) return payload.records;
-          if(Array.isArray(payload.data)) return payload.data;
-        }
-        return [];
-      }
-
-      function pickLegacyDbArr(){
-        var best = [];
-        var stores = [localStorage, sessionStorage];
-        var keys = [DB_KEY, DB_SNAPSHOT_KEY, DB_SNAPSHOT_SESSION_KEY].concat(LEGACY_DB_KEYS);
-        for(var s=0;s<stores.length;s++){
-          var storage = stores[s];
-          for(var i=0;i<keys.length;i++){
-            var k = keys[i];
-            var arr = [];
-            try{
-              arr = tryArray(storage.getItem(k));
-              if(!arr.length) arr = tryPayloadRows(storage.getItem(k));
-            }catch(e){ arr = []; }
-            if(arr.length > best.length) best = arr;
-          }
-        }
-        return best;
-      }
-
-      var meta = null, rows = [];
       try{
-        meta = await idbGetMeta(PAGE_KEY);
-        rows = await idbGetAllRows(PAGE_KEY);
-      }catch(e){ meta=null; rows=[]; }
-
-      var snapshotRows = [];
-      try{ snapshotRows = tryArray(localStorage.getItem(DB_SNAPSHOT_KEY)); }catch(e){ snapshotRows = []; }
-      if(!snapshotRows.length){ try{ snapshotRows = tryArray(sessionStorage.getItem(DB_SNAPSHOT_SESSION_KEY)); }catch(e){ snapshotRows = []; } }
-      if(!snapshotRows.length){ try{ snapshotRows = tryPayloadRows(localStorage.getItem(DB_SNAPSHOT_KEY)); }catch(e){ snapshotRows = []; } }
-      if(!snapshotRows.length){ try{ snapshotRows = tryPayloadRows(sessionStorage.getItem(DB_SNAPSHOT_SESSION_KEY)); }catch(e){ snapshotRows = []; } }
-
-      var legacyRows = [];
-      try{ legacyRows = pickLegacyDbArr(); }catch(e){ legacyRows = []; }
-
-      var mergedRows = [];
-      try{
-        mergedRows = mergePayload(
-          { db: rows || [], counter: Number(meta && meta.counter || 0) || 0 },
-          { db: (snapshotRows || []).concat(legacyRows || []), counter: 0 }
-        ).db || [];
-      }catch(e){
-        mergedRows = (rows && rows.length) ? rows : ((snapshotRows && snapshotRows.length) ? snapshotRows : legacyRows);
-      }
-
-      if(meta || (mergedRows && mergedRows.length)){
-        var counter = Number(meta && meta.counter || 0) || 0;
-        if(!counter) counter = Number(localStorage.getItem(COUNTER_KEY)||"0") || 0;
-        state.lastSyncAt = Number(meta && meta.lastSyncAt || 0) || 0;
-        state.clientId = norm(meta && meta.clientId) || getClientId();
-        try{
-          if((mergedRows && mergedRows.length) && JSON.stringify(mergedRows)!==JSON.stringify(rows||[])){
-            await idbPutRows(PAGE_KEY, mergedRows);
-          }
-        }catch(e){}
-        return { db: mergedRows||[], counter: counter };
-      }
-
-      var arr = pickLegacyDbArr();
-      if(!Array.isArray(arr) || !arr.length) arr = snapshotRows;
-      if(!Array.isArray(arr)) arr = [];
-      var c = Number(localStorage.getItem(COUNTER_KEY)||"0");
-      if(!Number.isFinite(c) || c<0) c = 0;
-
-      state.lastSyncAt = 0;
-      state.clientId = getClientId();
-
-      try{
-        await idbPutRows(PAGE_KEY, arr);
-        await idbPutMeta({ pageKey: PAGE_KEY, counter: c, lastSyncAt: 0, clientId: state.clientId, updatedAt: nowISO() });
+        var meta = document.querySelector('meta[name="' + C.REBUILD_STAMP_META_NAME + '"]');
+        return meta ? String(meta.getAttribute('content') || '').trim() : '';
       }catch(e){}
-
-      return { db: arr, counter: c };
+      return '';
     }
+    R.currentRebuildStamp = readCurrentRebuildStamp();
+    G.CURRENT_REBUILD_STAMP = R.currentRebuildStamp;
+  })();
+  </script>
+
+<style id="tasun-authority-ui-core">
+  body.locked #loginOverlay{ display:flex !important; }
+  body:not(.locked) #loginOverlay{ display:none !important; }
+
+  body.locked #navArea,
+  body.locked #userBar{
+    display:none !important;
+  }
+
+  body:not(.locked) #navArea{
+    display:block !important;
+  }
+
+  #bootCover,
+  #loginBootInline[hidden]{
+    display:none !important;
+  }
+
+  body,
+  .hero,
+  .hero-inner,
+  .lotus-stage,
+  .zen-visual,
+  #zenImg{
+    visibility:visible !important;
+    opacity:1 !important;
+  }
+
+  .hero{
+    position:fixed !important;
+    inset:0 !important;
+    width:100vw !important;
+    height:100vh !important;
+    overflow:hidden !important;
+  }
+  .hero-inner{
+    position:absolute !important;
+    inset:0 !important;
+    width:100vw !important;
+    height:100vh !important;
+    overflow:hidden !important;
+  }
+  .lotus-stage,
+  .zen-visual{
+    position:absolute !important;
+    inset:0 !important;
+    width:100% !important;
+    height:100% !important;
+  }
+  #zenImg{
+    position:absolute !important;
+    inset:0 !important;
+    width:100% !important;
+    height:100% !important;
+    display:block !important;
+    object-fit:cover !important;
+    object-position:center center !important;
+  }
+
+  .login-overlay{
+    position:fixed !important;
+    inset:0 !important;
+    width:100vw !important;
+    height:100vh !important;
+    align-items:center !important;
+    justify-content:center !important;
+    padding:max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)) !important;
+    overflow:hidden !important;
+    background:transparent !important;
+    z-index:9999 !important;
+  }
+  .login-box{
+    position:relative !important;
+    z-index:10000 !important;
+  }
+
+/* ===== Tasun v5 r21 password-eye integrated (desktop + mobile) ===== */
+.login-pwd-wrapper{
+  position:relative !important;
+  display:block !important;
+  width:100% !important;
+}
+.login-pwd-input{
+  width:100% !important;
+  min-width:0 !important;
+  flex:1 1 auto !important;
+  padding-right:4.35rem !important;
+}
+.btn-eye-login{
+  position:absolute !important;
+  top:50% !important;
+  right:10px !important;
+  transform:translateY(-50%) !important;
+  display:inline-flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  width:44px !important;
+  height:44px !important;
+  min-width:44px !important;
+  min-height:44px !important;
+  margin:0 !important;
+  padding:0 !important;
+  border:none !important;
+  border-radius:999px !important;
+  background:transparent !important;
+  box-shadow:none !important;
+  color:rgba(102,62,24,0.98) !important;
+  z-index:3 !important;
+}
+@media (max-width: 900px){
+  .login-pwd-input{
+    padding-right:4.2rem !important;
+  }
+  .btn-eye-login{
+    width:42px !important;
+    height:42px !important;
+    min-width:42px !important;
+    min-height:42px !important;
+    right:8px !important;
+  }
+}
+
+</style>
 
 
-    // 嘗試復原舊版本本機資料（不同 key / 舊備份格式），並合併回目前 db
-    function recoverLegacyLocal(){
-      // 以「內容特徵」找舊資料：任何 storage key 只要能解析出 {db:[{uid/text/trade/sys/...}], counter} 或直接是陣列，都納入合併
-      function tryParsePayload(parsed){
-        if(Array.isArray(parsed)){
-          // 直接是資料列陣列
-          return { db: parsed, counter: 0 };
-        }
-        if(parsed && typeof parsed==="object"){
-          // 可能包在 payload/data/result
-          var un = unwrap(parsed);
-          if(Array.isArray(un.db) && un.db.length) return { db: un.db, counter: un.counter||0 };
-          // 也可能就是 {records:[...]} 或 {rows:[...]} 等
-          if(Array.isArray(parsed.records) && parsed.records.length) return { db: parsed.records, counter: Number(parsed.counter||0)||0 };
-          if(Array.isArray(parsed.rows) && parsed.rows.length) return { db: parsed.rows, counter: Number(parsed.counter||0)||0 };
-          if(Array.isArray(parsed.items) && parsed.items.length) return { db: parsed.items, counter: Number(parsed.counter||0)||0 };
-        }
-        return null;
-      }
+<style id="tasun-restore-visual-nav-fix">
+/* restore prior stage look; only reinforce side buttons visibility */
+.site-title-wrapper{
+  top:clamp(18px, 3.0vh, 34px) !important;
+  left:50% !important;
+  transform:translateX(-50%) !important;
+  z-index:30 !important;
+}
+.site-title{
+  display:block !important;
+  font-size: clamp(2.68rem, 3.95vw, 4.65rem) !important;
+  font-weight:700 !important;
+  letter-spacing:.18em !important;
+  padding-left:.18em !important;
+  background: linear-gradient(180deg, #fffbe6 0%, #fff0bb 18%, #ffd86b 48%, #f3b21f 72%, #8f5a08 100%) !important;
+  -webkit-background-clip:text !important;
+  background-clip:text !important;
+  -webkit-text-fill-color:transparent !important;
+  color:transparent !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.95),
+    0 2px 0 rgba(255,239,188,0.88),
+    0 4px 0 rgba(209,149,33,0.36),
+    0 10px 20px rgba(72,40,6,0.30),
+    0 0 20px rgba(255,220,110,0.24) !important;
+  filter: drop-shadow(0 2px 0 rgba(255,255,255,0.18)) drop-shadow(0 12px 18px rgba(78,48,8,0.22)) !important;
+}
+#zwAxisText,#zwLeft,#zwRight,#zwBottomLine{
+  background: linear-gradient(180deg, #fffef7 0%, #fff4cf 16%, #ffe192 42%, #f6c04a 66%, #b67313 100%) !important;
+  -webkit-background-clip:text !important;
+  background-clip:text !important;
+  -webkit-text-fill-color:transparent !important;
+  color:transparent !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.96),
+    0 2px 0 rgba(255,247,221,0.82),
+    0 8px 18px rgba(88,54,14,0.22),
+    0 0 14px rgba(255,226,150,0.16) !important;
+  filter: drop-shadow(0 1px 0 rgba(255,255,255,0.18)) drop-shadow(0 10px 18px rgba(74,42,8,0.16)) !important;
+}
+#navArea{
+  z-index: 88 !important;
+  display:block !important;
+  overflow:visible !important;
+}
+#navArea .nav-btn{
+  position:absolute;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  min-width:260px !important;
+  min-height:72px !important;
+  padding:14px 22px !important;
+  border-radius:999px !important;
+  border:1px solid rgba(255,242,206,0.72) !important;
+  background:
+    linear-gradient(180deg, rgba(124,88,42,0.54), rgba(72,46,20,0.36)),
+    linear-gradient(180deg, rgba(255,252,244,0.20), rgba(255,238,196,0.08)) !important;
+  box-shadow:
+    0 10px 26px rgba(92,58,18,0.18),
+    inset 0 1px 0 rgba(255,255,255,0.20),
+    0 0 24px rgba(255,216,132,0.14) !important;
+  backdrop-filter: blur(6px) !important;
+  -webkit-backdrop-filter: blur(6px) !important;
+  text-decoration:none !important;
+  visibility:visible !important;
+  opacity:1 !important;
+  pointer-events:auto !important;
+}
+#navArea .nav-btn::after{
+  content:'';
+  position:absolute;
+  inset:1px;
+  border-radius:inherit;
+  background:linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0.00) 46%);
+  pointer-events:none;
+}
+#navArea .nav-btn span{
+  position:relative;
+  z-index:1;
+  display:inline-block !important;
+  max-width:100% !important;
+  padding:0 .22em !important;
+  color:rgba(255,236,180,0.99) !important;
+  font-weight:700 !important;
+  line-height:1.1 !important;
+  text-align:center !important;
+  white-space:nowrap !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.20),
+    0 0 16px rgba(255,224,150,0.18),
+    0 4px 14px rgba(48,28,8,0.36) !important;
+  -webkit-text-stroke: 0.45px rgba(54,28,8,0.18);
+}
+</style>
 
-      function looksLikeRow(x){
-        if(!x || typeof x!=="object") return false;
-        // 允許舊欄名：content/note/body 也視作 text
-        var hasUid = !!norm(x.uid || x.pk || x.key || x.uuid || "");
-        var hasText = !!norm(x.text || x.content || x.note || x.body || x.msg || "");
-        var hasMeta = !!norm(x.trade || x.kind || x.work || "") || !!norm(x.sys || x.system || "") || !!norm(x.date || x.createdAt || "");
-        return (hasUid && hasText) || (hasText && hasMeta);
-      }
+</head>
 
-      function normalizeLegacyRows(arr){
-        var out = [];
-        for(var i=0;i<(arr||[]).length;i++){
-          var x = arr[i];
-          if(!x || typeof x!=="object") continue;
-          // map legacy fields
-          var uid = norm(x.uid || x.pk || x.key || x.uuid || "");
-          if(!uid) uid = uuid(); // fallback
-          out.push({
-            uid: uid,
-            id: Number(x.id||x.no||0)||0,
-            text: norm(x.text || x.content || x.note || x.body || x.msg || ""),
-            trade: norm(x.trade || x.kind || x.work || ""),
-            sys: norm(x.sys || x.system || ""),
-            source: norm(x.source || x.from || x.origin || ""),
-            attach: norm(x.attach || x.link || x.url || ""),
-            remark: norm(x.remark || x.memo || ""),
-            date: norm(x.date || (x.createdAt? String(x.createdAt).slice(0,10):"") || ""),
-            updatedAt: norm(x.updatedAt || x.updated || x.modifiedAt || x.ts || ""),
-            rev: norm(x.rev || x.version || ""),
-            deleted: !!(x.deleted || x.isDeleted)
-          });
-        }
-        return out;
-      }
+<body class="locked">
+<script>
+  window.__TASUN_INDEX_READY__ = (async function () {
+    'use strict';
 
-      function scanStorage(storage, storageName){
-        var keys = [];
-        try{
-          for(var i=0;i<storage.length;i++){
-            var k = storage.key(i);
-            if(k) keys.push(k);
-          }
-        }catch(e){}
-        var mergedAny = false;
-        var localNow = { db: state.db, counter: state.counter };
-        var matched = [];
-        for(var j=0;j<keys.length;j++){
-          var key = keys[j];
-          if(key===DB_KEY || key===COUNTER_KEY || key===READ_MODE_KEY) continue;
-          var raw = null;
-          try{ raw = storage.getItem(key); }catch(e){ raw=null; }
-          if(!raw || raw.length<2) continue;
-
-          var parsed = safeJSON(raw);
-          if(!parsed) continue;
-
-          var pay = tryParsePayload(parsed);
-          if(!pay || !Array.isArray(pay.db) || !pay.db.length) continue;
-
-          // 檢查是否像是我們的資料列（至少 1 筆符合）
-          var arr = pay.db;
-          var ok = false;
-          for(var k=0;k<Math.min(arr.length, 10);k++){
-            if(looksLikeRow(arr[k])) { ok = true; break; }
-          }
-          if(!ok) continue;
-
-          // normalize legacy
-          var normed = normalizeLegacyRows(arr);
-          if(!normed.length) continue;
-
-          var merged = mergePayload({ db: normed, counter: pay.counter||0 }, localNow);
-          localNow = { db: merged.db, counter: merged.counter };
-          mergedAny = true;
-          matched.push({ storage: storageName, key: key, rows: normed.length, bytes: raw.length });
-        }
-
-        if(mergedAny){
-          state.db = localNow.db;
-          state.counter = localNow.counter;
-          saveLocal({ db: state.db, counter: state.counter });
-          buildDictsFromDb();
-        }
-        return { mergedAny: mergedAny, matched: matched };
-      }
-
-      var res1 = scanStorage(localStorage, "localStorage");
-      var res2 = scanStorage(sessionStorage, "sessionStorage");
-
-      // expose last scan result for debugging
-      state._legacyScan = { local: res1, session: res2, at: nowISO() };
-
-      return !!(res1.mergedAny || res2.mergedAny);
-    }
-
-
-        async function saveLocal(payload){
-      var dbArr = payload.db||[];
-      var counter = Number(payload.counter||0)||0;
-
-      // IDB primary
+    const FALLBACK_VER = '';
+    function normVer(s){ return (s===undefined||s===null) ? '' : String(s).trim(); }
+    function addVer(url, ver){
+      const vv = normVer(ver);
+      if(!vv) return url;
       try{
-        await idbPutRows(PAGE_KEY, dbArr);
-        await idbPutMeta({
-          pageKey: PAGE_KEY,
-          counter: counter,
-          lastSyncAt: Number(state.lastSyncAt||0)||0,
-          clientId: state.clientId || getClientId(),
-          updatedAt: nowISO()
+        const u = new URL(url, document.baseURI);
+        if(u.origin === location.origin){
+          u.searchParams.set('v', vv);
+          return u.toString();
+        }
+        return url;
+      }catch(e){
+        const s = String(url || '');
+        if(!s || /^https?:\/\//i.test(s) || /^mailto:/i.test(s) || /^tel:/i.test(s)) return s;
+        return s + (s.includes('?') ? '&' : '?') + 'v=' + encodeURIComponent(vv);
+      }
+    }
+    function hasScript(id){ return !!document.querySelector(`script[data-tasun-id="${id}"]`); }
+    function loadOnce(id, src){
+      return new Promise((resolve)=>{
+        try{
+          if(hasScript(id)) return resolve(true);
+          const s = document.createElement('script');
+          s.src = src;
+          s.async = false;
+          s.setAttribute('data-tasun-id', id);
+          s.onload = ()=>resolve(true);
+          s.onerror = ()=>resolve(false);
+          document.head.appendChild(s);
+        }catch(e){ resolve(false); }
+      });
+    }
+
+    try{
+      if(window.__TASUN_VERSION_READY__ && typeof window.__TASUN_VERSION_READY__.then === 'function'){
+        await window.__TASUN_VERSION_READY__;
+      }
+    }catch(e){}
+
+    async function fetchLatestVersionText(){
+      try{
+        const GG = window.__TASUN_GLOBALS__ || {};
+        const CC = GG.CONSTS || {};
+        const versionUrl = String(CC.VERSION_URL || 'tasun-version.json');
+        const res = await fetch(versionUrl + '?_=' + Date.now(), { cache:'reload', credentials:'same-origin', headers:{ 'cache-control':'no-cache, no-store, must-revalidate', pragma:'no-cache' } });
+        if(!res.ok) return '';
+        const data = await res.json().catch(()=>null);
+        if(!data) return '';
+        const cand = [
+          data.version, data.ver, data.appVer, data.app_ver, data.cacheV, data.cache_v,
+          data.build, data.buildVersion, data.release,
+          data.data && (data.data.version || data.data.ver || data.data.appVer || data.data.cacheV),
+          data.meta && (data.meta.version || data.meta.ver || data.meta.appVer || data.meta.cacheV)
+        ];
+        for(const v of cand){
+          const s = normVer(v);
+          if(s) return s;
+        }
+      }catch(e){}
+      return '';
+    }
+
+    function getLocalRebuildStamp(){
+      try{
+        const GG = window.__TASUN_GLOBALS__ || {};
+        const RR = GG.RUNTIME || {};
+        if(RR.currentRebuildStamp) return normVer(RR.currentRebuildStamp);
+      }catch(e){}
+      try{
+        const meta = document.querySelector('meta[name="tasun-rebuild-stamp"]');
+        if(meta){
+          const mv = normVer(meta.getAttribute('content'));
+          if(mv) return mv;
+        }
+      }catch(e){}
+      try{
+        const html = String(document.documentElement && document.documentElement.outerHTML || '');
+        const m = html.match(/TASUN_REBUILD_STAMP:([^\n>]*)/i);
+        if(m && m[1]) return normVer(m[1]);
+      }catch(e){}
+      return '';
+    }
+
+    function buildPageFingerprint(info){
+      try{
+        const obj = info || {};
+        return [
+          normVer(obj.pageFile || 'index.html'),
+          normVer(obj.rebuildStamp || ''),
+          normVer(obj.title || ''),
+          obj.hasHeroInner ? 'heroInner' : '',
+          obj.hasNavArea ? 'navArea' : '',
+          obj.hasZenWords ? 'zenWords' : '',
+          normVer(obj.headSig || '')
+        ].filter(Boolean).join(' | ');
+      }catch(e){
+        return '';
+      }
+    }
+
+    async function fetchRemotePageInfo(){
+      try{
+        const GG = window.__TASUN_GLOBALS__ || {};
+        const CC = GG.CONSTS || {};
+        const pageFile = String(CC.PAGE_FILE || 'index.html');
+        const res = await fetch(pageFile + '?_=' + Date.now(), { cache:'reload', credentials:'same-origin', headers:{ 'cache-control':'no-cache, no-store, must-revalidate', pragma:'no-cache' } });
+        if(!res.ok) return { version:'', rebuildStamp:'', html:'', fingerprint:'', pageFile: pageFile, title:'' };
+        const html = await res.text();
+        const vm = html.match(/(?:__CACHE_V|TASUN_APP_VER|APP_VER)\s*[:=]\s*['"]([^'"]+)['"]/i);
+        const mm = html.match(/<meta\s+name=["']tasun-rebuild-stamp["']\s+content=["']([^"']+)["']/i);
+        const cm = html.match(/TASUN_REBUILD_STAMP:([^\n>]*)/i);
+        const tm = html.match(/<title>([^<]+)<\/title>/i);
+        const rebuildStamp = normVer(mm && mm[1] ? mm[1] : (cm && cm[1] ? cm[1] : ''));
+        const title = normVer(tm && tm[1] ? tm[1] : '');
+        var headSig = '';
+        try{
+          headSig = String(html || '').slice(0, 4096).replace(/\s+/g, ' ').trim();
+        }catch(e){}
+        const fingerprint = buildPageFingerprint({
+          pageFile,
+          rebuildStamp,
+          title,
+          hasHeroInner: /id=["']heroInner["']/.test(html),
+          hasNavArea: /id=["']navArea["']/.test(html),
+          hasZenWords: /class=["'][^"']*zen-words[^"']*["']/.test(html) || /id=["']zwTopAxis["']/.test(html),
+          headSig: headSig
         });
-      }catch(e){}
-
-      // localStorage fallback
-      try{
-        localStorage.setItem(DB_KEY, JSON.stringify(dbArr));
-        localStorage.setItem(COUNTER_KEY, String(counter));
-      }catch(e){}
-      try{
-        saveSnapshot(dbArr, { source:"saveLocal", counter: counter });
-      }catch(e){}
-    }
-
-    function normalizeRow(x){
-      if(!x || typeof x!=="object") return null;
-      var r = Object.assign({}, x);
-
-      // 兼容舊欄位命名：system/系統、trade/工種、text/記事內容... 等
-      var pick = function(obj, keys){
-        for(var i=0;i<keys.length;i++){
-          var k = keys[i];
-          if(obj && obj[k]!==undefined && obj[k]!==null && String(obj[k]).trim()!=="") return obj[k];
-        }
-        return "";
-      };
-
-      // uid / pk
-      r.uid = norm(pick(r, ["uid","pk","_pk","uuid","_uid","user"])) || "";
-      if(!r.uid) return null;
-
-      // 顯示用 id（允許舊資料用「項次/序號」）
-      var rawId = pick(r, ["id","_id","no","項次","序號"]);
-      r.id = Number(rawId || 0);
-
-      r.text = norm(pick(r, ["text","content","記事內容","事項內容","內容","記事"])) || "";
-      r.trade = norm(pick(r, ["trade","工種","類別","工程","工別"])) || "";
-      r.sys = norm(pick(r, ["sys","system","系統","系統項目","系統別"])) || "";
-      r.source = norm(pick(r, ["source","src","出處","來源"])) || "";
-      r.attach = norm(pick(r, ["attach","附件","file","files","附件連結"])) || "";
-      r.remark = norm(pick(r, ["remark","備註","note","註記"])) || "";
-
-      // 日期欄位兼容（仍以字串顯示）
-      r.date = norm(pick(r, ["date","登錄日期","日期","createdAt","created_at"])) || "";
-      r.updatedAt = norm(pick(r, ["updatedAt","updated_at","updateAt","ts","time"])) || "";
-      r.rev = norm(pick(r, ["rev","_rev","version"])) || "";
-
-      r.deleted = !!(r.deleted || r._deleted);
-      return r;
-    }
-
-    // ---------------------------
-    // Legacy UID migration (deterministic)
-    // ---------------------------
-    // Some older localStorage rows may not contain uid/pk.
-    // To keep multi-device merge stable, we derive a deterministic uid from row content,
-    // then persist it back into DB_KEY once per device.
-    function fnv1a32(str){
-      str = (str===undefined||str===null) ? "" : String(str);
-      var h = 0x811c9dc5;
-      for(var i=0;i<str.length;i++){
-        h ^= str.charCodeAt(i);
-        // h *= 16777619 (with 32-bit overflow)
-        h = (h + ((h<<1) + (h<<4) + (h<<7) + (h<<8) + (h<<24))) >>> 0;
+        return {
+          version: normVer(vm && vm[1] ? vm[1] : ''),
+          rebuildStamp,
+          html,
+          fingerprint,
+          pageFile,
+          title
+        };
+      }catch(e){
+        return { version:'', rebuildStamp:'', html:'', fingerprint:'', pageFile:'index.html', title:'' };
       }
-      return ("00000000" + h.toString(16)).slice(-8);
     }
 
-    function deriveLegacyUid(rawRow){
-      if(!rawRow || typeof rawRow!=="object") return "";
-      // Use the same pick logic as normalizeRow, but allow missing uid
-      var pick = function(obj, keys){
-        for(var i=0;i<keys.length;i++){
-          var k = keys[i];
-          if(obj && obj[k]!==undefined && obj[k]!==null && String(obj[k]).trim()!=="") return obj[k];
+    async function ensureLatestBuildSync(force){
+      try{
+        const G = window.__TASUN_GLOBALS__ || {};
+        const C = G.CONSTS || {};
+        const R = G.RUNTIME || (G.RUNTIME = {});
+        const lockKey = C.TRIPLE_CHECK_LOCK_KEY || 'tasun_triple_check_lock_v4';
+        const seenKey = C.TRIPLE_CHECK_SEEN_KEY || 'tasun_triple_check_seen_v4';
+        const cooldownMs = Number(C.TRIPLE_CHECK_COOLDOWN_MS || 12000);
+        const guardMs = Number(C.FORCE_RELOAD_GUARD_MS || 20000);
+        const now = Date.now();
+        if(!force){
+          const prev = Number(sessionStorage.getItem(lockKey) || 0);
+          if(prev && (now - prev) < cooldownMs) return false;
         }
-        return "";
-      };
-      var id = String(pick(rawRow, ["id","_id","no","項次","序號"]) || "");
-      var text = norm(pick(rawRow, ["text","content","記事內容","事項內容","內容","記事"]) || "");
-      var trade = norm(pick(rawRow, ["trade","工種","類別","工程","工別"]) || "");
-      var sys = norm(pick(rawRow, ["sys","system","系統","系統項目","系統別"]) || "");
-      var source = norm(pick(rawRow, ["source","src","出處","來源"]) || "");
-      var attach = norm(pick(rawRow, ["attach","附件","file","files","附件連結"]) || "");
-      var remark = norm(pick(rawRow, ["remark","備註","note","註記"]) || "");
-      var date = norm(pick(rawRow, ["date","登錄日期","日期","createdAt","created_at"]) || "");
-      // If we still have nothing meaningful, skip
-      if(!text && !trade && !sys && !source && !attach && !remark && !id && !date) return "";
-      var key = [PAGE_KEY, id, date, trade, sys, source, attach, remark, text].join("|");
-      return "l" + fnv1a32(key);
-    }
+        sessionStorage.setItem(lockKey, String(now));
 
-    function migrateEnsureUidInPlace(){
-      var changed = false;
-      for(var i=0;i<(state.db||[]).length;i++){
-        var x = state.db[i];
-        if(!x || typeof x!=="object") continue;
-        var uid = norm(x.uid || x.pk || x._pk || x.uuid || x._uid || "");
-        if(!uid){
-          uid = deriveLegacyUid(x);
-          if(uid){
-            x.uid = uid;
-            x.pk = uid;
-            changed = true;
+        const latestVer = normVer(await fetchLatestVersionText());
+        const localVer = normVer(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || curV || '');
+        const localStamp = getLocalRebuildStamp();
+        var localHeadSig = '';
+        try{
+          localHeadSig = String(document.documentElement && document.documentElement.outerHTML || '').slice(0, 4096).replace(/\s+/g, ' ').trim();
+        }catch(e){}
+        const localFingerprint = buildPageFingerprint({
+          pageFile: String(C.PAGE_FILE || 'index.html'),
+          rebuildStamp: localStamp,
+          title: document.title || '',
+          hasHeroInner: !!document.getElementById('heroInner'),
+          hasNavArea: !!document.getElementById('navArea'),
+          hasZenWords: !!document.getElementById('zwTopAxis'),
+          headSig: localHeadSig
+        });
+        const remote = await fetchRemotePageInfo();
+        const remoteStamp = normVer(remote.rebuildStamp || '');
+        const remoteFingerprint = normVer(remote.fingerprint || '');
+
+        R.currentVersion = localVer;
+        R.currentRebuildStamp = localStamp;
+        R.currentPageFingerprint = localFingerprint;
+
+        const versionMismatch = !!(latestVer && localVer && latestVer !== localVer) || (!!latestVer && !localVer);
+        const remoteVersionMismatch = !!(latestVer && remote.version && latestVer !== normVer(remote.version || ''));
+        const rebuildMismatch = !!(remoteStamp && localStamp && remoteStamp !== localStamp);
+        const remoteRealPageMismatch = !!(remoteFingerprint && localFingerprint && remoteFingerprint !== localFingerprint);
+
+        if(!(versionMismatch || remoteVersionMismatch || rebuildMismatch || remoteRealPageMismatch)) return false;
+
+        const nextVer = latestVer || remote.version || localVer || '';
+        const reloadSignature = [nextVer, remoteStamp || localStamp, remoteFingerprint || localFingerprint].filter(Boolean).join(' | ');
+        try{
+          const rawSeen = sessionStorage.getItem(seenKey) || '';
+          const seen = rawSeen ? JSON.parse(rawSeen) : null;
+          if(seen && seen.sig === reloadSignature && (now - Number(seen.ts || 0)) < guardMs){
+            return false;
           }
-        }else{
-          // normalize pk convenience
-          if(!x.pk) { x.pk = uid; changed = true; }
-          if(!x.uid) { x.uid = uid; changed = true; }
+          sessionStorage.setItem(seenKey, JSON.stringify({ sig: reloadSignature, ts: now }));
+        }catch(e){}
+
+        const nextUrl = new URL(location.href);
+        if(nextVer) nextUrl.searchParams.set('v', nextVer);
+        nextUrl.searchParams.set('_', String(now));
+        if(remoteStamp) nextUrl.searchParams.set('_bs', remoteStamp);
+        location.replace(nextUrl.toString());
+        return true;
+      }catch(e){}
+      return false;
+    }
+
+    async function hardRefreshToVersion(nextVer){
+      const nv = normVer(nextVer);
+      if(!nv) return false;
+      try{
+        const LOCK_KEY = ((window.__TASUN_GLOBALS__||{}).CONSTS||{}).FORCE_LATEST_LOCK_KEY || 'tasun_force_latest_lock_r5';
+        const now = Date.now();
+        const raw = sessionStorage.getItem(LOCK_KEY) || '';
+        const lock = raw ? JSON.parse(raw) : null;
+        if(lock && lock.v === nv && (now - Number(lock.ts || 0)) < 15000){
+          return false;
         }
-        // normalize minimal fields so normalizeRow can work
-        if(x.deleted===undefined && x._deleted!==undefined){ x.deleted = !!x._deleted; changed = true; }
-        if(x.deleted===undefined) x.deleted = !!x.deleted;
-        if(!x.rev){ x.rev = "r" + Date.now().toString(16) + "_" + Math.random().toString(16).slice(2,6); changed = true; }
-        if(!x.updatedAt){ x.updatedAt = nowISO(); changed = true; }
-      }
-      if(changed){
-        saveLocal({ db: state.db, counter: state.counter });
-      }
-      return changed;
-    }
-
-function getVisibleRows(){
-      var q = norm($("qText").value).toLowerCase();
-      var ft = norm($("fTrade").value);
-      var fs = norm($("fSys").value);
-      var rows = state.db
-        .map(normalizeRow)
-        .filter(Boolean)
-        .filter(function(r){ return !r.deleted; });
-
-      // sort by id asc
-      rows.sort(function(a,b){ return (Number(a.id||0)-Number(b.id||0)) || (tsOf(a)-tsOf(b)); });
-
-      if(q){
-        rows = rows.filter(function(r){ return (r.text||"").toLowerCase().includes(q); });
-      }
-      if(ft){
-        rows = rows.filter(function(r){ return r.trade===ft; });
-      }
-      if(fs){
-        rows = rows.filter(function(r){ return r.sys===fs; });
-      }
-      return rows;
-    }
-
-    function displayNoOf(uid){
-      uid = norm(uid);
-      if(!uid) return 0;
-      var rows = getVisibleRows();
-      for(var i=0;i<rows.length;i++){
-        if(rows[i] && rows[i].uid===uid) return i+1;
-      }
-      return 0;
-    }
-
-
-    function buildDictsFromDb(){
-      var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
-      var trades = new Set(loadDict(TRADE_DICT_KEY));
-      var syss = new Set(loadDict(SYS_DICT_KEY));
-      var sources = new Set(loadDict(SOURCE_DICT_KEY));
-
-      var map = loadMap(); // trade -> [sys]
-      for(var i=0;i<rows.length;i++){
-        var r = rows[i];
-        if(r.trade) trades.add(r.trade);
-        if(r.sys) syss.add(r.sys);
-        if(r.source) sources.add(r.source);
-        if(r.trade && r.sys){
-          map[r.trade] = map[r.trade] || [];
-          if(!map[r.trade].includes(r.sys)) map[r.trade].push(r.sys);
+        sessionStorage.setItem(LOCK_KEY, JSON.stringify({ v:nv, ts:now }));
+      }catch(e){}
+      try{
+        if('caches' in window){
+          const names = await caches.keys().catch(()=>[]);
+          await Promise.all((names || []).map((n)=>caches.delete(n).catch(()=>false)));
         }
+      }catch(e){}
+      try{
+        if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations){
+          const regs = await navigator.serviceWorker.getRegistrations().catch(()=>[]);
+          await Promise.all((regs || []).map((r)=>r.unregister().catch(()=>false)));
+        }
+      }catch(e){}
+      try{
+        const seenKey = ((window.__TASUN_GLOBALS__||{}).CONSTS||{}).FORCE_LATEST_SEEN_KEY || 'tasun_force_latest_seen_r5';
+        sessionStorage.setItem(seenKey, nv);
+        localStorage.setItem(seenKey, nv);
+      }catch(e){}
+      const nextUrl = new URL(location.href);
+      nextUrl.searchParams.set('v', nv);
+      nextUrl.searchParams.set('_', String(Date.now()));
+      location.replace(nextUrl.toString());
+      return true;
+    }
+
+    const url = new URL(location.href);
+    const curV = normVer(url.searchParams.get('v'));
+    let VER = normVer(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '') || curV || FALLBACK_VER;
+    const vts = (curV && /^\d{10,}$/.test(curV) && curV !== VER) ? curV : '';
+
+    try{
+      const path = String(url.pathname || '');
+      if(/\/Tasun\/?$/i.test(path)){
+        url.pathname = path.replace(/\/?$/, '/index.html').replace(/\/index\.html\/index\.html$/i, '/index.html');
+        if(VER) url.searchParams.set('v', VER);
+        url.searchParams.set('_', String(Date.now()));
+        location.replace(url.toString());
+        return;
       }
-      saveDict(TRADE_DICT_KEY, Array.from(trades).sort());
-      saveDict(SYS_DICT_KEY, Array.from(syss).sort());
-      saveDict(SOURCE_DICT_KEY, Array.from(sources).sort());
-      saveMap(map);
+    }catch(e){}
+
+    const latestVer = normVer(await fetchLatestVersionText()) || '';
+    if(await ensureLatestBuildSync(true)) return;
+
+    window.APP_VER = latestVer || VER;
+    window.TASUN_APP_VER = latestVer || VER;
+    window.__CACHE_V = latestVer || VER || curV || '';
+    VER = latestVer || VER;
+
+    if (VER && (curV !== VER || vts)) {
+      url.searchParams.set('v', VER);
+      url.searchParams.set('_', vts || String(Date.now()));
+      location.replace(url.toString());
+      return;
     }
 
-    // 修訂2：依工種取得系統清單（來源：工種-系統綁定表 + 本頁資料），並去重排序
-    function collectSysForTrade(trade, dbArr){
-      trade = norm(trade);
-      var set = new Set();
-
-      // 來源1：工種-系統綁定表（指定工種）
-      var bound = (TRADE_SYS_MAP && trade && TRADE_SYS_MAP[trade]) ? TRADE_SYS_MAP[trade] : [];
-      for(var i=0;i<bound.length;i++){ if(bound[i]) set.add(String(bound[i])); }
-
-      // 來源2：本頁資料庫中該工種實際出現過的系統（補強：避免綁定表漏掉）
-      var rows = (dbArr||[]).map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
-      for(var j=0;j<rows.length;j++){
-        if(rows[j].trade===trade && rows[j].sys) set.add(rows[j].sys);
-      }
-
-      return Array.from(set).sort();
-    }
-
-
-
-
-
-
-
-    // ---------------------------
-    // Dict / Map helpers
-    // ---------------------------
-    function loadDict(key){
-      var a = safeJSON(localStorage.getItem(key));
-      return Array.isArray(a) ? a.filter(Boolean).map(function(x){return norm(x);}).filter(Boolean) : [];
-    }
-    function saveDict(key, arr){
-      arr = Array.isArray(arr) ? arr.filter(Boolean).map(function(x){return norm(x);}).filter(Boolean) : [];
-      // unique + sort
-      var set = new Set(arr);
-      localStorage.setItem(key, JSON.stringify(Array.from(set).sort()));
-    }
-    function loadMap(){
-      var m = safeJSON(localStorage.getItem(TRADE_SYS_MAP_KEY));
-      return (m && typeof m==="object") ? m : {};
-    }
-    function saveMap(m){
-      if(!m || typeof m!=="object") m = {};
-      // normalize arrays
-      Object.keys(m).forEach(function(k){
-        var a = m[k];
-        if(!Array.isArray(a)) a = [];
-        var set = new Set(a.map(function(x){return norm(x);}).filter(Boolean));
-        m[k] = Array.from(set).sort();
-      });
-      localStorage.setItem(TRADE_SYS_MAP_KEY, JSON.stringify(m));
-    }
-
-    function saveSnapshot(rows, meta){
-      var arr = Array.isArray(rows) ? rows : [];
-      try{ localStorage.setItem(DB_SNAPSHOT_KEY, JSON.stringify(arr)); }catch(e){}
-      try{ sessionStorage.setItem(DB_SNAPSHOT_SESSION_KEY, JSON.stringify(arr)); }catch(e){}
-      var metaObj = Object.assign({ at: nowISO(), appVer: APP_VER, pageKey: PAGE_KEY }, meta||{});
-      try{ localStorage.setItem(DB_SNAPSHOT_META_KEY, JSON.stringify(metaObj)); }catch(e){}
-      try{ sessionStorage.setItem(DB_SNAPSHOT_SESSION_META_KEY, JSON.stringify(metaObj)); }catch(e){}
-    }
-
-    function loadSnapshotRows(){
-      var arr = safeJSON(localStorage.getItem(DB_SNAPSHOT_KEY));
-      if(Array.isArray(arr) && arr.length) return arr;
-      arr = safeJSON(sessionStorage.getItem(DB_SNAPSHOT_SESSION_KEY));
-      return Array.isArray(arr) ? arr : [];
-    }
-
-    function normalizeCloudDbPayload(payload){
-      var p = unwrap(payload);
-      if(Array.isArray(p)) return p;
-      if(!p || typeof p!=="object") return [];
-      if(Array.isArray(p.db)) return p.db;
-      if(Array.isArray(p.rows)) return p.rows;
-      if(Array.isArray(p.items)) return p.items;
-      if(Array.isArray(p.records)) return p.records;
-      if(Array.isArray(p.data)) return p.data;
-      if(p.payload && typeof p.payload==="object") return normalizeCloudDbPayload(p.payload);
-      return [];
-    }
-
-    function unwrap(obj){
-      if(!obj || typeof obj!=="object") return obj;
-      return obj.payload ?? obj.data ?? obj.result ?? obj;
-    }
-
-    function tsOf(r){
-      var raw = r && (r.updatedAt!==undefined ? r.updatedAt : (r.ts!==undefined ? r.ts : (r.time!==undefined ? r.time : "")));
-      var n = Number(raw||0);
-      if(Number.isFinite(n) && n>0) return n;
-      var t = norm(raw);
-      if(!t) return 0;
-      n = Date.parse(t);
-      return Number.isFinite(n) ? n : 0;
-    }
-
-    // ---------------------------
-    // State
-    // ---------------------------
-    var state = {
-      lastSyncAt:0,
-      clientId:'',
-      db: [],
-      counter: 0,
-      user: null,
-      role: "read",
-      selectedUid: "",
-      mode: "view",
-      readMode: false,
-      cloud: { ok:false, cfgOk:false, apiBase:"", endpoints:null, lastSyncAt:"", lastOkAt:"" },
-      _legacyScan: null
+    window.__withV = function (u) {
+      return addVer(u, window.__CACHE_V || VER || FALLBACK_VER);
     };
 
-    // load map once (kept in memory + persisted on change)
-    var TRADE_SYS_MAP = loadMap();
-
-    // ---------------------------
-    // Merge logic (cloud/local)
-    // ---------------------------
-    function ensureRowV1(r){
-      r = normalizeRow(r);
-      if(!r) return null;
-
-      // mandatory fields per v1
-      r.uid = norm(r.uid);
-      if(!r.uid) return null;
-      r.pk = r.uid; // internal convenience
-      var ts = Number(r.updatedAt||0);
-      if(!Number.isFinite(ts) || ts<=0){
-        var parsed = Date.parse(r.updatedAt || "");
-        ts = Number.isFinite(parsed) ? parsed : Date.now();
-      }
-      r.updatedAt = ts;
-      var rv = Number(r.rev||0);
-      if(!Number.isFinite(rv) || rv<=0) rv = ts;
-      r.rev = rv;
-      r.deleted = !!r.deleted;
-
-      // id is display only; keep numeric but not required
-      if(!Number.isFinite(Number(r.id))) r.id = 0;
-
-      // normalize date value (YYYY-MM-DD preferred)
-      if(r.date && /^\d{4}-\d{2}-\d{2}/.test(r.date)===false){
-        // accept ISO -> slice
-        if(/^\d{4}-\d{2}-\d{2}T/.test(r.date)) r.date = r.date.slice(0,10);
-      }
-      return r;
-    }
-
-    function mergeTwo(a, b){
-      // choose newer by updatedAt; tie -> keep non-empty fields of either
-      var ta = tsOf(a), tb = tsOf(b);
-      var newer = (tb>ta) ? b : a;
-      var older = (newer===a) ? b : a;
-      var out = Object.assign({}, older, newer);
-      // ✅ 修訂：避免「系統 sys」在雲端合併時被空字串覆蓋（曾造成表格顯示異常）
-// 但其他欄位（例如附件 attach）必須允許使用者清空，所以只保護 sys。
-(["sys"]).forEach(function(k){
-  var touched = !!(newer && newer._touch && newer._touch[k]);
-  // 若非刻意清空，且新值為空、舊值不空，則保留舊值
-  if(!touched && !norm(newer && newer[k]) && norm(older && older[k])) out[k] = older[k];
-});
-
-// if either says deleted true and it's newer, keep deleted true
-      out.deleted = !!newer.deleted;
-
-      // keep essential fields
-      out.uid = norm(out.uid || newer.uid || older.uid);
-      var outTs = Number(out.updatedAt||0);
-      if(!Number.isFinite(outTs) || outTs<=0){
-        var parsedTs = Date.parse(out.updatedAt || "");
-        outTs = Number.isFinite(parsedTs) ? parsedTs : Date.now();
-      }
-      out.updatedAt = outTs;
-      var outRev = Number(out.rev||0);
-      if(!Number.isFinite(outRev) || outRev<=0) outRev = outTs;
-      out.rev = outRev;
-      out.pk = out.uid;
-      return out;
-    }
-
-    function mergePayload(remote, local){
-      // payload: {db:[rows], counter}
-      var ldb = (local && Array.isArray(local.db)) ? local.db : [];
-      var rdb = (remote && Array.isArray(remote.db)) ? remote.db : [];
-
-      var map = new Map();
-      function put(x){
-        var r = ensureRowV1(x);
-        if(!r) return;
-        var key = r.uid;
-        if(!map.has(key)) map.set(key, r);
-        else map.set(key, mergeTwo(map.get(key), r));
-      }
-      ldb.forEach(put);
-      rdb.forEach(put);
-
-      var outDb = Array.from(map.values());
-      // keep stable order: by date desc then updatedAt desc, else uid
-      outDb.sort(function(a,b){
-        var da = norm(a.date), db = norm(b.date);
-        if(da && db && da!==db) return db.localeCompare(da);
-        var ta = tsOf(a), tb = tsOf(b);
-        if(tb!==ta) return tb-ta;
-        return norm(a.uid).localeCompare(norm(b.uid));
-      });
-
-      var lc = Number(local && local.counter || 0) || 0;
-      var rc = Number(remote && remote.counter || 0) || 0;
-      return { db: outDb, counter: Math.max(lc, rc) };
-    }
-
-    // ---------------------------
-    // UI: filters and selects
-    // ---------------------------
-    function setOptions(el, arr, keepValue, opt){
-      opt = opt || {};
-      if(!el) return;
-      var cur = keepValue ? norm(el.value) : "";
-      var tag = (el.tagName||"").toUpperCase();
-
-      // SELECT: rebuild <option>
-      if(tag==="SELECT"){
-        el.innerHTML = "";
-        if(opt.includeAll){
-          var op0 = document.createElement("option");
-          op0.value = ""; op0.textContent = "全部";
-          el.appendChild(op0);
-        }
-        (arr||[]).forEach(function(v){
-          v = norm(v);
-          if(!v) return;
-          var op = document.createElement("option");
-          op.value = v; op.textContent = v;
-          el.appendChild(op);
-        });
-        if(opt.forceValue!==undefined) el.value = String(opt.forceValue);
-        if(keepValue && cur && Array.from(el.options).some(function(o){return o.value===cur;})){
-          el.value = cur;
-        }
-        return;
-      }
-
-      // INPUT + datalist: rebuild datalist options (keep input value as-is)
-      var listId = el.getAttribute("list");
-      var dl = listId ? $(listId) : null;
-      if(dl){
-        dl.innerHTML = "";
-        (arr||[]).forEach(function(v){
-          v = norm(v);
-          if(!v) return;
-          var op = document.createElement("option");
-          op.value = v;
-          dl.appendChild(op);
-        });
-      }
-      if(keepValue && cur) el.value = cur;
-    }
-
-    function uniqueOf(arr){
-      var set = new Set();
-      (arr||[]).forEach(function(x){ x = norm(x); if(x) set.add(x); });
-      return Array.from(set).sort();
-    }
-
-    // ✅ 系統篩選清單：需與「目前搜尋/工種」顯示結果一致（不含系統本身的篩選）
-    function getBaseRowsForSysFilter(){
-      var q = norm($("qText").value).toLowerCase();
-      var ft = norm($("fTrade").value);
-      var rows = state.db
-        .map(normalizeRow)
-        .filter(Boolean)
-        .filter(function(r){ return !r.deleted; });
-
-      if(ft){
-        rows = rows.filter(function(r){ return r.trade===ft; });
-      }
-      if(q){
-        rows = rows.filter(function(r){ return (r.text||"").toLowerCase().includes(q); });
-      }
-      return rows;
-    }
-
-
-    function rebuildFilterOptions(){
-      // build dicts first
-      buildDictsFromDb();
-
-      var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
-
-      // ✅ 主頁「工種」篩選：只顯示目前資料表工種不重複
-      var tradesTable = uniqueOf(rows.map(function(r){return r.trade;}));
-      setOptions($("fTrade"), tradesTable, true, { includeAll:true });
-
-      // ✅ 主頁「系統」篩選：需與「目前搜尋/工種」顯示結果一致（避免下拉選單與列表不一致）
-      var sysList;
-      var ft = norm($("fTrade").value);
-      if(ft){
-        var baseRows = getBaseRowsForSysFilter(); // 已套用 工種 + 搜尋（不含系統篩選）
-        sysList = uniqueOf(baseRows.map(function(r){ return r.sys; }));
-        // 若目前搜尋結果剛好 0 筆，仍保留「工種所屬系統」作為備援（避免空選單）
-        if(!sysList.length){
-          sysList = collectSysForTrade(ft, state.db);
-        }
-      }else{
-        var q = norm($("qText").value).toLowerCase();
-        var baseRows2 = rows.slice();
-        if(q){
-          baseRows2 = baseRows2.filter(function(r){ return (r.text||"").toLowerCase().includes(q); });
-        }
-        sysList = uniqueOf(baseRows2.map(function(r){ return r.sys; }));
-        if(!sysList.length){
-          // 備援：字典 + 本頁資料
-          sysList = uniqueOf(rows.map(function(r){return r.sys;})).concat(loadDict(SYS_DICT_KEY));
-          sysList = uniqueOf(sysList);
-        }
-      }
-      setOptions($("fSys"), sysList, true, { includeAll:true });
-
-      // ✅「新增/編輯」視窗  工種：依字典不重複（若字典空，回退用表格不重複）
-      var tradeDict = uniqueOf(loadDict(TRADE_DICT_KEY));
-      if(!tradeDict.length) tradeDict = tradesTable.slice();
-      setOptions($("mTradeSel"), tradeDict, true, { includeBlank:true });
-
-      // ✅「新增/編輯」視窗  系統：依字典工種所屬不重複系統（工種-系統綁定表 + 本頁資料）
-      var mTrade = norm($("mTradeSel").value);
-      var mSysList = mTrade ? collectSysForTrade(mTrade, state.db) : uniqueOf(loadDict(SYS_DICT_KEY));
-      setOptions($("mSysSel"), mSysList, true, { includeBlank:true });
-
-      // ✅ 出處：字典 + 本頁資料去重；輸入框的 datalist 由 mSourceSel 來填
-      var sources = uniqueOf(rows.map(function(r){return r.source;})).concat(loadDict(SOURCE_DICT_KEY));
-      sources = uniqueOf(sources);
-      setOptions($("mSourceSel"), sources, true, { includeBlank:true });
-    }
-
-    // when trade filter changes, system filter must be recomputed (修訂2), system filter must be recomputed (修訂2)
-    function onTradeFilterChanged(){
-      var ft = norm($("fTrade").value);
-      var fsOld = norm($("fSys").value);
-
-      // ✅ 系統下拉需跟著「工種 + 目前搜尋」同步（不含系統本身）
-      var sysList;
-      if(ft){
-        var baseRows = getBaseRowsForSysFilter();
-        sysList = uniqueOf(baseRows.map(function(r){ return r.sys; }));
-        if(!sysList.length){
-          sysList = collectSysForTrade(ft, state.db);
-        }
-      }else{
-        var q = norm($("qText").value).toLowerCase();
-        var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
-        if(q){
-          rows = rows.filter(function(r){ return (r.text||"").toLowerCase().includes(q); });
-        }
-        sysList = uniqueOf(rows.map(function(r){return r.sys;}));
-        if(!sysList.length){
-          sysList = uniqueOf(state.db.map(normalizeRow).filter(Boolean).filter(function(r){return !r.deleted;}).map(function(r){return r.sys;})).concat(loadDict(SYS_DICT_KEY));
-          sysList = uniqueOf(sysList);
-        }
-      }
-
-      setOptions($("fSys"), sysList, false, { includeAll:true, forceValue:"" });
-      if(fsOld && sysList.includes(fsOld)) $("fSys").value = fsOld;
-      refresh();
-    }
-
-    // modal trade changed => update modal system options (修訂2)
-    function onModalTradeChanged(){
-      var t = norm($("mTradeSel").value);
-      var curSys = norm($("mSysSel").value);
-      var list = t ? collectSysForTrade(t, state.db) : uniqueOf(loadDict(SYS_DICT_KEY));
-      setOptions($("mSysSel"), list, false, { includeBlank:true });
-      if(curSys && list.includes(curSys)) $("mSysSel").value = curSys;
-    }
-
-    // ---------------------------
-    // Render: table + cards
-    // ---------------------------
-    function attachCell(attach){
-      attach = norm(attach);
-      if(!attach) return document.createTextNode("—");
-      var a = document.createElement("a");
-      a.href = addV(attach);
-      a.target="_blank";
-      a.rel="noopener";
-      a.textContent = "開啟";
-      a.style.fontWeight="900";
-      a.style.color="rgba(120,64,6,.96)";
-      return a;
-    }
-
-    function mkBtn(text, onClick){
-      var b = document.createElement("button");
-      b.className="attBtn";
-      b.type="button";
-      var span = document.createElement("span");
-      span.className="t";
-      span.textContent = text;
-      b.appendChild(span);
-      b.addEventListener("click", onClick);
-      return b;
-    }
-
-    function renderTable(rows){
-      var tb = $("tbody");
-      tb.innerHTML = "";
-      if(!rows || !rows.length){
-        var tr0 = document.createElement("tr");
-        var td0 = document.createElement("td");
-        td0.colSpan = 9;
-        td0.style.textAlign = "center";
-        td0.style.padding = "24px 12px";
-        td0.style.color = "rgba(90,60,20,.72)";
-        td0.style.fontWeight = "800";
-        td0.textContent = "目前沒有可顯示資料；系統會自動嘗試雲端同步。";
-        tr0.appendChild(td0);
-        tb.appendChild(tr0);
-        return;
-      }
-      for(var i=0;i<rows.length;i++){
-        var r = rows[i];
-        var tr = document.createElement("tr");
-        if(r.uid===state.selectedUid) tr.classList.add("sel");
-
-        var tdNo = document.createElement("td");
-        tdNo.style.textAlign="center";
-        tdNo.textContent = String(i+1); // 修訂3：依顯示列排序顯示項次
-        tr.appendChild(tdNo);
-
-        var tdText = document.createElement("td");
-        tdText.textContent = r.text || "";
-        tr.appendChild(tdText);
-
-        var tdTrade = document.createElement("td");
-        tdTrade.style.textAlign="center";
-        tdTrade.textContent = r.trade || "";
-        tr.appendChild(tdTrade);
-
-        var tdSys = document.createElement("td");
-        tdSys.style.textAlign="center";
-        tdSys.textContent = r.sys || "";
-        tr.appendChild(tdSys);
-
-        var tdSrc = document.createElement("td");
-        tdSrc.style.textAlign="center";
-        tdSrc.textContent = r.source || "";
-        tr.appendChild(tdSrc);
-
-        var tdAtt = document.createElement("td");
-        tdAtt.style.textAlign="center";
-        tdAtt.appendChild(attachCell(r.attach));
-        tr.appendChild(tdAtt);
-
-        var tdRem = document.createElement("td");
-        tdRem.textContent = r.remark || "";
-        tr.appendChild(tdRem);
-
-        var tdDate = document.createElement("td");
-        tdDate.style.textAlign="center";
-        tdDate.textContent = r.date || "";
-        tr.appendChild(tdDate);
-
-        var tdAct = document.createElement("td");
-        tdAct.style.textAlign="center";
-        tdAct.appendChild(mkBtn("選取", (function(uid){ return function(e){
-          e.stopPropagation();
-          selectRow(uid);
-        };})(r.uid)));
-        tr.appendChild(tdAct);
-
-        tr.addEventListener("click", (function(uid){ return function(){
-          selectRow(uid);
-        };})(r.uid));
-
-        tb.appendChild(tr);
-      }
-    }
-
-    function renderCards(rows){
-      var box = $("cards");
-      box.innerHTML = "";
-      if(!rows || !rows.length){
-        var empty = document.createElement("div");
-        empty.className = "noteCard";
-        empty.innerHTML = '<div class="noteBody" style="text-align:center;">目前沒有可顯示資料；系統會自動嘗試雲端同步。</div>';
-        box.appendChild(empty);
-        return;
-      }
-      for(var i=0;i<rows.length;i++){
-        var r = rows[i];
-        var card = document.createElement("div");
-        card.className = "noteCard" + (r.uid===state.selectedUid ? " sel": "");
-        card.dataset.uid = r.uid;
-
-        var head = document.createElement("div");
-        head.className = "noteHead";
-        var meta = document.createElement("div");
-        meta.className = "noteMeta";
-
-        function tag(txt){
-          var s=document.createElement("span");
-          s.className="noteTag";
-          s.textContent=txt;
-          return s;
-        }
-        meta.appendChild(tag("項次 " + (i+1)));
-        if(r.trade) meta.appendChild(tag(r.trade));
-        if(r.sys) meta.appendChild(tag(r.sys));
-        if(r.source) meta.appendChild(tag(r.source));
-        if(r.date) meta.appendChild(tag(r.date));
-
-        head.appendChild(meta);
-
-        var btn = mkBtn("選取", (function(uid){ return function(e){ e.stopPropagation(); selectRow(uid); };})(r.uid));
-        head.appendChild(btn);
-
-        var body = document.createElement("div");
-        body.className="noteBody";
-        body.textContent = r.text || "";
-
-        var more = document.createElement("div");
-        more.className="noteMore miniHint";
-        more.textContent = "點一下展開/收合內容";
-
-        card.appendChild(head);
-        card.appendChild(body);
-        card.appendChild(more);
-
-        card.addEventListener("click", function(){
-          var uid = this.dataset.uid;
-          selectRow(uid);
-          this.classList.toggle("open");
-        });
-
-        box.appendChild(card);
-      }
-    }
-
-    function refresh(){
-      rebuildFilterOptions();
-      var rows = getVisibleRows();
-
-      renderTable(rows);
-      renderCards(rows);
-
-      // hint
-      var cloudTxt = state.cloud.ok ? "已同步" : (state.cloud.cfgOk ? "待同步" : "未設定");
-      var lastTxt = state.cloud.lastOkAt ? fmtClock(state.cloud.lastOkAt) : "—";
-      var roleTxt = state.role==="admin" ? "admin" : (state.role==="write"?"可編輯":"唯讀");
-
-      $("hint").innerHTML = "";
-      function hb(k,v,bad){
-        var s=document.createElement("span");
-        s.className="hb"+(bad?" bad":"");
-        s.innerHTML = '<span class="k">'+escHtml(k)+'</span><span class="v">'+escHtml(v)+'</span>';
-        return s;
-      }
-      $("hint").appendChild(hb("版本", APP_VER));
-      $("hint").appendChild(hb("筆數", String(rows.length) + " / " + String(state.db.map(normalizeRow).filter(Boolean).filter(function(r){return !r.deleted;}).length)));
-      $("hint").appendChild(hb("選取", state.selectedUid ? "已選取" : "未選取", !state.selectedUid));
-      $("hint").appendChild(hb("雲端", cloudTxt, !state.cloud.ok));
-      $("hint").appendChild(hb("最後", lastTxt));
-      }
-
-    function selectRow(uid){
-      uid = norm(uid);
-      state.selectedUid = uid;
-      refresh();
-    }
-
-    // ---------------------------
-    // Modal logic
-    // ---------------------------
-    function openMask(mode){
-      state.mode = mode;
-      // (v12) prevent background scroll while modal is open
-      if(state._prevBodyOverflow===undefined){ state._prevBodyOverflow = document.body.style.overflow || ""; }
-      document.body.style.overflow = "hidden";
-      $("mask").style.display = "flex";
-      $("mTitle").textContent = (mode==="add") ? "新增" : (mode==="edit" ? "編輯" : "查看");
-      var canEdit = (state.role==="admin" || state.role==="write") && (mode!=="view");
-      $("btnSave").style.display = canEdit ? "" : "none";
-      $("btnDelete").style.display = (canEdit && mode!=="add") ? "" : "none";
-      // lock inputs in view mode
-      var ro = (mode==="view");
-      ["mText","mAttach","mRemark","mDate"].forEach(function(id){ $(id).disabled = ro; });
-      ["mTradeSel","mSysSel","mSourceSel"].forEach(function(id){ $(id).disabled = ro; });
-      ["btnAddTrade","btnAddSys","btnAddSource","btnNetDisk"].forEach(function(id){ $(id).disabled = ro; });
-    }
-
-    function closeMask(){
-      $("mask").style.display = "none";
-      // (v12) restore page scroll
-      try{ document.body.style.overflow = (state._prevBodyOverflow===undefined) ? "" : state._prevBodyOverflow; }catch(e){}
-    }
-
-    function fillModal(row){
-      row = row || {};
-      $("mText").value = norm(row.text);
-      $("mTradeSel").value = norm(row.trade);
-      onModalTradeChanged();
-      $("mSysSel").value = norm(row.sys);
-      $("mSourceSel").value = norm(row.source);
-      $("mAttach").value = norm(row.attach);
-      $("mRemark").value = norm(row.remark);
-      $("mDate").value = norm(row.date) || todayISO();
-      $("mNo").value = row.uid ? String(displayNoOf(row.uid) || "") : "";
-    }
-
-    function currentRowByUid(uid){
-      uid = norm(uid);
-      if(!uid) return null;
-      for(var i=0;i<state.db.length;i++){
-        var r = ensureRowV1(state.db[i]);
-        if(r && r.uid===uid) return r;
-      }
-      return null;
-    }
-
-    function openView(){
-      if(!state.selectedUid){ toast("請先選取一筆"); return; }
-      var r = currentRowByUid(state.selectedUid);
-      if(!r){ toast("找不到資料"); return; }
-      fillModal(r);
-      openMask("view");
-    }
-
-    function openEdit(){
-      if(!state.selectedUid){ toast("請先選取一筆"); return; }
-      if(!(state.role==="admin" || state.role==="write")){ toast("目前權限不可編輯"); return; }
-      var r = currentRowByUid(state.selectedUid);
-      if(!r){ toast("找不到資料"); return; }
-      fillModal(r);
-      openMask("edit");
-    }
-
-    function openAdd(){
-      if(!(state.role==="admin" || state.role==="write")){ toast("目前權限不可新增"); return; }
-      state.selectedUid = "";
-      fillModal({ date: todayISO() });
-      openMask("add");
-    }
-
-    function modalToRow(existingUid){
-      var uid = existingUid ? norm(existingUid) : uuid();
-      // ✅ _touch：標記本次「表單有改動/有填寫」的欄位，讓 mergeTwo 判斷「刻意清空」也要生效
-      var touch = { text:1, trade:1, sys:1, source:1, attach:1, remark:1, date:1 };
-      var r = {
-        uid: uid,
-        id: 0, // display only
-        text: norm($("mText").value),
-        trade: norm($("mTradeSel").value),
-        sys: norm($("mSysSel").value),
-        source: norm($("mSourceSel").value),
-        attach: norm($("mAttach").value),
-        remark: norm($("mRemark").value),
-        date: norm($("mDate").value) || todayISO(),
-        updatedAt: Date.now(),
-        rev: Date.now(),
-        deleted: false,
-        _touch: touch
-      };
-      return ensureRowV1(r);
-    }
-
-    function upsertRow(row){
-      var found = false;
-      for(var i=0;i<state.db.length;i++){
-        var r = ensureRowV1(state.db[i]);
-        if(r && r.uid===row.uid){
-          state.db[i] = mergeTwo(r, row);
-          found = true;
-          break;
-        }
-      }
-      if(!found) state.db.push(row);
-      markDirty(row.uid);
-      saveLocal({ db: state.db, counter: state.counter });
-      buildDictsFromDb();
-      refresh();
-    }
-
-    function deleteRow(uid){
-      uid = norm(uid);
-      if(!uid) return;
-      for(var i=0;i<state.db.length;i++){
-        var r = ensureRowV1(state.db[i]);
-        if(r && r.uid===uid){
-          r.deleted = true;
-          r.updatedAt = Date.now();
-          r.rev = Date.now();
-          state.db[i] = r;
-          break;
-        }
-      }
-      markDirty(uid);
-      saveLocal({ db: state.db, counter: state.counter });
-      refresh();
-    }
-
-    // ---------------------------
-    // Prompt modal (add trade/sys/source)
-    // ---------------------------
-    var promptMode = "";
-
-function setPromptListOptions(arr){
-  var dl = $("pList");
-  if(!dl) return;
-  dl.innerHTML = "";
-  (arr||[]).forEach(function(v){
-    v = norm(v);
-    if(!v) return;
-    var op = document.createElement("option");
-    op.value = v;
-    dl.appendChild(op);
-  });
-}
-
-function getPromptOptions(mode){
-  var rows = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; });
-  if(mode==="trade"){
-    return uniqueOf(rows.map(function(r){return r.trade;})).concat(loadDict(TRADE_DICT_KEY)).filter(Boolean);
-  }
-  if(mode==="sys"){
-    var t = norm($("mTradeSel").value);
-    if(t) return collectSysForTrade(t, state.db);
-    return uniqueOf(rows.map(function(r){return r.sys;})).concat(loadDict(SYS_DICT_KEY)).filter(Boolean);
-  }
-  if(mode==="source"){
-    return uniqueOf(rows.map(function(r){return r.source;})).concat(loadDict(SOURCE_DICT_KEY)).filter(Boolean);
-  }
-  return [];
-}
-
- // "trade" | "sys" | "source"
-    function openPrompt(mode){
-      promptMode = mode;
-      $("pMask").style.display="flex";
-      $("pInput").value="";
-      if(mode==="trade"){
-        $("pTitle").textContent="新增工種";
-        $("pLabel").textContent="請輸入工種";
-        $("pHint").textContent="新增後會加入「工種字典」。";
-      }else if(mode==="sys"){
-        $("pTitle").textContent="新增系統";
-        $("pLabel").textContent="請輸入系統";
-        $("pHint").textContent="新增後會加入「系統字典」，並綁定到目前工種。";
-      }else{
-        $("pTitle").textContent="新增出處";
-        $("pLabel").textContent="請輸入出處";
-        $("pHint").textContent="新增後會加入「出處字典」。";
-      }
-      // ✅ 讓「新增」視窗也能用下拉建議（不改 UI；用 datalist）
-      setPromptListOptions(uniqueOf(getPromptOptions(mode)));
-      setTimeout(function(){ $("pInput").focus(); }, 50);
-    }
-    function closePrompt(){ $("pMask").style.display="none"; promptMode=""; }
-
-    function commitPrompt(){
-      var val = norm($("pInput").value);
-      if(!val){ toast("請輸入內容"); return; }
-
-      if(promptMode==="trade"){
-        var trades = uniqueOf(loadDict(TRADE_DICT_KEY).concat([val]));
-        saveDict(TRADE_DICT_KEY, trades);
-        rebuildFilterOptions();
-        $("mTradeSel").value = val;
-        onModalTradeChanged();
-        toast("已新增工種");
-      }else if(promptMode==="sys"){
-        var syss = uniqueOf(loadDict(SYS_DICT_KEY).concat([val]));
-        saveDict(SYS_DICT_KEY, syss);
-
-        var t = norm($("mTradeSel").value);
-        if(t){
-          TRADE_SYS_MAP[t] = TRADE_SYS_MAP[t] || [];
-          if(!TRADE_SYS_MAP[t].includes(val)) TRADE_SYS_MAP[t].push(val);
-          saveMap(TRADE_SYS_MAP);
-        }
-        rebuildFilterOptions();
-        $("mSysSel").value = val;
-        toast("已新增系統並綁定");
-      }else if(promptMode==="source"){
-        var srcs = uniqueOf(loadDict(SOURCE_DICT_KEY).concat([val]));
-        saveDict(SOURCE_DICT_KEY, srcs);
-        rebuildFilterOptions();
-        $("mSourceSel").value = val;
-        toast("已新增出處");
-      }
-      closePrompt();
-    }
-
-    // ---------------------------
-    // Cloud API
-    // ---------------------------
-      // --- Cloud API (Worker pull/merge compatible) ---
-      // Worker supports:
-      //   GET  /api/tasun/pull?key=PAGE_KEY   (or GET /api/read?key=PAGE_KEY)
-      //   POST /api/tasun/merge              (or POST /api/merge) body: { key, payload:{db,counter}, client:{user,...} }
-      // Response payload shape: { ok:true, payload:{db,counter}, ... }
-
-      function _joinUrl(base, path){
-        base = (base || "").replace(/\/+$/,"");
-        path = (path || "").trim();
-        if(!path) return base;
-        if(path.startsWith("http://") || path.startsWith("https://")) return path;
-        if(!path.startsWith("/")) path = "/" + path;
-        return base + path;
-      }
-
-      async function cloudHealth(cfg){
-        try{
-          cfg = cfg || await loadCloudCfg();
-          const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
-          const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-
+    window.__TASUN_DEFERRED_CORE_LOAD__ = window.__TASUN_DEFERRED_CORE_LOAD__ || (function(){
+      let coreLoadPromise = null;
+      return function(){
+        if(coreLoadPromise) return coreLoadPromise;
+        coreLoadPromise = (async function(){
           try{
-            state.cloud.apiBase = apiBase || "";
-            state.cloud.endpoints = eps || null;
-            state.cloud.cfgOk = !!(cfg && isValidApiBase(apiBase));
+            await loadOnce('tasun-next-fix', window.__withV('tasun-next-fix.js'));
+            await loadOnce('tasun-cloudwrap-v4', window.__withV('tasun-cloudwrap-v4.js'));
+            await loadOnce('tasun-auth-v4', window.__withV('tasun-auth-v4.js'));
+            await loadOnce('tasun-guard-v5', window.__withV('tasun-guard-v5.js'));
           }catch(e){}
+          return true;
+        })();
+        return coreLoadPromise;
+      };
+    })();
 
-          const candidates = [];
-          if(eps && eps.health) candidates.push(_joinUrl(apiBase, eps.health));
-          // common fallbacks
-          candidates.push(_joinUrl(apiBase, "/api/ping"));
-          candidates.push(_joinUrl(apiBase, "/api/tasun/ping"));
-          candidates.push(_joinUrl(apiBase, "/api/ping"));
+    (function initViewportStabilizer(){
+      const root = document.documentElement;
+      let minH = 0;
+      let lastW = 0;
+      function calcVV(reset){
+        try{
+          const vv = window.visualViewport;
+          const h = Math.round(vv ? vv.height : window.innerHeight);
+          const w = Math.round(vv ? vv.width  : window.innerWidth);
+          const top = Math.round(vv ? vv.offsetTop : 0);
+          const bottom = Math.max(0, Math.round(window.innerHeight - (vv ? (vv.height + vv.offsetTop) : window.innerHeight)));
+          root.style.setProperty('--vv-top', top + 'px');
+          root.style.setProperty('--vv-bottom', bottom + 'px');
+          if(reset || !minH || Math.abs(w - lastW) > 180){
+            minH = h;
+            lastW = w;
+          }else{
+            minH = Math.min(minH, h);
+          }
+          root.style.setProperty('--appH', minH + 'px');
+          root.style.setProperty('--appHLive', h + 'px');
+          root.style.setProperty('--appW', w + 'px');
+        }catch(e){
+          try{
+            root.style.setProperty('--appH', window.innerHeight + 'px');
+            root.style.setProperty('--appHLive', window.innerHeight + 'px');
+            root.style.setProperty('--appW', window.innerWidth + 'px');
+          }catch(_e){}
+        }
+      }
+      calcVV(true);
+      const onResize = () => calcVV(false);
+      const onOrient = () => calcVV(true);
+      window.addEventListener('resize', onResize, { passive:true });
+      window.addEventListener('orientationchange', onOrient, { passive:true });
+      if(window.visualViewport){
+        window.visualViewport.addEventListener('resize', onResize, { passive:true });
+        window.visualViewport.addEventListener('scroll', onResize, { passive:true });
+      }
+      document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible') calcVV(false); }, { passive:true });
+    })();
 
-          for(const url of candidates){
+    try{
+      const id = 'preloadZen';
+      if(!document.getElementById(id)){
+        const l = document.createElement('link');
+        l.id = id;
+        l.rel = 'preload';
+        l.as = 'image';
+        l.href = window.__withV('佛教禪意主視覺.png');
+        l.setAttribute('crossorigin', 'anonymous');
+        l.crossOrigin = 'anonymous';
+        l.setAttribute('data-base', '佛教禪意主視覺.png');
+        document.head.appendChild(l);
+      }
+    }catch(e){}
+
+    function patchZenResources(){
+      const withV = window.__withV || ((u)=>u);
+      try{
+        const l = document.getElementById('preloadZen');
+        if(l){
+          const base = l.getAttribute('data-base') || l.getAttribute('href') || '';
+          l.setAttribute('crossorigin', 'anonymous');
+          l.crossOrigin = 'anonymous';
+          if(base) l.href = withV(base);
+        }
+      }catch(e){}
+      try{
+        const img = document.getElementById('zenImg');
+        if(img){
+          const base = img.getAttribute('data-base') || img.getAttribute('src') || '';
+          if(base) img.src = withV(base);
+        }
+      }catch(e){}
+    }
+    patchZenResources();
+    document.addEventListener('DOMContentLoaded', patchZenResources, { once:true });
+
+    window.__TASUN_DEFERRED_BOOT__ = window.__TASUN_DEFERRED_BOOT__ || (function(){
+      let started = false;
+      const withV = window.__withV || ((u)=>u);
+      function loadScript(src){
+        return new Promise((resolve)=>{
+          try{
+            const s = document.createElement('script');
+            s.src = src;
+            s.async = false;
+            s.onload = ()=>resolve(true);
+            s.onerror = ()=>resolve(false);
+            document.head.appendChild(s);
+          }catch(e){ resolve(false); }
+        });
+      }
+      async function startNow(){
+        if(started) return true;
+        started = true;
+        try{
+          const deferredCoreLoader = window.__TASUN_DEFERRED_CORE_LOAD__;
+          await (typeof deferredCoreLoader === 'function'
+            ? deferredCoreLoader()
+            : (deferredCoreLoader || Promise.resolve(true)));
+        }catch(e){}
+        await loadScript(withV('tasun-boot.js'));
+        await loadScript(withV('tasun-loader.js'));
+        function tryStart(){
+          try{
+            if(window.TasunLoader && typeof window.TasunLoader.start === 'function'){
+              window.TasunLoader.start({
+                pageKey: 'index',
+                verUrl: 'tasun-version.json',
+                corePath: 'tasun-core.js',
+                forceUrlV: true,
+                forceVersionSync: true,
+                patchResources: true,
+                networkToast: true,
+                appHeightVar: false,
+                preloadId: 'preloadZen',
+                zenImgId: 'zenImg',
+                appVer: window.TASUN_APP_VER
+              });
+              return true;
+            }
+          }catch(e){}
+          return false;
+        }
+        if(!tryStart()){
+          let n = 0;
+          const t = setInterval(()=>{
+            n++;
+            if(tryStart() || n > 40) clearInterval(t);
+          }, 120);
+        }
+        return true;
+      }
+      function waitUntilUnlocked(){
+        let checks = 0;
+        const tick = function(){
+          checks++;
+          try{
+            if(document.body && !document.body.classList.contains('locked')){
+              startNow();
+              return;
+            }
+          }catch(e){}
+          if(checks < 60) setTimeout(tick, 500);
+        };
+        setTimeout(tick, 2500);
+      }
+      waitUntilUnlocked();
+      return { startNow };
+    })();
+  })();
+  </script>
+
+  <style>
+    :root{
+      --gap-01cm: 0.1cm;
+      --outer-side: var(--gap-01cm);
+      --frame-inset: var(--gap-01cm);
+      --frame-radius: clamp(16px, 1.55vw, 30px);
+      --vv-top: 0px;
+      --vv-bottom: 0px;
+      --ambient-op: 0.58;
+      --zen-opacity: 0.99;
+      --zen-scale: 1.00;
+      --zen-contrast: 1.18;
+      --zen-bright: 1.08;
+      --zen-sat: 1.10;
+      --zen-posX: 50%;
+      --zen-posY: 50%;
+      --ripple-op: .0032;
+      --ripple-speed: 30s;
+      --mist-op: .10;
+      --mist-a: rgba(245,250,255,0.10);
+      --mist-b: rgba(235,245,255,0.06);
+      --mist-beam: rgba(255,248,235,0.05);
+      --mist-blur: 16px;
+      --mist-speed: 54s;
+      --panel-blur: 17px;
+      --btn-blur: 17px;
+      --title-size: clamp(2.15rem, 4.6vw, 4.15rem);
+      --axis-top: clamp(78px, 11vh, 170px);
+      --axis-size: clamp(2.00rem, 3.8vw, 3.80rem);
+      --axis-op: 0.92;
+      --side-size: clamp(1.06rem, 2.0vw, 1.70rem);
+      --bottom-size: clamp(1.14rem, 2.2vw, 1.72rem);
+      --side-op: 0.70;
+      --bottom-op: 0.96;
+      --zen-fixed-y: 58%;
+      --zen-fixed-x: clamp(64px, 18vw, 360px);
+      --zw-bottom-lift: clamp(3.10cm, 6.6vh, 4.10cm);
+      --zw-bottom-pad: calc(var(--frame-inset) + var(--zw-bottom-lift) + env(safe-area-inset-bottom) + var(--vv-bottom));
+      --amber-1: rgba(255, 255, 255, 0.78);
+      --amber-2: rgba(255, 244, 210, 0.72);
+      --amber-3: rgba(245, 184, 74, 0.90);
+      --amber-4: rgba(155, 82, 20, 0.96);
+      --gold-fallback: rgba(255, 232, 175, 0.98);
+      --gold-stroke: rgba(92, 56, 22, 0.70);
+      --gold-shadow: rgba(0, 0, 0, 0.52);
+      --gold-glow: rgba(255, 220, 160, 0.18);
+      --btn-border: rgba(246, 211, 122, 0.72);
+      --btn-border-hi: rgba(255, 244, 210, 0.92);
+      --btn-glass-a: 0.060;
+      --btn-glass-b: 0.055;
+      --btn-body-a: rgba(255, 248, 232, 0.055);
+      --btn-body-b: rgba(30, 22, 14, 0.070);
+      --btn-text: rgba(255, 226, 156, 0.99);
+      --btn-stroke: rgba(18, 8, 2, 0.94);
+      --btn-stroke-w: 2.10px;
+      --btn-ol: calc(var(--btn-stroke-w) * 0.62);
+      --btn-shadowA: rgba(0,0,0,0.74);
+      --btn-glowA: rgba(255, 210, 140, 0.18);
+      --userbar-pad: clamp(12px, 1.1vw, 20px);
+      --navTop: 140px;
+      --navBottom: 140px;
+      --btnH: 82px;
+      --btnGap: 14px;
+      --btnW: 380px;
+      --btnScale: 1;
+      --midGap: 64px;
+      --btnColGap: 10px;
+      --stackMaxW: 340px;
+      --zw-bottom-x-shift: 0px;
+    }
+    *{ box-sizing:border-box; margin:0; padding:0; }
+    html, body{ height:100%; }
+    body{
+      min-height:100vh;
+      font-family:'標楷體','Noto Serif TC','Microsoft JhengHei',serif;
+      overflow-x:hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: geometricPrecision;
+      background:
+        radial-gradient(1200px 760px at 50% 10%, rgba(255,247,226,0.74) 0, rgba(255,238,196,0.24) 32%, rgba(0,0,0,0) 72%),
+        radial-gradient(980px 560px at 50% 94%, rgba(255,214,132,0.18) 0, rgba(0,0,0,0) 74%),
+        linear-gradient(180deg, #58422d 0%, #3c2a1d 34%, #24170f 68%, #130c08 100%);
+    }
+    body.locked{ overflow:hidden; }
+    body.booting *{ transition:none !important; }
+    body.prehide .hero{ opacity:0; visibility:hidden; pointer-events:none; }
+    body.prehide .login-overlay{ position:fixed; inset:0; z-index:3000; display:none; align-items:center; justify-content:center; background:
+      radial-gradient(180px 130px at 50% 50%, rgba(255,255,255,0.10) 0, rgba(255,255,255,0.10) 34%, rgba(255,255,255,0.00) 72%),
+      radial-gradient(540px 340px at 50% 50%, rgba(255,245,214,0.20) 0, rgba(255,228,170,0.12) 42%, rgba(255,208,132,0.05) 64%, rgba(0,0,0,0) 84%),
+      conic-gradient(from 0deg at 50% 50%, rgba(255,248,232,0.00) 0deg, rgba(255,244,220,0.12) 22deg, rgba(255,214,132,0.22) 56deg, rgba(255,248,232,0.03) 84deg, rgba(255,248,232,0.00) 118deg, rgba(255,248,232,0.00) 242deg, rgba(255,214,132,0.20) 304deg, rgba(255,246,226,0.08) 334deg, rgba(255,248,232,0.00) 360deg),
+      radial-gradient(1400px 920px at 50% 50%, rgba(255,220,140,0.07), rgba(0,0,0,0) 78%);
+      backdrop-filter: none; -webkit-backdrop-filter: none; }
+    .ripple-film, .mist-film, .blessing-film{ display:none !important; animation:none !important; }
+    .login-box{ width:min(520px, calc(100vw - 36px)); border-radius:22px; padding:22px 22px 18px; background:
+      linear-gradient(180deg, rgba(255,255,255,0.34), rgba(255,252,244,0.22) 18%, rgba(255,238,198,0.15) 46%, rgba(214,160,82,0.10) 82%, rgba(136,82,28,0.08) 100%),
+      linear-gradient(135deg, rgba(255,255,255,0.24), rgba(255,255,255,0.08) 28%, rgba(255,238,198,0.13) 58%, rgba(255,255,255,0.14) 100%),
+      radial-gradient(420px 240px at 50% 0%, rgba(255,255,255,0.40), rgba(255,250,236,0.20) 34%, rgba(0,0,0,0) 76%),
+      radial-gradient(700px 340px at 50% 116%, rgba(255,222,146,0.16), rgba(0,0,0,0) 72%);
+      border:1px solid rgba(255,255,255,0.94);
+      box-shadow:
+        inset 0 2px 0 rgba(255,255,255,0.88),
+        inset 0 0 0 1px rgba(255,248,232,0.26),
+        inset 0 -20px 36px rgba(190,132,48,0.10),
+        inset 0 -40px 70px rgba(96,58,18,0.10),
+        0 22px 48px rgba(52,30,8,0.18),
+        0 40px 110px rgba(92,54,14,0.22),
+        0 0 140px rgba(255,232,175,0.34),
+        0 0 260px rgba(255,214,118,0.20);
+      backdrop-filter: blur(6px) saturate(1.14); -webkit-backdrop-filter: blur(6px) saturate(1.14);
+      position:relative; overflow:hidden; transform: translateZ(0); }
+    .login-box::before{ content:''; position:absolute; inset:-42% -30%; pointer-events:none; background:
+      radial-gradient(260px 150px at 50% 8%, rgba(255,255,255,0.52), rgba(255,250,232,0.18) 42%, rgba(0,0,0,0) 78%),
+      radial-gradient(620px 320px at 50% 46%, rgba(255,244,220,0.22), rgba(255,214,132,0.14) 42%, rgba(0,0,0,0) 78%),
+      conic-gradient(from 180deg at 50% 50%, rgba(255,248,232,0.00) 0deg, rgba(255,244,220,0.16) 18deg, rgba(255,220,150,0.28) 48deg, rgba(255,248,232,0.08) 78deg, rgba(255,248,232,0.00) 110deg, rgba(255,248,232,0.00) 250deg, rgba(255,220,150,0.28) 312deg, rgba(255,246,226,0.08) 340deg, rgba(255,248,232,0.00) 360deg);
+      mix-blend-mode:screen; opacity:1; filter: blur(6px); }
+    .login-box::after{ content:''; position:absolute; inset:0; pointer-events:none; border-radius:inherit; background:
+      linear-gradient(180deg, rgba(255,255,255,0.46), rgba(255,250,236,0.18) 16%, rgba(255,244,214,0.06) 36%, rgba(0,0,0,0) 58%),
+      linear-gradient(90deg, rgba(255,255,255,0.30), rgba(255,255,255,0.05) 24%, rgba(255,255,255,0.00) 48%, rgba(255,244,220,0.08) 72%, rgba(255,255,255,0.10));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.54), inset 0 -16px 26px rgba(130,86,30,0.06), inset 0 0 30px rgba(255,248,232,0.08); }
+    .login-boot-inline{ margin:0 0 14px; display:flex; justify-content:center; }
+    .login-boot-inline[hidden]{ display:none !important; }
+    .login-boot-card{ width:100%; border-radius:18px; padding:12px 14px; text-align:center; background: linear-gradient(180deg, rgba(48,31,17,0.88), rgba(18,12,7,0.92)); border:1px solid rgba(246,211,122,0.44); box-shadow: 0 12px 32px rgba(0,0,0,0.30), inset 0 1px 0 rgba(255,255,255,0.05); }
+    .login-boot-title{ font-size:1.10rem; margin-bottom:4px; }
+    .login-boot-sub{ font-size:13px; color: rgba(255,232,175,0.92); letter-spacing:.06em; text-shadow: 0 7px 14px rgba(0,0,0,0.46); font-weight:900; }
+    .login-title{ font-size:clamp(2.05rem, 2.8vw, 3.1rem); margin-bottom:clamp(14px, 1.4vw, 22px); text-align:center; position:relative; z-index:1; color: rgba(82,50,20,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.82), 0 10px 18px rgba(84,56,18,0.14), 0 0 10px rgba(255,248,232,0.24); }
+    .login-sub{ text-align:center; min-height:22px; font-size:clamp(15px, 1.05vw, 18px); opacity:.98; margin-bottom:clamp(16px, 1.4vw, 24px); color: rgba(74,46,20,0.98); letter-spacing:.06em; text-shadow: 0 1px 0 rgba(255,255,255,0.80), 0 8px 14px rgba(94,66,26,0.08); font-weight:900; position:relative; z-index:1; }
+    .login-field{ display:flex; flex-direction:column; gap:clamp(12px, 1.1vw, 18px); margin:clamp(16px, 1.2vw, 22px) 0; }
+    .login-field label{ font-size:clamp(19px, 1.55vw, 24px); line-height:1.35; letter-spacing:.08em; color: rgba(88,54,22,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.88), 0 6px 10px rgba(94,66,26,0.08); font-weight:900; position:relative; z-index:1; }
+    .login-pwd-wrapper{ display:flex; gap:14px; align-items:center; }
+    .login-pwd-input{ flex:1; padding:clamp(1rem, 1.15vw, 1.22rem) clamp(1.12rem, 1.25vw, 1.36rem); border-radius:999px; border:1px solid rgba(255,255,255,0.90); background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,252,244,0.06)), linear-gradient(180deg, rgba(255,244,220,0.02), rgba(255,214,132,0.01)); color: rgba(88,52,22,0.98); caret-color: rgba(88,52,22,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.92); box-shadow: inset 0 1px 0 rgba(255,255,255,0.42), inset 0 0 0 1px rgba(255,250,236,0.08), 0 10px 18px rgba(58,36,12,0.05), 0 0 28px rgba(255,242,210,0.06); outline:none; font-size:clamp(20px, 1.5vw, 24px); font-weight:900; position:relative; z-index:1; }
+    .login-pwd-input:focus{ border-color: rgba(255,250,232,1); box-shadow: 0 0 0 2px rgba(255,240,198,0.18), 0 0 28px rgba(255,246,222,0.22), inset 0 1px 0 rgba(255,255,255,0.24); }
+    .btn-eye-login{ width:clamp(52px, 3vw, 60px); height:clamp(52px, 3vw, 60px); border-radius:999px; border:1px solid rgba(255,255,255,0.88); background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,244,220,0.04)); color: rgba(102,62,24,0.98); cursor:pointer; box-shadow: inset 0 1px 0 rgba(255,255,255,0.42), 0 10px 20px rgba(58,36,12,0.05), 0 0 20px rgba(255,244,214,0.06); text-shadow: 0 1px 0 rgba(255,255,255,0.86); font-weight:900; position:relative; z-index:1; }
+    .login-error{ min-height:28px; color: rgba(255,190,160,0.98); font-size:clamp(15px, 1.05vw, 18px); letter-spacing:.06em; margin-top:6px; text-align:center; text-shadow: 0 8px 16px rgba(0,0,0,0.48); font-weight:900; }
+    .login-actions{ display:flex; gap:16px; justify-content:center; margin-top:clamp(18px, 1.4vw, 26px); }
+    .btn-login, .btn-secondary{ border-radius:999px; padding:clamp(13px, 1vw, 16px) clamp(22px, 1.7vw, 30px); border:1px solid rgba(255,255,255,0.92); background: linear-gradient(180deg, rgba(255,255,255,0.20), rgba(255,232,175,0.07)), linear-gradient(135deg, rgba(255,255,255,0.12), rgba(255,255,255,0.03) 42%, rgba(255,238,198,0.08) 100%); cursor:pointer; letter-spacing:.12em; box-shadow: inset 0 1px 0 rgba(255,255,255,0.56), inset 0 0 0 1px rgba(255,250,236,0.10), 0 12px 28px rgba(58,36,12,0.10), 0 0 26px rgba(255,244,214,0.10); font-size:clamp(18px, 1.35vw, 22px); font-weight:900; backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); color: rgba(92,58,24,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.92); position:relative; z-index:1; }
+    .select-wrap{ position:relative; width:100%; min-height:clamp(58px, 4.1vw, 68px); }
+    .select-wrap select{ position:absolute; inset:0; opacity:0; pointer-events:none; z-index:4; -webkit-appearance:none; appearance:none; background:transparent; border:0; color:transparent; font-size:15px; font-weight:900; }
+    .select-wrap.native-touch select{
+      opacity:1;
+      pointer-events:auto;
+      color: rgba(88,52,22,0.98);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,252,244,0.06)),
+        linear-gradient(180deg, rgba(255,244,220,0.02), rgba(255,214,132,0.01));
+      z-index:5;
+      width:100%;
+      height:100%;
+      padding:clamp(1rem, 1.1vw, 1.18rem) 3.25rem clamp(1rem, 1.1vw, 1.18rem) 1.12rem;
+      border-radius:999px;
+      border:1px solid rgba(255,255,255,0.90);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.42),
+        inset 0 0 0 1px rgba(255,250,236,0.08),
+        0 10px 18px rgba(58,36,12,0.05);
+      font-size:clamp(20px, 1.5vw, 24px);
+      font-weight:900;
+      line-height:1.2;
+      -webkit-appearance:none;
+      appearance:none;
+      outline:none;
+    }
+    .select-wrap.native-touch select:focus{
+      border-color: rgba(255,250,232,1);
+      box-shadow:
+        0 0 0 2px rgba(255,240,198,0.18),
+        0 0 28px rgba(255,246,222,0.22),
+        inset 0 1px 0 rgba(255,255,255,0.24);
+    }
+    .select-wrap.native-touch select option,
+    .select-wrap.native-touch select optgroup{
+      background:#2a1e14;
+      color: rgba(255,246,222,0.98);
+      font-size:15px;
+      font-weight:900;
+    }
+    .select-wrap.native-touch::after{
+      content:'▾';
+      position:absolute;
+      right:.88rem;
+      top:50%;
+      transform:translateY(-50%);
+      opacity:.98;
+      font-size:1.36rem;
+      color: rgba(196,142,62,0.98);
+      text-shadow: 0 1px 0 rgba(255,255,255,0.92), 0 6px 12px rgba(88,52,22,0.10);
+      pointer-events:none;
+      font-weight:900;
+      z-index:6;
+      line-height:1;
+    }
+    .select-wrap.native-touch .select-menu{ display:none !important; }
+    .select-wrap.native-touch .select-display{ display:none !important; visibility:hidden !important; pointer-events:none !important; }
+    .select-display::after{ content:'▾'; position:absolute; right:.88rem; top:50%; transform: translateY(-50%); opacity:.98; font-size:1.36rem; color: rgba(196,142,62,0.98); text-shadow: 0 1px 0 rgba(255,255,255,0.92), 0 6px 12px rgba(88,52,22,0.10); pointer-events:none; font-weight:900; }
+    .select-menu{ position:absolute; left:0; right:0; top:calc(100% + 10px); max-height:280px; overflow:auto; border-radius:16px; border:1px solid rgba(246,211,122,0.62); background: rgba(8,5,3,0.98); box-shadow: 0 22px 60px rgba(0,0,0,0.46), 0 0 24px rgba(246,211,122,0.10); display:none; z-index:4005; padding:6px; }
+    .select-menu.open{ display:block; }
+    .select-option{ padding:.70rem .96rem; border-radius:12px; cursor:pointer; color: rgba(255,232,175,0.98); letter-spacing:.06em; text-shadow: 0 2px 10px rgba(0,0,0,0.38); user-select:none; border:1px solid transparent; font-weight:900; }
+    .select-option:hover{ background: rgba(255,244,210,0.10); }
+    .select-option[aria-selected='true']{ background: rgba(246,211,122,0.14); border-color: rgba(246,211,122,0.20); }
+    .select-option.active{ background: rgba(255,244,210,0.14); border-color: rgba(255,244,210,0.22); outline:none; }
+    @media (max-width: 900px){
+      :root{ --panel-blur: 12px; --btn-blur: 12px; --side-size: clamp(1.02rem, 3.0vw, 1.30rem); --bottom-size: clamp(1.10rem, 3.1vw, 1.40rem); --axis-size: clamp(1.72rem, 5.1vw, 2.55rem); --zen-fixed-x: clamp(56px, 12vw, 140px); --axis-top: clamp(62px, 8.6vh, 132px); --zw-bottom-lift: clamp(2.35cm, 5.6vh, 3.20cm); --btn-glass-a: 0.040; --btn-glass-b: 0.036; --btn-body-a: rgba(255, 248, 232, 0.040); --btn-body-b: rgba(30, 22, 14, 0.055); --zen-posY: 60%; }
+      .hero{ min-height: var(--appHLive, 100dvh); align-items:stretch; }
+      .hero-inner{ height: calc(var(--appHLive, 100dvh) - (var(--outer-side) * 2)); }
+      .user-bar{ left: calc(var(--frame-inset) + 10px + env(safe-area-inset-left)); right: calc(var(--frame-inset) + 10px + env(safe-area-inset-right)); max-width:none; display:grid; grid-template-columns: 1fr 1fr; grid-template-areas: 'pill pill' 'switch export' 'release release' 'logout logout'; gap:8px; align-items:stretch; }
+      .user-pill{ grid-area:pill; white-space:normal; text-wrap:balance; }
+      #btnSwitchUser{ grid-area:switch; }
+      #btnExport{ grid-area:export; }
+      #btnRelease{ grid-area:release; }
+      #btnLogout{ grid-area:logout; }
+      .btn-switch, .user-pill{ font-size: clamp(12px, 3.2vw, 14px); padding: clamp(7px, 2.1vw, 10px) clamp(9px, 2.8vw, 12px); }
+      .nav-btn span{ font-size: clamp(1.12rem, calc(5.9cqw * var(--btnScale)), 2.12rem); }
+    }
+    @media (max-height: 560px){ :root{ --side-op: 0.60; } .zw-side-col{ padding:8px 10px; } }
+    @media (max-width: 520px){
+      .nav-area.phone-compact-glass{ --btn-glass-a: 0.028; --btn-glass-b: 0.024; --btn-body-a: rgba(255, 248, 232, 0.030); --btn-body-b: rgba(30, 22, 14, 0.040); --btn-border: rgba(246, 211, 122, 0.58); --btn-border-hi: rgba(255, 244, 210, 0.84); }
+      .nav-area.phone-compact-glass .nav-btn::after{ opacity:.10; }
+      .nav-area.phone-compact-stack{ right:auto; width:min(var(--stackMaxW), 340px); max-width:min(var(--stackMaxW), 340px); padding-left:12px; padding-right:8px; }
+      .nav-area.phone-compact-stack.phone-compact-right{ left:auto; right: var(--frame-inset); padding-left:8px; padding-right:12px; }
+      .nav-area.phone-compact-stack{ --btn-glass-a: 0.024; --btn-glass-b: 0.020; --btn-body-a: rgba(255, 248, 232, 0.026); --btn-body-b: rgba(30, 22, 14, 0.036); --btn-border: rgba(246, 211, 122, 0.54); --btn-border-hi: rgba(255, 244, 210, 0.82); }
+      .nav-area.phone-compact-stack .nav-btn{ box-shadow: 0 12px 34px rgba(0,0,0,0.22), 0 0 26px rgba(246,211,122,0.10), inset 0 1px 0 rgba(255,255,255,0.08), inset 0 -8px 14px rgba(0,0,0,0.04); }
+      .nav-area.phone-compact-stack .nav-btn::after{ opacity:.08; }
+    }
+  
+    /* ===== Tasun v5 login full-bleed + centered panel fix ===== */
+    :root{
+      --outer-side: 0px !important;
+      --frame-inset: 0px !important;
+      --frame-radius: 0px !important;
+    }
+    html, body{
+      width:100%;
+      min-height:100%;
+      background:#000;
+      overflow-x:hidden;
+    }
+    body{
+      margin:0;
+    }
+    .hero{
+      position:fixed;
+      inset:0;
+      width:100vw;
+      height:var(--appHLive, 100dvh);
+      min-height:100dvh;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      overflow:hidden;
+    }
+    .hero-inner{
+      position:relative;
+      width:100vw;
+      height:var(--appHLive, 100dvh);
+      min-height:100dvh;
+      margin:0;
+      border-radius:0 !important;
+      overflow:hidden;
+    }
+    .lotus-stage,
+    .zen-visual{
+      position:absolute;
+      inset:0;
+      width:100%;
+      height:100%;
+    }
+    #zenImg{
+      position:absolute;
+      inset:0;
+      width:100%;
+      height:100%;
+      display:block;
+      object-fit:cover;
+      object-position:center center;
+    }
+    .login-overlay{
+      position:fixed !important;
+      inset:0 !important;
+      width:100vw;
+      height:var(--appHLive, 100dvh);
+      min-height:100dvh;
+      display:flex;
+      align-items:center !important;
+      justify-content:center !important;
+      padding:
+        max(20px, env(safe-area-inset-top))
+        max(20px, env(safe-area-inset-right))
+        max(20px, env(safe-area-inset-bottom))
+        max(20px, env(safe-area-inset-left));
+      overflow:hidden;
+    }
+    .login-box{
+      width:min(44vw, 760px) !important;
+      min-width:min(560px, calc(100vw - 40px));
+      max-width:min(760px, calc(100vw - 40px));
+      max-height:min(84vh, 860px);
+      aspect-ratio:1.52 / 1;
+      margin:0 auto !important;
+      padding:clamp(30px, 2.8vw, 44px) !important;
+      display:flex;
+      flex-direction:column;
+      justify-content:center;
+      transform:translateZ(0);
+    }
+    .login-title{
+      font-size:clamp(1.6rem, 2vw, 2.3rem);
+      margin-bottom:clamp(12px, 1.2vw, 18px);
+    }
+    .login-field{
+      gap:clamp(8px, .8vw, 12px);
+      margin:clamp(10px, .9vw, 14px) 0;
+    }
+    .login-actions{
+      margin-top:clamp(14px, 1.1vw, 18px);
+    }
+    @media (max-width: 900px){
+      .hero,
+      .hero-inner,
+      .login-overlay{
+        height:var(--appHLive, 100dvh);
+        min-height:100dvh;
+      }
+      .login-box{
+        width:min(92vw, 640px) !important;
+        min-width:0;
+        max-width:min(640px, calc(100vw - 20px));
+        max-height:none;
+        aspect-ratio:auto;
+        padding:clamp(22px, 5vw, 30px) !important;
+      }
+    }
+
+  
+
+/* ===== Tasun v5 fix: full-bleed background + true centered login panel ===== */
+html, body{
+  width:100% !important;
+  height:100% !important;
+  min-height:100% !important;
+  margin:0 !important;
+  padding:0 !important;
+  overflow:hidden !important;
+  background:#000 !important;
+}
+:root{
+  --outer-side: 0px !important;
+  --frame-inset: 0px !important;
+  --frame-radius: 0px !important;
+}
+body > main.hero,
+.hero{
+  position:fixed !important;
+  inset:0 !important;
+  width:100vw !important;
+  height:100vh !important;
+  min-height:100vh !important;
+  margin:0 !important;
+  padding:0 !important;
+  display:block !important;
+  overflow:hidden !important;
+}
+.hero-inner{
+  position:absolute !important;
+  inset:0 !important;
+  width:100vw !important;
+  height:100vh !important;
+  min-height:100vh !important;
+  margin:0 !important;
+  padding:0 !important;
+  border-radius:0 !important;
+  overflow:hidden !important;
+}
+.lotus-stage,
+.zen-visual{
+  position:absolute !important;
+  inset:0 !important;
+  width:100vw !important;
+  height:100vh !important;
+  min-height:100vh !important;
+  overflow:hidden !important;
+}
+#zenImg{
+  position:absolute !important;
+  inset:0 !important;
+  width:100vw !important;
+  height:100vh !important;
+  min-width:100vw !important;
+  min-height:100vh !important;
+  display:block !important;
+  object-fit:cover !important;
+  object-position:center center !important;
+  transform:none !important;
+}
+.login-overlay{
+  position:fixed !important;
+  inset:0 !important;
+  width:100vw !important;
+  height:100vh !important;
+  min-height:100vh !important;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  padding:
+    max(24px, env(safe-area-inset-top))
+    max(24px, env(safe-area-inset-right))
+    max(24px, env(safe-area-inset-bottom))
+    max(24px, env(safe-area-inset-left)) !important;
+  overflow:hidden !important;
+}
+.login-box{
+  position:relative !important;
+  z-index: 5001 !important;
+  box-shadow:
+    inset 0 2px 0 rgba(255,255,255,0.92),
+    inset 0 0 0 1px rgba(255,250,236,0.28),
+    inset 0 -28px 56px rgba(190,132,48,0.12),
+    inset 0 -58px 96px rgba(82,46,10,0.10),
+    0 24px 54px rgba(48,26,6,0.22),
+    0 46px 120px rgba(92,54,14,0.24),
+    0 0 160px rgba(255,232,175,0.36),
+    0 0 280px rgba(255,214,118,0.20) !important;
+  backdrop-filter: blur(7px) saturate(1.16) !important;
+  -webkit-backdrop-filter: blur(7px) saturate(1.16) !important;
+  left:auto !important;
+  top:auto !important;
+  right:auto !important;
+  bottom:auto !important;
+  margin:0 auto !important;
+  width:clamp(540px, 44vw, 760px) !important;
+  max-width:min(760px, calc(100vw - 40px)) !important;
+  min-width:min(540px, calc(100vw - 40px)) !important;
+  min-height:clamp(500px, 58vh, 640px) !important;
+  height:auto !important;
+  max-height:min(84vh, 860px) !important;
+  padding:1cm clamp(30px, 2.8vw, 44px) 1cm !important;
+  display:flex !important;
+  flex-direction:column !important;
+  justify-content:flex-start !important;
+  align-self:center !important;
+  justify-self:center !important;
+  transform:none !important;
+}
+#loginOverlay .login-box{
+  overflow:hidden !important;
+}
+.login-title{
+  font-size:clamp(1.7rem, 2.05vw, 2.5rem) !important;
+  margin-top:0 !important;
+  margin-bottom:clamp(12px, 1vw, 18px) !important;
+  white-space:nowrap !important;
+}
+#loginForm{
+  display:flex !important;
+  flex-direction:column !important;
+  flex:1 1 auto !important;
+  min-height:0 !important;
+  justify-content:flex-start !important;
+}
+#loginForm .login-field,
+#loginForm .login-error,
+#loginForm .login-actions{
+  flex:0 0 auto !important;
+}
+.login-sub{
+  margin-bottom:clamp(10px, 0.9vw, 14px) !important;
+}
+.login-field{
+  margin:clamp(10px, 0.9vw, 14px) 0 !important;
+}
+.login-actions{
+  margin-top:auto !important;
+  padding-top:clamp(14px, 1.1vw, 18px) !important;
+  padding-bottom:0 !important;
+}
+@media (max-width: 900px){
+  .login-box{
+    width:min(92vw, 640px) !important;
+    min-width:0 !important;
+    max-width:calc(100vw - 20px) !important;
+    min-height:0 !important;
+    height:auto !important;
+    max-height:none !important;
+    padding:clamp(22px, 5vw, 30px) !important;
+  }
+  .login-actions{
+    margin-top:clamp(14px, 1.1vw, 18px) !important;
+    padding-top:0 !important;
+  }
+}
+
+
+/* ===== Tasun v5 final fix: force login panel visible above hero ===== */
+#loginOverlay{
+  display:flex !important;
+  position:fixed !important;
+  inset:0 !important;
+  z-index:99999 !important;
+  align-items:center !important;
+  justify-content:center !important;
+  pointer-events:auto !important;
+}
+body:not(.locked) #loginOverlay{ display:none !important; }
+#loginOverlay .login-box{
+  position:relative !important;
+  z-index:100000 !important;
+}
+main.hero,
+.hero,
+.hero-inner,
+.lotus-stage,
+.zen-visual,
+#zenImg{
+  z-index:1 !important;
+}
+.user-bar,
+.site-title-wrapper,
+.nav-area,
+.zen-words{
+  z-index:2 !important;
+}
+
+
+/* ===== Tasun v5 patch: brighter zen stage + visible zen words + focused login notice ===== */
+.hero-inner{
+  background:
+    radial-gradient(1200px 760px at 50% 18%, rgba(255,248,224,0.24) 0%, rgba(255,232,190,0.12) 28%, rgba(0,0,0,0) 62%),
+    radial-gradient(900px 680px at 50% 72%, rgba(255,220,150,0.16) 0%, rgba(255,208,132,0.08) 30%, rgba(0,0,0,0) 64%),
+    linear-gradient(180deg, rgba(46,30,18,0.08) 0%, rgba(36,22,12,0.05) 42%, rgba(18,10,6,0.08) 100%) !important;
+}
+.hero-inner::before{
+  content:'';
+  position:absolute;
+  inset:0;
+  pointer-events:none;
+  z-index:1;
+  background:
+    radial-gradient(56% 46% at 50% 46%, rgba(255,245,220,0.18) 0%, rgba(255,230,185,0.10) 26%, rgba(0,0,0,0) 66%),
+    linear-gradient(90deg, rgba(255,238,200,0.14) 0%, rgba(255,236,198,0.05) 10%, rgba(0,0,0,0) 20%, rgba(0,0,0,0) 80%, rgba(255,236,198,0.05) 90%, rgba(255,238,200,0.14) 100%),
+    linear-gradient(180deg, rgba(255,248,226,0.08) 0%, rgba(0,0,0,0) 24%, rgba(0,0,0,0) 76%, rgba(255,220,156,0.07) 100%);
+  mix-blend-mode:screen;
+}
+.hero-inner::after{
+  content:'';
+  position:absolute;
+  inset:0;
+  pointer-events:none;
+  z-index:1;
+  background:
+    radial-gradient(40% 34% at 50% 58%, rgba(255,235,190,0.16) 0%, rgba(255,214,146,0.08) 34%, rgba(0,0,0,0) 72%),
+    radial-gradient(120% 100% at 50% 50%, rgba(255,252,242,0.06) 0%, rgba(0,0,0,0) 68%);
+}
+#zenImg{
+  filter: brightness(1.15) contrast(1.10) saturate(1.12) !important;
+}
+.lotus-stage{
+  z-index:1 !important;
+}
+.spotlight{
+  position:absolute !important;
+  inset:-6% -8% -2% -8% !important;
+  pointer-events:none !important;
+  z-index:2 !important;
+  background:
+    radial-gradient(42% 30% at 50% 60%, rgba(255,244,214,0.20) 0%, rgba(255,223,166,0.12) 28%, rgba(0,0,0,0) 72%),
+    radial-gradient(28% 18% at 50% 53%, rgba(255,255,255,0.18) 0%, rgba(255,244,224,0.08) 36%, rgba(0,0,0,0) 74%),
+    radial-gradient(120% 84% at 50% 50%, rgba(255,240,210,0.05) 0%, rgba(0,0,0,0) 70%) !important;
+  mix-blend-mode:screen;
+}
+.site-title-wrapper{
+  position:absolute !important;
+  top:clamp(18px, 3.0vh, 34px) !important;
+  left:50% !important;
+  transform:translateX(-50%) !important;
+  z-index:30 !important;
+  display:flex !important;
+  justify-content:center !important;
+  width:auto !important;
+  pointer-events:none !important;
+}
+.site-title{
+  display:block !important;
+  color:rgba(110,72,30,0.98) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.92),
+    0 0 12px rgba(255,244,220,0.30),
+    0 12px 24px rgba(56,32,10,0.18) !important;
+  filter:none !important;
+}
+.zen-words{
+  position:absolute !important;
+  inset:0 !important;
+  z-index:26 !important;
+  display:block !important;
+  pointer-events:none !important;
+  visibility:visible !important;
+  opacity:1 !important;
+}
+.zw-top-axis,
+#zwTopAxis{
+  position:absolute !important;
+  top:clamp(98px, 14vh, 164px) !important;
+  left:50% !important;
+  transform:translateX(-50%) !important;
+  display:block !important;
+  visibility:visible !important;
+  opacity:1 !important;
+  z-index:27 !important;
+}
+.zw-axis-text,
+#zwAxisText{
+  display:inline-block !important;
+  font-size:clamp(2.2rem, 4.6vw, 4.3rem) !important;
+  letter-spacing:0.36em !important;
+  padding-left:0.36em !important;
+  color:rgba(108,76,34,0.82) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.90),
+    0 0 14px rgba(255,244,220,0.26),
+    0 14px 24px rgba(66,42,14,0.18) !important;
+}
+.zw-side-col,
+#zwLeft,
+#zwRight{
+  position:absolute !important;
+  top:50% !important;
+  transform:translateY(-50%) !important;
+  writing-mode:vertical-rl !important;
+  text-orientation:upright !important;
+  letter-spacing:0.24em !important;
+  font-size:clamp(1.3rem, 1.9vw, 1.9rem) !important;
+  color:rgba(106,78,38,0.62) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.86),
+    0 8px 18px rgba(66,42,14,0.16) !important;
+  display:block !important;
+  visibility:visible !important;
+  opacity:.92 !important;
+  z-index:27 !important;
+}
+#zwLeft{ left:clamp(22px, 8vw, 110px) !important; }
+#zwRight{ right:clamp(22px, 8vw, 110px) !important; }
+.zw-bottom-line,
+#zwBottomLine{
+  position:absolute !important;
+  left:50% !important;
+  bottom:clamp(22px, 5.2vh, 52px) !important;
+  transform:translateX(-50%) !important;
+  font-size:clamp(1.15rem, 2.0vw, 1.8rem) !important;
+  letter-spacing:0.44em !important;
+  padding-left:0.44em !important;
+  color:rgba(112,82,40,0.66) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.88),
+    0 10px 18px rgba(66,42,14,0.14) !important;
+  display:block !important;
+  visibility:visible !important;
+  opacity:.95 !important;
+  z-index:27 !important;
+}
+.gold-crystal,
+.login-title,
+.login-field label,
+.site-title,
+.zw-axis-text,
+.zw-side-col,
+.zw-bottom-line{
+  -webkit-text-stroke: 0 transparent;
+}
+.login-error{
+  min-height:26px !important;
+  color:rgba(198,78,26,0.98) !important;
+  font-size:15px !important;
+  font-weight:900 !important;
+  letter-spacing:.08em !important;
+  text-shadow:
+    0 1px 0 rgba(255,250,236,0.96),
+    0 0 12px rgba(255,214,146,0.46),
+    0 10px 18px rgba(120,56,14,0.26) !important;
+}
+.login-error:not(:empty){
+  background:linear-gradient(180deg, rgba(255,244,220,0.52), rgba(255,226,178,0.22)) !important;
+  border:1px solid rgba(255,214,146,0.62) !important;
+  border-radius:999px !important;
+  padding:6px 14px !important;
+  display:inline-flex !important;
+  align-self:center !important;
+  justify-content:center !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.72),
+    0 8px 20px rgba(120,56,14,0.14),
+    0 0 16px rgba(255,214,146,0.20) !important;
+}
+@media (max-width: 900px){
+  #titleWrap,
+  .site-title-wrapper{
+    width:auto !important;
+    max-width:calc(100vw - 24px) !important;
+  }
+  .site-title{
+    white-space:nowrap !important;
+    word-break:keep-all !important;
+    letter-spacing:.08em !important;
+    padding-left:.08em !important;
+    font-size:clamp(2.1rem, 8.6vw, 3.45rem) !important;
+  }
+  #navArea .nav-btn{
+    min-width:0 !important;
+    min-height:0 !important;
+    padding:10px 14px !important;
+  }
+  #navArea .nav-btn span{
+    white-space:nowrap !important;
+    line-height:1.05 !important;
+  }
+}
+@media (max-width: 900px){
+  .zw-top-axis,#zwTopAxis{ top:clamp(84px, 11vh, 118px) !important; }
+  #zwLeft{ left:14px !important; }
+  #zwRight{ right:14px !important; }
+  .zw-side-col,#zwLeft,#zwRight{
+    font-size:clamp(1.0rem, 2.8vw, 1.36rem) !important;
+    opacity:.82 !important;
+  }
+  .zw-bottom-line,#zwBottomLine{
+    bottom:clamp(16px, 4vh, 32px) !important;
+    font-size:clamp(0.98rem, 2.8vw, 1.22rem) !important;
+  }
+}
+
+
+/* ===== Tasun v5 r3 user-request fixes ===== */
+:root{
+  --tasun-top-zen-size: clamp(2rem, 3vw, 3rem);
+  --tasun-side-zen-size: clamp(1.34rem, 2vw, 2.15rem);
+  --tasun-bottom-zen-size: clamp(1.20rem, 1.9vw, 1.75rem);
+}
+#navArea{
+  z-index: 88 !important;
+}
+#navArea .nav-btn{
+  overflow: visible !important;
+  visibility: visible !important;
+}
+#navArea .nav-btn span{
+  display:inline-block !important;
+  max-width:100% !important;
+  padding:0 .18em !important;
+  line-height:1.1 !important;
+  text-align:center !important;
+  white-space:nowrap !important;
+  color:rgba(255,236,182,0.99) !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.20),
+    0 0 12px rgba(255,228,152,0.16),
+    0 4px 12px rgba(42,22,6,0.42) !important;
+}
+#zwAxisText,
+#zwLeft,
+#zwRight,
+#zwBottomLine{
+  background: linear-gradient(180deg, #fffef7 0%, #fff4cf 16%, #ffe192 42%, #f6c04a 66%, #b67313 100%) !important;
+  -webkit-background-clip:text !important;
+  background-clip:text !important;
+  -webkit-text-fill-color:transparent !important;
+  color:transparent !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.96),
+    0 2px 0 rgba(255,247,221,0.82),
+    0 8px 18px rgba(88,54,14,0.22),
+    0 0 14px rgba(255,226,150,0.16) !important;
+  filter: drop-shadow(0 1px 0 rgba(255,255,255,0.18)) drop-shadow(0 10px 18px rgba(74,42,8,0.16)) !important;
+}
+#zwAxisText{
+  font-size: var(--tasun-top-zen-size) !important;
+  letter-spacing: .32em !important;
+  padding-left: .32em !important;
+}
+#zwLeft,
+#zwRight{
+  font-size: var(--tasun-side-zen-size) !important;
+  letter-spacing: .15em !important;
+}
+#zwBottomLine{
+  font-size: var(--tasun-bottom-zen-size) !important;
+  letter-spacing: .26em !important;
+  padding-left: .26em !important;
+}
+
+</style>
+
+
+
+
+<style id="tasun-index-userbar-desktop-fix-r3">
+  .user-bar{
+    position:absolute !important;
+    top:clamp(12px, 2.0vh, 22px) !important;
+    left:clamp(14px, 1.8vw, 28px) !important;
+    right:clamp(14px, 1.8vw, 28px) !important;
+    bottom:auto !important;
+    z-index:92 !important;
+    width:auto !important;
+    max-width:none !important;
+    display:grid !important;
+    grid-template-columns:minmax(180px, 320px) 1fr repeat(4, auto) !important;
+    grid-template-areas:"pill spacer switch logout export release" !important;
+    align-items:center !important;
+    column-gap:clamp(6px, 0.6vw, 10px) !important;
+    row-gap:8px !important;
+    overflow:visible !important;
+    pointer-events:none !important;
+  }
+  .user-bar > *{
+    min-width:0 !important;
+    pointer-events:auto !important;
+  }
+  #userInfo{ grid-area:pill !important; justify-self:start !important; }
+  #btnSwitchUser{ grid-area:switch !important; justify-self:end !important; }
+  #btnLogout{ grid-area:logout !important; justify-self:end !important; }
+  #btnExport{ grid-area:export !important; justify-self:end !important; }
+  #btnRelease{ grid-area:release !important; justify-self:end !important; }
+
+  .user-pill,
+  .btn-switch{
+    display:inline-flex !important;
+    align-items:center !important;
+    justify-content:center !important;
+    min-height:clamp(40px, 4.3vh, 48px) !important;
+    height:auto !important;
+    padding:0 clamp(11px, 0.95vw, 16px) !important;
+    border-radius:999px !important;
+    border:1px solid rgba(246,211,122,0.72) !important;
+    background:
+      linear-gradient(180deg, rgba(124,88,42,0.40), rgba(72,46,20,0.26)),
+      linear-gradient(180deg, rgba(255,252,244,0.18), rgba(255,238,196,0.08)) !important;
+    box-shadow:
+      0 10px 24px rgba(92,58,18,0.16),
+      inset 0 1px 0 rgba(255,255,255,0.18),
+      0 0 18px rgba(255,216,132,0.10) !important;
+    backdrop-filter: blur(6px) !important;
+    -webkit-backdrop-filter: blur(6px) !important;
+    color:rgba(255,236,180,0.99) !important;
+    text-decoration:none !important;
+    font-family:'標楷體','Noto Serif TC','Microsoft JhengHei',serif !important;
+    font-weight:700 !important;
+    line-height:1.08 !important;
+    text-shadow:
+      0 1px 0 rgba(255,255,255,0.20),
+      0 0 14px rgba(255,224,150,0.14),
+      0 4px 12px rgba(48,28,8,0.34) !important;
+    -webkit-text-stroke: 0.35px rgba(54,28,8,0.18);
+    cursor:pointer !important;
+    visibility:visible !important;
+    opacity:1 !important;
+    max-width:100% !important;
+    white-space:nowrap !important;
+  }
+
+  .user-pill{
+    max-width:min(320px, 22vw) !important;
+    overflow:hidden !important;
+    text-overflow:ellipsis !important;
+    pointer-events:none !important;
+    justify-content:flex-start !important;
+  }
+
+  .btn-switch{
+    min-width:clamp(72px, 4.8vw, 104px) !important;
+    max-width:clamp(92px, 7vw, 132px) !important;
+    overflow:hidden !important;
+    text-overflow:ellipsis !important;
+    flex:0 1 auto !important;
+  }
+
+  .btn-switch:hover{ filter:brightness(1.05); }
+  .btn-switch:disabled{
+    opacity:.65 !important;
+    cursor:default !important;
+  }
+
+  @media (max-width: 1400px){
+    .user-bar{
+      grid-template-columns:minmax(160px, 260px) 1fr repeat(4, auto) !important;
+      column-gap:6px !important;
+    }
+    .user-pill{
+      max-width:min(260px, 20vw) !important;
+    }
+    .user-pill,
+    .btn-switch{
+      min-height:42px !important;
+      padding:0 12px !important;
+      font-size:14px !important;
+    }
+    .btn-switch{
+      min-width:68px !important;
+      max-width:112px !important;
+    }
+  }
+
+  @media (max-width: 1100px){
+    .user-bar{
+      grid-template-columns:minmax(140px, 210px) 1fr repeat(4, auto) !important;
+      column-gap:5px !important;
+    }
+    .user-pill{
+      max-width:min(210px, 18vw) !important;
+    }
+    .user-pill,
+    .btn-switch{
+      font-size:13px !important;
+      min-height:40px !important;
+      padding:0 10px !important;
+    }
+    .btn-switch{
+      min-width:62px !important;
+      max-width:96px !important;
+    }
+  }
+
+  @media (max-width: 900px){
+    .user-bar{
+      left:calc(var(--frame-inset) + 10px + env(safe-area-inset-left)) !important;
+      right:calc(var(--frame-inset) + 10px + env(safe-area-inset-right)) !important;
+      top:clamp(86px, 12vh, 132px) !important;
+      display:grid !important;
+      grid-template-columns:1fr 1fr !important;
+      grid-template-areas:
+        "pill pill"
+        "switch logout"
+        "export release" !important;
+      column-gap:8px !important;
+      row-gap:8px !important;
+      justify-content:stretch !important;
+    }
+    .user-pill{
+      grid-area:pill !important;
+      max-width:none !important;
+      min-width:0 !important;
+      white-space:nowrap !important;
+      text-wrap:nowrap !important;
+      overflow:hidden !important;
+      text-overflow:ellipsis !important;
+      justify-content:center !important;
+    }
+    .btn-switch{
+      max-width:none !important;
+      min-width:0 !important;
+      width:100% !important;
+    }
+    .btn-switch, .user-pill{
+      min-height:40px !important;
+      padding:0 10px !important;
+      font-size:clamp(12px, 3.2vw, 14px) !important;
+    }
+  }
+
+  @media (max-width: 520px){
+    .user-bar{
+      grid-template-columns:1fr 1fr !important;
+      grid-template-areas:
+        "pill pill"
+        "switch logout"
+        "export release" !important;
+      column-gap:6px !important;
+      row-gap:6px !important;
+    }
+    .btn-switch, .user-pill{
+      min-height:38px !important;
+      font-size:clamp(11px, 3.4vw, 13px) !important;
+      padding:0 8px !important;
+    }
+  }
+
+</style>
+
+<style id="tasun-index-mobile-moremenu-r1">
+  #btnMoreActions,
+  #mobileMoreMenu{
+    display:none;
+  }
+  @media (min-width: 901px){
+    #btnMoreActions,
+    #mobileMoreMenu{
+      display:none !important;
+      visibility:hidden !important;
+      pointer-events:none !important;
+    }
+  }
+  .more-menu-panel[hidden]{
+    display:none !important;
+  }
+  .more-menu-panel{
+    position:absolute;
+    right:0;
+    top:calc(100% + 8px);
+    width:min(220px, calc(100vw - 24px));
+    padding:8px;
+    border-radius:18px;
+    border:1px solid rgba(246,211,122,0.72);
+    background:
+      linear-gradient(180deg, rgba(124,88,42,0.46), rgba(72,46,20,0.32)),
+      linear-gradient(180deg, rgba(255,252,244,0.18), rgba(255,238,196,0.08));
+    box-shadow:
+      0 14px 32px rgba(92,58,18,0.20),
+      inset 0 1px 0 rgba(255,255,255,0.18),
+      0 0 18px rgba(255,216,132,0.10);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    opacity:0;
+    visibility:hidden;
+    pointer-events:none;
+    transform:translateY(-4px);
+    transition:opacity .18s ease, transform .18s ease, visibility .18s ease;
+    z-index:120 !important;
+  }
+  .more-menu-item{
+    display:flex;
+    width:100%;
+    min-height:40px;
+    align-items:center;
+    justify-content:center;
+    padding:0 10px;
+    border:1px solid rgba(246,211,122,0.56);
+    border-radius:999px;
+    background:
+      linear-gradient(180deg, rgba(124,88,42,0.34), rgba(72,46,20,0.20)),
+      linear-gradient(180deg, rgba(255,252,244,0.16), rgba(255,238,196,0.06));
+    color:rgba(255,236,180,0.99);
+    text-shadow:
+      0 1px 0 rgba(255,255,255,0.20),
+      0 0 14px rgba(255,224,150,0.14),
+      0 4px 12px rgba(48,28,8,0.34);
+    -webkit-text-stroke: 0.30px rgba(54,28,8,0.18);
+    font-family:'標楷體','Noto Serif TC','Microsoft JhengHei',serif;
+    font-size:clamp(12px, 3.2vw, 14px);
+    font-weight:700;
+    line-height:1.08;
+    cursor:pointer;
+  }
+  .more-menu-item + .more-menu-item{
+    margin-top:6px;
+  }
+  .more-menu-item[hidden]{
+    display:none !important;
+  }
+  @media (max-width: 900px){
+    .user-bar{
+      grid-template-columns:minmax(0,1fr) auto !important;
+      grid-template-areas:"pill more" !important;
+      column-gap:8px !important;
+      row-gap:0 !important;
+      align-items:start !important;
+      position:absolute !important;
+      overflow:visible !important;
+    }
+    #userInfo{
+      grid-area:pill !important;
+      justify-self:start !important;
+      justify-content:flex-start !important;
+      max-width:none !important;
+      min-width:0 !important;
+      width:100% !important;
+      white-space:nowrap !important;
+      text-overflow:ellipsis !important;
+      overflow:hidden !important;
+      padding-right:8px !important;
+    }
+    #btnMoreActions{
+      grid-area:more !important;
+      display:inline-flex !important;
+      justify-self:end !important;
+      min-width:96px !important;
+      max-width:none !important;
+      width:auto !important;
+    }
+    #btnSwitchUser,
+    #btnLogout,
+    #btnExport,
+    #btnRelease{
+      display:none !important;
+    }
+    .user-bar.more-open #mobileMoreMenu{
+      display:block !important;
+      visibility:visible !important;
+      opacity:1 !important;
+      pointer-events:auto !important;
+      transform:translateY(0) !important;
+    }
+  }
+  @media (max-width: 520px){
+    #btnMoreActions{
+      min-width:90px !important;
+      min-height:38px !important;
+      font-size:clamp(11px, 3.4vw, 13px) !important;
+      padding:0 8px !important;
+    }
+    #mobileMoreMenu{
+      width:min(210px, calc(100vw - 20px));
+      padding:7px;
+    }
+    .more-menu-item{
+      min-height:38px;
+      font-size:clamp(11px, 3.4vw, 13px);
+      padding:0 8px;
+    }
+  }
+</style>
+
+<style id="tasun-index-desktop-nav-polish-r1">
+  @media (min-width: 901px){
+    #navArea .nav-btn{
+      border:1.2px solid rgba(255,246,222,0.78) !important;
+      box-shadow:
+        0 14px 30px rgba(82,52,14,0.18),
+        inset 0 1px 0 rgba(255,255,255,0.22),
+        0 0 26px rgba(255,220,144,0.14) !important;
+    }
+    #navArea .nav-btn span{
+      color:rgba(255,242,206,0.995) !important;
+      font-weight:700 !important;
+      text-shadow:
+        0 1px 0 rgba(255,255,255,0.28),
+        0 0 18px rgba(255,232,176,0.18),
+        0 6px 14px rgba(48,28,8,0.40) !important;
+      -webkit-text-stroke: 0.60px rgba(82,46,12,0.18) !important;
+      letter-spacing:0.04em !important;
+    }
+  }
+</style>
+
+  <a class="login-cloud-btn" id="loginCloudBtn" href="https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav" target="_blank" rel="noopener noreferrer">雲端檔案</a>
+
+  <div class="boot-cover" id="bootCover" hidden aria-hidden="true">
+    <div class="boot-cover-card">
+      <div class="boot-cover-title gold-crystal">Tasun 資料 · 載入中</div>
+      <div class="boot-cover-sub">登入資料準備中…</div>
+    </div>
+  </div>
+
+  <div class="login-overlay" id="loginOverlay">
+    <div class="login-box">
+      <div class="login-boot-inline" id="loginBootInline" aria-live="polite" hidden>
+        <div class="login-boot-card">
+          <div class="login-boot-title gold-crystal">Tasun 資料 · 載入中</div>
+          <div class="login-boot-sub">登入資料準備中…</div>
+        </div>
+      </div>
+      <div class="login-title gold-crystal">Tasun 資料 · 登入</div>
+      <div class="login-sub" id="loginSub"></div>
+      <form id="loginForm" autocomplete="on">
+        <div class="login-field">
+          <label for="username">使用者名稱</label>
+          <div class="select-wrap" id="usernameWrap">
+            <select id="username" name="username" autocomplete="username">
+              <option value="" disabled selected>請選擇使用者</option>
+              <option value="alex">alex</option>
+              <option value="JOYCE">JOYCE</option>
+              <option value="tasun">tasun</option>
+              <option value="wu">wu</option>
+            </select>
+            <button type="button" class="select-display" id="usernameDisplay" aria-haspopup="listbox" aria-expanded="false">請選擇使用者</button>
+            <div class="select-menu" id="usernameMenu" role="listbox" aria-label="使用者名稱清單"></div>
+          </div>
+        </div>
+        <div class="login-field">
+          <label for="password">密碼</label>
+          <div class="login-pwd-wrapper">
+            <input id="password" name="password" type="password" autocomplete="current-password" class="login-pwd-input" />
+            <button type="button" class="btn-eye-login" id="btnTogglePwd">👁</button>
+          </div>
+        </div>
+        <div class="login-error" id="loginError"></div>
+        <div class="login-actions">
+          <button type="submit" class="btn-login">登入</button>
+          <button type="button" class="btn-secondary" id="btnForceRelogin">切換/重新登入</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <main class="hero">
+    <div class="hero-inner" id="heroInner">
+      <div class="ripple-film" aria-hidden="true"></div>
+      <div class="mist-film" aria-hidden="true"></div>
+      <div class="blessing-film" aria-hidden="true"></div>
+      <div class="lotus-stage" id="lotusStage" aria-hidden="true">
+        <div class="spotlight" aria-hidden="true"></div>
+        <div class="zen-visual" aria-hidden="true">
+          <img id="zenImg" src="佛教禪意主視覺.png" data-base="佛教禪意主視覺.png" alt="" loading="eager" decoding="async" fetchpriority="high" crossorigin="anonymous">
+        </div>
+      </div>
+      <div class="zen-words" aria-hidden="true">
+        <div class="zw-top-axis" id="zwTopAxis"><span class="zw-axis-text zen-crystal" id="zwAxisText">空 無 明</span></div>
+        <div class="zw-side-col zen-crystal" id="zwLeft">空寧無我</div>
+        <div class="zw-side-col zen-crystal" id="zwRight">清明寧靜</div>
+        <div class="zw-bottom-line zen-crystal" id="zwBottomLine">空無　明靜</div>
+      </div>
+      <div class="user-bar" id="userBar">
+        <div class="user-pill" id="userInfo" data-text="目前使用者：未登入">目前使用者：未登入</div>
+        <button class="btn-switch" id="btnSwitchUser" type="button">切換帳號</button>
+        <button class="btn-switch" id="btnLogout" type="button">登出</button>
+        <button class="btn-switch btn-export" id="btnExport" type="button">匯出備份</button>
+        <button class="btn-switch btn-export" id="btnRelease" type="button" style="display:none;">發布新版</button>
+        <button class="btn-switch btn-more" id="btnMoreActions" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="mobileMoreMenu">更多功能</button>
+        <div class="more-menu-panel" id="mobileMoreMenu" hidden>
+          <button class="more-menu-item" id="btnMenuSwitchUser" type="button">切換帳號</button>
+          <button class="more-menu-item" id="btnMenuLogout" type="button">登出</button>
+          <button class="more-menu-item" id="btnMenuExport" type="button">匯出備份</button>
+          <button class="more-menu-item" id="btnMenuRelease" type="button" hidden>發布新版</button>
+        </div>
+      </div>
+      <div class="site-title-wrapper" id="titleWrap"><div class="site-title gold-crystal">Tasun 資料</div></div>
+      <div class="nav-area" id="navArea"></div>
+    </div>
+  </main>
+
+  <script>
+  (function(){
+    'use strict';
+
+    async function sha256Hex(str){
+      str = String(str === undefined || str === null ? '' : str);
+      if(!(window.crypto && crypto.subtle && window.TextEncoder)){
+        let h = 0;
+        for(let i=0;i<str.length;i++){ h = ((h<<5)-h) + str.charCodeAt(i); h |= 0; }
+        let x = (h>>>0).toString(16);
+        while(x.length < 64) x = '0' + x;
+        return x.slice(0,64);
+      }
+      const enc = new TextEncoder();
+      const buf = await crypto.subtle.digest('SHA-256', enc.encode(str));
+      const bytes = new Uint8Array(buf);
+      let hex = '';
+      for(let i=0;i<bytes.length;i++){
+        const b = bytes[i].toString(16);
+        hex += (b.length===1 ? '0'+b : b);
+      }
+      return hex;
+    }
+
+    function runIndexApp(){
+      if(window.__tasun_index_app_started__) return;
+      window.__tasun_index_app_started__ = true;
+
+      const Core = window.TasunCore || null;
+      const withV = (Core && Core.withV) ? Core.withV : (window.__withV || ((u)=>u));
+      const safeJsonParse = (Core && Core.jsonParse) ? Core.jsonParse : ((s,f)=>{ try{return JSON.parse(s);}catch(e){return f;} });
+      const clamp = (Core && Core.clamp) ? Core.clamp : ((n,a,b)=>Math.max(a,Math.min(b,n)));
+      const rafDebounce = (Core && Core.rafDebounce) ? Core.rafDebounce : (fn=>{ let r=0; return function(){ try{ cancelAnimationFrame(r); }catch(e){} r=requestAnimationFrame(()=>{ try{ fn(); }catch(e){} }); }; });
+      const onFontsReady = (cb)=>{ if(document.fonts && document.fonts.ready) document.fonts.ready.then(cb); else setTimeout(cb, 180); };
+      const $ = (sel)=>document.querySelector(sel);
+
+      const G = window.__TASUN_GLOBALS__ = window.__TASUN_GLOBALS__ || {};
+      const C = G.CONSTS = G.CONSTS || {};
+      Object.assign(C, {
+        AUTH_KEY:'tasunAuthTable_v1',
+        CURRENT_KEY:'tasunCurrentUser_v1',
+        INDEX_SESSION_KEY:'tasunIndexSessionAuthed_v2',
+        CHILD_INDEX_SESSION_KEY:'tasunIndexSession_v1',
+        SESSION_KEY:'tasunSessionLogin_v2',
+        NAV_KEY:'tasunNavButtons_v1',
+        ROUTE_KEY:'tasunNavRoutes_v1',
+        PERM_MATRIX_KEY:'tasunPermMatrix_v1',
+        BACKUP_RING_KEY:'tasunBackupRing_v1',
+        BACKUP_RING_MAX:10,
+        SSO_KEY:'tasunSso_v2',
+        SSO_TTL_MS:1000 * 60 * 60 * 12,
+        TAB_ID_KEY:'tasunTabId_v1',
+        VERSION_URL: String((window.__TASUN_GLOBALS__||{}).CONSTS && (window.__TASUN_GLOBALS__||{}).CONSTS.VERSION_URL || 'tasun-version.json'),
+        PAGE_FILE: String((window.__TASUN_GLOBALS__||{}).CONSTS && (window.__TASUN_GLOBALS__||{}).CONSTS.PAGE_FILE || 'index.html'),
+        TRIPLE_CHECK_LOCK_KEY: String((window.__TASUN_GLOBALS__||{}).CONSTS && (window.__TASUN_GLOBALS__||{}).CONSTS.TRIPLE_CHECK_LOCK_KEY || 'tasun_triple_check_lock_v4'),
+        TRIPLE_CHECK_SEEN_KEY: String((window.__TASUN_GLOBALS__||{}).CONSTS && (window.__TASUN_GLOBALS__||{}).CONSTS.TRIPLE_CHECK_SEEN_KEY || 'tasun_triple_check_seen_v4'),
+        TRIPLE_CHECK_COOLDOWN_MS: Number((window.__TASUN_GLOBALS__||{}).CONSTS && (window.__TASUN_GLOBALS__||{}).CONSTS.TRIPLE_CHECK_COOLDOWN_MS || 12000),
+        FORCE_RELOAD_GUARD_MS: Number((window.__TASUN_GLOBALS__||{}).CONSTS && (window.__TASUN_GLOBALS__||{}).CONSTS.FORCE_RELOAD_GUARD_MS || 20000),
+        AUTHORITY_EVENTS: Array.isArray((window.__TASUN_GLOBALS__||{}).CONSTS && (window.__TASUN_GLOBALS__||{}).CONSTS.AUTHORITY_EVENTS) ? (window.__TASUN_GLOBALS__||{}).CONSTS.AUTHORITY_EVENTS.slice() : ['DOMContentLoaded','load','pageshow','focus'],
+        STABLE_CALIBRATOR_DELAYS: Array.isArray((window.__TASUN_GLOBALS__||{}).CONSTS && (window.__TASUN_GLOBALS__||{}).CONSTS.STABLE_CALIBRATOR_DELAYS) ? (window.__TASUN_GLOBALS__||{}).CONSTS.STABLE_CALIBRATOR_DELAYS.slice() : [40,180],
+
+        ZEN_LAYOUT: Object.assign({
+          TOP_Y_RATIO: 0.238,
+          SIDE_Y_RATIO: 0.618,
+          TOP_SIZE_RATIO: 0.052,
+          SIDE_SIZE_RATIO: 0.040,
+          BOTTOM_SIZE_RATIO: 0.034,
+          SIDE_DELTA_RATIO: 0.395,
+          BOTTOM_Y_RATIO: 0.748,
+          TOP_OFFSET_Y_CM: -4.0,
+          LEFT_OFFSET_X_CM: -7.0,
+          LEFT_OFFSET_Y_CM: -2.0,
+          BOTTOM_OFFSET_X_CM: 0.5,
+          BOTTOM_OFFSET_Y_CM: 2.0,
+          RIGHT_OFFSET_X_CM: 7.0,
+          RIGHT_OFFSET_Y_CM: -2.5
+        }, (((window.__TASUN_GLOBALS__||{}).CONSTS||{}).ZEN_LAYOUT || {})),
+        NAV_LAYOUT: Object.assign({
+          EDGE_PAD_RATIO: 0.006,
+          ZEN_GAP_RATIO: 0.006,
+          LOTUS_GAP_RATIO: 0.012,
+          OUTWARD_PUSH_RATIO: 0.058
+        }, (((window.__TASUN_GLOBALS__||{}).CONSTS||{}).NAV_LAYOUT || {})),
+        MOBILE_FLOAT_LAYOUT: Object.assign({
+          SIDE_PAD_PHONE: 16,
+          SIDE_PAD_NARROW: 24,
+          TOP_ROW_GAP_PHONE: 12,
+          TOP_ROW_GAP_NARROW: 16,
+          LOWER_COL_GAP_PHONE: 14,
+          LOWER_COL_GAP_NARROW: 16,
+          LOWER_ROW_GAP_PHONE: 12,
+          LOWER_ROW_GAP_NARROW: 16,
+          TOP_ZONE_START_PORTRAIT_RATIO: 0.30,
+          TOP_ZONE_START_LANDSCAPE_RATIO: 0.16,
+          TOP_ZONE_MIN_HEIGHT: 92,
+          LOWER_ZONE_START_PORTRAIT_RATIO: 0.82,
+          LOWER_ZONE_START_LANDSCAPE_RATIO: 0.74,
+          LOWER_ZONE_MIN_HEIGHT: 180,
+          TOP_BTN_W_PORTRAIT_RATIO: 0.42,
+          TOP_BTN_W_LANDSCAPE_RATIO: 0.22,
+          TOP_BTN_W_MAX_PORTRAIT: 300,
+          TOP_BTN_W_MAX_LANDSCAPE: 340,
+          BOTTOM_BTN_W_PORTRAIT_RATIO: 0.42,
+          BOTTOM_BTN_W_LANDSCAPE_RATIO: 0.30,
+          BOTTOM_BTN_W_MAX_PORTRAIT: 310,
+          BOTTOM_BTN_W_MAX_LANDSCAPE: 330,
+          TOP_BTN_H_MAX_PORTRAIT: 84,
+          TOP_BTN_H_MAX_LANDSCAPE: 78,
+          BOTTOM_BTN_H_MAX_PORTRAIT: 82,
+          BOTTOM_BTN_H_MAX_LANDSCAPE: 76,
+          LOWER_TOTAL_HEIGHT_MATCH_TOP: true,
+          LOWER_TOTAL_HEIGHT_MAX_PORTRAIT: 84,
+          LOWER_TOTAL_HEIGHT_MAX_LANDSCAPE: 78,
+          LOTUS_CENTER_Y_RATIO: 0.635,
+          LOTUS_W_RATIO: 0.52,
+          LOTUS_H_RATIO: 0.78,
+          LOTUS_TOP_CLEARANCE: 22,
+          LOTUS_BOTTOM_CLEARANCE: 22
+        }, (((window.__TASUN_GLOBALS__||{}).CONSTS||{}).MOBILE_FLOAT_LAYOUT || {})),
+        ZEN_LAYOUT_DESKTOP: Object.assign({
+          TOP_SIZE_BOOST_STEPS: 2,
+          SIDE_SIZE_BOOST_STEPS: 2,
+          BOTTOM_SIZE_BOOST_STEPS: 2,
+          TOP_OFFSET_Y_CM_DELTA: 0.5,
+          SIDE_INWARD_CM: 4.5,
+          BOTTOM_OFFSET_Y_CM_DELTA: -3.0,
+          CLARITY_TEXT_STROKE_PX: 1.25,
+          CLARITY_SHADOW_ALPHA: 0.52
+        }, (((window.__TASUN_GLOBALS__||{}).CONSTS||{}).ZEN_LAYOUT_DESKTOP || {})),
+        ZEN_LAYOUT_MOBILE: Object.assign({
+          BOTTOM_OFFSET_Y_CM_DELTA: -2.0
+        }, (((window.__TASUN_GLOBALS__||{}).CONSTS||{}).ZEN_LAYOUT_MOBILE || {}))
+      });
+      const AUTH_KEY    = C.AUTH_KEY;
+      const CURRENT_KEY = C.CURRENT_KEY;
+      const INDEX_SESSION_KEY = C.INDEX_SESSION_KEY;
+      const CHILD_INDEX_SESSION_KEY = C.CHILD_INDEX_SESSION_KEY;
+      const SESSION_KEY = C.SESSION_KEY;
+      const NAV_KEY     = C.NAV_KEY;
+      const ROUTE_KEY   = C.ROUTE_KEY;
+      const PERM_MATRIX_KEY = C.PERM_MATRIX_KEY;
+      const BACKUP_RING_KEY = C.BACKUP_RING_KEY;
+      const BACKUP_RING_MAX = C.BACKUP_RING_MAX;
+      const SSO_KEY = C.SSO_KEY;
+      const SSO_TTL_MS = C.SSO_TTL_MS;
+      const TAB_ID_KEY = C.TAB_ID_KEY;
+      const TAB_ID = (function(){ try{ let id = sessionStorage.getItem(TAB_ID_KEY); if(!id){ id = 'tab_' + Math.random().toString(36).slice(2) + '_' + Date.now().toString(36); sessionStorage.setItem(TAB_ID_KEY, id); } return id; }catch(e){ return 'tab_' + Date.now(); }})();
+      const AUTH_CHANNEL_NAME = 'tasun_auth_channel_v1';
+      const authChannel = (function(){ try{ return ('BroadcastChannel' in window) ? new BroadcastChannel(AUTH_CHANNEL_NAME) : null; }catch(e){ return null; }})();
+
+      const METRO_ID    = 'btn2';
+      const METRO_HREF  = '汐東工程管理表.html';
+      const FIXED_ROUTES = {
+        '捷運汐東線事項紀錄': '捷運汐東線事項記錄.html',
+        '捷運汐東線事項記錄': '捷運汐東線事項記錄.html',
+        '捷運汐東線事項紀錄.html': '捷運汐東線事項記錄.html',
+        '捷運汐東線事項記錄.html': '捷運汐東線事項記錄.html',
+        '捷運汐東線記事': '捷運汐東線事項記錄.html',
+        '捷運汐東線記事.html': '捷運汐東線事項記錄.html',
+        '捷運汐東線事項記錄': '捷運汐東線事項記錄.html',
+        '捷運汐東線事項記錄.html': '捷運汐東線事項記錄.html',
+        '臻鼎時代大廈管理表': '臻鼎管理表.html',
+        '臻鼎時代大廈管理表.html': '臻鼎管理表.html',
+        '臻鼎管理表': '臻鼎管理表.html',
+        '臻鼎管理表.html': '臻鼎管理表.html',
+        '工程資料庫': '工程資料庫.html',
+        '工程資料庫.html': '工程資料庫.html',
+        '雲端檔案': 'https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88'
+      };
+      const LEGACY_BUTTON_KEYS = ['btn1','btn2','btn3','btn4','btn5'];
+
+      const bootCover    = document.getElementById('bootCover');
+      const loginOverlay = $('#loginOverlay');
+      const loginBootInline = $('#loginBootInline');
+      const loginForm    = $('#loginForm');
+      const loginError   = $('#loginError');
+      const loginSub     = $('#loginSub');
+      const userInfo     = $('#userInfo');
+      const btnSwitch    = $('#btnSwitchUser');
+      const btnLogout    = $('#btnLogout');
+      const btnExport    = $('#btnExport');
+      const btnRelease   = $('#btnRelease');
+      const btnMoreActions = $('#btnMoreActions');
+      const mobileMoreMenu = $('#mobileMoreMenu');
+      const btnMenuSwitch = $('#btnMenuSwitchUser');
+      const btnMenuLogout = $('#btnMenuLogout');
+      const btnMenuExport = $('#btnMenuExport');
+      const btnMenuRelease = $('#btnMenuRelease');
+      const btnTogglePwd = $('#btnTogglePwd');
+      const btnForceRelogin = $('#btnForceRelogin');
+      const navArea      = $('#navArea');
+      const titleWrap    = $('#titleWrap');
+      const userBar      = $('#userBar');
+      const zwTopAxis    = $('#zwTopAxis');
+      const zwBottomLine = $('#zwBottomLine');
+      const zenImg       = document.getElementById('zenImg');
+      const heroInner    = $('#heroInner');
+      const lotusStage   = $('#lotusStage');
+      const usernameWrap = document.getElementById('usernameWrap');
+      const usernameSel = document.getElementById('username');
+      const usernameDisplay = document.getElementById('usernameDisplay');
+      const usernameMenu = document.getElementById('usernameMenu');
+      const passwordInput = document.getElementById('password');
+
+      function stopIndexAppForMissingDom(missingIds){
+        try{
+          const ids = Array.isArray(missingIds) ? missingIds.filter(Boolean) : [];
+          const msg = '頁面缺少必要 DOM 節點，已中止腳本綁定：' + ids.join('、');
+          try{ console.warn('[TASUN][index] missing DOM nodes:', ids); }catch(_e){}
+          let warn = document.getElementById('tasunDomWarn');
+          if(!warn){
+            warn = document.createElement('div');
+            warn.id = 'tasunDomWarn';
+            warn.style.position = 'fixed';
+            warn.style.left = '12px';
+            warn.style.right = '12px';
+            warn.style.top = '12px';
+            warn.style.zIndex = '200000';
+            warn.style.padding = '14px 18px';
+            warn.style.borderRadius = '18px';
+            warn.style.background = 'linear-gradient(180deg, rgba(154,22,22,0.96), rgba(120,10,10,0.96))';
+            warn.style.color = '#fff4ea';
+            warn.style.fontFamily = "'Microsoft JhengHei','Noto Sans TC',sans-serif";
+            warn.style.fontSize = '16px';
+            warn.style.fontWeight = '700';
+            warn.style.boxShadow = '0 16px 36px rgba(0,0,0,0.28)';
+            document.body.appendChild(warn);
+          }
+          warn.textContent = msg;
+        }catch(_e){}
+      }
+
+      const requiredDom = [
+        ['loginOverlay', loginOverlay],
+        ['loginForm', loginForm],
+        ['loginSub', loginSub],
+        ['loginError', loginError],
+        ['userInfo', userInfo],
+        ['btnSwitchUser', btnSwitch],
+        ['btnLogout', btnLogout],
+        ['btnExport', btnExport],
+        ['btnRelease', btnRelease],
+        ['btnMoreActions', btnMoreActions],
+        ['mobileMoreMenu', mobileMoreMenu],
+        ['btnMenuSwitchUser', btnMenuSwitch],
+        ['btnMenuLogout', btnMenuLogout],
+        ['btnMenuExport', btnMenuExport],
+        ['btnMenuRelease', btnMenuRelease],
+        ['btnTogglePwd', btnTogglePwd],
+        ['btnForceRelogin', btnForceRelogin],
+        ['navArea', navArea],
+        ['titleWrap', titleWrap],
+        ['userBar', userBar],
+        ['zwTopAxis', zwTopAxis],
+        ['zwBottomLine', zwBottomLine],
+        ['zenImg', zenImg],
+        ['heroInner', heroInner],
+        ['lotusStage', lotusStage],
+        ['usernameWrap', usernameWrap],
+        ['username', usernameSel],
+        ['usernameDisplay', usernameDisplay],
+        ['usernameMenu', usernameMenu],
+        ['password', passwordInput]
+      ].filter(function(item){ return !item[1]; }).map(function(item){ return item[0]; });
+
+      if(requiredDom.length){
+        stopIndexAppForMissingDom(requiredDom);
+        return;
+      }
+
+      let __bootUiReleased = false;
+      function releaseBootUI(){
+        if(__bootUiReleased) return;
+        __bootUiReleased = true;
+        try{ document.body.classList.remove('prehide'); }catch(e){}
+        try{ if(bootCover) bootCover.hidden = true; }catch(e){}
+        try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){}
+      }
+      function waitForLoginVisualReady(){
+        return Promise.resolve();
+      }
+      let __loginStageQuietedOnce = false;
+      function quiesceLoginStageNetwork(){
+        if(__loginStageQuietedOnce) return;
+        __loginStageQuietedOnce = true;
+      }
+
+      function isTouchPickerPreferred(){
+        try{
+          const hasTouch = ('ontouchstart' in window) || ((navigator.maxTouchPoints || 0) > 0) || ((navigator.msMaxTouchPoints || 0) > 0);
+          const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+          return !!(hasTouch || coarse);
+        }catch(e){ return false; }
+      }
+      function applyUsernamePickerMode(){
+        try{
+          const useNativeTouch = true; // 正式版：開頁直接可點原生下拉，不經中介動畫
+          if(usernameWrap) usernameWrap.classList.toggle('native-touch', useNativeTouch);
+          if(usernameDisplay){
+            usernameDisplay.setAttribute('aria-hidden', useNativeTouch ? 'true' : 'false');
+            usernameDisplay.tabIndex = useNativeTouch ? -1 : 0;
+          }
+          if(usernameMenu){
+            usernameMenu.classList.remove('open');
+            usernameMenu.setAttribute('hidden', 'hidden');
+          }
+        }catch(e){}
+      }
+      applyUsernamePickerMode();
+      window.addEventListener('resize', applyUsernamePickerMode, { passive:true });
+
+      const CLOUD_RES_URL = 'tasun-resources.json';
+      const CLOUD_RESOURCE_KEY = String(window.TASUN_INDEX_CLOUD_KEY || 'tasun-index-db').trim() || 'tasun-index-db';
+      const CLOUD_KEYS = [AUTH_KEY, NAV_KEY, ROUTE_KEY, PERM_MATRIX_KEY];
+      const CLOUD_KEY_SET = new Set(CLOUD_KEYS);
+      let cloudCtrl = null;
+      let cloudApplying = false;
+      let cloudSaveTimer = 0;
+      let cloudFailCount = 0;
+      let cloudBackoffMs = 0;
+
+      const D1_AUTH_TABLE_ENDPOINT_FULL  = '/api/auth/table';
+      const D1_AUTH_TABLE_ENDPOINT_PUB   = '/api/auth/public';
+      function getApiBaseLocked(){
+        const v = String(localStorage.getItem('tasunApiBase_v1') || '').trim();
+        return String(v || 'https://tasun-worker.wutasun.workers.dev').replace(/\/+$/,'');
+      }
+      function getSharedWorkerToken(){
+        const keys = ['tasunCloudToken_v1','tasunCloudToken_v1__sxdh-notes','tasunCloudToken_v1__auth-table'];
+        for(const key of keys){
+          const v = String(localStorage.getItem(key) || sessionStorage.getItem(key) || '').trim();
+          if(v) return v;
+        }
+        return '';
+      }
+      function buildWorkerAuthHeaders(extra){
+        const headers = Object.assign({}, extra || {});
+        const bearer = getSharedWorkerToken();
+        if(bearer && !headers.Authorization) headers.Authorization = 'Bearer ' + bearer;
+        return headers;
+      }
+      function withNoCache(u){
+        try{
+          const url = new URL(u, location.href);
+          url.searchParams.set('_', String(Date.now()));
+          return url.toString();
+        }catch(_e){
+          const ts = Date.now();
+          return String(u || '') + (String(u || '').includes('?') ? '&' : '?') + '_=' + ts;
+        }
+      }
+      async function d1GetJson(path){
+        const url = withNoCache(getApiBaseLocked() + path);
+        const res = await fetch(url, {
+          method:'GET', credentials:'include', cache:'no-store',
+          headers: buildWorkerAuthHeaders()
+        });
+        const json = await res.json().catch(()=>null);
+        return { ok: res.ok, status: res.status, json };
+      }
+      function mergeAuthorityAuthToLocal(rows){
+        if(!Array.isArray(rows) || !rows.length) return false;
+        const local = safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []);
+        const map = new Map();
+        (Array.isArray(local) ? local : []).forEach(row=>{
+          const key = String(row?.user ?? row?.username ?? row?.name ?? row?.account ?? '').trim();
+          if(key) map.set(key.toLowerCase(), Object.assign({}, row));
+        });
+        let changed = false;
+        rows.forEach(row=>{
+          const user = String(row?.user ?? row?.username ?? row?.name ?? row?.account ?? '').trim();
+          if(!user) return;
+          const k = user.toLowerCase();
+          const prev = map.get(k) || {};
+          const next = Object.assign({}, prev, row);
+          next.user = user;
+          next.username = user;
+          if(!next.role && next.level) next.role = next.level;
+          if(!next.level && next.role) next.level = next.role;
+          const incomingHash = String(row?.passHash || row?.passwordHash || row?.hash || '').trim();
+          const incomingPlain = String(row?.pass || row?.password || row?.pw || '').trim();
+          if(incomingHash) next.passHash = incomingHash;
+          else if(!String(next.passHash || '').trim()) next.passHash = String(prev.passHash || prev.passwordHash || prev.hash || '').trim();
+          if(incomingPlain) next.pass = incomingPlain;
+          else if(!String(next.pass || next.password || next.pw || '').trim()) next.pass = String(prev.pass || prev.password || prev.pw || '').trim();
+          map.set(k, next);
+        });
+        const merged = Array.from(map.values());
+        const oldText = JSON.stringify(Array.isArray(local) ? local : []);
+        const newText = JSON.stringify(merged);
+        if(oldText !== newText){
+          localStorage.setItem(AUTH_KEY, newText);
+          return true;
+        }
+        return changed;
+      }
+      async function syncAuthTableFromAuthority(){ return false; }
+
+      function loadScriptOnce(src){
+        return new Promise((resolve)=>{
+          try{
+            const id = 'tasunScript__' + src;
+            if(document.getElementById(id)) return resolve(true);
+            const s = document.createElement('script');
+            s.id = id;
+            s.src = src;
+            s.async = true;
+            s.onload = ()=>resolve(true);
+            s.onerror = ()=>resolve(false);
+            document.head.appendChild(s);
+          }catch(e){ resolve(false); }
+        });
+      }
+      const INDEX_KEY_UID_MAP_KEY = 'tasunIndexKeyUidMap_v1';
+      function uuidV4(){ try{ if(window.crypto && typeof crypto.randomUUID === 'function') return crypto.randomUUID(); }catch(e){} return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c=>{ const r=(Math.random()*16)|0; const v=(c==='x')?r:((r&0x3)|0x8); return v.toString(16); }); }
+      function getUidMap(){ try{ return JSON.parse(localStorage.getItem(INDEX_KEY_UID_MAP_KEY) || '{}') || {}; }catch(e){ return {}; } }
+      function setUidMap(map){ try{ localStorage.setItem(INDEX_KEY_UID_MAP_KEY, JSON.stringify(map || {})); }catch(e){} }
+      function ensureRowUidForKey(k){ const key = String(k||'').trim(); if(!key) return uuidV4(); const map = getUidMap(); if(map[key]) return map[key]; const uid = uuidV4(); map[key] = uid; setUidMap(map); return uid; }
+      function buildCloudPayloadFromLocal(){
+        const now = Date.now();
+        const rows = [];
+        const keys = CLOUD_KEYS.slice().sort((a,b)=>a.localeCompare(b,'zh-Hant'));
+        keys.forEach((k, idx)=>{
+          const raw = localStorage.getItem(k);
+          const uid = ensureRowUidForKey(k);
+          rows.push({ uid, id: idx + 1, k, v: (raw == null ? '' : String(raw)), rev: now, updatedAt: now, deleted: false });
+        });
+        return { db: rows, counter: rows.length, source: 'index.html', appVer: (window.__CACHE_V || window.TASUN_APP_VER || '') };
+      }
+      function broadcastAuthState(kind, payload){
+        const msg = { kind, payload: payload || null, tabId: TAB_ID, ts: Date.now() };
+        try{ if(authChannel) authChannel.postMessage(msg); }catch(e){}
+        try{ localStorage.setItem('__tasun_auth_sync__', JSON.stringify(msg)); localStorage.removeItem('__tasun_auth_sync__'); }catch(e){}
+      }
+      function inferRole(name, role){
+        const r = String(role || '').trim().toLowerCase();
+        if(r) return r;
+        const u = String(name || '').trim().toLowerCase();
+        if(u === 'alex' || u === 'joyce') return 'admin';
+        if(u === 'tasun') return 'write';
+        return 'read';
+      }
+      function userKey(s){ return String(s || '').trim(); }
+      function loadPermMatrixSafe(){ return safeJsonParse(localStorage.getItem(PERM_MATRIX_KEY) || 'null', null) || null; }
+      function getPermFromMatrix(pm, username, page, btnId){
+        try{
+          const u = pm && pm.users && pm.users[userKey(username)];
+          const pg = u && u[String(page || 'index.html')];
+          if(pg && Object.prototype.hasOwnProperty.call(pg, btnId)) return !!pg[btnId];
+        }catch(e){}
+        return null;
+      }
+      function scheduleCloudSave(readOnly){
+        if(readOnly) return;
+        if(!cloudCtrl || typeof cloudCtrl.saveMerged !== 'function') return;
+        if(cloudApplying || cloudCtrl.__disabled__) return;
+        clearTimeout(cloudSaveTimer);
+        cloudSaveTimer = setTimeout(async()=>{
+          const jitter = Math.floor(Math.random()*180);
+          const wait = Math.max(0, cloudBackoffMs) + jitter;
+          if(wait) await new Promise(r=>setTimeout(r, wait));
+          try{
+            await cloudCtrl.saveMerged({ lock:false, mode:'merge' });
+            cloudFailCount = 0;
+            cloudBackoffMs = 0;
+          }catch(e){
+            cloudFailCount++;
+            const msg = String(e && (e.message || e) || '');
+            const status = Number(e && (e.status || e.code || (e.cause && e.cause.status)) || 0) || 0;
+            if(status === 400 || /(\b400\b)|MERGE_FAIL/i.test(msg)) cloudBackoffMs = Math.min(30000, (cloudBackoffMs || 1200) * 2);
+            else cloudBackoffMs = Math.min(20000, (cloudBackoffMs || 800) * 2);
+            if(cloudFailCount >= 8){
+              cloudCtrl.__disabled__ = true;
+              try{ console.warn('[index] Cloud sync paused after repeated failures.', e); }catch(_e){}
+            }
+          }
+        }, 650);
+      }
+            async function ensureCloudMounted(user){
+        try{
+          if(cloudCtrl && typeof cloudCtrl.pullNow === 'function' && typeof cloudCtrl.saveMerged === 'function') return cloudCtrl;
+          const wrap = window.TasunCloudWrapV4 || null;
+          if(!wrap) return null;
+
+          function pickMethod(obj, names){
+            for(const n of names){
+              if(obj && typeof obj[n] === 'function') return obj[n].bind(obj);
+            }
+            return null;
+          }
+
+          const mountFn = pickMethod(wrap, ['mountIndexCloud','mountIndexDb','mountPageCloud','mountPageDb','createSyncController','createCloudController','mount']);
+          let mounted = null;
+          if(mountFn){
+            mounted = await mountFn({
+              pageKey:'index',
+              resourceKey:CLOUD_RESOURCE_KEY,
+              cloudKey:CLOUD_RESOURCE_KEY,
+              keys:CLOUD_KEYS.slice(),
+              buildPayload:buildCloudPayloadFromLocal,
+              user:user || CURRENT_USER || null
+            }).catch(()=>null);
+          }
+          const baseObj = mounted || wrap;
+          const pullFn = pickMethod(baseObj, ['pullNow','pull','download','syncDown','loadMerged','load']);
+          const saveFn = pickMethod(baseObj, ['saveMerged','pushNow','push','upload','syncUp','save']);
+          if(!pullFn && !saveFn) return null;
+
+          cloudCtrl = {
+            __mounted__: !!mounted,
+            __readOnly__: false,
+            __disabled__: false,
+            async pullNow(){
+              if(cloudApplying) return null;
+              cloudApplying = true;
+              try{
+                const data = pullFn ? await pullFn({ pageKey:'index', resourceKey:CLOUD_RESOURCE_KEY, cloudKey:CLOUD_RESOURCE_KEY, user:user || CURRENT_USER || null }).catch(()=>null) : null;
+                if(data && typeof data === 'object'){
+                  const rows = Array.isArray(data.db) ? data.db : (Array.isArray(data.rows) ? data.rows : []);
+                  rows.forEach((row)=>{
+                    const k = String(row && (row.k || row.key || '') || '').trim();
+                    if(!CLOUD_KEY_SET.has(k)) return;
+                    const deleted = !!(row && row.deleted);
+                    const v = row && Object.prototype.hasOwnProperty.call(row,'v') ? row.v : (row && row.value);
+                    try{
+                      if(deleted) localStorage.removeItem(k);
+                      else localStorage.setItem(k, v == null ? '' : String(v));
+                    }catch(e){}
+                  });
+                  try{ onIndexConfigApplied(); }catch(e){}
+                }
+                return data;
+              }finally{
+                cloudApplying = false;
+              }
+            },
+            async saveMerged(opts){
+              if(!saveFn) return null;
+              const payload = buildCloudPayloadFromLocal();
+              return await saveFn(Object.assign({ pageKey:'index', resourceKey:CLOUD_RESOURCE_KEY, cloudKey:CLOUD_RESOURCE_KEY, payload, db:payload.db, rows:payload.db, user:user || CURRENT_USER || null }, opts || {}));
+            }
+          };
+
+          try{ await cloudCtrl.pullNow(); }catch(e){}
+          return cloudCtrl;
+        }catch(e){
+          return null;
+        }
+      }
+
+      function isAdminUser(user){
+        try{ return String(user && (user.level || user.role || '')).trim().toLowerCase() === 'admin'; }catch(e){ return false; }
+      }
+      function updateReleaseButtonVisibility(){
+        try{
+          const adminVisible = isAdminUser(CURRENT_USER);
+          if(btnRelease){
+            btnRelease.style.display = adminVisible ? '' : 'none';
+            btnRelease.disabled = false;
+            btnRelease.textContent = '發布新版';
+          }
+          if(btnMenuRelease){
+            btnMenuRelease.hidden = !adminVisible;
+            btnMenuRelease.disabled = false;
+            btnMenuRelease.textContent = '發布新版';
+          }
+        }catch(e){}
+      }
+      async function getReleaseApiBase(){
+        try{
+          if(window.TasunCloudWrapV4 && typeof window.TasunCloudWrapV4.load === 'function'){
+            const base = await window.TasunCloudWrapV4.load();
+            if(base) return String(base).replace(/\/+$/,'');
+          }
+        }catch(e){}
+        try{
+          const raw = localStorage.getItem('tasunApiBase_v1') || '';
+          if(raw) return String(raw).trim().replace(/\/+$/,'');
+        }catch(e){}
+        return 'https://tasun-worker.wutasun.workers.dev';
+      }
+      async function triggerAdminRelease(){
+        if(!isAdminUser(CURRENT_USER)) { toast('只有 admin 可發布新版'); return; }
+        if(!btnRelease) return;
+        const ok = confirm('確定要發布新版？\n\n系統將自動觸發 GitHub Actions 發版程序。');
+        if(!ok) return;
+        const oldText = btnRelease.textContent || '發布新版';
+        btnRelease.disabled = true;
+        btnRelease.textContent = '發布中...';
+        try{
+          const apiBase = await getReleaseApiBase();
+          const token = (window.TasunAuthV4 && window.TasunAuthV4.getToken) ? window.TasunAuthV4.getToken() : '';
+          const headers = { 'content-type':'application/json', 'accept':'application/json' };
+          if(token) headers.Authorization = /^Bearer\s+/i.test(token) ? token : ('Bearer ' + token);
+          const res = await fetch(String(apiBase).replace(/\/+$/,'') + '/api/tasun/release-version', {
+            method:'POST', credentials:'include', headers,
+            body: JSON.stringify({
+              source: 'index.html',
+              workflow: 'release-version.yml',
+              ref: 'main',
+              inputs: {
+                reason: 'admin-button',
+                actor: String((CURRENT_USER && CURRENT_USER.username) || 'admin'),
+                write_fallbacks: 'true'
+              }
+            })
+          });
+          const data = await res.json().catch(function(){ return {}; });
+          if(!res.ok || !data || data.ok === false) throw new Error((data && (data.error || data.detail)) || ('HTTP ' + res.status));
+          toast('已送出發布：' + String(data.run_id || data.workflow || 'release-version.yml'));
+          try{ alert('發布工作已送出\nRun ID：' + String(data.run_id || '-') + '\nWorkflow：' + String(data.workflow || 'release-version.yml')); }catch(e){}
+        }catch(err){
+          toast('發布失敗：' + String(err && err.message || err));
+        }finally{
+          btnRelease.disabled = false;
+          btnRelease.textContent = oldText;
+          updateReleaseButtonVisibility();
+        }
+      }
+
+
+      function isMobileUserBarMode(){
+        try{ return window.matchMedia('(max-width: 900px)').matches; }catch(e){ return (window.innerWidth || 0) <= 900; }
+      }
+      function closeMoreMenu(){
+        try{
+          if(userBar) userBar.classList.remove('more-open');
+          if(btnMoreActions) btnMoreActions.setAttribute('aria-expanded', 'false');
+          if(mobileMoreMenu) mobileMoreMenu.hidden = true;
+        }catch(e){}
+      }
+      function openMoreMenu(){
+        try{
+          if(!isMobileUserBarMode()) return;
+          if(userBar) userBar.classList.add('more-open');
+          if(btnMoreActions) btnMoreActions.setAttribute('aria-expanded', 'true');
+          if(mobileMoreMenu) mobileMoreMenu.hidden = false;
+        }catch(e){}
+      }
+      function toggleMoreMenu(){
+        try{
+          if(!isMobileUserBarMode()) return;
+          const opened = !!(userBar && userBar.classList.contains('more-open'));
+          if(opened) closeMoreMenu();
+          else openMoreMenu();
+        }catch(e){}
+      }
+      function performSwitchUser(){
+        closeMoreMenu();
+        clearSession();
+        try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
+        CURRENT_USER = null;
+        showLogin('請重新輸入密碼登入');
+        scheduleExport('switchUser');
+        scheduleAll();
+      }
+      function performLogout(){
+        closeMoreMenu();
+        clearSession();
+        try{ localStorage.removeItem(CURRENT_KEY); }catch(e){}
+        CURRENT_USER = null;
+        showLogin('未登入無法進入網頁');
+        try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){}
+        scheduleExport('logout');
+        scheduleAll();
+      }
+      function performExportBackup(){
+        closeMoreMenu();
+        exportBackupNow('manual:button', { download:true });
+      }
+      function performReleaseNew(){
+        closeMoreMenu();
+        return triggerAdminRelease();
+      }
+
+      function markLatin(span){
+        const t = String(span.textContent || '');
+        const hasLatin = /[A-Za-z0-9_./-]/.test(t);
+        const hasCJK   = /[\u3400-\u9FFF]/.test(t);
+        if(hasLatin) span.classList.add('latin');
+        if(hasLatin && !hasCJK) span.classList.add('latin-only');
+      }
+      function hrefToDom(href){ const h = String(href || '').trim(); if(!h) return '#'; if(/^https?:\/\//i.test(h)) return h; if(/^mailto:/i.test(h)) return h; return withV(encodeURI(h)); }
+      function labelToFile(label){ let s = String(label || '').trim(); if(!s) return '#'; if(s.endsWith('.html')) return s; s = s.replace(/[\\\/:*?"<>|]/g, '').trim(); s = s.replace(/\s+/g, ''); return s + '.html'; }
+      function collectBackupPayload(reason){
+        const now = new Date();
+        const keys = [];
+        for(let i=0;i<localStorage.length;i++){
+          const k = localStorage.key(i);
+          if(!k) continue;
+          if(k.startsWith('tasun') || k.includes('汐東') || k.includes('捷運') || k.includes('水環') || k.includes('審查') || k.includes('文件') || k.includes('資料庫')) keys.push(k);
+        }
+        keys.sort((a,b)=>a.localeCompare(b, 'zh-Hant'));
+        const data = {};
+        keys.forEach(k => { const raw = localStorage.getItem(k); const parsed = safeJsonParse(raw, null); data[k] = (parsed === null && raw !== 'null' && raw !== null) ? raw : parsed; });
+        const sess = safeJsonParse(sessionStorage.getItem(SESSION_KEY) || 'null', null);
+        return { meta: { app: 'Tasun index.html', reason: String(reason || 'manual'), ts: now.toISOString(), href: location.href, cacheV: (window.__CACHE_V || '') }, session: sess, data };
+      }
+      function storeBackupRing(payload){ try{ const arr = safeJsonParse(localStorage.getItem(BACKUP_RING_KEY) || '[]', []); const next = Array.isArray(arr) ? arr : []; next.unshift(payload); next.length = Math.min(next.length, BACKUP_RING_MAX); localStorage.setItem(BACKUP_RING_KEY, JSON.stringify(next)); }catch(e){} }
+      function downloadJson(payload){ const ts = new Date().toISOString().replace(/[:.]/g, '-'); const filename = `Tasun備份_${ts}.json`; const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' }); const u = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = u; a.download = filename; a.style.display = 'none'; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(u); a.remove(); }, 0); }
+      let _exportTimer = 0, _pendingReason = '', _exportOnceExit = false;
+      function exportBackupNow(reason, opts){ const o = opts || {}; const payload = collectBackupPayload(reason); storeBackupRing(payload); if(o.download){ try{ downloadJson(payload); }catch(e){} } }
+      function scheduleExport(reason){ const r = String(reason || 'auto'); _pendingReason = _pendingReason ? (_pendingReason + ' | ' + r) : r; clearTimeout(_exportTimer); _exportTimer = setTimeout(() => { const rr = _pendingReason || 'auto'; _pendingReason = ''; exportBackupNow(rr, { download:false }); }, 350); }
+      function tryExportOnExit(){ if(_exportOnceExit) return; _exportOnceExit = true; exportBackupNow('exit/pagehide', { download:false }); }
+      window.addEventListener('pagehide', tryExportOnExit, { passive:true });
+      document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'hidden') tryExportOnExit(); }, { passive:true });
+
+      function applyFixedRoutes(obj){
+        const out = (obj && typeof obj === 'object') ? { ...obj } : {};
+        getHomeButtonLibrary().forEach((it, idx) => {
+          const id = `btn${idx+1}`;
+          if(it.href) out[id] = it.href;
+          if(it.label && it.href) out[it.label] = it.href;
+        });
+        return out;
+      }
+      function getHomeButtonLibrary(){
+        return [
+          { sourceId:'metro',    label:'捷運汐止東湖線',     href:'汐東工程管理表.html', target:'', roles:['admin','write','read'] },
+          { sourceId:'zhending', label:'臻鼎時代大廈管理表', href:'臻鼎管理表.html',     target:'', roles:['admin','write','read'] },
+          { sourceId:'auth',     label:'系統/權限',         href:'權限表.html',         target:'', roles:['admin'] },
+          { sourceId:'engdb',    label:'工程資料庫',         href:'工程資料庫.html',     target:'', roles:['admin','write','read'] },
+          { sourceId:'cloud',    label:'雲端檔案',           href:'https://www.dropbox.com/home?_tk=web_left_nav_bar&di=left_nav', target:'_blank', roles:['admin','write','read'] }
+        ].map((it, idx) => ({ id:`btn${idx+1}`, ...it }));
+      }
+      function inferHomeSourceId(hit, fallbackId){
+        const library = getHomeButtonLibrary();
+        const rawSourceId = String(hit?.sourceId || '').trim();
+        if(rawSourceId && library.some(it => it.sourceId === rawSourceId)) return rawSourceId;
+        const href = String(hit?.href || '').trim();
+        if(href){
+          const byHref = library.find(it => String(it.href || '').trim() === href);
+          if(byHref) return byHref.sourceId;
+        }
+        const label = String(hit?.label || '').replace(/\s+/g,'').trim();
+        if(label){
+          const byLabel = library.find(it => String(it.label || '').replace(/\s+/g,'').trim() === label);
+          if(byLabel) return byLabel.sourceId;
+          if(/系統[\/／]?權限|權限表/.test(label)) return 'auth';
+        }
+        const id = String(hit?.id || fallbackId || '').trim();
+        const match = id.match(/^btn(\d+)$/i);
+        if(match){
+          const idx = Number(match[1]) - 1;
+          if(library[idx]) return library[idx].sourceId;
+        }
+        return '';
+      }
+      function getHomeLibraryBySourceId(sourceId){
+        const sid = String(sourceId || '').trim();
+        return getHomeButtonLibrary().find(it => it.sourceId === sid) || null;
+      }
+      function mirrorRoutesFromNav(nav){
+        const routes = {};
+        (Array.isArray(nav) ? nav : []).forEach((item, idx) => {
+          const id = `btn${idx+1}`;
+          const label = String(item?.label || '').trim();
+          const href = String(item?.href || '').trim();
+          if(!href) return;
+          routes[id] = href;
+          if(label) routes[label] = href;
+        });
+        try{ localStorage.setItem(ROUTE_KEY, JSON.stringify(routes, null, 2)); }catch(e){}
+        return routes;
+      }
+      function loadRoutes(){
+        const routes = applyFixedRoutes(safeJsonParse(localStorage.getItem(ROUTE_KEY) || 'null', null));
+        try{ localStorage.setItem(ROUTE_KEY, JSON.stringify(routes, null, 2)); }catch(e){}
+        return routes;
+      }
+      function loadNavButtonsSeedIfMissing(){
+        const library = getHomeButtonLibrary();
+        const raw = safeJsonParse(localStorage.getItem(NAV_KEY) || 'null', null);
+        const libMap = new Map(library.map(it => [it.sourceId, it]));
+        const normalized = [];
+        const seen = new Set();
+        if(Array.isArray(raw)){
+          raw.forEach((hit, idx) => {
+            const sourceId = inferHomeSourceId(hit, `btn${idx+1}`);
+            const lib = libMap.get(sourceId) || null;
+            if(!sourceId || !lib || seen.has(sourceId)) return;
+            seen.add(sourceId);
+            normalized.push({
+              id:`btn${normalized.length+1}`,
+              sourceId,
+              label: String(hit?.label || lib.label || '').trim(),
+              href: String(hit?.href || lib.href || '').trim(),
+              target: String(hit?.target || lib.target || '').trim(),
+              roles: Array.isArray(lib.roles) ? lib.roles.slice() : ['admin','write','read']
+            });
+          });
+        }
+        library.forEach((lib) => {
+          if(seen.has(lib.sourceId)) return;
+          seen.add(lib.sourceId);
+          normalized.push({
+            id:`btn${normalized.length+1}`,
+            sourceId: lib.sourceId,
+            label: String(lib.label || '').trim(),
+            href: String(lib.href || '').trim(),
+            target: String(lib.target || '').trim(),
+            roles: Array.isArray(lib.roles) ? lib.roles.slice() : ['admin','write','read']
+          });
+        });
+        const nav = normalized.slice(0, LEGACY_BUTTON_KEYS.length).map((row, idx) => ({
+          id:`btn${idx+1}`,
+          sourceId: String(row?.sourceId || `btn${idx+1}`).trim(),
+          label: String(row?.label || '').trim(),
+          href: String(row?.href || '').trim(),
+          target: String(row?.target || '').trim(),
+          roles: Array.isArray(row?.roles) ? row.roles.slice() : ['admin','write','read']
+        })).filter(x => x.label && x.href);
+        try{ localStorage.setItem(NAV_KEY, JSON.stringify(nav)); }catch(e){}
+        mirrorRoutesFromNav(nav);
+        return nav;
+      }
+      function resolveHref(cfg, routes){
+        const href = String(cfg?.href || '').trim();
+        if(href) return href;
+        const id = String(cfg?.id || '').trim();
+        const label = String(cfg?.label || '').trim();
+        if(routes && routes[id]) return routes[id];
+        if(routes && label && routes[label]) return routes[label];
+        const guess = labelToFile(label);
+        return guess;
+      }
+      function getDefaultAuthTableLegacy(btnCount){
+        const keys = Array.from({length: btnCount}, (_, i) => `btn${i+1}`);
+        const mkAll = () => Object.fromEntries(keys.map(k => [k, true]));
+        const mkOnlyLast = () => Object.fromEntries(keys.map((k, i) => [k, i === btnCount - 1]));
+        return [
+          { user:'alex',  passHash:'7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07',  role:'admin', ...mkAll() },
+          { user:'JOYCE', passHash:'d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815', role:'admin', ...mkAll() },
+          { user:'tasun', passHash:'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba', role:'write', ...mkAll() },
+          { user:'wu',    passHash:'8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92', role:'read', ...mkOnlyLast() }
+        ];
+      }
+      function normalizeRowFromStorage(row, btnCount){
+        const username = (row?.username ?? row?.user ?? row?.name ?? row?.account ?? '').toString().trim();
+        const password = (row?.password ?? row?.pass ?? '').toString();
+        const level    = (row?.level ?? row?.role ?? 'read').toString().trim().toLowerCase();
+        const arr = Array.isArray(row?.buttons) ? row.buttons : null;
+        const buttons = [];
+        for(let i=0;i<btnCount;i++){
+          if(arr && i < arr.length){ buttons[i] = !!arr[i]; continue; }
+          const k = `btn${i+1}`;
+          const has = row && Object.prototype.hasOwnProperty.call(row, k);
+          if(has) buttons[i] = !!row[k];
+          else buttons[i] = (level === 'read') ? (i === btnCount - 1) : true;
+        }
+        const passHash = (row?.passHash ?? row?.passwordHash ?? row?.hash ?? '').toString().trim();
+        return { username, password, passHash, level, buttons };
+      }
+      function loadAuthTable(btnCount){
+        const raw = localStorage.getItem(AUTH_KEY);
+        if(!raw){ const legacy = getDefaultAuthTableLegacy(btnCount); localStorage.setItem(AUTH_KEY, JSON.stringify(legacy)); return legacy.map(r => normalizeRowFromStorage(r, btnCount)); }
+        const parsed = safeJsonParse(raw, null);
+        const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
+        if(Array.isArray(arr)){
+          const mapped = arr.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
+          if(mapped.length){
+            const dedup = [];
+            const seen = new Set();
+            for(let i = mapped.length - 1; i >= 0; i--){
+              const row = mapped[i];
+              const key = String(row.username || '').trim().toLowerCase();
+              if(!key || seen.has(key)) continue;
+              seen.add(key);
+              dedup.unshift(row);
+            }
+            return dedup.length ? dedup : mapped;
+          }
+        }
+        const legacy = getDefaultAuthTableLegacy(btnCount);
+        localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
+        return legacy.map(r => normalizeRowFromStorage(r, btnCount));
+      }
+      const DEFAULT_AUTH_HASH = {
+        alex: '7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07',
+        joyce: 'd558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815',
+        tasun: 'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba',
+        wu: '8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92'
+      };
+      function findAuthCandidates(username){
+        const wanted = String(username || '').trim().toLowerCase();
+        if(!wanted) return [];
+        AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+        return AUTH_TABLE.filter(r => String(r.username || '').trim().toLowerCase() === wanted);
+      }
+      function pickLoginUserFromCandidates(candidates, passwordHash, passwordPlain){
+        const plain = String(passwordPlain || '').trim();
+        for(const u of candidates){
+          const storedHash = String(u.passHash || '').trim().toLowerCase();
+          const storedPlain = String(u.password || '').trim();
+          if((storedHash && passwordHash === storedHash) || (!!storedPlain && plain === storedPlain)) return u;
+        }
+        return null;
+      }
+      function repairKnownAuthSecrets(){
+        try{
+          const raw = localStorage.getItem(AUTH_KEY);
+          const parsed = safeJsonParse(raw, null);
+          const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
+          if(!Array.isArray(arr) || !arr.length) return;
+          const seedMap = new Map([
+            ['alex',  { user:'alex',  passHash:'7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07', role:'admin' }],
+            ['joyce', { user:'JOYCE', passHash:'d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815', role:'admin' }],
+            ['tasun', { user:'tasun', passHash:'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba', role:'write' }],
+            ['wu',    { user:'wu',    passHash:'8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92', role:'read' }]
+          ]);
+          let changed = false;
+          arr.forEach(r => {
+            if(!r || typeof r !== 'object') return;
+            const key = String(r.user || r.username || r.name || r.account || '').trim().toLowerCase();
+            const seed = seedMap.get(key);
+            if(!seed) return;
+            const hasHash = String(r.passHash || r.passwordHash || r.hash || '').trim();
+            const hasPlain = String(r.pass || r.password || r.pw || '').trim();
+            if(!hasHash && !hasPlain){
+              r.passHash = seed.passHash;
+              changed = true;
+            }
+            if(!String(r.role || r.level || '').trim()){
+              r.role = seed.role;
+              changed = true;
+            }
+          });
+          if(changed) localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
+        }catch(e){}
+      }
+      function migrateAuthToHashedIfNeeded(){
+        try{
+          const raw = localStorage.getItem(AUTH_KEY);
+          const parsed = safeJsonParse(raw, null);
+          const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
+          if(!Array.isArray(arr) || arr.length === 0){ const legacy = getDefaultAuthTableLegacy(LEGACY_BUTTON_KEYS.length); localStorage.setItem(AUTH_KEY, JSON.stringify(legacy)); return; }
+          let need = false;
+          for(const r of arr){ if(!r) continue; const hasPass = (r.pass || r.password || r.pw); const hasHash = (r.passHash || r.passwordHash || r.hash); if(hasPass && !hasHash){ need = true; break; } }
+          if(!need) return;
+          (async ()=>{
             try{
-              const r = await fetch(url, { method:"GET", credentials: (cfg && cfg.credentials) ? "include" : "omit", cache:"no-store" });
-              if(r.ok){
-                try{
-                  state.cloud.ok = true;
-                  state.cloud.lastOkAt = Date.now();
-                  state.cloud.lastSyncAt = Date.now();
-                  refresh();
-                }catch(e){}
-                return true;
+              let changed = false;
+              for(const r of arr){
+                if(!r) continue;
+                const hasHash = (r.passHash || r.passwordHash || r.hash);
+                const pass = (r.password ?? r.pass ?? r.pw ?? '').toString();
+                if(!hasHash && pass){ r.passHash = await sha256Hex(pass); delete r.password; delete r.pass; delete r.pw; changed = true; }
+              }
+              if(changed) localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
+            }catch(e){}
+          })();
+        }catch(e){}
+      }
+
+      const COOKIE_NAME = 'tasun_session_v4';
+      const COOKIE_TTL_MS = 1000 * 60 * 60 * 12;
+      function _b64e(s){ try{ return btoa(unescape(encodeURIComponent(s))); }catch(_e){ return ''; } }
+      function _b64d(s){ try{ return decodeURIComponent(escape(atob(s))); }catch(_e){ return ''; } }
+      function setCookieSession(user){
+        try{
+          const now = Date.now();
+          const payload = { u: String(user?.username || user?.user || user?.name || '').trim(), r: String(user?.level || user?.role || '').trim().toLowerCase(), exp: now + COOKIE_TTL_MS, v: (window.__CACHE_V || window.TASUN_APP_VER || '') };
+          if(!payload.u) return;
+          const val = encodeURIComponent(_b64e(JSON.stringify(payload)));
+          document.cookie = `${COOKIE_NAME}=${val}; Path=/; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`;
+        }catch(_e){}
+      }
+      function clearCookieSession(){ try{ document.cookie = `${COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`; }catch(_e){} }
+      function getCookieSession(){
+        try{
+          const m = document.cookie.match(new RegExp('(?:^|; )' + COOKIE_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '=([^;]*)'));
+          if(!m) return null;
+          const raw = decodeURIComponent(m[1] || '');
+          const json = _b64d(raw);
+          const o = JSON.parse(json);
+          if(!o || !o.u) return null;
+          if(o.exp && Date.now() > Number(o.exp)) return null;
+          return { user: String(o.u), role: String(o.r || '').toLowerCase(), exp: Number(o.exp || 0) };
+        }catch(_e){ return null; }
+      }
+      function setSSO(user){
+        try{
+          const now = Date.now();
+          const payload = { name: user?.name || user?.user || user?.username || '', role: inferRole(user?.name || user?.user || user?.username || '', user?.role), at: now, exp: now + SSO_TTL_MS, v: (window.__CACHE_V || window.TASUN_APP_VER || ''), tabId: TAB_ID };
+          if(!payload.name) return;
+          sessionStorage.setItem(SSO_KEY, JSON.stringify(payload));
+          sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ name: payload.name, user: payload.name, role: payload.role }));
+          sessionStorage.setItem('tasunSsoTab_v1', '1');
+        }catch(_e){}
+      }
+      function getSSO(){
+        try{
+          const raw = sessionStorage.getItem(SSO_KEY);
+          if(!raw) return null;
+          const o = JSON.parse(raw);
+          if(!o || !o.name) return null;
+          if(o.exp && Date.now() > Number(o.exp)) return null;
+          return o;
+        }catch(_e){ return null; }
+      }
+      function clearSSO(){
+        try{ sessionStorage.removeItem(SSO_KEY); }catch(e){}
+        try{ sessionStorage.removeItem('tasunSsoTab_v1'); }catch(e){}
+      }
+      function setSession(user){
+        const record = { user: user.username, role: String(user.level || '').toLowerCase(), t: Date.now(), tabId: TAB_ID };
+        try{
+          sessionStorage.setItem(SESSION_KEY, JSON.stringify(record));
+          sessionStorage.setItem(INDEX_SESSION_KEY, '1');
+          sessionStorage.setItem(CHILD_INDEX_SESSION_KEY, '1');
+          try{ localStorage.setItem(CHILD_INDEX_SESSION_KEY, '1'); }catch(_e){}
+          sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: record.role }));
+        }catch(e){}
+        setCookieSession(user);
+        setSSO({ name: user.username, role: user.level });
+        try{
+          const ssoV1 = { name:user.username, user:user.username, role:record.role, at:Date.now(), exp:Date.now() + SSO_TTL_MS, v:(window.__CACHE_V || window.TASUN_APP_VER || '') };
+          sessionStorage.setItem('tasunSso_v1', JSON.stringify(ssoV1));
+          localStorage.setItem('tasunSso_v1', JSON.stringify(ssoV1));
+          sessionStorage.setItem('tasunSso_v2', JSON.stringify(ssoV1));
+          localStorage.setItem('tasunSso_v2', JSON.stringify(ssoV1));
+          sessionStorage.setItem('tasunSession_v1', JSON.stringify({ user:user.username, name:user.username, role:record.role, level:record.role, at:new Date().toISOString() }));
+          localStorage.setItem('tasunSession_v1', JSON.stringify({ user:user.username, name:user.username, role:record.role, level:record.role, at:new Date().toISOString() }));
+        }catch(_e){}
+        broadcastAuthState('login', { user: user.username, role: record.role });
+      }
+      function clearSession(opts){
+        const silent = !!(opts && opts.silent);
+        try{ sessionStorage.removeItem(SESSION_KEY); sessionStorage.removeItem(INDEX_SESSION_KEY); sessionStorage.removeItem(CHILD_INDEX_SESSION_KEY); sessionStorage.removeItem(CURRENT_KEY); }catch(e){}
+        try{ localStorage.removeItem(CHILD_INDEX_SESSION_KEY); }catch(_e){}
+        clearCookieSession();
+        clearSSO();
+        if(!silent) broadcastAuthState('logout', null);
+      }
+      function getSession(){
+        const obj = safeJsonParse(sessionStorage.getItem(SESSION_KEY) || 'null', null);
+        if(obj && typeof obj === 'object'){
+          const u = String(obj.user || '').trim();
+          const r = String(obj.role || '').trim().toLowerCase();
+          if(u) return { user: u, role: r, t: Number(obj.t || 0), source: 'sessionStorage' };
+        }
+        const ck = getCookieSession();
+        if(ck && ck.user){
+          try{
+            sessionStorage.setItem(SESSION_KEY, JSON.stringify({ user: ck.user, role: ck.role, t: Date.now(), tabId: TAB_ID }));
+            sessionStorage.setItem(INDEX_SESSION_KEY, '1');
+            sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: ck.user, role: ck.role }));
+          }catch(_e){}
+          return { user: ck.user, role: ck.role, t: Date.now(), source: 'cookie' };
+        }
+        return null;
+      }
+
+      const ROLE_MAP = {};
+      let BTN_CONFIGS = [];
+      let mainNavBtns = [];
+      let AUTH_TABLE = [];
+      let ROUTES = loadRoutes();
+      let NAV_ARR = loadNavButtonsSeedIfMissing();
+      let CURRENT_USER = null;
+
+      function applyUiAuthority(reason){
+        try{
+          G.RUNTIME = G.RUNTIME || {};
+          G.AUTHORITY = G.AUTHORITY || {};
+          const locked = !!G.RUNTIME.uiLocked;
+          G.AUTHORITY.uiState = locked ? 'locked' : 'ready';
+          G.AUTHORITY.reason = String(reason || G.AUTHORITY.reason || 'authority');
+          if(!document.body) return;
+          document.body.classList.toggle('locked', locked);
+          document.body.classList.remove('booting');
+          document.body.classList.remove('prehide');
+          if(loginOverlay) loginOverlay.style.display = locked ? 'flex' : 'none';
+          if(bootCover){ bootCover.hidden = true; bootCover.style.display = 'none'; }
+          if(loginBootInline){ loginBootInline.hidden = true; loginBootInline.style.display = 'none'; }
+          if(navArea){
+            navArea.style.display = locked ? 'none' : '';
+            navArea.style.visibility = locked ? 'hidden' : 'visible';
+          }
+          if(userBar) userBar.style.display = locked ? 'none' : '';
+          if(titleWrap) titleWrap.style.display = '';
+        }catch(e){}
+      }
+      function setUiLockState(locked, reason){
+        try{
+          G.RUNTIME = G.RUNTIME || {};
+          G.RUNTIME.uiLocked = !!locked;
+          G.RUNTIME.uiReady = !locked;
+        }catch(e){}
+        applyUiAuthority(reason || (locked ? 'lock' : 'unlock'));
+      }
+
+      function isRoleAllowed(cfg, level){
+        const roles = Array.isArray(cfg?.roles) ? cfg.roles : ['admin','write','read'];
+        return roles.includes(level);
+      }
+      function isAuthLikeButtonCfg(cfg){
+        const sid = String(cfg?.sourceId || '').trim();
+        const label = String(cfg?.label || '').replace(/\s+/g,'').trim();
+        const href = String(cfg?.href || resolveHref(cfg, ROUTES) || '').trim();
+        return sid === 'auth' || /系統[\/／]?權限|權限表/.test(label) || /權限表\.html$/i.test(href);
+      }
+      function isAllowedByAuth(user, cfg){
+        const level = String(user?.level || '').trim().toLowerCase();
+        if(isAuthLikeButtonCfg(cfg)) return level === 'admin';
+        return ['admin','write','read'].includes(level);
+      }
+
+      function persistChildPageBridgeForTarget(href){
+        try{
+          var target = String(href || '').trim();
+          if(!target) return false;
+          if(/^https?:\/\//i.test(target) || /^mailto:/i.test(target) || /^tel:/i.test(target)) return false;
+
+          var cur = CURRENT_USER || null;
+          if(!cur){
+            try{ cur = JSON.parse(sessionStorage.getItem(CURRENT_KEY) || localStorage.getItem(CURRENT_KEY) || 'null'); }catch(_e){ cur = null; }
+          }
+          var username = String((cur && (cur.username || cur.user || cur.name)) || '').trim();
+          var role = String((cur && (cur.level || cur.role)) || '').trim().toLowerCase() || inferRole(username, '');
+          if(!username){
+            try{
+              var sso = JSON.parse(sessionStorage.getItem('tasunSso_v2') || localStorage.getItem('tasunSso_v2') || sessionStorage.getItem('tasunSso_v1') || localStorage.getItem('tasunSso_v1') || 'null');
+              if(sso && sso.name){
+                username = String(sso.name || sso.user || '').trim();
+                role = String(sso.role || '').trim().toLowerCase() || inferRole(username, '');
               }
             }catch(_e){}
           }
+
+          var payload = { user: username, name: username, username: username, role: role, level: role, at: new Date().toISOString() };
+          if(username){
+            try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+            try{ localStorage.setItem(CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+            try{ sessionStorage.setItem('tasunSession_v1', JSON.stringify(payload)); }catch(_e){}
+            try{ localStorage.setItem('tasunSession_v1', JSON.stringify(payload)); }catch(_e){}
+            try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(payload)); }catch(_e){}
+            try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(payload)); }catch(_e){}
+            try{
+              var ssoPayload = { name:username, user:username, role:role, at:Date.now(), exp:Date.now() + SSO_TTL_MS, v:(window.__CACHE_V || window.TASUN_APP_VER || '') };
+              sessionStorage.setItem('tasunSso_v1', JSON.stringify(ssoPayload));
+              localStorage.setItem('tasunSso_v1', JSON.stringify(ssoPayload));
+              sessionStorage.setItem('tasunSso_v2', JSON.stringify(ssoPayload));
+              localStorage.setItem('tasunSso_v2', JSON.stringify(ssoPayload));
+            }catch(_e){}
+          }
+
+          try{ sessionStorage.setItem(INDEX_SESSION_KEY, '1'); }catch(_e){}
+          try{ localStorage.setItem(INDEX_SESSION_KEY, '1'); }catch(_e){}
+          try{ sessionStorage.setItem(CHILD_INDEX_SESSION_KEY, '1'); }catch(_e){}
+          try{ localStorage.setItem(CHILD_INDEX_SESSION_KEY, '1'); }catch(_e){}
+          try{ sessionStorage.setItem('tasunIndexSessionAuthed_v2', '1'); }catch(_e){}
+          try{ localStorage.setItem('tasunIndexSessionAuthed_v2', '1'); }catch(_e){}
+          try{ sessionStorage.setItem('tasunSsoTab_v1', '1'); }catch(_e){}
+
+          var tokenKeys = ['tasunCloudToken_v1','tasunCloudToken_v1__index','tasunCloudToken_v1__auth-table','tasunCloudToken_v1__sxdh-notes','tasunBearerToken_v1','tasunAccessToken_v1','tasunAuthToken_v1','tasunSessionToken_v1','tasun_token','tasunToken','tasun_auth_token','authToken','access_token','token','x-api-key','tasunApiKey_v1'];
+          var token = '';
+          for(var i=0;i<tokenKeys.length;i++){
+            token = String(sessionStorage.getItem(tokenKeys[i]) || localStorage.getItem(tokenKeys[i]) || '').trim();
+            if(token) break;
+          }
+          if(token){
+            tokenKeys.forEach(function(k){
+              try{ sessionStorage.setItem(k, token); }catch(_e){}
+              try{ localStorage.setItem(k, token); }catch(_e){}
+            });
+            if(username){
+              try{
+                var bridge = JSON.parse(sessionStorage.getItem('tasunSessionBridge_v1') || localStorage.getItem('tasunSessionBridge_v1') || '{}') || {};
+                bridge.user = username; bridge.name = username; bridge.username = username; bridge.role = role; bridge.level = role;
+                bridge.token = token; bridge.accessToken = token; bridge.authToken = token; bridge.bearer = token; bridge.at = new Date().toISOString();
+                sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge));
+                localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge));
+              }catch(_e){}
+            }
+          }
+
+          var pass = '';
           try{
-            state.cloud.ok = false;
-            refresh();
+            pass = String(sessionStorage.getItem('tasunLastLoginPass_v1__' + username) || localStorage.getItem('tasunLastLoginPass_v1__' + username) || sessionStorage.getItem('tasunLastLoginPass_v1') || localStorage.getItem('tasunLastLoginPass_v1') || '').trim();
+          }catch(_e){}
+          if(pass){
+            try{ sessionStorage.setItem('tasunLastLoginPass_v1', pass); }catch(_e){}
+            try{ localStorage.setItem('tasunLastLoginPass_v1', pass); }catch(_e){}
+            if(username){
+              try{ sessionStorage.setItem('tasunLastLoginPass_v1__' + username, pass); }catch(_e){}
+              try{ localStorage.setItem('tasunLastLoginPass_v1__' + username, pass); }catch(_e){}
+            }
+          }
+
+          try{ sessionStorage.setItem('tasun_next_path_v1', target); }catch(_e){}
+          try{ localStorage.setItem('tasun_next_path_v1', target); }catch(_e){}
+          return true;
+        }catch(_err){
+          console.warn('persistChildPageBridgeForTarget failed', _err);
+          return false;
+        }
+      }
+
+      function buildMainButtonsDOM(){
+        ROUTES = loadRoutes();
+        NAV_ARR = loadNavButtonsSeedIfMissing();
+        const navMap = new Map((Array.isArray(NAV_ARR) ? NAV_ARR : []).map(x => [String(x?.sourceId || '').trim(), x]));
+        BTN_CONFIGS = getHomeButtonLibrary().map((lib, idx) => {
+          const hit = navMap.get(lib.sourceId) || {};
+          return {
+            id: lib.sourceId === 'auth' ? 'systemBtn' : `btn${idx+1}`,
+            sourceId: lib.sourceId,
+            label: String(hit?.label || lib.label || '').trim(),
+            href: String(hit?.href || lib.href || '').trim(),
+            target: String(hit?.target || lib.target || '').trim(),
+            roles: Array.isArray(lib.roles) ? lib.roles.slice() : ['admin','write','read']
+          };
+        }).filter(cfg => cfg.label && cfg.href);
+        try{ localStorage.setItem(NAV_KEY, JSON.stringify(BTN_CONFIGS.map((cfg, idx) => ({ id:`btn${idx+1}`, sourceId:cfg.sourceId, label:cfg.label, href:cfg.href, target:cfg.target, roles:cfg.roles })))); }catch(e){}
+        mirrorRoutesFromNav(BTN_CONFIGS);
+        mainNavBtns = [];
+        navArea.innerHTML = '';
+        BTN_CONFIGS.forEach((cfg) => {
+          const a = document.createElement('a');
+          a.className = 'nav-btn';
+          const isAuth = isAuthLikeButtonCfg(cfg);
+          a.id = isAuth ? 'systemBtn' : (cfg.id || '');
+          if(isAuth) { a.classList.add('is-system'); a.dataset.sourceId = 'auth'; }
+          else { a.dataset.sourceId = String(cfg.sourceId || ''); }
+          const span = document.createElement('span');
+          span.textContent = cfg.label;
+          markLatin(span);
+          a.appendChild(span);
+          const finalHref = resolveHref(cfg, ROUTES);
+          a.setAttribute('href', hrefToDom(finalHref));
+          a.dataset.rawHref = finalHref;
+          a.addEventListener('click', function(ev){
+            var rawHref = String(this.dataset.rawHref || finalHref || '').trim();
+            var targetBlank = String(cfg.target || '').trim() === '_blank';
+            if(!rawHref || targetBlank || /^https?:\/\//i.test(rawHref) || /^mailto:/i.test(rawHref) || /^tel:/i.test(rawHref)) return;
+            ev.preventDefault();
+            persistChildPageBridgeForTarget(rawHref);
+            var jump = hrefToDom(rawHref);
+            try{ sessionStorage.setItem('tasun_child_jump_lock_v1', rawHref); }catch(_e){}
+            try{ localStorage.setItem('tasun_child_jump_lock_v1', rawHref); }catch(_e){}
+            setTimeout(function(){ window.location.assign(jump); }, 8);
+          }, true);
+          const t = cfg.target || '';
+          if(t){ a.target = t; if(t === '_blank') a.rel = 'noopener noreferrer'; }
+          a.style.display = 'none';
+          navArea.appendChild(a);
+          mainNavBtns.push(a);
+        });
+      }
+      function resetButtonsForLogout(){
+        closeMoreMenu();
+        mainNavBtns.forEach(btn => btn.style.display = 'none');
+        navArea.classList.remove('stack','grid2','grid3','sides','phone-compact-stack','phone-compact-right','phone-compact-glass');
+        navArea.style.removeProperty('--stackMaxW');
+        updateReleaseButtonVisibility();
+        scheduleAll();
+      }
+      function refreshButtonsForCurrentUser(){
+        closeMoreMenu();
+        if(!CURRENT_USER) return;
+        ROUTES = loadRoutes();
+        const level = String(CURRENT_USER.level || '').trim().toLowerCase();
+        const showAuth = (level === 'admin');
+        mainNavBtns.forEach((btn, index) => {
+          const cfg = BTN_CONFIGS[index];
+          const isAuth = isAuthLikeButtonCfg(cfg);
+          const shouldShow = isAuth ? showAuth : true;
+          btn.hidden = !shouldShow;
+          btn.style.display = shouldShow ? 'flex' : 'none';
+          btn.style.visibility = shouldShow ? 'visible' : 'hidden';
+          btn.style.opacity = shouldShow ? '1' : '0';
+          btn.style.pointerEvents = shouldShow ? 'auto' : 'none';
+          btn.style.zIndex = shouldShow ? '88' : '0';
+          const finalHref = resolveHref(cfg, ROUTES);
+          btn.setAttribute('href', hrefToDom(finalHref));
+          if(cfg.target){
+            btn.target = cfg.target;
+            if(cfg.target === '_blank') btn.rel = 'noopener noreferrer';
+            else btn.removeAttribute('rel');
+          }else{
+            btn.removeAttribute('target');
+            btn.removeAttribute('rel');
+          }
+        });
+        scheduleAll();
+      }
+      function onIndexConfigApplied(){
+        try{
+          try{ migrateAuthToHashedIfNeeded(); }catch(_e){}
+          ROUTES = loadRoutes();
+          NAV_ARR = loadNavButtonsSeedIfMissing();
+          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+          try{ if(loginOverlay && loginOverlay.style.display === 'flex') populateUserSelect(); }catch(e){}
+          buildMainButtonsDOM();
+          if(CURRENT_USER){
+            const refreshed = AUTH_TABLE.find(r => String(r.username||'') === String(CURRENT_USER.username||''));
+            if(refreshed){ CURRENT_USER = refreshed; refreshButtonsForCurrentUser(); }
+            else forceLogoutAndShowLogin('使用者已不存在，請重新登入');
+          }else resetButtonsForLogout();
+        }catch(e){}
+      }
+
+      function forceLogoutAndShowLogin(msg){
+        clearSession();
+        CURRENT_USER = null;
+        setUiLockState(true, 'forceLogout');
+        try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){}
+        if(loginSub) loginSub.textContent = msg || '';
+        if(loginError) loginError.textContent = '';
+        if(passwordInput) passwordInput.value = '';
+        if(userInfo){ userInfo.textContent = '目前使用者：未登入'; userInfo.setAttribute('data-text', '目前使用者：未登入'); }
+        populateUserSelect();
+        resetButtonsForLogout();
+        updateReleaseButtonVisibility();
+        setTimeout(()=>{ try{ if(usernameDisplay) usernameDisplay.focus(); else if(usernameSel) usernameSel.focus(); }catch(e){} }, 0);
+      }
+      function applyUser(user, opts){
+        const o = opts || {};
+        releaseBootUI();
+        setUiLockState(false, 'applyUser');
+        try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){}
+        if(loginSub) loginSub.textContent = '';
+        __loginStageQuietedOnce = false;
+        closeMoreMenu();
+        CURRENT_USER = user;
+        try{ sessionStorage.setItem(CURRENT_KEY, JSON.stringify({ user: user.username, role: user.level })); }catch(e){}
+        const t = `目前使用者：${user.username} (${user.level})`;
+        if(userInfo){ userInfo.textContent = t; userInfo.setAttribute('data-text', t); }
+        refreshButtonsForCurrentUser();
+        updateReleaseButtonVisibility();
+        scheduleExport('login:applyUser');
+        ensureCloudMounted(user).catch(()=>{});
+        try{
+          if(window.__TASUN_DEFERRED_BOOT__ && typeof window.__TASUN_DEFERRED_BOOT__.startNow === 'function'){
+            const p = window.__TASUN_DEFERRED_BOOT__.startNow();
+            if(p && typeof p.catch === 'function') p.catch(()=>{});
+          }
+        }catch(e){}
+        scheduleAll();
+        if(!o.skipBroadcast){ broadcastAuthState('state', { user: user.username, role: String(user.level||'').toLowerCase() }); }
+      }
+      function canSilentReenterFromSession(){
+        try{
+          if(sessionStorage.getItem(INDEX_SESSION_KEY) !== '1') return false;
+          const sess = getSession();
+          if(!sess || !sess.user) return false;
+          const u = AUTH_TABLE.find(r => r.username === sess.user);
+          if(!u) return false;
+          if(String(u.level||'').toLowerCase() !== String(sess.role||'').toLowerCase()) return false;
+          return true;
+        }catch(e){ return false; }
+      }
+      function tryRestoreLogin(){
+        try{
+          const sess = getSession();
+          if(!sess || !sess.user) return false;
+          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+          const u = AUTH_TABLE.find(r => String(r.username || '').trim() === String(sess.user || '').trim());
+          if(!u) return false;
+          const finalRole = String(u.level || u.role || sess.role || inferRole(u.username, '') || 'read').trim().toLowerCase();
+          applyUser(Object.assign({}, u, { level: finalRole }), { skipBroadcast:true });
+          try{
+            sessionStorage.setItem(INDEX_SESSION_KEY, '1');
+            sessionStorage.setItem(CHILD_INDEX_SESSION_KEY, '1');
+          }catch(_e){}
+          return true;
+        }catch(e){ return false; }
+      }
+      function showLogin(msg){
+        try{ clearSession({ silent:true }); }catch(e){}
+        closeMoreMenu();
+        CURRENT_USER = null;
+        setUiLockState(true, 'forceLogout');
+        if(msg) loginSub.textContent = msg;
+        else if(loginSub) loginSub.textContent = '未登入無法進入網頁';
+        try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){}
+        if(loginError) loginError.textContent = '';
+        if(passwordInput) passwordInput.value = '';
+        populateUserSelect();
+        resetButtonsForLogout();
+        updateReleaseButtonVisibility();
+        if(userInfo){ userInfo.textContent = '目前使用者：未登入'; userInfo.setAttribute('data-text', '目前使用者：未登入'); }
+        try{ scheduleAll(); }catch(e){}
+        releaseBootUI();
+        setTimeout(() => { try{ if(usernameSel) usernameSel.focus(); }catch(e){} }, 0);
+      }
+      function syncUserBarPosition(){
+        try{
+          if(!userBar || !heroInner || !titleWrap) return;
+          if(isMobileUserBarMode()){
+            const heroRect = heroInner.getBoundingClientRect();
+            const titleRect = titleWrap.getBoundingClientRect();
+            const targetTop = Math.max(12, Math.round((titleRect.bottom - heroRect.top) + 12));
+            userBar.style.setProperty('top', targetTop + 'px', 'important');
+          }else{
+            userBar.style.setProperty('top', 'clamp(12px, 2.0vh, 22px)', 'important');
+          }
+        }catch(e){}
+      }
+      function getVVBottomInset(){ try{ const vv = window.visualViewport; if(!vv) return 0; return Math.max(0, window.innerHeight - (vv.height + vv.offsetTop)); }catch(e){ return 0; } }
+      function getVisibleButtons(){ return mainNavBtns.filter(b => b.style.display !== 'none'); }
+      function fitButtonTextPhone(btns){
+        try{
+          for(const btn of btns){
+            const span = btn ? btn.querySelector('span') : null;
+            if(!span) continue;
+            span.style.fontSize = '';
+            const br = btn.getBoundingClientRect();
+            const h = Math.max(1, br.height);
+            const maxPx = clamp(Math.round(h * 0.56), 16, 34);
+            const minPx = clamp(Math.round(h * 0.34), 12, 18);
+            let lo = minPx, hi = maxPx, best = minPx;
+            const limitH = Math.max(1, h - 10);
+            for(let i=0;i<9;i++){
+              const mid = Math.round((lo + hi) / 2);
+              span.style.fontSize = mid + 'px';
+              const need = span.scrollHeight;
+              if(need <= limitH){ best = mid; lo = mid + 1; }
+              else hi = mid - 1;
+            }
+            span.style.fontSize = best + 'px';
+          }
+        }catch(e){}
+      }
+      function computeLotusKeepout(heroRect, stageRect, topBound, bottomBound, isPhone){
+        try{
+          const s = stageRect || heroRect;
+          const sLeft = (s.left - heroRect.left), sTop  = (s.top - heroRect.top), sW = Math.max(1, s.width), sH = Math.max(1, s.height);
+          const cxRel = sLeft + sW * 0.50;
+          const cyBase = sTop + sH * (isPhone ? 0.60 : 0.56);
+          const avail = Math.max(1, bottomBound - topBound);
+          const yMargin = clamp(Math.round(avail * 0.20), 84, 150);
+          const cyRel = clamp(cyBase, topBound + yMargin, bottomBound - yMargin);
+          const rx = clamp(sW * (isPhone ? 0.19 : 0.20), 56, 170);
+          const ry = clamp(sH * (isPhone ? 0.29 : 0.32), 140, 360);
+          const pad = isPhone ? 12 : 14;
+          const abs = { cx: heroRect.left + cxRel, cy: heroRect.top + cyRel, rx: rx + pad, ry: ry + pad };
+          const rel = { cx: cxRel, cy: cyRel, rx: rx + pad, ry: ry + pad };
+          return { abs, rel, top: rel.cy - rel.ry, bottom: rel.cy + rel.ry, left: rel.cx - rel.rx, right: rel.cx + rel.rx, midGapMin: Math.round(rel.rx * 2 + 18) };
+        }catch(e){ return null; }
+      }
+      function rectIntersectsEllipseAbs(rect, ellAbs){ const nx = clamp(ellAbs.cx, rect.left, rect.right); const ny = clamp(ellAbs.cy, rect.top, rect.bottom); const dx = (nx - ellAbs.cx) / Math.max(1, ellAbs.rx); const dy = (ny - ellAbs.cy) / Math.max(1, ellAbs.ry); return (dx*dx + dy*dy) <= 1; }
+      function anyKeepoutHit(btns, keepout){ if(!keepout || !keepout.abs) return false; for(const btn of btns){ const r = btn.getBoundingClientRect(); if(rectIntersectsEllipseAbs(r, keepout.abs)) return true; } return false; }
+
+            function layoutButtons(){
+        if(document.body && document.body.classList.contains('locked')) return;
+        if(!navArea || !heroInner) return;
+
+        const visible = getVisibleButtons();
+        if(!visible.length) return;
+
+        const rect = heroInner.getBoundingClientRect();
+        const W = Math.max(1, rect.width);
+        const H = Math.max(1, rect.height);
+        const isNarrow = window.matchMedia('(max-width: 900px)').matches || W < 980;
+        const isPhone = window.matchMedia('(max-width: 520px)').matches || Math.min(W, H) <= 520;
+
+        const userRect = userBar ? userBar.getBoundingClientRect() : null;
+        const titleRect = titleWrap ? titleWrap.getBoundingClientRect() : null;
+        const topZenRect = zwTopAxis ? zwTopAxis.getBoundingClientRect() : null;
+        const bottomZenRect = zwBottomLine ? zwBottomLine.getBoundingClientRect() : null;
+        const navCfg = (((window.__TASUN_GLOBALS__ || {}).CONSTS || {}).NAV_LAYOUT || {});
+
+        visible.forEach(btn=>{
+          btn.style.position = 'absolute';
+          btn.style.left = '';
+          btn.style.right = '';
+          btn.style.top = '';
+          btn.style.width = '';
+          btn.style.height = '';
+          btn.style.minWidth = '0';
+          btn.style.minHeight = '0';
+          btn.style.gridColumn = '';
+          btn.style.display = 'flex';
+          btn.style.visibility = 'visible';
+          btn.style.opacity = '1';
+          btn.style.pointerEvents = 'auto';
+          btn.style.zIndex = '88';
+        });
+
+        navArea.classList.remove('stack','grid2','grid3','sides','phone-compact-stack','phone-compact-right','phone-compact-glass');
+        navArea.style.removeProperty('--stackMaxW');
+
+        if(isNarrow){
+          navArea.classList.add('stack');
+
+          const portrait = H >= W;
+          const mf = (((window.__TASUN_GLOBALS__ || {}).CONSTS || {}).MOBILE_FLOAT_LAYOUT || {});
+          const sidePad = Number(isPhone ? mf.SIDE_PAD_PHONE : mf.SIDE_PAD_NARROW) || (isPhone ? 16 : 24);
+          const topColGap = Number(isPhone ? mf.TOP_ROW_GAP_PHONE : mf.TOP_ROW_GAP_NARROW) || (isPhone ? 12 : 16);
+          const lowerColGap = Number(isPhone ? mf.LOWER_COL_GAP_PHONE : mf.LOWER_COL_GAP_NARROW) || (isPhone ? 14 : 16);
+          const lowerRowGap = Number(isPhone ? mf.LOWER_ROW_GAP_PHONE : mf.LOWER_ROW_GAP_NARROW) || (isPhone ? 12 : 16);
+
+          const lotusWApprox = Math.min(W * Number(mf.LOTUS_W_RATIO || 0.52), H * 0.82);
+          const lotusHApprox = lotusWApprox * Number(mf.LOTUS_H_RATIO || 0.78);
+          const lotusCenterY = H * Number(mf.LOTUS_CENTER_Y_RATIO || 0.635);
+          const lotusTop = Math.round(lotusCenterY - lotusHApprox / 2);
+          const lotusBottom = Math.round(lotusCenterY + lotusHApprox / 2);
+
+          const titleBottom = titleRect ? (titleRect.bottom - rect.top) : Math.round(H * 0.14);
+          const topZenTop = topZenRect ? (topZenRect.top - rect.top) : lotusTop - 24;
+
+          const mobileShiftUp = isPhone ? Math.round((96 / 2.54) * 2.0) : 0;
+          const upperStartBase = Math.max(
+            titleBottom + 18,
+            Math.round(H * Number(portrait ? (mf.TOP_ZONE_START_PORTRAIT_RATIO || 0.30) : (mf.TOP_ZONE_START_LANDSCAPE_RATIO || 0.16)))
+          );
+          const upperStart = Math.max(titleBottom + 18, upperStartBase - mobileShiftUp);
+          const upperEnd = Math.max(
+            upperStart + Number(mf.TOP_ZONE_MIN_HEIGHT || 92),
+            Math.min(topZenTop - 18, lotusTop - Number(mf.LOTUS_TOP_CLEARANCE || 22))
+          );
+
+          const lowerStartBase = Math.max(
+            lotusBottom + Number(mf.LOTUS_BOTTOM_CLEARANCE || 22),
+            Math.round(H * Number(portrait ? (mf.LOWER_ZONE_START_PORTRAIT_RATIO || 0.82) : (mf.LOWER_ZONE_START_LANDSCAPE_RATIO || 0.74)))
+          );
+          const lowerStart = Math.max(lotusBottom + 10, lowerStartBase - mobileShiftUp);
+          const lowerEnd = Math.max(
+            lowerStart + Number(mf.LOWER_ZONE_MIN_HEIGHT || 180),
+            H - (isPhone ? 18 : 24) - mobileShiftUp
+          );
+
+          const topBtns = visible.slice(0, Math.min(2, visible.length));
+          const bottomBtns = visible.slice(Math.min(2, visible.length));
+
+          let topBtnW = 0;
+          let topBtnH = 0;
+          if(topBtns.length){
+            const topZoneH = Math.max(1, upperEnd - upperStart);
+            topBtnH = clamp(
+              Math.round(Math.min(topZoneH * 0.72, portrait ? Number(mf.TOP_BTN_H_MAX_PORTRAIT || 84) : Number(mf.TOP_BTN_H_MAX_LANDSCAPE || 78))),
+              56,
+              portrait ? Number(mf.TOP_BTN_H_MAX_PORTRAIT || 84) : Number(mf.TOP_BTN_H_MAX_LANDSCAPE || 78)
+            );
+            const topAvailableW = Math.max(120, W - sidePad * 2);
+            topBtnW = Math.max(118, Math.floor((topAvailableW - topColGap) / 2) - (isPhone ? 6 : 0));
+            const rowWidth = topBtns.length * topBtnW + Math.max(0, (topBtns.length - 1) * topColGap);
+            let x = Math.round((W - rowWidth) / 2);
+            const y = Math.round(upperStart + Math.max(0, (topZoneH - topBtnH) / 2));
+
+            topBtns.forEach(btn=>{
+              btn.style.width = topBtnW + 'px';
+              btn.style.height = topBtnH + 'px';
+              btn.style.left = x + 'px';
+              btn.style.top = y + 'px';
+              x += topBtnW + topColGap;
+            });
+          }
+
+          if(bottomBtns.length){
+            const lowerZoneH = Math.max(1, lowerEnd - lowerStart);
+            const rows = Math.ceil(bottomBtns.length / 2);
+            const bottomAvailableW = Math.max(120, W - sidePad * 2);
+            const bottomBtnW = topBtnW;
+            const topTotalH = topBtnH || 0;
+            const wantMatchTotal = !!(mf.LOWER_TOTAL_HEIGHT_MATCH_TOP !== false && topTotalH > 0);
+            const lowerTargetTotalH = wantMatchTotal
+              ? clamp(Math.round(topTotalH), 56, portrait ? Number(mf.LOWER_TOTAL_HEIGHT_MAX_PORTRAIT || 84) : Number(mf.LOWER_TOTAL_HEIGHT_MAX_LANDSCAPE || 78))
+              : clamp(Math.round(Math.min(lowerZoneH, portrait ? Number(mf.LOWER_TOTAL_HEIGHT_MAX_PORTRAIT || 84) : Number(mf.LOWER_TOTAL_HEIGHT_MAX_LANDSCAPE || 78))), 56, portrait ? Number(mf.BOTTOM_BTN_H_MAX_PORTRAIT || 82) : Number(mf.BOTTOM_BTN_H_MAX_LANDSCAPE || 76));
+            const effectiveLowerGap = wantMatchTotal ? Math.min(lowerRowGap, Math.max(4, lowerTargetTotalH - rows * 24)) : lowerRowGap;
+            const bottomBtnH = topBtnH > 0
+              ? topBtnH
+              : clamp(
+                  Math.round((lowerZoneH - lowerRowGap * Math.max(0, rows - 1)) / rows),
+                  56,
+                  portrait ? Number(mf.BOTTOM_BTN_H_MAX_PORTRAIT || 82) : Number(mf.BOTTOM_BTN_H_MAX_LANDSCAPE || 76)
+                );
+
+            const totalBottomH = rows * bottomBtnH + Math.max(0, (rows - 1) * lowerRowGap);
+            let y = Math.round(lowerStart + Math.max(0, (lowerZoneH - totalBottomH) / 2));
+
+            for(let row = 0; row < rows; row++){
+              const rowBtns = bottomBtns.slice(row * 2, row * 2 + 2);
+              const countInRow = rowBtns.length;
+              const rowWidth = countInRow * bottomBtnW + Math.max(0, (countInRow - 1) * lowerColGap);
+              let x = Math.round((W - rowWidth) / 2);
+
+              rowBtns.forEach(btn=>{
+                btn.style.width = bottomBtnW + 'px';
+                btn.style.height = bottomBtnH + 'px';
+                btn.style.left = x + 'px';
+                btn.style.top = y + 'px';
+                x += bottomBtnW + lowerColGap;
+              });
+
+              y += bottomBtnH + lowerRowGap;
+            }
+          }
+
+          fitButtonLabels(visible);
+          return;
+        }
+
+        const topBound = Math.max(
+          98,
+          userRect ? (userRect.bottom - rect.top) + 18 : 0,
+          titleRect ? (titleRect.bottom - rect.top) + 18 : 0,
+          topZenRect ? (topZenRect.bottom - rect.top) + 16 : 0
+        );
+        const bottomBound = Math.max(
+          topBound + 140,
+          bottomZenRect ? (bottomZenRect.top - rect.top) - 18 : H - 96
+        );
+
+        navArea.classList.add('sides');
+
+        const leftZen = document.getElementById('zwLeft');
+        const rightZen = document.getElementById('zwRight');
+        const leftZenRect = leftZen ? leftZen.getBoundingClientRect() : null;
+        const rightZenRect = rightZen ? rightZen.getBoundingClientRect() : null;
+
+        const cx = W * 0.50;
+        const lotusW = Math.min(W * 0.52, H * 0.82);
+        const lotusLeft = cx - lotusW * 0.50;
+        const lotusRight = cx + lotusW * 0.50;
+
+        const edgePad = clamp(Math.round(W * Number(navCfg.EDGE_PAD_RATIO || 0.006)), 8, 18);
+        const zenGap = clamp(Math.round(W * Number(navCfg.ZEN_GAP_RATIO || 0.006)), 10, 18);
+        const lotusGap = clamp(Math.round(W * Number(navCfg.LOTUS_GAP_RATIO || 0.012)), 14, 26);
+
+        const leftInnerByLotus = lotusLeft - lotusGap;
+        const rightInnerByLotus = lotusRight + lotusGap;
+        const leftInnerByZen = leftZenRect ? ((leftZenRect.left - rect.left) - zenGap) : leftInnerByLotus;
+        const rightInnerByZen = rightZenRect ? ((rightZenRect.right - rect.left) + zenGap) : rightInnerByLotus;
+
+        const leftInner = Math.min(leftInnerByLotus, leftInnerByZen);
+        const rightInner = Math.max(rightInnerByLotus, rightInnerByZen);
+
+        const availableLeft = Math.max(220, leftInner - edgePad);
+        const availableRight = Math.max(220, (W - edgePad) - rightInner);
+
+        const btnW = clamp(Math.floor(Math.min(W * 0.255, availableLeft, availableRight)), 236, 420);
+        const outwardPush = clamp(Math.round(W * Number(navCfg.OUTWARD_PUSH_RATIO || 0.052)), 30, 88);
+
+        const leftX = Math.round(Math.max(edgePad, leftInner - btnW - outwardPush));
+        const rightX = Math.round(Math.min(W - edgePad - btnW, rightInner + outwardPush));
+
+        const leftBtns = [], rightBtns = [];
+        visible.forEach((btn, i)=> (i % 2 === 0 ? leftBtns : rightBtns).push(btn));
+
+        const maxRows = Math.max(leftBtns.length, rightBtns.length);
+        const zoneH = Math.max(1, bottomBound - topBound);
+        const gapY = clamp(Math.round(H * 0.020), 12, 20);
+        const btnH = clamp(Math.round(Math.min(98, (zoneH - gapY * Math.max(0, maxRows - 1)) / Math.max(1, maxRows))), 70, 98);
+
+        function placeColumn(list, x){
+          if(!list.length) return;
+          const total = list.length * btnH + Math.max(0, (list.length - 1) * gapY);
+          let y = topBound + Math.max(0, Math.round((zoneH - total) / 2));
+          list.forEach(btn=>{
+            btn.style.width = btnW + 'px';
+            btn.style.height = btnH + 'px';
+            btn.style.left = x + 'px';
+            btn.style.top = Math.round(y) + 'px';
+            y += btnH + gapY;
+          });
+        }
+
+        placeColumn(leftBtns, leftX);
+        placeColumn(rightBtns, rightX);
+
+        const desktopLiftPx = Math.round((96 / 2.54) * 1.0);
+        visible.forEach((btn, idx) => {
+          if(idx < 2) return;
+          const curTop = parseFloat(btn.style.top || '0');
+          if(Number.isNaN(curTop)) return;
+          btn.style.top = Math.max(topBound, Math.round(curTop - desktopLiftPx)) + 'px';
+        });
+
+        fitButtonLabels(visible);
+      }
+
+      let _userActiveIndex = -1, _typeBuf = '', _typeTimer = 0;
+      function menuItems(){ return Array.from(usernameMenu ? usernameMenu.querySelectorAll('.select-option') : []); }
+      function isMenuOpen(){ return !!(usernameMenu && usernameMenu.classList.contains('open')); }
+      function closeUsernameMenu(){ if(!usernameMenu) return; usernameMenu.classList.remove('open'); if(usernameDisplay) usernameDisplay.setAttribute('aria-expanded', 'false'); _userActiveIndex = -1; _typeBuf = ''; }
+      function openUsernameMenu(){ if(!usernameMenu || !usernameDisplay || usernameDisplay.disabled) return; usernameMenu.classList.add('open'); usernameDisplay.setAttribute('aria-expanded', 'true'); const items = menuItems(); if(!items.length) return; const idx = items.findIndex(it => (it.dataset.value || '') === (usernameSel.value || '')); setActiveIndex(idx >= 0 ? idx : 0, true); }
+      function toggleUsernameMenu(){ if(isMenuOpen()) closeUsernameMenu(); else openUsernameMenu(); }
+      function syncUsernameDisplay(){ if(!usernameSel || !usernameDisplay) return; const opt = usernameSel.options[usernameSel.selectedIndex]; const txt = opt ? String(opt.textContent || '').trim() : ''; usernameDisplay.textContent = (!txt || (opt && opt.disabled)) ? '請選擇使用者' : txt; }
+      function selectByValue(val){ if(!val) return; usernameSel.value = val; syncUsernameDisplay(); const items = menuItems(); items.forEach(it => it.setAttribute('aria-selected', (it.dataset.value === val) ? 'true' : 'false')); }
+      function setActiveIndex(nextIndex, scrollIntoView){ const items = menuItems(); if(!items.length) { _userActiveIndex = -1; return; } const n = items.length; let idx = nextIndex; if(idx < 0) idx = 0; if(idx >= n) idx = n - 1; _userActiveIndex = idx; items.forEach((it, i) => it.classList.toggle('active', i === idx)); if(scrollIntoView){ try{ items[idx].scrollIntoView({ block:'nearest' }); }catch(e){} } }
+      function buildUsernameMenu(){
+        if(!usernameMenu || !usernameSel || !usernameDisplay) return;
+        usernameMenu.innerHTML = '';
+        const opts = Array.from(usernameSel.options || []);
+        const usable = opts.filter(o => !o.disabled && String(o.value||'').trim());
+        if(!usable.length){ usernameDisplay.textContent = '（尚無使用者，請先到「系統 / 權限」新增）'; usernameDisplay.disabled = true; closeUsernameMenu(); return; }
+        usernameDisplay.disabled = false;
+        usable.forEach((o, i) => {
+          const item = document.createElement('div');
+          item.className = 'select-option'; item.setAttribute('role', 'option'); item.dataset.value = o.value; item.textContent = o.textContent;
+          const selected = (o.value === usernameSel.value); item.setAttribute('aria-selected', selected ? 'true' : 'false');
+          item.addEventListener('mouseenter', () => { if(isMenuOpen()) setActiveIndex(i, false); });
+          item.addEventListener('click', () => { selectByValue(o.value); closeUsernameMenu(); usernameDisplay.focus(); });
+          usernameMenu.appendChild(item);
+        });
+      }
+      function refreshUsernamePicker(){ if(!usernameSel) return; const opt = usernameSel.options[usernameSel.selectedIndex]; if(opt && opt.disabled){ const first = Array.from(usernameSel.options).find(o => !o.disabled && String(o.value||'').trim()); if(first) usernameSel.value = first.value; } syncUsernameDisplay(); buildUsernameMenu(); }
+      if(usernameSel){
+        usernameSel.addEventListener('change', () => {
+          syncUsernameDisplay();
+          closeUsernameMenu();
+          try{
+            if(String(usernameSel.value || '').trim() && passwordInput) passwordInput.focus();
           }catch(e){}
-          return false;
-        }catch(_e){
-          try{
-            state.cloud.ok = false;
-            state.cloud.cfgOk = false;
-            refresh();
-          }catch(e){}
-          return false;
-        }
-      }
-
-      function buildCloudEnvelope(pageKey, payload){
-        // Backward compatible wrapper; cloudMerge/cloudRead no longer require this shape,
-        // but keep it to avoid touching other code paths.
-        return { key: pageKey, payload: payload || { db:[], counter:0 } };
-      }
-
-      function _normalizePullResponse(json){
-        // Accept {ok,payload:{db}} / {data:{rows}} / raw {items} / Worker variants.
-        const j = (json && typeof json==="object") ? json : {};
-        const payload = (j.payload && typeof j.payload==="object") ? j.payload : (j.data && typeof j.data==="object") ? j.data : j;
-        const db = normalizeCloudDbPayload(payload);
-        const counter = Number.isFinite(Number((payload && payload.counter) || j.counter)) ? Number((payload && payload.counter) || j.counter) : (Array.isArray(db) ? db.length : 0);
-        return { db, counter };
-      }
-
-      async function cloudRead(cfg, pageKey){
-        cfg = cfg || await loadCloudCfg();
-        const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
-        const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-        const token = getCloudToken();
-        if(!token) throw new Error("UNAUTH:NO_TOKEN");
-
-        const readPaths = [];
-        function pushPath(p){
-          p = norm(p);
-          if(!p) return;
-          if(readPaths.indexOf(p) < 0) readPaths.push(p);
-        }
-        pushPath((eps && eps.read) ? String(eps.read) : "/api/tasun/read");
-        pushPath("/api/tasun/read");
-
-        var lastErr = null;
-        for(var i=0;i<readPaths.length;i++){
-          const readPath = readPaths[i];
-          const url = _joinUrl(apiBase, readPath);
-          try{
-            const r = await fetch(url, {
-              method: "POST",
-              cache: "no-store",
-              credentials: (cfg && cfg.credentials) ? "include" : "omit",
-              headers: {
-                "content-type":"application/json",
-                "accept":"application/json",
-                "Authorization":"Bearer " + token
-              },
-              body: JSON.stringify({ resourceKey: pageKey })
-            });
-            if(r.status===401){
-              lastErr = new Error("UNAUTH");
-              continue;
-            }
-            if(!r.ok){
-              const t = await r.text().catch(()=> "");
-              lastErr = new Error("cloud read failed: " + r.status + " " + t.slice(0,200));
-              continue;
-            }
-            const j = await r.json();
-            const db = Array.isArray(j.rows) ? j.rows : normalizeCloudDbPayload(j);
-            return { db: Array.isArray(db) ? db : [], counter: Array.isArray(db) ? db.length : 0 };
-          }catch(err){
-            lastErr = err;
-          }
-        }
-        throw (lastErr || new Error("cloud read failed"));
-      }
-
-            async function cloudMerge(cfg, pageKey, payloadLike, clientInfo){
-        cfg = cfg || await loadCloudCfg();
-        const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
-        const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-        const token = getCloudToken();
-        if(!token) throw new Error("UNAUTH:NO_TOKEN");
-
-        let payload = payloadLike;
-        if(payload && typeof payload === "object"){
-          if(payload.payload && typeof payload.payload==="object") payload = payload.payload;
-          if(payload.data && typeof payload.data==="object") payload = payload.data;
-        }
-        payload = payload || { db:[], counter:0 };
-
-        const body = {
-          resourceKey: pageKey,
-          payload: { db: Array.isArray(payload.db)? payload.db.map(ensureRowV1).filter(Boolean) : [], counter: Number(payload.counter)||0 },
-          client: clientInfo && typeof clientInfo==="object" ? clientInfo : {}
-        };
-
-        const mergePaths = [];
-        function pushPath(p){
-          p = norm(p);
-          if(!p) return;
-          if(mergePaths.indexOf(p) < 0) mergePaths.push(p);
-        }
-        pushPath((eps && eps.merge) ? String(eps.merge) : "/api/tasun/merge");
-        pushPath("/api/tasun/merge");
-
-        var lastErr = null;
-        for(var i=0;i<mergePaths.length;i++){
-          const url = _joinUrl(apiBase, mergePaths[i]);
-          try{
-            const r = await fetch(url, {
-              method: "POST",
-              cache: "no-store",
-              credentials: (cfg && cfg.credentials) ? "include" : "omit",
-              headers: {
-                "content-type":"application/json",
-                "accept":"application/json",
-                "Authorization":"Bearer " + token
-              },
-              body: JSON.stringify(body)
-            });
-            if(r.status===401){
-              lastErr = new Error("UNAUTH");
-              continue;
-            }
-            if(!r.ok){
-              const t = await r.text().catch(()=> "");
-              lastErr = new Error("cloud merge failed: " + r.status + " " + t.slice(0,200));
-              continue;
-            }
-            const j = await r.json();
-            if(Array.isArray(j.rows)) return { db:j.rows, counter:j.rows.length };
-            if(Array.isArray(j.db)) return { db:j.db, counter:Number(j.counter)||j.db.length };
-            return { db:[], counter:Number(payload.counter)||0, raw:j };
-          }catch(err){
-            lastErr = err;
-          }
-        }
-        throw (lastErr || new Error("cloud merge failed"));
-      }
-
-    async function syncFromCloud(opts){
-      opts = (opts && typeof opts==="object") ? opts : {};
-      var silent = !!opts.silent;
-      var aggressive = !!opts.aggressive;
-
-      var cfg = await loadCloudCfg();
-      if(!cfg || !isValidApiBase(cfg.apiBase)){
-        if(!silent) toast("雲端未設定/無效"); 
-        return false;
-      }
-      if(!hasUsableCloudToken()){
-        if(!silent) handleCloudUnauth("雲端授權不足，請重新登入");
-        return false;
-      }
-
-      try{
-        var remote = await cloudRead(cfg, PAGE_KEY);
-        var remoteDb = normalizeCloudDbPayload(remote);
-        var localDb = (state.db || []).map(ensureRowV1).filter(Boolean);
-        var bootKey = "tasunCloudBooted_" + PAGE_KEY;
-        var autoFillKey = "tasunCloudAutoFill_" + PAGE_KEY;
-
-        function _uid(x){
-          if(!x) return "";
-          return String(x.uid || x.pk || x.Uid || x.ID || x.id || "");
-        }
-
-        if(remoteDb && remoteDb.length){
-          saveSnapshot(remoteDb, { source:"cloud-read", counter: remote.counter||remoteDb.length });
-        }
-
-        var rSet = new Set((remoteDb||[]).map(_uid).filter(Boolean));
-        var missing = localDb.filter(function(it){
-          var u = _uid(it);
-          return u && !rSet.has(u);
         });
-
-        var remoteEmpty = (!remoteDb || remoteDb.length === 0);
-        var localHas = (localDb.length > 0);
-
-        // 桌機/新裝置若雲端有資料，直接以下拉為主；若雲端空白但本機有資料，才回填雲端
-        if(localHas && (remoteEmpty || missing.length > 0) && !sessionStorage.getItem(autoFillKey)){
-          sessionStorage.setItem(autoFillKey, "1");
-          try{
-            var reason = remoteEmpty ? "auto-bootstrap-cloud-empty" : "auto-fill-cloud-missing";
-            var merged = await cloudMerge(cfg, PAGE_KEY, { db: localDb, counter: state.counter }, {
-              user: state.user || "",
-              role: state.role || "",
-              appVer: APP_VER,
-              clientId: state.clientId || getClientId(),
-              at: nowISO(),
-              reason: reason
-            });
-            var mergedDb = normalizeCloudDbPayload(merged);
-            if(mergedDb && mergedDb.length){
-              remote = merged;
-              remoteDb = mergedDb;
-              saveSnapshot(remoteDb, { source:reason, counter: merged.counter||remoteDb.length });
-              if(remoteEmpty) localStorage.setItem(bootKey, "1");
-              if(!silent){
-                toast(remoteEmpty
-                  ? ("雲端空白，已自動倒入本機資料：" + localDb.length + " 筆")
-                  : ("已自動補齊雲端缺少資料：" + missing.length + " 筆"));
-              }
-            }
-          }catch(e){
-            if(!silent) toast("雲端自動補齊失敗：" + (e && (e.message||e) ? (e.message||e) : e));
-          }
-        }
-
-        // 若雲端仍空，但本機有 snapshot，至少先用 snapshot 恢復桌機畫面，避免桌機/手機不同步觀感
-        if((!remoteDb || !remoteDb.length) && aggressive){
-          var snap = loadSnapshotRows();
-          if(snap && snap.length){
-            remote = { db: snap, counter: snap.length };
-            remoteDb = snap;
-          }
-        }
-
-        var out = mergePayload({ db: remoteDb || [], counter: remote.counter || (remoteDb ? remoteDb.length : 0) }, { db: state.db, counter: state.counter });
-        state.db = out.db;
-        state.counter = out.counter;
-
-        state.lastSyncAt = Date.now();
-        try{
-          state.cloud.cfgOk = true;
-          state.cloud.ok = true;
-          state.cloud.lastOkAt = Date.now();
-          state.cloud.lastSyncAt = Date.now();
-        }catch(e){}
-        await idbClearOps(PAGE_KEY);
-        await saveLocal({ db: state.db, counter: state.counter });
-        saveSnapshot(state.db, { source:"merged-local-cloud", counter: state.counter });
-
-        buildDictsFromDb();
-        refresh();
-        if(!silent) toast("已從雲端更新");
-        return true;
-      }catch(e){
-        try{ state.cloud.ok = false; }catch(_e){}
-        if(/UNAUTH|401|NO_TOKEN/i.test(String((e&&e.message)||e||""))){
-          if(!silent) handleCloudUnauth("雲端授權已失效，請重新登入");
-          return false;
-        }
-
-        // 回退：嘗試 snapshot，避免桌機空白但手機有資料
-        try{
-          var snap2 = loadSnapshotRows();
-          if(snap2 && snap2.length){
-            var out2 = mergePayload({ db: snap2, counter: snap2.length }, { db: state.db, counter: state.counter });
-            state.db = out2.db;
-            state.counter = out2.counter;
-            await saveLocal({ db: state.db, counter: state.counter });
-            buildDictsFromDb();
-            refresh();
-            if(!silent) toast("雲端暫時不可用，已先載入本機快照資料");
-            return true;
-          }
-        }catch(_snapErr){}
-
-        if(!silent) toast("雲端讀取失敗：" + (e && e.message ? e.message : String(e)));
-        try{ refresh(); }catch(_e){}
-        return false;
+        usernameSel.addEventListener('input', () => {
+          syncUsernameDisplay();
+          closeUsernameMenu();
+        });
       }
-    }
-
-    async function syncToCloud(opts){
-      opts = (opts && typeof opts==="object") ? opts : {};
-      var silent = !!opts.silent;
-      var reason = opts.reason || "";
-      var fullUpload = !!opts.fullUpload;
-
-      var cfg = await loadCloudCfg();
-      if(!cfg || !isValidApiBase(cfg.apiBase)){
-        if(!silent) toast("雲端未設定/無效"); 
-        return;
+      if(usernameDisplay){
+        usernameDisplay.addEventListener('click', toggleUsernameMenu);
+        usernameDisplay.addEventListener('keydown', (e) => {
+          if(usernameDisplay.disabled) return;
+          const key = e.key;
+          if(key === 'ArrowDown' || key === 'ArrowUp'){ e.preventDefault(); if(!isMenuOpen()) openUsernameMenu(); const items = menuItems(); if(!items.length) return; const dir = (key === 'ArrowDown') ? 1 : -1; const next = (_userActiveIndex < 0) ? 0 : (_userActiveIndex + dir); setActiveIndex(next, true); return; }
+          if(key === 'Enter'){ e.preventDefault(); if(!isMenuOpen()){ openUsernameMenu(); return; } const items = menuItems(); if(!items.length) return; const idx = (_userActiveIndex >= 0) ? _userActiveIndex : 0; const val = items[idx]?.dataset?.value || ''; if(val) selectByValue(val); closeUsernameMenu(); return; }
+          if(key === 'Escape'){ e.preventDefault(); closeUsernameMenu(); return; }
+          if(key && key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey){ if(!isMenuOpen()) openUsernameMenu(); _typeBuf += key.toLowerCase(); clearTimeout(_typeTimer); _typeTimer = setTimeout(()=>{ _typeBuf=''; }, 650); const items = menuItems(); const idx = items.findIndex(it => String(it.textContent||'').trim().toLowerCase().startsWith(_typeBuf)); if(idx >= 0) setActiveIndex(idx, true); }
+        });
       }
-      if(!hasUsableCloudToken()){
-        if(!silent) handleCloudUnauth("雲端授權不足，請重新登入");
-        return;
-      }
-
-      var meta = null;
-      try{ meta = await idbGetMeta(PAGE_KEY); }catch(e){ meta=null; }
-      var lastSyncAt = Number(state.lastSyncAt || (meta && meta.lastSyncAt) || 0) || 0;
-
-      var sendRows = [];
-      if(fullUpload){
-        sendRows = (state.db||[]).map(ensureRowV1).filter(Boolean);
-      }else{
-        var dirtyUids = [];
-        try{ dirtyUids = await idbGetDirtyUids(PAGE_KEY, lastSyncAt); }catch(e){ dirtyUids = []; }
-
-        if(!dirtyUids.length){
-          if(!silent) toast("沒有需要上傳的本機變更");
+      document.addEventListener('click', (e) => { if(!usernameWrap || !usernameMenu) return; if(isMenuOpen() && !usernameWrap.contains(e.target)) closeUsernameMenu(); });
+      document.addEventListener('keydown', (e) => { if(e.key === 'Escape') closeUsernameMenu(); });
+      function populateUserSelect(){
+        repairKnownAuthSecrets();
+        AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+        usernameSel.innerHTML = '';
+        if(!AUTH_TABLE.length){
+          const opt = document.createElement('option');
+          opt.value = '';
+          opt.textContent = '（尚無使用者，請先到「系統 / 權限」新增）';
+          opt.disabled = true;
+          opt.selected = true;
+          usernameSel.appendChild(opt);
+          refreshUsernamePicker();
           return;
         }
+        const ph = document.createElement('option');
+        ph.value = '';
+        ph.textContent = '請選擇使用者';
+        ph.disabled = true;
+        ph.selected = true;
+        usernameSel.appendChild(ph);
 
-        var dirtySet = new Set(dirtyUids.map(norm));
-        sendRows = (state.db||[])
-          .map(ensureRowV1)
-          .filter(Boolean)
-          .filter(function(r){ return dirtySet.has(norm(r.uid)); });
-      }
-
-      try{
-        var merged = await cloudMerge(cfg, PAGE_KEY, { db: sendRows, counter: state.counter }, {
-          user: state.user || "",
-          role: state.role || "",
-          appVer: APP_VER,
-          clientId: state.clientId || getClientId(),
-          at: nowISO(),
-          reason: reason || (fullUpload ? "fullUpload" : "incremental")
+        const names = Array.from(new Set(AUTH_TABLE.map(r => r.username).filter(Boolean))).sort((a,b)=>a.localeCompare(b, 'zh-Hant'));
+        names.forEach(name => {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          usernameSel.appendChild(opt);
         });
 
-        var out = mergePayload(merged, { db: state.db, counter: state.counter });
-        state.db = out.db;
-        state.counter = out.counter;
+        usernameSel.selectedIndex = 0;
+        syncUsernameDisplay();
+        buildUsernameMenu();
+        try{ if(usernameDisplay) usernameDisplay.disabled = false; }catch(e){}
+      }
 
-        state.lastSyncAt = Date.now();
+      (function patchLocalStorageOnce(){
         try{
-          state.cloud.cfgOk = true;
-          state.cloud.ok = true;
-          state.cloud.lastOkAt = Date.now();
-          state.cloud.lastSyncAt = Date.now();
-        }catch(e){}
-        await idbClearOps(PAGE_KEY);
-        await saveLocal({ db: state.db, counter: state.counter });
-        saveSnapshot(state.db, { source:"cloud-merge", counter: state.counter });
-
-        buildDictsFromDb();
-        refresh();
-        if(!silent) toast(fullUpload ? "雲端同步完成（全量）" : "雲端同步完成（增量）");
-      }catch(e){
-        try{ state.cloud.ok = false; }catch(_e){}
-        if(/UNAUTH|401|NO_TOKEN/i.test(String((e&&e.message)||e||""))){
-          if(!silent) handleCloudUnauth("雲端授權已失效，請重新登入");
-          return;
-        }
-        if(!silent) toast("雲端同步失敗：" + (e && e.message ? e.message : String(e)));
-        try{ refresh(); }catch(_e){}
-      }
-    }
-
-    // ---------------------------
-    // Export / Import helpers (backup)
-    // ---------------------------
-    function downloadText(filename, text){
-      var blob = new Blob([text], {type:"application/json;charset=utf-8"});
-      var a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(function(){
-        URL.revokeObjectURL(a.href);
-        a.remove();
-      }, 0);
-    }
-
-    function exportBackup(){
-      var pack = {
-        meta: { app:"Tasun sxdh-notes", ver: APP_VER, exportedAt: nowISO(), pageKey: PAGE_KEY },
-        db: state.db.map(ensureRowV1).filter(Boolean),
-        counter: state.counter,
-        dicts: {
-          trades: loadDict(TRADE_DICT_KEY),
-          syss: loadDict(SYS_DICT_KEY),
-          sources: loadDict(SOURCE_DICT_KEY),
-          tradeSysMap: loadMap()
-        }
-      };
-      downloadText("捷運汐東線事項記錄_backup_"+APP_VER+".json", JSON.stringify(pack, null, 2));
-      toast("已匯出備份");
-    }
-
-    // ---------------------------
-    // Read mode
-    // ---------------------------
-    function applyReadMode(on){
-      state.readMode = !!on;
-      document.body.classList.toggle("readMode", state.readMode);
-      $("btnRead").querySelector(".t").textContent = "閱讀模式：" + (state.readMode ? "開" : "關");
-      localStorage.setItem(READ_MODE_KEY, state.readMode ? "1" : "0");
-      refresh();
-    }
-
-    // ---------------------------
-    // Nav / menus
-    // ---------------------------
-    function navTo(href){
-      href = norm(href);
-      if(!href) return;
-      location.href = addV(href);
-    }
-
-    function setupMobileMenu(){
-      var btn = $("mMoreBtn");
-      var menu = $("mMoreMenu");
-      if(!btn || !menu) return;
-
-      btn.addEventListener("click", function(e){
-        e.stopPropagation();
-        menu.style.display = (menu.style.display==="none" || !menu.style.display) ? "block" : "none";
-      });
-      document.addEventListener("click", function(){ menu.style.display="none"; });
-      menu.querySelectorAll(".menuItem").forEach(function(it){
-        it.addEventListener("click", function(){
-          navTo(this.dataset.href);
-        });
-      });
-    }
-
-    // ---------------------------
-    // Login
-    // ---------------------------
-    function openLogin(){
-      $("loginMask").style.display="flex";
-      $("loginErr").style.display="none";
-      $("loginPass").value="";
-      var auth = ensureAuthTable();
-      var sel = $("loginUser");
-      sel.innerHTML = '<option value="">請選擇帳號</option>';
-      auth.users.forEach(function(u){
-        var op = document.createElement("option");
-        op.value = u.user;
-        op.textContent = (u.name||u.user) + " ("+(u.role||"read")+")";
-        sel.appendChild(op);
-      });
-    }
-    function closeLogin(){ $("loginMask").style.display="none"; }
-
-    function applyUser(u){
-      state.user = u;
-      state.role = u && u.role ? u.role : "read";
-      $("uName").textContent = u && (u.name||u.user) ? (u.name||u.user) : "—";
-      $("uRole").textContent = state.role || "—";
-
-      var canWrite = (state.role==="admin" || state.role==="write");
-      $("btnAdd").style.display = canWrite ? "" : "none";
-      $("btnEdit").style.display = canWrite ? "" : "none";
-      $("btnToken").style.display = (state.role==="admin") ? "" : "none";
-      refresh();
-    }
-
-    async function doLogin(){
-      var user = norm($("loginUser").value);
-      var pass = norm($("loginPass").value);
-      if(!user || !pass){
-        $("loginErr").style.display="block";
-        $("loginErr").textContent="請選擇帳號並輸入密碼";
-        return;
-      }
-      var auth = ensureAuthTable();
-      var hit = auth.users.find(function(u){ return u.user===user && u.pass===pass; });
-      if(!hit){
-        $("loginErr").style.display="block";
-        $("loginErr").textContent="帳號或密碼錯誤";
-        return;
-      }
-
-      try{
-        var cfg = await loadCloudCfg();
-        var loginUrl = _joinUrl(String(cfg.apiBase||""), "/api/tasun/login");
-        var lr = await fetch(loginUrl, {
-          method:"POST",
-          cache:"no-store",
-          headers:{ "content-type":"application/json", "accept":"application/json" },
-          body: JSON.stringify({ username:user, password:pass })
-        });
-        var lj = await lr.json().catch(function(){ return {}; });
-        if(!lr.ok || !lj || !lj.ok || !lj.token){
-          $("loginErr").style.display="block";
-          $("loginErr").textContent="雲端登入失敗：" + String((lj && (lj.error||lj.detail)) || lr.status || "UNKNOWN");
-          return;
-        }
-        setCloudToken(lj.token, Number(lj.exp||0)||0);
-      }catch(e){
-        $("loginErr").style.display="block";
-        $("loginErr").textContent="雲端登入失敗：" + String(e && e.message ? e.message : e);
-        return;
-      }
-
-      var cur = { user: hit.user, role: hit.role||"read", name: hit.name||hit.user, at: nowISO() };
-      setCurrentUser(cur);
-      applyUser(cur);
-      closeLogin();
-      toast("登入成功");
-      try{ await syncFromCloud({ silent:false, aggressive:true }); }catch(e){}
-    }
-
-    // ---------------------------
-    // Cloud setting modal
-    // ---------------------------
-    function openToken(){
-      $("tokenMask").style.display="flex";
-      $("tokenErr").style.display="none";
-
-      // ✅ 鎖定模式：只顯示，不可修改（外觀不變：仍使用同一個 input + 按鈕）
-      $("tokenInput").value = "";
-      try{ $("tokenInput").readOnly = !!LOCK_CLOUD_CFG_UI; }catch(e){}
-      updateTokenHint(true);
-    }
-    function closeToken(){ $("tokenMask").style.display="none"; }
-
-    async function updateTokenHint(fillInput){
-      var cfg = await loadCloudCfg();
-      var txt = (cfg && cfg.apiBase) ? cfg.apiBase : "—";
-      $("tokenHint").textContent = "目前狀態：" + txt;
-
-      // 鎖定模式：自動把目前 apiBase 放進輸入框（只讀；可用「顯示/隱藏」看內容）
-      if(fillInput && LOCK_CLOUD_CFG_UI){
-        try{ $("tokenInput").value = txt || ""; }catch(e){}
-      }
-    }
-
-    function saveToken(){
-      if(LOCK_CLOUD_CFG_UI){ toast("雲端設定已鎖定（只顯示）"); return; }
-      var raw = norm($("tokenInput").value);
-      if(!raw){
-        $("tokenErr").style.display="block";
-        $("tokenErr").textContent="請貼上 apiBase 或 JSON";
-        return;
-      }
-      var js = parseJsonLenient(raw);
-      if(js && typeof js==="object" && (js.apiBase || js.endpoints)){
-        if(js.apiBase){
-          if(!isValidApiBase(js.apiBase)){
-            $("tokenErr").style.display="block";
-            $("tokenErr").textContent="apiBase 格式不正確";
-            return;
-          }
-          localStorage.setItem(API_BASE_LS_KEY, norm(js.apiBase));
-        }
-        if(js.endpoints){
-          localStorage.setItem(API_EP_LS_KEY, JSON.stringify(normalizeEndpoints(js.endpoints)));
-        }
-      }else{
-        if(!isValidApiBase(raw)){
-          $("tokenErr").style.display="block";
-          $("tokenErr").textContent="apiBase 格式不正確";
-          return;
-        }
-        localStorage.setItem(API_BASE_LS_KEY, raw);
-      }
-      _cloudCfgCache = null;
-      toast("已儲存雲端設定");
-      updateTokenHint();
-      cloudHealth();
-    }
-
-    function clearToken(){
-      if(LOCK_CLOUD_CFG_UI){ toast("雲端設定已鎖定（只顯示）"); return; }
-      localStorage.removeItem(API_BASE_LS_KEY);
-      localStorage.removeItem(API_EP_LS_KEY);
-      _cloudCfgCache = null;
-      toast("已清除雲端設定");
-      updateTokenHint();
-      cloudHealth();
-    }
-
-    function toggleTokenVis(){
-      var inp = $("tokenInput");
-      inp.type = (inp.type==="password") ? "text" : "password";
-    }
-
-    // ---------------------------
-    // Wire events
-    // ---------------------------
-    function wire(){
-      $("navBack").addEventListener("click", function(){ navTo("汐東工程管理表.html"); });
-      $("mBack").addEventListener("click", function(){ navTo("汐東工程管理表.html"); });
-      setupMobileMenu();
-
-      $("btnView").addEventListener("click", openView);
-      $("btnEdit").addEventListener("click", openEdit);
-      $("btnAdd").addEventListener("click", openAdd);
-
-      $("btnCloud").addEventListener("click", async function(){
-        try{
-          await syncFromCloud({ silent:false });
-          await syncToCloud({ silent:true, reason:"manual-cloud", fullUpload:false });
-        }catch(e){
-          try{ scheduleSync("manual-cloud-retry", true); }catch(_e){}
-        }
-      });
-      $("btnExport").addEventListener("click", exportBackup);
-      $("btnClear").addEventListener("click", function(){
-        $("qText").value="";
-        $("fTrade").value="";
-        $("fSys").value="";
-        refresh();
-      });
-
-      $("qText").addEventListener("input", function(){ refresh(); });
-      $("fTrade").addEventListener("change", onTradeFilterChanged);
-      $("fSys").addEventListener("change", function(){ refresh(); });
-
-      $("btnRead").addEventListener("click", function(){ applyReadMode(!state.readMode); });
-
-      // modal buttons
-      $("btnClose").addEventListener("click", closeMask);
-      $("btnCancel").addEventListener("click", closeMask);
-
-      $("mTradeSel").addEventListener("change", onModalTradeChanged);
-
-      $("btnAddTrade").addEventListener("click", function(){ openPrompt("trade"); });
-      $("btnAddSys").addEventListener("click", function(){ openPrompt("sys"); });
-      $("btnAddSource").addEventListener("click", function(){ openPrompt("source"); });
-
-      $("btnNetDisk").addEventListener("click", async function(){
-  // ✅ 行為修正：附件欄位為空時，「網路硬碟」仍可打開預設網路硬碟（不影響 UI）
-  var v = norm($("mAttach").value);
-  if(v){
-    window.open(addV(v), "_blank", "noopener");
-    return;
-  }
-  try{
-    var cfg = await loadCloudCfg();
-    var url = (cfg && cfg.netDiskUrl) ? String(cfg.netDiskUrl) : "https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88";
-    window.open(addV(url), "_blank", "noopener");
-  }catch(e){
-    window.open("https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88", "_blank", "noopener");
-  }
-});
-
-$("btnSave").addEventListener("click", async function(){
-        if(state.mode==="view"){ closeMask(); return; }
-        var existing = (state.mode==="edit") ? state.selectedUid : "";
-        var row = modalToRow(existing);
-        if(!row.text){ toast("請輸入記事內容"); return; }
-        if(!row.trade){ toast("請選擇工種"); return; }
-        // record trade-sys binding if both set
-        if(row.trade && row.sys){
-          TRADE_SYS_MAP[row.trade] = TRADE_SYS_MAP[row.trade] || [];
-          if(!TRADE_SYS_MAP[row.trade].includes(row.sys)) TRADE_SYS_MAP[row.trade].push(row.sys);
-          saveMap(TRADE_SYS_MAP);
-        }
-        upsertRow(row);
-        state.selectedUid = row.uid;
-        closeMask();
-        // ✅ 自動同步：不阻塞 UI（離線會自動重試）
-        scheduleSync("save", true);
-      });
-
-      $("btnDelete").addEventListener("click", async function(){
-        if(!(state.role==="admin" || state.role==="write")){ toast("目前權限不可刪除"); return; }
-        if(!state.selectedUid){ toast("請先選取一筆"); return; }
-        if(!confirm("確定刪除？（可在雲端同步後仍保留刪除狀態）")) return;
-        deleteRow(state.selectedUid);
-        closeMask();
-        // ✅ 自動同步：不阻塞 UI（離線會自動重試）
-        scheduleSync("delete", true);
-      });
-
-      // prompt
-      $("pClose").addEventListener("click", closePrompt);
-      $("pCancel").addEventListener("click", closePrompt);
-      $("pOk").addEventListener("click", commitPrompt);
-      $("pInput").addEventListener("keydown", function(e){
-        if(e.key==="Enter"){ e.preventDefault(); commitPrompt(); }
-      });
-
-      // token modal
-      $("btnToken").addEventListener("click", openToken);
-      $("tokenClose").addEventListener("click", closeToken);
-      $("tokenSave").addEventListener("click", saveToken);
-      $("tokenClear").addEventListener("click", clearToken);
-      $("tokenToggle").addEventListener("click", toggleTokenVis);
-
-      // login modal
-      $("loginClose").addEventListener("click", closeLogin);
-      $("loginBtn").addEventListener("click", doLogin);
-      $("loginPass").addEventListener("keydown", function(e){ if(e.key==="Enter") doLogin(); });
-      $("loginToAuth").addEventListener("click", function(){ navTo("權限表.html"); });
-      // ---------------------------
-      // ✅ Auto sync triggers
-      // ---------------------------
-      window.addEventListener("online", function(){ scheduleSync("online", true); });
-      window.addEventListener("focus", function(){ scheduleSync("focus"); });
-      document.addEventListener("visibilitychange", function(){
-        if(!document.hidden) scheduleSync("visible");
-      });
-      // 週期保底同步（避免長時間開著頁面但沒互動）
-      setInterval(function(){ scheduleSync("periodic"); }, SYNC_PERIODIC_MS);
-
-    }
-
-    // ---------------------------
-    // Boot
-    // ---------------------------
-        async function boot(){
-      // ✅ 目的：無論雲端/IndexedDB 是否異常，都要先畫出版本/筆數/選取/雲端/最後。
-      // ✅ 強化：桌機首進頁面若本機空白，會主動雲端下拉 + 快照回復 + 延遲重試，避免手機有資料、桌機沒資料。
-      var cur = null;
-      try{
-        try{ await openIDB(); }catch(e){}
-
-        try{
-          var p = await loadDb();
-          state.db = p.db;
-          state.counter = p.counter;
-        }catch(e){
-          state.db = Array.isArray(state.db) ? state.db : [];
-          state.counter = Number(state.counter||0)||0;
-        }
-
-        try{ state.clientId = state.clientId || getClientId(); }catch(e){}
-
-        try{ recoverLegacyLocal(); }catch(e){}
-        try{ migrateEnsureUidInPlace(); }catch(e){}
-
-        try{
-          state.readMode = localStorage.getItem(READ_MODE_KEY)==="1";
-          applyReadMode(state.readMode);
-        }catch(e){ state.readMode = false; }
-
-        try{ ensureAuthTable(); }catch(e){}
-        try{ cur = getCurrentUser(); }catch(e){ cur = null; }
-        try{
-          if(cur && !hasUsableCloudToken()) cur = null;
-          if(cur) applyUser(cur);
-          else applyUser({ user:"—", role:"read", name:"—" });
-        }catch(e){}
-
-        try{ wire(); }catch(e){}
-        try{ refresh(); }catch(e){}
-        try{ await cloudHealth(); }catch(e){}
-
-        var localCount = 0;
-        try{ localCount = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length; }catch(e){ localCount = 0; }
-
-        try{ await syncFromCloud({ silent:true, aggressive:(localCount===0) }); }catch(e){}
-
-        try{
-          var visibleCount = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
-          if(!visibleCount){
-            var snap = loadSnapshotRows();
-            if(snap && snap.length){
-              state.db = mergePayload({ db: snap, counter: snap.length }, { db: state.db, counter: state.counter }).db;
-              state.counter = Math.max(Number(state.counter||0)||0, snap.length);
-              await saveLocal({ db: state.db, counter: state.counter });
+          if(window.__tasun_localstorage_patched__) return;
+          window.__tasun_localstorage_patched__ = true;
+          const _set = Storage.prototype.setItem;
+          const _remove = Storage.prototype.removeItem;
+          Storage.prototype.setItem = function(k, v){
+            _set.call(this, k, v);
+            if(this === localStorage){
+              scheduleExport('save:setItem:' + k);
+              if(CLOUD_KEY_SET.has(String(k))) scheduleCloudSave(!!(cloudCtrl && cloudCtrl.__readOnly__));
             }
-          }
+          };
+          Storage.prototype.removeItem = function(k){
+            _remove.call(this, k);
+            if(this === localStorage){
+              scheduleExport('save:removeItem:' + k);
+              if(CLOUD_KEY_SET.has(String(k))) scheduleCloudSave(!!(cloudCtrl && cloudCtrl.__readOnly__));
+            }
+          };
         }catch(e){}
+      })();
 
-        try{ refresh(); }catch(e){}
-        try{ if(!cur) openLogin(); }catch(e){}
 
+            function syncZenWordScale(){
         try{
-          await idbPutMeta({
-            pageKey: PAGE_KEY,
-            counter: state.counter,
-            lastSyncAt: Number(state.lastSyncAt||0)||0,
-            clientId: state.clientId,
-            updatedAt: nowISO()
+          const heroRect = heroInner ? heroInner.getBoundingClientRect() : null;
+          if(!heroRect) return;
+
+          const topEl = document.getElementById('zwTopAxis');
+          const axisEl = document.getElementById('zwAxisText');
+          const leftEl = document.getElementById('zwLeft');
+          const rightEl = document.getElementById('zwRight');
+          const bottomEl = document.getElementById('zwBottomLine');
+          if(!topEl || !axisEl || !leftEl || !rightEl || !bottomEl) return;
+
+          const cfg = (((window.__TASUN_GLOBALS__ || {}).CONSTS || {}).ZEN_LAYOUT || {});
+          const desktopCfg = (((window.__TASUN_GLOBALS__ || {}).CONSTS || {}).ZEN_LAYOUT_DESKTOP || {});
+          const mobileCfg = (((window.__TASUN_GLOBALS__ || {}).CONSTS || {}).ZEN_LAYOUT_MOBILE || {});
+          const W = Math.max(1, heroRect.width);
+          const H = Math.max(1, heroRect.height);
+          const isDesktop = !window.matchMedia('(max-width: 900px)').matches;
+          const lotusW = Math.min(W * 0.52, H * 0.82);
+          const lotusH = lotusW * 0.78;
+          const cx = W * 0.50;
+          const cy = H * 0.635;
+          const CM_TO_PX = 96 / 2.54;
+
+          const topBoostSteps = isDesktop ? Number(desktopCfg.TOP_SIZE_BOOST_STEPS || 0) : 0;
+          const sideBoostSteps = isDesktop ? Number(desktopCfg.SIDE_SIZE_BOOST_STEPS || 0) : 0;
+          const bottomBoostSteps = isDesktop ? Number(desktopCfg.BOTTOM_SIZE_BOOST_STEPS || 0) : 0;
+          const boostPerStep = 0.004;
+
+          const topSizeRatio = Number(cfg.TOP_SIZE_RATIO || 0.052) + (topBoostSteps * boostPerStep);
+          const sideSizeRatio = Number(cfg.SIDE_SIZE_RATIO || 0.040) + (sideBoostSteps * boostPerStep);
+          const bottomSizeRatio = Number(cfg.BOTTOM_SIZE_RATIO || 0.034) + (bottomBoostSteps * boostPerStep);
+
+          const topSize = clamp(lotusW * topSizeRatio, 18, isDesktop ? 38 : 31);
+          const sideSize = clamp(lotusW * sideSizeRatio, 14, isDesktop ? 28 : 22);
+          const bottomSize = clamp(lotusW * bottomSizeRatio, 12, isDesktop ? 24 : 19);
+
+          const topOffsetY = (Number(cfg.TOP_OFFSET_Y_CM || 0) + (isDesktop ? Number(desktopCfg.TOP_OFFSET_Y_CM_DELTA || 0) : 0)) * CM_TO_PX;
+          const inwardCm = isDesktop ? Number(desktopCfg.SIDE_INWARD_CM || 0) : 0;
+          const leftOffsetX = (Number(cfg.LEFT_OFFSET_X_CM || 0) + inwardCm) * CM_TO_PX;
+          const leftOffsetY = Number(cfg.LEFT_OFFSET_Y_CM || 0) * CM_TO_PX;
+          const bottomOffsetX = Number(cfg.BOTTOM_OFFSET_X_CM || 0) * CM_TO_PX;
+          const bottomOffsetY = (Number(cfg.BOTTOM_OFFSET_Y_CM || 0) + (isDesktop ? Number(desktopCfg.BOTTOM_OFFSET_Y_CM_DELTA || 0) : Number(mobileCfg.BOTTOM_OFFSET_Y_CM_DELTA || 0))) * CM_TO_PX;
+          const rightOffsetX = (Number(cfg.RIGHT_OFFSET_X_CM || 0) - inwardCm) * CM_TO_PX;
+          const rightOffsetY = Number(cfg.RIGHT_OFFSET_Y_CM || 0) * CM_TO_PX;
+
+          const topY = clamp(cy - lotusH * Number(cfg.TOP_Y_RATIO || 0.238) + topOffsetY, 96, H * 0.53);
+          const sideYBase = clamp(cy - lotusH * (0.5 - Number(cfg.SIDE_Y_RATIO || 0.618)), H * 0.42, H * 0.78);
+          const sideDelta = lotusW * Number(cfg.SIDE_DELTA_RATIO || 0.395);
+          const leftX = clamp(cx - sideDelta + leftOffsetX, 42, W * 0.43);
+          const rightX = clamp(cx + sideDelta + rightOffsetX, W * 0.57, W - 42);
+          const leftY = clamp(sideYBase + leftOffsetY, H * 0.38, H * 0.78);
+          const rightY = clamp(sideYBase + rightOffsetY, H * 0.38, H * 0.78);
+          const bottomY = clamp(cy + lotusH * (Number(cfg.BOTTOM_Y_RATIO || 0.748) - 0.5) + bottomOffsetY, H * 0.60, H - 88);
+
+          document.documentElement.style.setProperty('--tasun-top-zen-size', topSize + 'px');
+          document.documentElement.style.setProperty('--tasun-side-zen-size', sideSize + 'px');
+          document.documentElement.style.setProperty('--tasun-bottom-zen-size', bottomSize + 'px');
+
+          function imp(el, prop, value){ try{ el.style.setProperty(prop, value, 'important'); }catch(_e){} }
+          function applyGoldCrystal(el){
+            const clarityStroke = isDesktop ? Number(desktopCfg.CLARITY_TEXT_STROKE_PX || 1.25) : 0.55;
+            const clarityShadowAlpha = isDesktop ? Number(desktopCfg.CLARITY_SHADOW_ALPHA || 0.52) : 0.30;
+            imp(el, 'font-family', 'DFKai-SB, BiauKai, STKaiti, Kaiti TC, Noto Serif TC, serif');
+            imp(el, 'font-weight', '700');
+            imp(el, 'background', 'linear-gradient(180deg,#fffdf1 0%,#fff3c6 10%,#ffe383 28%,#f8c84a 48%,#d89218 68%,#8a5408 100%)');
+            imp(el, '-webkit-background-clip', 'text');
+            imp(el, 'background-clip', 'text');
+            imp(el, '-webkit-text-fill-color', 'transparent');
+            imp(el, 'color', 'transparent');
+            imp(el, '-webkit-text-stroke', clarityStroke + 'px rgba(92,56,12,' + clarityShadowAlpha + ')');
+            imp(el, 'paint-order', 'stroke fill');
+            imp(el, 'text-shadow', '0 1px 0 rgba(255,250,224,.98), 0 2px 0 rgba(255,232,150,.88), 0 4px 0 rgba(218,158,28,.64), 0 6px 12px rgba(86,52,10,' + Math.max(0.28, clarityShadowAlpha) + '), 0 12px 26px rgba(58,34,6,' + Math.min(0.68, clarityShadowAlpha + 0.10) + '), 0 0 18px rgba(255,224,116,.44)');
+            imp(el, 'filter', 'drop-shadow(0 1px 0 rgba(255,255,255,.28)) drop-shadow(0 10px 18px rgba(82,48,10,' + Math.min(0.55, clarityShadowAlpha + 0.05) + '))');
+          }
+
+          [axisEl, leftEl, rightEl, bottomEl].forEach(applyGoldCrystal);
+
+          imp(topEl, 'top', Math.round(topY) + 'px');
+          imp(topEl, 'left', '50%');
+          imp(topEl, 'right', 'auto');
+          imp(topEl, 'bottom', 'auto');
+          imp(topEl, 'transform', 'translateX(-50%)');
+          imp(axisEl, 'font-size', topSize + 'px');
+          imp(axisEl, 'letter-spacing', '.20em');
+          imp(axisEl, 'padding-left', '.20em');
+
+          imp(leftEl, 'left', Math.round(leftX) + 'px');
+          imp(leftEl, 'right', 'auto');
+          imp(leftEl, 'top', Math.round(leftY) + 'px');
+          imp(leftEl, 'bottom', 'auto');
+          imp(leftEl, 'transform', 'translate(-50%, -50%)');
+          imp(leftEl, 'font-size', sideSize + 'px');
+          imp(leftEl, 'letter-spacing', '.06em');
+
+          imp(rightEl, 'left', Math.round(rightX) + 'px');
+          imp(rightEl, 'right', 'auto');
+          imp(rightEl, 'top', Math.round(rightY) + 'px');
+          imp(rightEl, 'bottom', 'auto');
+          imp(rightEl, 'transform', 'translate(-50%, -50%)');
+          imp(rightEl, 'font-size', sideSize + 'px');
+          imp(rightEl, 'letter-spacing', '.06em');
+
+          imp(bottomEl, 'left', 'calc(50% + ' + bottomOffsetX.toFixed(2) + 'px)');
+          imp(bottomEl, 'right', 'auto');
+          imp(bottomEl, 'bottom', 'auto');
+          imp(bottomEl, 'top', Math.round(bottomY) + 'px');
+          imp(bottomEl, 'transform', 'translateX(-50%)');
+          imp(bottomEl, 'font-size', bottomSize + 'px');
+          imp(bottomEl, 'letter-spacing', '.14em');
+          imp(bottomEl, 'padding-left', '.14em');
+        }catch(e){}
+      }
+
+      function runStableCalibrator(reason){
+        try{
+          applyUiAuthority(reason || 'stable-calibrator');
+          syncZenWordScale();
+          layoutButtons();
+          guardNavButtonsVisible();
+        }catch(e){}
+      }
+      function bindStableCalibrator(){
+        try{
+          G.RUNTIME = G.RUNTIME || {};
+          if(G.RUNTIME.calibratorBound) return;
+          G.RUNTIME.calibratorBound = true;
+          const events = Array.isArray(C.AUTHORITY_EVENTS) ? C.AUTHORITY_EVENTS.slice() : ['DOMContentLoaded','load','pageshow','focus'];
+          const delays = Array.isArray(C.STABLE_CALIBRATOR_DELAYS) ? C.STABLE_CALIBRATOR_DELAYS.slice() : [40,180];
+          events.forEach((ev)=>{
+            window.addEventListener(ev, ()=>{
+              delays.forEach((delay)=>{
+                setTimeout(()=>runStableCalibrator(ev + ':' + delay), Number(delay) || 0);
+              });
+            }, { passive:true });
+          });
+          document.addEventListener('visibilitychange', ()=>{
+            if(document.visibilityState === 'visible') setTimeout(()=>runStableCalibrator('visibilitychange:visible'), 60);
+          }, { passive:true });
+        }catch(e){}
+      }
+
+      function fitButtonLabels(btns){
+        try{
+          const list = Array.isArray(btns) ? btns : [];
+          if(!list.length) return;
+          let longest = 0;
+          list.forEach((btn)=>{
+            const span = btn ? btn.querySelector('span') : null;
+            if(span) longest = Math.max(longest, String(span.textContent || '').trim().length);
+          });
+          const desktopMode = !isMobileUserBarMode();
+          list.forEach((btn)=>{
+            const span = btn ? btn.querySelector('span') : null;
+            if(!span) return;
+            span.style.fontSize = '';
+            const br = btn.getBoundingClientRect();
+            const w = Math.max(1, br.width);
+            const h = Math.max(1, br.height);
+            const innerW = Math.max(40, w - Math.max(28, Math.round(w * 0.13)));
+            const innerH = Math.max(18, h - Math.max(12, Math.round(h * 0.26)));
+            const maxPx = desktopMode
+              ? clamp(Math.round(Math.min(h * 0.48, w * 0.128)), 18, 40)
+              : clamp(Math.round(Math.min(h * 0.40, w * 0.10)), 15, 32);
+            const minPx = desktopMode
+              ? clamp(Math.round(maxPx - 8 - Math.max(0, (longest - 9) * 0.55)), 12, 22)
+              : clamp(Math.round(maxPx - 10 - Math.max(0, (longest - 9) * 0.7)), 10, 18);
+            let lo = minPx, hi = maxPx, best = minPx;
+            for(let i = 0; i < 10; i++){
+              const mid = Math.round((lo + hi) / 2);
+              span.style.fontSize = mid + 'px';
+              const fits = span.scrollWidth <= innerW + 1 && span.scrollHeight <= innerH + 1;
+              if(fits){ best = mid; lo = mid + 1; } else { hi = mid - 1; }
+            }
+            span.style.fontSize = best + 'px';
+            span.style.fontWeight = '700';
+            span.style.letterSpacing = desktopMode ? '0.045em' : '0.02em';
           });
         }catch(e){}
+      }
+      function applyDesktopSideNavFallback(btns){
+        try{
+          const rect = heroInner ? heroInner.getBoundingClientRect() : null;
+          if(!rect) return;
+          const H = Math.max(1, rect.height), W = Math.max(1, rect.width);
+          const topSafe = Math.max(130, userBar ? (userBar.getBoundingClientRect().bottom - rect.top) + 24 : 130);
+          const bottomSafe = Math.max(topSafe + 140, zwBottomLine ? (zwBottomLine.getBoundingClientRect().top - rect.top) - 28 : H - 120);
+          const avail = Math.max(1, bottomSafe - topSafe);
+          const leftZenRect = document.getElementById('zwLeft') ? document.getElementById('zwLeft').getBoundingClientRect() : null;
+          const rightZenRect = document.getElementById('zwRight') ? document.getElementById('zwRight').getBoundingClientRect() : null;
+          const gap = clamp(Math.round(W * 0.018), 20, 38);
+          const btnW = clamp(Math.round(W * 0.19), 260, 400);
+          const btnH = clamp(Math.round(H * 0.105), 72, 98);
+          const leftX = leftZenRect ? Math.max(24, Math.round(leftZenRect.left - rect.left - btnW - gap)) : 24;
+          const rightX = rightZenRect ? Math.min(W - btnW - 24, Math.round(rightZenRect.right - rect.left + gap)) : (W - btnW - 24);
+          const leftBtns = [], rightBtns = [];
+          btns.forEach((btn, i) => (i % 2 === 0 ? leftBtns : rightBtns).push(btn));
+          function place(list, x){
+            const rows = list.length;
+            if(!rows) return;
+            const total = rows * btnH + Math.max(0, (rows - 1) * 16);
+            let y = topSafe + Math.max(0, Math.round((avail - total) * 0.46));
+            list.forEach((btn) => {
+              btn.style.position = 'absolute';
+              btn.style.left = Math.round(x) + 'px';
+              btn.style.right = '';
+              btn.style.top = Math.round(y) + 'px';
+              btn.style.width = btnW + 'px';
+              btn.style.height = btnH + 'px';
+              btn.style.display = 'flex';
+              btn.style.visibility = 'visible';
+              btn.style.opacity = '1';
+              btn.style.pointerEvents = 'auto';
+              btn.style.zIndex = '88';
+              y += btnH + 16;
+            });
+          }
+          navArea.classList.remove('stack','grid2','grid3','phone-compact-stack','phone-compact-right','phone-compact-glass');
+          navArea.classList.add('sides');
+          place(leftBtns, leftX);
+          place(rightBtns, rightX);
+          const desktopLiftPx = Math.round((96 / 2.54) * 1.0);
+          (Array.isArray(btns) ? btns : []).forEach((btn, idx) => {
+            if(idx < 2 || !btn) return;
+            const curTop = parseFloat(btn.style.top || '0');
+            if(Number.isNaN(curTop)) return;
+            btn.style.top = Math.max(topSafe, Math.round(curTop - desktopLiftPx)) + 'px';
+          });
+        }catch(e){}
+      }
+      function guardNavButtonsVisible(){
+        try{
+          if(document.body && document.body.classList.contains('locked')) return;
+          const visible = getVisibleButtons();
+          if(!visible.length){
+            if(CURRENT_USER) refreshButtonsForCurrentUser();
+            return;
+          }
+          let offscreen = false;
+          visible.forEach((btn)=>{
+            const r = btn.getBoundingClientRect();
+            if(r.width < 120 || r.height < 24 || r.right < 10 || r.left > window.innerWidth - 10 || r.bottom < 10 || r.top > window.innerHeight - 10){
+              offscreen = true;
+            }
+          });
+          if(offscreen && window.innerWidth > 900){
+            applyDesktopSideNavFallback(visible);
+          }
+          fitButtonLabels(getVisibleButtons());
+        }catch(e){}
+      }
+      let scheduleLayout = ()=>{};
+      function scheduleAll(){ try{ syncUserBarPosition(); scheduleLayout(); syncZenWordScale(); guardNavButtonsVisible(); }catch(e){} }
+      try{ window.__TASUN_SYNC_ZEN_WORDS__ = syncZenWordScale; window.__TASUN_LAYOUT_NAV__ = layoutButtons; window.__TASUN_GUARD_NAV__ = guardNavButtonsVisible; }catch(e){}
+      scheduleLayout = rafDebounce(layoutButtons);
 
-        setTimeout(function(){
-          try{
-            var n = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
-            if(!n) syncFromCloud({ silent:true, aggressive:true }).catch(function(){});
-          }catch(_e){}
-        }, 1200);
+      repairKnownAuthSecrets();
+      AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+      buildMainButtonsDOM();
+      updateReleaseButtonVisibility();
+      bindStableCalibrator();
+      if(!tryRestoreLogin()) showLogin('未登入無法進入網頁');
+      if(zenImg) zenImg.addEventListener('load', () => { scheduleAll(); }, { once:false });
+      requestAnimationFrame(() => { document.body.classList.remove('booting'); scheduleAll(); runStableCalibrator('raf'); onFontsReady(() => { scheduleAll(); runStableCalibrator('fonts'); }); setTimeout(() => { scheduleAll(); runStableCalibrator('t120'); }, 120); setTimeout(() => { scheduleAll(); runStableCalibrator('t320'); }, 320); });
 
-        setTimeout(function(){
+      async function verifyUserPassword(username, password){
+        const wanted = String(username || '').trim().toLowerCase();
+        const plain = String(password || '').trim();
+        if(!wanted || !plain) return null;
+        const pwHash = (await sha256Hex(plain)).toLowerCase();
+        const candidates = AUTH_TABLE.filter(r => String(r.username || '').trim().toLowerCase() === wanted);
+        for(const u of candidates){
+          const storedHash = String(u.passHash || '').trim().toLowerCase();
+          const storedPlain = String(u.password || u.pass || '').trim();
+          if((storedHash && pwHash === storedHash) || (!!storedPlain && plain === storedPlain)) return u;
+        }
+        const fallbackHash = String(DEFAULT_AUTH_HASH[wanted] || '').trim().toLowerCase();
+        if(fallbackHash && pwHash === fallbackHash){
+          const matched = candidates[0] || { username: username, level: inferRole(username, '') };
+          return Object.assign({}, matched, {
+            username: String(matched.username || username).trim(),
+            level: String(matched.level || matched.role || inferRole(username, '')).trim().toLowerCase() || 'read',
+            passHash: fallbackHash
+          });
+        }
+        return null;
+      }
+
+
+
+      function __tasunSaveLoginBridge(username, password, role){
+        try{
+          const nowIso = new Date().toISOString();
+          const u = String(username || '').trim();
+          const p = String(password || '');
+          const r = String(role || '').trim().toLowerCase() || 'read';
+
+          if(!u) return false;
+
+          const userObj = {
+            user: u,
+            name: u,
+            role: r,
+            at: nowIso
+          };
+
+          const bridgeObj = {
+            user: u,
+            name: u,
+            role: r,
+            at: nowIso
+          };
+
+          try{ sessionStorage.setItem('tasunCurrentUser_v1', JSON.stringify(userObj)); }catch(e){}
+          try{ localStorage.setItem('tasunCurrentUser_v1', JSON.stringify(userObj)); }catch(e){}
+          try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridgeObj)); }catch(e){}
+          try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridgeObj)); }catch(e){}
+          try{ sessionStorage.setItem('tasunIndexSession_v1', '1'); }catch(e){}
+          try{ localStorage.setItem('tasunIndexSession_v1', '1'); }catch(e){}
+
+          if(p){
+            try{ sessionStorage.setItem('tasunLastLoginPass_v1', p); }catch(e){}
+            try{ localStorage.setItem('tasunLastLoginPass_v1', p); }catch(e){}
+            try{ sessionStorage.setItem('tasunLastLoginPass_v1__' + u, p); }catch(e){}
+            try{ localStorage.setItem('tasunLastLoginPass_v1__' + u, p); }catch(e){}
+          }
+
+          return true;
+        }catch(err){
+          console.warn('save login bridge failed', err);
+          return false;
+        }
+      }
+
+      async function __tasunBridgeWorkerTokenNow(username, password, role){
+        try{
+          const user = String(username || '').trim();
+          const pass = String(password || '').trim();
+          const finalRole = String(role || 'read').trim().toLowerCase() || 'read';
+          if(!user || !pass) return false;
+          const apiBase = 'https://tasun-worker.wutasun.workers.dev';
+          const res = await fetch(apiBase + '/api/tasun/login', {
+            method:'POST',
+            cache:'no-store',
+            credentials:'include',
+            headers:{ 'content-type':'application/json', 'accept':'application/json' },
+            body: JSON.stringify({ username:user, password:pass, user:user, pass:pass })
+          });
+          if(!res.ok) return false;
+          const json = await res.json().catch(() => ({}));
+          const token = String(
+            json.token || json.accessToken || json.authToken || json.bearer || json.workerToken || json.cloudToken || json.apiKey ||
+            ((json.auth || {}).token || (json.auth || {}).accessToken || (json.auth || {}).authToken || (json.auth || {}).bearer || (json.auth || {}).apiKey) ||
+            ((json.session || {}).token || (json.session || {}).accessToken || (json.session || {}).authToken || (json.session || {}).bearer || (json.session || {}).apiKey) ||
+            ((json.data || {}).token || (json.data || {}).accessToken || (json.data || {}).authToken || (json.data || {}).bearer || (json.data || {}).apiKey) ||
+            ((json.payload || {}).token || (json.payload || {}).accessToken || (json.payload || {}).authToken || (json.payload || {}).bearer || (json.payload || {}).apiKey) ||
+            ''
+          ).trim();
+          if(!token) return false;
+
+          const tokenKeys = [
+            'tasunCloudToken_v1',
+            'tasunCloudToken_v1__index',
+            'tasunCloudToken_v1__auth-table',
+            'tasunBearerToken_v1',
+            'tasunAccessToken_v1',
+            'tasunAuthToken_v1',
+            'tasunSessionToken_v1',
+            'tasun_token',
+            'tasunToken',
+            'tasun_auth_token',
+            'authToken',
+            'access_token',
+            'token',
+            'x-api-key',
+            'tasunApiKey_v1'
+          ];
+          tokenKeys.forEach((k) => {
+            try{ sessionStorage.setItem(k, token); }catch(e){}
+            try{ localStorage.setItem(k, token); }catch(e){}
+          });
+
+          const bridge = { user:user, name:user, role:finalRole, token:token, accessToken:token, authToken:token, bearer:token, at:new Date().toISOString() };
+          try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge)); }catch(e){}
+          try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge)); }catch(e){}
+          return true;
+        }catch(err){
+          console.warn('worker token bridge failed', err);
+          return false;
+        }
+      }
+
+      loginForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const username = (usernameSel && usernameSel.value ? String(usernameSel.value) : '').trim();
+        const password = String(passwordInput ? passwordInput.value : '').trim();
+
+        if(!username){
+          loginError.textContent = '請選擇使用者';
+          return;
+        }
+        if(!password){
+          loginError.textContent = '請輸入密碼';
+          return;
+        }
+
+        loginError.textContent = '登入中…';
+
+        try{
+          repairKnownAuthSecrets();
+          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+
+          const u = await verifyUserPassword(username, password);
+          if(!u){
+            const exists = AUTH_TABLE.some(r =>
+              String(r.username || '').trim().toLowerCase() === String(username).trim().toLowerCase()
+            );
+            loginError.textContent = exists ? '密碼錯誤' : '查無此使用者（請到「系統 / 權限」新增）';
+            return;
+          }
+
+          const finalRole = String(u.level || u.role || inferRole(u.username, '') || 'read').trim().toLowerCase();
+
+          setSession({ username: u.username, level: finalRole });
+
+          __tasunSaveLoginBridge(u.username, password, finalRole);
+          await __tasunBridgeWorkerTokenNow(u.username, password, finalRole);
+
+          applyUser(
+            Object.assign({}, u, { level: finalRole }),
+            { skipBroadcast:true }
+          );
+
+          loginError.textContent = '';
+
+          if(passwordInput) passwordInput.value = '';
+        }catch(err){
+          var msg = (err && err.message ? err.message : String(err));
+          if(/核心登入鏈未載入/.test(msg)) msg = '登入服務載入中，請稍後再試';
+          loginError.textContent = '登入失敗：' + msg;
+        }
+      });
+      btnForceRelogin.addEventListener('click', () => { clearSession(); closeMoreMenu(); loginSub.textContent = '請重新輸入密碼登入'; loginError.textContent = ''; if(passwordInput) passwordInput.value = ''; try{ if(passwordInput) passwordInput.focus(); }catch(e){} scheduleAll(); });
+      btnSwitch.addEventListener('click', performSwitchUser);
+      if(btnMenuSwitch) btnMenuSwitch.addEventListener('click', performSwitchUser);
+      btnTogglePwd.addEventListener('click', () => { if(passwordInput) passwordInput.type = (passwordInput.type === 'password') ? 'text' : 'password'; });
+      if(btnLogout) btnLogout.addEventListener('click', performLogout);
+      if(btnMenuLogout) btnMenuLogout.addEventListener('click', performLogout);
+      btnExport.addEventListener('click', performExportBackup);
+      if(btnMenuExport) btnMenuExport.addEventListener('click', performExportBackup);
+      if(btnRelease) btnRelease.addEventListener('click', performReleaseNew);
+      if(btnMenuRelease) btnMenuRelease.addEventListener('click', performReleaseNew);
+      if(btnMoreActions) btnMoreActions.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); toggleMoreMenu(); });
+      document.addEventListener('click', function(ev){
+        try{
+          if(!isMobileUserBarMode()) return;
+          const target = ev && ev.target;
+          if(!target) return;
+          if(btnMoreActions && btnMoreActions.contains(target)) return;
+          if(mobileMoreMenu && mobileMoreMenu.contains(target)) return;
+          closeMoreMenu();
+        }catch(_e){}
+      }, true);
+      document.addEventListener('keydown', function(ev){
+        if(ev && ev.key === 'Escape') closeMoreMenu();
+      });
+      window.addEventListener('resize', () => { if(!isMobileUserBarMode()) closeMoreMenu(); scheduleAll(); }, { passive:true });
+      if(window.visualViewport) window.visualViewport.addEventListener('resize', () => scheduleAll(), { passive:true });
+      let __visibleRefreshBusy = false;
+      let __visibleRefreshTs = 0;
+      function isLoginStageActive(){
+        try{
+          if(document.body && document.body.classList.contains('locked')) return true;
+          return !!(loginOverlay && getComputedStyle(loginOverlay).display !== 'none');
+        }catch(e){
+          return !!(loginOverlay && loginOverlay.style.display === 'flex');
+        }
+      }
+      async function forceRefreshLatestOnVisible(opts){
+        const o = opts || {};
+        const now = Date.now();
+        if(__visibleRefreshBusy) return false;
+        if(!o.force && (now - __visibleRefreshTs) < 12000) return false;
+        if(isLoginStageActive()) return false;
+        __visibleRefreshBusy = true;
+        __visibleRefreshTs = now;
+        try{
+          return await ensureLatestBuildSync(!!o.force);
+        }catch(e){
+          return false;
+        }finally{
+          __visibleRefreshBusy = false;
+        }
+      }
+      document.addEventListener('visibilitychange', ()=>{
+        if(document.visibilityState === 'visible'){
+          scheduleAll();
+          guardNavButtonsVisible();
+          if(isLoginStageActive()) return;
+          forceRefreshLatestOnVisible().catch(()=>{});
+          if(!CURRENT_USER){ return; }
+          if(!CURRENT_USER) return;
+        try{ if(cloudCtrl && cloudCtrl.pullNow) cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
+        }
+      }, { passive:true });
+      window.addEventListener('focus', ()=>{
+        if(isLoginStageActive()) return;
+        forceRefreshLatestOnVisible().catch(()=>{});
+        scheduleAll();
+        if(!CURRENT_USER) return;
+        try{ if(cloudCtrl && cloudCtrl.pullNow) cloudCtrl.pullNow().catch(()=>{}); }catch(e){}
+      }, { passive:true });
+      window.addEventListener('pageshow', ()=>{
+        scheduleAll();
+        runStableCalibrator('pageshow');
+        if(isLoginStageActive()) return;
+        forceRefreshLatestOnVisible().catch(()=>{});
+      }, { passive:true });
+      window.addEventListener('storage', (e)=>{
+        if(!e) return;
+        if(e.key === '__tasun_auth_sync__' && e.newValue){
           try{
-            var n = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
-            if(!n) syncFromCloud({ silent:true, aggressive:true }).catch(function(){});
+            const msg = JSON.parse(e.newValue);
+            if(msg && msg.tabId !== TAB_ID){
+              if(msg.kind === 'logout'){ CURRENT_USER = null; forceLogoutAndShowLogin('已於其他分頁登出'); }
+              else if(msg.kind === 'login' || msg.kind === 'state'){ tryRestoreLogin(); }
+            }
           }catch(_e){}
-        }, 4200);
-      }catch(e){
-        try{ wire(); }catch(_e){}
-        try{ refresh(); }catch(_e){}
-        try{ if(!cur) openLogin(); }catch(_e){}
-        console.error(e);
+          return;
+        }
+        if(e.storageArea !== localStorage) return;
+        if(CLOUD_KEY_SET.has(String(e.key || ''))){ onIndexConfigApplied(); }
+      });
+      if(authChannel){
+        authChannel.onmessage = function(ev){
+          try{
+            const msg = ev && ev.data;
+            if(!msg || msg.tabId === TAB_ID) return;
+            if(msg.kind === 'logout'){ CURRENT_USER = null; forceLogoutAndShowLogin('已於其他分頁登出'); }
+            else if(msg.kind === 'login' || msg.kind === 'state'){ tryRestoreLogin(); }
+          }catch(e){}
+        };
       }
     }
 
-
-    window.addEventListener("storage", async function(e){
-      var k = String((e && e.key) || "");
-      if(k && [DB_KEY, COUNTER_KEY, READ_MODE_KEY, AUTH_KEY, CURRENT_KEY, CLOUD_TOKEN_KEY, CLOUD_TOKEN_EXP_KEY, DB_SNAPSHOT_KEY, DB_SNAPSHOT_META_KEY, DB_SNAPSHOT_SESSION_KEY, DB_SNAPSHOT_SESSION_META_KEY].indexOf(k)===-1) return;
-      try{
-        var p2 = await loadDb();
-        state.db = p2.db;
-        state.counter = p2.counter;
-        var cur2 = getCurrentUser();
-        if(cur2) applyUser(cur2);
-        state.readMode = localStorage.getItem(READ_MODE_KEY)==="1";
-        applyReadMode(state.readMode);
-        if((k===DB_SNAPSHOT_KEY || k===DB_SNAPSHOT_META_KEY) && (!state.db || !state.db.length)){
-          var snapRows = loadSnapshotRows();
-          if(snapRows && snapRows.length){
-            state.db = snapRows;
-            state.counter = Math.max(Number(state.counter||0)||0, snapRows.length);
-            await saveLocal({ db: state.db, counter: state.counter });
-          }
-        }
-        refresh();
-        try{
-          var n2 = state.db.map(normalizeRow).filter(Boolean).filter(function(r){ return !r.deleted; }).length;
-          if(!n2) syncFromCloud({ silent:true, aggressive:true }).catch(function(){});
-        }catch(_e){}
-      }catch(err){}
-    });
-
-    boot().catch(function(e){ console.error(e); });
+    if(window.TasunLoader && typeof window.TasunLoader.ready === 'function'){
+      try{ window.TasunLoader.ready(runIndexApp, 8000); }catch(_e){}
+    }else if(window.TasunCore && typeof window.TasunCore.ready === 'function'){
+      try{ window.TasunCore.ready(runIndexApp, 8000); }catch(_e){}
+    }else{
+      setTimeout(runIndexApp, 0);
+    }
+    setTimeout(()=>{ try{ runIndexApp(); }catch(_e){} }, 1200);
   })();
-  
+  </script>
 
-window.TasunGuardV4 && window.TasunGuardV4.boot({ pageKey: "捷運汐東線事項記錄.html" });
+
+</body>
+</html>
