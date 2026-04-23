@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>汐東工程管理表 · Tasun</title>
-  <meta name="tasun-build-stamp" content="20260422_tasun_v5_xidong_manager_stallfix_r2">
+  <meta name="tasun-build-stamp" content="20260423_tasun_v5_xidong_manager_recordrootfix_r2">
 
   <script id="tasun-github-pages-html-once-refresh-r6">
   (function(){
@@ -50,10 +50,10 @@
       REBUILD_STAMP_FILE: 'TASUN_REBUILD_STAMP',
       PAGE_BUILD_STAMP: metaBuild,
       CHECK_INTERVAL_MS: 20000,
+      VERSION_CHECK_MIN_GAP_MS: 180000,
       RELOAD_LOCK_MS: 45000,
       MAX_REFRESH_ATTEMPTS: 2,
       FETCH_TIMEOUT_MS: 6000,
-      VERSION_CHECK_MIN_GAP_MS: 60000,
       ROUTE_KEY: 'tasunRoutes_v1',
       AUTH_ENTRY_BUTTONS_KEY: 'tasunAuthEntryButtons_v1',
       CURRENT_KEY: 'tasunCurrentUser_v1',
@@ -75,11 +75,14 @@
     var VERSION_JSON = String(G.VERSION_JSON || 'tasun-version.json').trim();
     var REBUILD_STAMP_FILE = String(G.REBUILD_STAMP_FILE || 'TASUN_REBUILD_STAMP').trim();
     var FETCH_TIMEOUT_MS = Number(G.FETCH_TIMEOUT_MS || 6000) || 6000;
-    var VERSION_CHECK_MIN_GAP_MS = Number(G.VERSION_CHECK_MIN_GAP_MS || 60000) || 60000;
+    var VERSION_CHECK_MIN_GAP_MS = Number(G.VERSION_CHECK_MIN_GAP_MS || 180000) || 180000;
     var RELOAD_LOCK_MS = Number(G.RELOAD_LOCK_MS || 45000) || 45000;
     var state = window.__TASUN_SYNC_STATE__ = window.__TASUN_SYNC_STATE__ || {};
     if(state.xidongBooted) return;
     state.xidongBooted = true;
+    state.lastCheckAt = 0;
+    state.reloading = false;
+    state.checking = false;
 
     function norm(v){ return (v===undefined || v===null) ? '' : String(v).trim(); }
     function now(){ return Date.now(); }
@@ -103,7 +106,7 @@
     ensureWithV();
 
     function getRefreshGuardKey(){
-      return 'tasun_xidong_refresh_guard_v1::' + PAGE_KEY;
+      return 'tasun_xidong_refresh_guard_v4::' + PAGE_KEY;
     }
     function canRefreshTarget(targetKey){
       try{
@@ -112,85 +115,48 @@
         var data = JSON.parse(raw);
         if(!data || !data.targetKey) return true;
         if(String(data.targetKey) !== String(targetKey)) return true;
-        if((now() - Number(data.at || 0)) > RELOAD_LOCK_MS) return true;
-        return false;
-      }catch(_e){
-        return true;
-      }
+        return (now() - Number(data.at || 0)) > RELOAD_LOCK_MS;
+      }catch(_e){ return true; }
     }
     function markRefreshTarget(targetKey){
-      try{
-        sessionStorage.setItem(getRefreshGuardKey(), JSON.stringify({ targetKey:String(targetKey || ''), at:now() }));
-      }catch(_e){}
+      try{ sessionStorage.setItem(getRefreshGuardKey(), JSON.stringify({ targetKey:String(targetKey || ''), at:now() })); }catch(_e){}
     }
 
     async function fetchText(url){
-      var ctl = null;
-      var tm = null;
+      var ctl = null, tm = null;
       try{
         ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
         tm = setTimeout(function(){ try{ ctl && ctl.abort(); }catch(_e){} }, FETCH_TIMEOUT_MS);
         var res = await fetch(url, { cache:'no-store', credentials:'same-origin', signal: ctl ? ctl.signal : undefined });
         if(!res.ok) return '';
         return await res.text();
-      }catch(_e){
-        return '';
-      }finally{
-        try{ clearTimeout(tm); }catch(_e){}
-      }
+      }catch(_e){ return ''; }
+      finally{ try{ clearTimeout(tm); }catch(_e){} }
     }
 
     async function fetchJson(url){
-      var ctl = null;
-      var tm = null;
+      var ctl = null, tm = null;
       try{
         ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
         tm = setTimeout(function(){ try{ ctl && ctl.abort(); }catch(_e){} }, FETCH_TIMEOUT_MS);
         var res = await fetch(url, { cache:'no-store', credentials:'same-origin', signal: ctl ? ctl.signal : undefined });
         if(!res.ok) return null;
         return await res.json().catch(function(){ return null; });
-      }catch(_e){
-        return null;
-      }finally{
-        try{ clearTimeout(tm); }catch(_e){}
-      }
+      }catch(_e){ return null; }
+      finally{ try{ clearTimeout(tm); }catch(_e){} }
     }
 
     async function fetchVersionBundle(){
       var data = await fetchJson(VERSION_JSON + '?_=' + now());
       if(!data) return null;
       var meta = data.meta || {};
-      var version = norm(
-        data.version || data.ver || data.appVer || data.app_version || data.APP_VER ||
-        data.cacheV || data.cache_v || data.manualVersion || data.fallbackVersion ||
-        meta.version || meta.ver || meta.appVer || meta.cacheV || ''
-      );
-      var buildStamp = norm(
-        data.buildStamp || data.build_stamp || data.pageBuildStamp || data.page_build_stamp ||
-        data.build || data.buildVersion || data.rebuildStamp ||
-        meta.buildStamp || meta.build_stamp || meta.pageBuildStamp || meta.rebuildStamp || ''
-      );
+      var version = norm(data.version || data.ver || data.appVer || data.app_version || data.APP_VER || data.cacheV || data.cache_v || data.manualVersion || data.fallbackVersion || meta.version || meta.ver || meta.appVer || meta.cacheV || '');
+      var buildStamp = norm(data.buildStamp || data.build_stamp || data.pageBuildStamp || data.page_build_stamp || data.build || data.buildVersion || data.rebuildStamp || meta.buildStamp || meta.build_stamp || meta.pageBuildStamp || meta.rebuildStamp || '');
       return { version:version, buildStamp:buildStamp };
     }
 
     async function fetchRebuildStamp(){
       return norm(await fetchText(REBUILD_STAMP_FILE + '?_=' + now()));
-    }
-
-    async function fetchRemotePageBuildStamp(version){
-      try{
-        var u = new URL(PAGE_KEY, location.href);
-        if(version) u.searchParams.set('v', version);
-        u.searchParams.set('_', String(now()));
-        var html = await fetchText(u.toString());
-        if(!html) return '';
-        var m = html.match(/<meta[^>]+name=["']tasun-build-stamp["'][^>]+content=["']([^"']+)/i)
-             || html.match(/__TASUN_PAGE_BUILD_STAMP__\s*=\s*["']([^"']+)/i)
-             || html.match(/PAGE_BUILD_STAMP\s*=\s*["']([^"']+)/i);
-        return norm(m && m[1] || '');
-      }catch(_e){
-        return '';
-      }
     }
 
     async function hardRefreshTo(version, buildStamp){
@@ -217,17 +183,11 @@
         var latestV = norm(bundle && bundle.version || '') || curV;
         var rebuildStamp = await fetchRebuildStamp();
         var latestBS = norm(bundle && bundle.buildStamp || rebuildStamp || PAGE_BUILD_STAMP);
-
-        if(!latestBS && (reason === 'boot' || reason === 'load')){
-          latestBS = norm(await fetchRemotePageBuildStamp(latestV) || PAGE_BUILD_STAMP);
-        }
-
         if(latestV){
           window.__CACHE_V = latestV;
           window.TASUN_APP_VER = latestV;
           window.APP_VER = latestV;
         }
-
         if((latestV && latestV !== curV) || (latestBS && latestBS !== PAGE_BUILD_STAMP)){
           return await hardRefreshTo(latestV, latestBS);
         }
@@ -240,23 +200,12 @@
     }
 
     window.__TASUN_ENSURE_LATEST_BUILDSTAMP__ = ensureLatestVersionAndBuildStamp;
-
-    function installLightweightChecks(){
-      window.addEventListener('load', function(){
-        ensureLatestVersionAndBuildStamp('load', true).catch(function(){});
-      }, { once:true, passive:true });
-
-      document.addEventListener('visibilitychange', function(){
-        if(document.visibilityState === 'visible'){
-          ensureLatestVersionAndBuildStamp('visibilitychange', false).catch(function(){});
-        }
-      }, { passive:true });
-    }
-
     Promise.resolve(window.__TASUN_VERSION_READY__ || true).then(function(){
       ensureLatestVersionAndBuildStamp('boot', true).catch(function(){});
     });
-    installLightweightChecks();
+    document.addEventListener('visibilitychange', function(){
+      if(document.visibilityState === 'visible') ensureLatestVersionAndBuildStamp('visibilitychange', false).catch(function(){});
+    }, { passive:true });
   })();
   </script>
 
@@ -534,6 +483,29 @@
       color:var(--goldText); -webkit-text-stroke:.88px rgba(58,35,10,.68);
       text-shadow:0 1px 0 rgba(255,255,255,.22), 0 2px 6px rgba(55,34,10,.20);
     }
+
+    .loginBlocker{
+      position:fixed; inset:0; z-index:99998; display:none;
+      align-items:center; justify-content:center; padding:20px;
+      background:rgba(12,12,12,.56); backdrop-filter:blur(6px);
+      -webkit-backdrop-filter:blur(6px);
+    }
+    .loginBlocker.show{display:flex}
+    .loginBlockerCard{
+      width:min(520px, calc(100vw - 32px));
+      border-radius:24px; border:1px solid rgba(150,98,22,.24);
+      background:linear-gradient(180deg, rgba(255,255,255,.74), rgba(255,255,255,.36));
+      box-shadow:0 28px 64px rgba(20,16,10,.26), inset 0 1px 0 rgba(255,255,255,.55);
+      padding:22px 20px 18px; text-align:center;
+    }
+    .loginBlockerTitle{
+      font-family:"Noto Serif TC","Noto Sans TC",serif;
+      font-size:clamp(22px, 2vw, 28px); font-weight:900; letter-spacing:.08em;
+      color:var(--goldDeep); -webkit-text-stroke:.7px rgba(58,35,10,.52);
+      text-shadow:0 1px 0 rgba(255,255,255,.26), 0 2px 8px rgba(55,34,10,.18);
+    }
+    .loginBlockerText{margin-top:12px; color:var(--goldText); font-weight:800; line-height:1.8; -webkit-text-stroke:.5px rgba(58,35,10,.34);}
+    .loginBlockerActions{margin-top:18px; display:flex; justify-content:center; gap:10px; flex-wrap:wrap}
     .domWarn{
       display:none; position:fixed; left:12px; right:12px; top:12px; z-index:99999;
       padding:12px 14px; border-radius:16px; border:1px solid rgba(190,92,92,.42);
@@ -570,6 +542,15 @@
   <div class="vehicleBG" aria-hidden="true"></div>
   <div class="mistFlow" aria-hidden="true"></div>
   <div class="domWarn" id="domWarn"></div>
+  <div class="loginBlocker" id="loginBlocker" aria-live="assertive">
+    <div class="loginBlockerCard">
+      <div class="loginBlockerTitle">未登入無法進入網頁</div>
+      <div class="loginBlockerText" id="loginBlockerText">請先登入 Tasun 首頁後再進入此頁。</div>
+      <div class="loginBlockerActions">
+        <button class="btn glassBtn goldText" id="loginBlockerBackBtn" type="button">返回首頁</button>
+      </div>
+    </div>
+  </div>
 
   <div class="wrap">
     <div class="stage">
@@ -627,14 +608,7 @@
     return 'read';
   }
   function clone(obj){ return JSON.parse(JSON.stringify(obj)); }
-
-  function trace(step, payload){
-    try{
-      window.__TASUN_RECORD_TRACE__ = window.__TASUN_RECORD_TRACE__ || [];
-      window.__TASUN_RECORD_TRACE__.push({ step:step, payload:payload, at:new Date().toISOString() });
-      console.log('[Tasun][汐東工程管理表][' + step + ']', payload);
-    }catch(_e){}
-  }
+  function trace(step, payload){ try{ console.log('[Tasun][汐東工程管理表][' + step + ']', payload); }catch(_e){} }
 
   function showDomWarning(message){
     var bar = $('domWarn');
@@ -642,37 +616,12 @@
     bar.textContent = message;
     bar.style.display = 'block';
   }
-
-  function ensureLoginBlockerDom(){
-    if($('loginBlocker') && $('loginBlockerText') && $('loginBlockerBackBtn')) return;
-    var wrap = document.createElement('div');
-    wrap.className = 'loginBlocker';
-    wrap.id = 'loginBlocker';
-    wrap.setAttribute('aria-live', 'assertive');
-    wrap.innerHTML =
-      '<div class="loginBlockerCard">' +
-        '<div class="loginBlockerTitle">未登入無法進入網頁</div>' +
-        '<div class="loginBlockerText" id="loginBlockerText">請先登入 Tasun 首頁後再進入此頁。</div>' +
-        '<div class="loginBlockerActions">' +
-          '<button class="btn glassBtn goldText" id="loginBlockerBackBtn" type="button">返回首頁</button>' +
-        '</div>' +
-      '</div>';
-    document.body.insertBefore(wrap, document.body.firstChild || null);
-    trace('auto_inject_login_blocker', { injected:true });
-  }
-
   function ensureRequiredDom(){
-    ensureLoginBlockerDom();
-    var required = [
-      'btnBack','btnSwitch','who','role','leftGroup','rightGroup',
-      'linkRecord','linkDutyLite','linkDB','linkDetail','linkAuth','linkDropbox',
-      'domWarn','loginBlocker','loginBlockerText','loginBlockerBackBtn'
-    ];
+    var required = ['btnBack','btnSwitch','who','role','leftGroup','rightGroup','linkRecord','linkDutyLite','linkDB','linkDetail','linkAuth','linkDropbox','domWarn','loginBlocker','loginBlockerText','loginBlockerBackBtn'];
     var missing = required.filter(function(id){ return !$(id); });
     if(!missing.length) return true;
     showDomWarning('頁面缺少必要節點，已中止腳本綁定：' + missing.join('、'));
     console.warn('[Tasun][汐東工程管理表] missing DOM nodes:', missing);
-    trace('missing_dom', missing);
     return false;
   }
 
@@ -682,7 +631,6 @@
   var ROUTE_KEY = String(G.ROUTE_KEY || 'tasunRoutes_v1');
   var ENTRY_FILE = String(G.ENTRY_FILE || '汐東工程管理表.html');
   var RECORD_FILE = String(G.RECORD_FILE || '捷運汐東線事項記錄.html');
-
   var SORTABLE_SOURCE_IDS = ['xidong_record','xidong_duty','xidong_db','xidong_detail','xidong_cloud'];
   var FIXED_AUTH_SOURCE_ID = 'xidong_auth';
   var RECORD_ALIASES = [
@@ -691,7 +639,6 @@
     '捷運汐東線事項紀錄.htm','捷運汐東線事項記錄.htm',
     '捷運汐東線記事','捷運汐東線記事.html','捷運汐東線記事.htm'
   ];
-
   var BUTTON_LIBRARY = {
     xidong_record: { key:'xidong_record', sourceId:'xidong_record', name:'捷運汐東線事項記錄', href:RECORD_FILE, target:'', roles:['admin','write','read'] },
     xidong_duty:   { key:'xidong_duty', sourceId:'xidong_duty', name:'權責分工精簡版', href:'捷運汐東線權責分工精簡版.html', target:'', roles:['admin','write','read'] },
@@ -701,31 +648,18 @@
     xidong_auth:   { key:'xidong_auth', sourceId:'xidong_auth', name:'系統／權限', href:'權限表.html', target:'', roles:['admin'] }
   };
 
-  function normalizeNameToken(v){
-    return norm(v).replace(/[\s　]+/g, '').replace(/[／]/g, '/').toLowerCase();
-  }
+  function normalizeNameToken(v){ return norm(v).replace(/[\s　]+/g, '').replace(/[／]/g, '/').toLowerCase(); }
   function canonicalRecordName(){ return BUTTON_LIBRARY.xidong_record.name; }
   function canonicalRecordHref(){ return BUTTON_LIBRARY.xidong_record.href; }
-  function getButtonBySourceId(sourceId){
-    var id = norm(sourceId).toLowerCase();
-    return BUTTON_LIBRARY[id] ? clone(BUTTON_LIBRARY[id]) : null;
-  }
-  function isRecordAliasName(name){
-    var token = normalizeNameToken(name);
-    return RECORD_ALIASES.some(function(alias){ return token === normalizeNameToken(alias); });
-  }
-  function isRecordAliasHref(href){
-    var h = norm(href).toLowerCase();
-    if(!h) return false;
-    if(h === canonicalRecordHref().toLowerCase()) return true;
-    return RECORD_ALIASES.some(function(alias){ return h === alias.toLowerCase(); });
-  }
+  function getButtonBySourceId(sourceId){ var id = norm(sourceId).toLowerCase(); return BUTTON_LIBRARY[id] ? clone(BUTTON_LIBRARY[id]) : null; }
+  function isRecordAliasName(name){ var token = normalizeNameToken(name); return RECORD_ALIASES.some(function(alias){ return token === normalizeNameToken(alias); }); }
+  function isRecordAliasHref(href){ var h = norm(href).toLowerCase(); if(!h) return false; if(h === canonicalRecordHref().toLowerCase()) return true; return RECORD_ALIASES.some(function(alias){ return h === alias.toLowerCase(); }); }
+
   function detectSourceId(item, fallbackId){
     var sourceId = norm(item && item.sourceId).toLowerCase();
     var key = norm(item && item.key).toLowerCase();
     var name = norm(item && (item.name || item.label));
     var href = norm(item && item.href);
-
     if(BUTTON_LIBRARY[sourceId]) return sourceId;
     if(BUTTON_LIBRARY[key]) return key;
     if(isRecordAliasName(name) || isRecordAliasHref(href)) return 'xidong_record';
@@ -734,7 +668,6 @@
     if(normalizeNameToken(name).indexOf(normalizeNameToken('工程資料庫')) >= 0 || href === '捷運汐止東湖線統包工程-資料庫.html') return 'xidong_db';
     if(normalizeNameToken(name).indexOf(normalizeNameToken('捷運系東線資料明細表')) >= 0 || href === '捷運汐止東湖線統包工程-資料明細表.html') return 'xidong_detail';
     if(normalizeNameToken(name).indexOf(normalizeNameToken('雲端檔案')) >= 0 || /^https?:\/\//i.test(href)) return 'xidong_cloud';
-
     var fallback = norm(fallbackId).toLowerCase();
     return BUTTON_LIBRARY[fallback] ? fallback : '';
   }
@@ -742,31 +675,14 @@
     var sourceId = detectSourceId(item, fallbackId);
     var fixed = getButtonBySourceId(sourceId);
     if(fixed) return fixed;
-    return {
-      key: norm(item && item.key || fallbackId || ''),
-      sourceId: norm(item && item.sourceId || fallbackId || ''),
-      name: norm(item && (item.name || item.label) || fallbackId || ''),
-      href: norm(item && item.href),
-      target: norm(item && item.target),
-      roles: Array.isArray(item && item.roles) ? item.roles.slice() : []
-    };
+    return { key:norm(item && item.key || fallbackId || ''), sourceId:norm(item && item.sourceId || fallbackId || ''), name:norm(item && (item.name || item.label) || fallbackId || ''), href:norm(item && item.href), target:norm(item && item.target), roles:Array.isArray(item && item.roles) ? item.roles.slice() : [] };
   }
 
-  function withV(href){
-    if(typeof window.__withV !== 'function') return href;
-    return window.__withV(href);
-  }
-  function applyVehicleBg(){
-    var file = String(G.VEHICLE_IMAGE || '捷運車輛.png');
-    var url = (typeof window.__withV === 'function') ? window.__withV(file) : file;
-    document.documentElement.style.setProperty('--vehicle-bg', 'url("' + url + '")');
-  }
+  function withV(href){ if(typeof window.__withV !== 'function') return href; return window.__withV(href); }
+  function applyVehicleBg(){ var file = String(G.VEHICLE_IMAGE || '捷運車輛.png'); var url = (typeof window.__withV === 'function') ? window.__withV(file) : file; document.documentElement.style.setProperty('--vehicle-bg', 'url("' + url + '")'); }
 
   function readCookie(name){
-    try{
-      var m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.$?*|{}()\[\]\\/+^]/g,'\\$&') + '=([^;]*)'));
-      return m ? decodeURIComponent(m[1]) : '';
-    }catch(_e){ return ''; }
+    try{ var m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.$?*|{}()\[\]\/+^]/g,'\$&') + '=([^;]*)')); return m ? decodeURIComponent(m[1]) : ''; }catch(_e){ return ''; }
   }
   function decodeSessionCookie(raw){
     try{
@@ -791,15 +707,8 @@
     try{ sessionStorage.setItem('tasunSessionLogin_v2', JSON.stringify({ user:user, role:role, t:Date.now() })); }catch(_e){}
     try{ sessionStorage.setItem('tasunIndexSession_v1', '1'); }catch(_e){}
     try{ sessionStorage.setItem('tasunIndexSessionAuthed_v2', '1'); }catch(_e){}
-    try{
-      var sso = { name:user, user:user, role:role, at:Date.now(), exp:Date.now() + 1000*60*60*12, v:(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '') };
-      sessionStorage.setItem('tasunSso_v1', JSON.stringify(sso));
-      sessionStorage.setItem('tasunSso_v2', JSON.stringify(sso));
-    }catch(_e){}
-    try{
-      var cookiePayload = encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify({ u:user, r:role, exp:Date.now() + 1000*60*60*12, v:(window.__CACHE_V || '') })))));
-      document.cookie = 'tasun_session_v4=' + cookiePayload + '; Path=/; SameSite=Lax' + (location.protocol === 'https:' ? '; Secure' : '');
-    }catch(_e){}
+    try{ var sso = { name:user, user:user, role:role, at:Date.now(), exp:Date.now() + 1000*60*60*12, v:(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '') }; sessionStorage.setItem('tasunSso_v1', JSON.stringify(sso)); sessionStorage.setItem('tasunSso_v2', JSON.stringify(sso)); }catch(_e){}
+    try{ var cookiePayload = encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify({ u:user, r:role, exp:Date.now() + 1000*60*60*12, v:(window.__CACHE_V || '') }))))); document.cookie = 'tasun_session_v4=' + cookiePayload + '; Path=/; SameSite=Lax' + (location.protocol === 'https:' ? '; Secure' : ''); }catch(_e){}
     try{ localStorage.removeItem(CURRENT_KEY); }catch(_e){}
     try{ localStorage.removeItem('tasunSession_v1'); }catch(_e){}
     try{ localStorage.removeItem('tasunSessionBridge_v1'); }catch(_e){}
@@ -822,50 +731,13 @@
     }
     return decodeSessionCookie(readCookie('tasun_session_v4'));
   }
-  function showLoginBlocker(message){
-    var wrap = $('loginBlocker');
-    var textNode = $('loginBlockerText');
-    if(textNode) textNode.textContent = message || '未登入無法進入網頁';
-    if(wrap) wrap.classList.add('show');
-    try{ document.body.style.overflow = 'hidden'; }catch(_e){}
-  }
-  function hideLoginBlocker(){
-    var wrap = $('loginBlocker');
-    if(wrap) wrap.classList.remove('show');
-    try{ document.body.style.overflow = ''; }catch(_e){}
-  }
-  function bindLoginBlocker(){
-    var btn = $('loginBlockerBackBtn');
-    if(btn && !btn.__tasunBound){
-      btn.__tasunBound = true;
-      btn.addEventListener('click', function(){ location.href = withV('index.html'); });
-    }
-  }
-  function ensureSessionAccess(){
-    var payload = getActiveSessionPayload();
-    if(payload && payload.user){
-      persistSessionPayload(payload);
-      hideLoginBlocker();
-      trace('session_ok', { user:payload.user, role:payload.role || payload.level });
-      return payload;
-    }
-    showLoginBlocker('未登入無法進入網頁，請先登入 Tasun 首頁後再進入此頁。');
-    trace('session_blocked', { reason:'no-session' });
-    return null;
-  }
-  function getCurrent(){
-    var obj = getActiveSessionPayload() || {};
-    var name = obj.name || obj.user || obj.username || obj.account || '';
-    return { name:name || '未登入', role:inferRole(name, obj.role || obj.level) };
-  }
-  function persistBridgeForNav(href){
-    try{ persistSessionPayload(getCurrent()); }catch(_e){}
-    try{ sessionStorage.setItem('tasun_next_path_v1', norm(href)); }catch(_e){}
-  }
-  window.__go = function(href){
-    persistBridgeForNav(href);
-    location.href = withV(href);
-  };
+  function showLoginBlocker(message){ var wrap = $('loginBlocker'); var textNode = $('loginBlockerText'); if(textNode) textNode.textContent = message || '未登入無法進入網頁'; if(wrap) wrap.classList.add('show'); try{ document.body.style.overflow = 'hidden'; }catch(_e){} }
+  function hideLoginBlocker(){ var wrap = $('loginBlocker'); if(wrap) wrap.classList.remove('show'); try{ document.body.style.overflow = ''; }catch(_e){} }
+  function bindLoginBlocker(){ var btn = $('loginBlockerBackBtn'); if(btn && !btn.__tasunBound){ btn.__tasunBound = true; btn.addEventListener('click', function(){ location.href = withV('index.html'); }); } }
+  function ensureSessionAccess(){ var payload = getActiveSessionPayload(); if(payload && payload.user){ persistSessionPayload(payload); hideLoginBlocker(); return payload; } showLoginBlocker('未登入無法進入網頁，請先登入 Tasun 首頁後再進入此頁。'); return null; }
+  function getCurrent(){ var obj = getActiveSessionPayload() || {}; var name = obj.name || obj.user || obj.username || obj.account || ''; return { name:name || '未登入', role:inferRole(name, obj.role || obj.level) }; }
+  function persistBridgeForNav(href){ try{ persistSessionPayload(getCurrent()); }catch(_e){} try{ sessionStorage.setItem('tasun_next_path_v1', norm(href)); }catch(_e){} }
+  window.__go = function(href){ persistBridgeForNav(href); location.href = withV(href); };
 
   function canonicalizeRouteStore(){
     try{
@@ -874,7 +746,7 @@
       RECORD_ALIASES.forEach(function(alias){ routes[alias] = canonicalRecordHref(); });
       routes[canonicalRecordName()] = canonicalRecordHref();
       localStorage.setItem(ROUTE_KEY, JSON.stringify(routes));
-      trace('canonicalize_routes', routes);
+      trace('route_store', routes);
     }catch(_e){}
   }
   function canonicalizeEntryButtonStore(){
@@ -882,13 +754,8 @@
       var store = safeParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || '{}', {});
       if(!store || typeof store !== 'object') store = {};
       var raw = Array.isArray(store[ENTRY_FILE]) ? store[ENTRY_FILE] : [];
-      if(!raw.length){
-        trace('entry_store_empty', { entry:ENTRY_FILE });
-        return;
-      }
-      trace('entry_store_raw', raw);
-      var seen = Object.create(null);
-      var normalized = [];
+      if(!raw.length) return;
+      var seen = Object.create(null), normalized = [];
       raw.forEach(function(item, idx){
         var normalizedItem = normalizeStoredButton(item, item && (item.sourceId || item.key) || ('slot' + idx));
         var sourceId = norm(normalizedItem.sourceId).toLowerCase();
@@ -898,18 +765,15 @@
       });
       store[ENTRY_FILE] = normalized;
       localStorage.setItem(AUTH_ENTRY_BUTTONS_KEY, JSON.stringify(store));
-      trace('entry_store_normalized', normalized);
+      trace('entry_store', normalized);
     }catch(_e){}
   }
   function resolveSortableButtons(){
     canonicalizeRouteStore();
     canonicalizeEntryButtonStore();
-
     var store = safeParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || '{}', {});
     var rawStore = Array.isArray(store[ENTRY_FILE]) ? store[ENTRY_FILE] : [];
-    var ordered = [];
-    var seen = Object.create(null);
-
+    var ordered = [], seen = Object.create(null);
     rawStore.forEach(function(item, idx){
       var normalizedItem = normalizeStoredButton(item, item && (item.sourceId || item.key) || ('slot' + idx));
       var sourceId = norm(normalizedItem.sourceId).toLowerCase();
@@ -917,71 +781,30 @@
       seen[sourceId] = true;
       ordered.push(getButtonBySourceId(sourceId));
     });
-
-    SORTABLE_SOURCE_IDS.forEach(function(sourceId){
-      if(!seen[sourceId]){
-        seen[sourceId] = true;
-        ordered.push(getButtonBySourceId(sourceId));
-      }
-    });
-
-    var resolved = ordered.filter(Boolean).map(function(item){ return normalizeStoredButton(item, item.sourceId); });
-    trace('resolve_sortable_buttons', resolved);
-    return resolved;
+    SORTABLE_SOURCE_IDS.forEach(function(sourceId){ if(!seen[sourceId]){ seen[sourceId] = true; ordered.push(getButtonBySourceId(sourceId)); } });
+    return ordered.filter(Boolean).map(function(item){ return normalizeStoredButton(item, item.sourceId); });
   }
-
-  function hardSetRecordAnchor(anchor){
-    if(!anchor) return;
-    var span = anchor.querySelector('span');
-    if(span) span.textContent = canonicalRecordName();
-    anchor.dataset.itemKey = 'xidong_record';
-    anchor.dataset.sourceId = 'xidong_record';
-    anchor.dataset.routeHref = canonicalRecordHref();
-    anchor.setAttribute('href', withV(canonicalRecordHref()));
-    anchor.removeAttribute('target');
-    anchor.removeAttribute('rel');
-  }
-
+  function hardSetRecordAnchor(anchor){ if(!anchor) return; var span = anchor.querySelector('span'); if(span) span.textContent = canonicalRecordName(); anchor.dataset.itemKey = 'xidong_record'; anchor.dataset.sourceId = 'xidong_record'; anchor.dataset.routeHref = canonicalRecordHref(); anchor.setAttribute('href', withV(canonicalRecordHref())); anchor.removeAttribute('target'); anchor.removeAttribute('rel'); }
   function forceRecordAnchorCanonical(){
-    hardSetRecordAnchor($('linkRecord'));
-    var anchors = [$('linkDutyLite'), $('linkDB'), $('linkDetail'), $('linkDropbox')];
+    var anchors = [$('linkRecord'), $('linkDutyLite'), $('linkDB'), $('linkDetail'), $('linkDropbox')];
     anchors.forEach(function(a){
       if(!a) return;
       var span = a.querySelector('span');
       var label = span ? span.textContent : '';
       var href = norm(a.dataset.routeHref || a.getAttribute('href'));
       var sourceId = norm(a.dataset.sourceId || a.dataset.itemKey).toLowerCase();
-      var looksRecord = sourceId === 'xidong_record' || isRecordAliasName(label) || isRecordAliasHref(href);
-      if(looksRecord) hardSetRecordAnchor(a);
-    });
-    trace('force_record_anchor', {
-      id:'linkRecord',
-      href:$('linkRecord') ? $('linkRecord').getAttribute('href') : '',
-      routeHref:$('linkRecord') ? $('linkRecord').dataset.routeHref : '',
-      sourceId:$('linkRecord') ? $('linkRecord').dataset.sourceId : ''
+      if(a.id === 'linkRecord' || sourceId === 'xidong_record' || isRecordAliasName(label) || isRecordAliasHref(href)) hardSetRecordAnchor(a);
     });
   }
-
   function applyEntryButtons(){
     var u = getCurrent();
     var role = norm(u.role || 'read').toLowerCase();
     var sortableSlots = [$('linkRecord'), $('linkDutyLite'), $('linkDB'), $('linkDetail'), $('linkDropbox')];
-    var sortableItems = resolveSortableButtons().filter(function(item){
-      return !Array.isArray(item.roles) || !item.roles.length || item.roles.indexOf(role) >= 0;
-    });
-
+    var sortableItems = resolveSortableButtons().filter(function(item){ return !Array.isArray(item.roles) || !item.roles.length || item.roles.indexOf(role) >= 0; });
     sortableSlots.forEach(function(a, i){
       var item = sortableItems[i];
       if(!a || !item){
-        if(a){
-          a.style.display = 'none';
-          a.removeAttribute('href');
-          a.removeAttribute('target');
-          a.removeAttribute('rel');
-          delete a.dataset.itemKey;
-          delete a.dataset.sourceId;
-          delete a.dataset.routeHref;
-        }
+        if(a){ a.style.display = 'none'; a.removeAttribute('href'); a.removeAttribute('target'); a.removeAttribute('rel'); delete a.dataset.itemKey; delete a.dataset.sourceId; delete a.dataset.routeHref; }
         return;
       }
       var span = a.querySelector('span');
@@ -994,98 +817,39 @@
       a.dataset.itemKey = norm(item.key || '');
       a.dataset.sourceId = norm(item.sourceId || item.key || '');
       a.dataset.routeHref = rawHref;
-      if(item.target){
-        a.target = item.target;
-        if(item.target === '_blank') a.rel = 'noopener';
-      }else{
-        a.removeAttribute('target');
-        a.removeAttribute('rel');
-      }
+      if(item.target){ a.target = item.target; if(item.target === '_blank') a.rel = 'noopener'; }
+      else { a.removeAttribute('target'); a.removeAttribute('rel'); }
     });
-
     var authAnchor = $('linkAuth');
     if(authAnchor){
       var authItem = getButtonBySourceId(FIXED_AUTH_SOURCE_ID);
       if(role !== 'admin'){
-        authAnchor.style.display = 'none';
-        authAnchor.removeAttribute('href');
-        authAnchor.removeAttribute('target');
-        authAnchor.removeAttribute('rel');
-        delete authAnchor.dataset.itemKey;
-        delete authAnchor.dataset.sourceId;
-        delete authAnchor.dataset.routeHref;
+        authAnchor.style.display = 'none'; authAnchor.removeAttribute('href'); authAnchor.removeAttribute('target'); authAnchor.removeAttribute('rel'); delete authAnchor.dataset.itemKey; delete authAnchor.dataset.sourceId; delete authAnchor.dataset.routeHref;
       }else{
-        var authSpan = authAnchor.querySelector('span');
-        authAnchor.style.display = 'flex';
-        if(authSpan) authSpan.textContent = authItem.name;
-        authAnchor.dataset.itemKey = authItem.key;
-        authAnchor.dataset.sourceId = authItem.sourceId;
-        authAnchor.dataset.routeHref = authItem.href;
-        authAnchor.setAttribute('href', withV(authItem.href));
-        authAnchor.removeAttribute('target');
-        authAnchor.removeAttribute('rel');
+        var authSpan = authAnchor.querySelector('span'); authAnchor.style.display = 'flex'; if(authSpan) authSpan.textContent = authItem.name; authAnchor.dataset.itemKey = authItem.key; authAnchor.dataset.sourceId = authItem.sourceId; authAnchor.dataset.routeHref = authItem.href; authAnchor.setAttribute('href', withV(authItem.href)); authAnchor.removeAttribute('target'); authAnchor.removeAttribute('rel');
       }
     }
-
     forceRecordAnchorCanonical();
-
-    trace('applied_buttons', sortableSlots.map(function(a){
-      return a ? {
-        id:a.id,
-        text:a.querySelector('span') ? a.querySelector('span').textContent : '',
-        href:a.getAttribute('href'),
-        routeHref:a.dataset.routeHref || '',
-        sourceId:a.dataset.sourceId || ''
-      } : null;
-    }));
+    trace('resolved_buttons', sortableSlots.map(function(a){ return a ? { id:a.id, text:a.querySelector('span') ? a.querySelector('span').textContent : '', routeHref:a.dataset.routeHref || '', href:a.getAttribute('href') || '', sourceId:a.dataset.sourceId || '' } : null; }));
   }
-
-  function renderUser(){
-    var u = getCurrent();
-    $('who').textContent = u.name;
-    $('role').textContent = u.role;
-    applyEntryButtons();
-  }
-
+  function renderUser(){ var u = getCurrent(); $('who').textContent = u.name; $('role').textContent = u.role; applyEntryButtons(); }
   function bindStableNavigate(){
     document.addEventListener('click', function(e){
       var a = e.target.closest('a[href]');
       if(!a) return;
       if(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       if(typeof e.button === 'number' && e.button !== 0) return;
-
       var routeHref = norm(a.dataset.routeHref || a.getAttribute('href') || '');
       var sourceId = norm(a.dataset.sourceId || a.dataset.itemKey).toLowerCase();
       var label = a.querySelector('span') ? a.querySelector('span').textContent : '';
-
-      if(a.id === 'linkRecord' || sourceId === 'xidong_record' || isRecordAliasName(label) || isRecordAliasHref(routeHref)){
-        routeHref = canonicalRecordHref();
-      }
-
-      trace('navigate_click', {
-        id:a.id || '',
-        label:label,
-        sourceId:sourceId,
-        routeHrefBefore:a.dataset.routeHref || '',
-        hrefAttr:a.getAttribute('href') || '',
-        finalRouteHref:routeHref
-      });
-
+      if(a.id === 'linkRecord' || sourceId === 'xidong_record' || isRecordAliasName(label) || isRecordAliasHref(routeHref)) routeHref = canonicalRecordHref();
+      trace('click_target', { id:a.id || '', label:label, sourceId:sourceId, routeHref:routeHref, hrefAttr:a.getAttribute('href') || '' });
       if(!routeHref || routeHref === '#') return;
       if(/^https?:\/\//i.test(routeHref) || /^mailto:/i.test(routeHref) || /^tel:/i.test(routeHref) || a.target === '_blank') return;
-
       e.preventDefault();
       persistBridgeForNav(routeHref);
       window.__go(routeHref);
     }, { capture:true });
-
-    var recordAnchor = $('linkRecord');
-    if(recordAnchor && !recordAnchor.__tasunRecordBound){
-      recordAnchor.__tasunRecordBound = true;
-      recordAnchor.addEventListener('mouseenter', function(){ hardSetRecordAnchor(recordAnchor); });
-      recordAnchor.addEventListener('focus', function(){ hardSetRecordAnchor(recordAnchor); });
-    }
-
     $('btnBack').addEventListener('click', function(){ window.__go('index.html'); });
     $('btnSwitch').addEventListener('click', function(){ window.__go('index.html'); });
   }
@@ -1095,14 +859,10 @@
     bindLoginBlocker();
     if(!ensureSessionAccess()) return;
     applyVehicleBg();
+    trace('record_file_static', { href:$('linkRecord') ? $('linkRecord').getAttribute('href') : '', recordFile:RECORD_FILE });
     renderUser();
     bindStableNavigate();
-    window.addEventListener('storage', function(e){
-      if(!e || !e.key) return;
-      if(e.key === AUTH_ENTRY_BUTTONS_KEY || e.key === ROUTE_KEY || e.key === CURRENT_KEY){
-        if(ensureSessionAccess()) renderUser();
-      }
-    });
+    window.addEventListener('storage', function(e){ if(!e || !e.key) return; if(e.key === AUTH_ENTRY_BUTTONS_KEY || e.key === ROUTE_KEY || e.key === CURRENT_KEY){ if(ensureSessionAccess()) renderUser(); } });
   }
 
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once:true });
