@@ -1371,25 +1371,25 @@
   async function d1GetJson(path){
     const base = getApiBaseLocked();
     const url = withNoCache(base + path);
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       method:"GET",
       credentials:"include",
       cache:"no-store",
       headers: buildWorkerAuthHeaders()
-    });
+    }, 12000, 'D1 下載');
     const j = await res.json().catch(()=>null);
     return { ok: res.ok, status: res.status, json: j };
   }
   async function d1PostJson(path, body){
     const base = getApiBaseLocked();
     const url = withNoCache(base + path);
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       method:"POST",
       credentials:"include",
       cache:"no-store",
       headers: buildWorkerAuthHeaders({ "content-type":"application/json" }),
       body: JSON.stringify(body || {})
-    });
+    }, 15000, 'D1 上傳');
     const j = await res.json().catch(()=>null);
     return { ok: res.ok, status: res.status, json: j };
   }
@@ -1525,7 +1525,29 @@
   let _loadRunning = false;
   let _loadQueued = false;
 
-  
+  function makeTimeoutError(label, ms){
+    return new Error((label || '網路要求') + '逾時（' + ms + 'ms）');
+  }
+  async function fetchWithTimeout(url, options, timeoutMs, label){
+    const ms = Math.max(3000, Number(timeoutMs || 12000));
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      try{ controller.abort(); }catch(_e){}
+    }, ms);
+    try{
+      const opts = Object.assign({}, options || {}, { signal: controller.signal });
+      const res = await fetch(url, opts);
+      clearTimeout(timer);
+      return res;
+    }catch(err){
+      clearTimeout(timer);
+      if(err && err.name === 'AbortError'){
+        throw makeTimeoutError(label, ms);
+      }
+      throw err;
+    }
+  }
+
   async function sha256Hex(str){
     const s = String(str ?? "");
     const data = new TextEncoder().encode(s);
@@ -1622,28 +1644,14 @@ function safeJsonParse(s, fallback){
     });
     return out;
   }
-  function dedupeNavButtonsShape(raw){
-    const list = Array.isArray(raw) ? raw : [];
-    const seen = new Set();
-    const out = [];
-    list.forEach((item, idx) => {
-      if(!item || typeof item !== 'object') return;
-      const id = String(item.id || ('btn' + (idx + 1))).trim() || ('btn' + (idx + 1));
-      const sourceId = String(item.sourceId || id).trim() || id;
-      const label = String(item.label || item.name || sourceId).trim() || sourceId;
-      const href = String(item.href || '').trim();
-      const target = String(item.target || '').trim();
-      const dedupeKey = [sourceId.toLowerCase(), href, label].join('::');
-      if(seen.has(dedupeKey)) return;
-      seen.add(dedupeKey);
-      out.push({
-        id,
-        sourceId,
-        label,
-        href,
-        target,
-        roles: Array.isArray(item.roles) ? item.roles.slice() : []
-      });
+  function dedupeRoutesShape(raw){
+    const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+    const out = {};
+    Object.keys(src).forEach((keyRaw) => {
+      const key = String(keyRaw || '').trim();
+      const val = String(src[keyRaw] || '').trim();
+      if(!key || !val) return;
+      out[key] = val;
     });
     return out;
   }
@@ -1675,71 +1683,11 @@ function safeJsonParse(s, fallback){
     });
     return out;
   }
-  function dedupeRoutesShape(raw){
-    const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
-    const out = {};
-    Object.keys(src).forEach((keyRaw) => {
-      const key = String(keyRaw || '').trim();
-      const val = String(src[keyRaw] || '').trim();
-      if(!key || !val) return;
-      out[key] = val;
-    });
-    return out;
-  }
-  function dedupeEntryRegistryShape(raw){
-    if(Array.isArray(raw)){
-      const seen = new Set();
-      return raw.filter((item) => {
-        const file = String(item?.file || '').trim();
-        if(!file) return false;
-        if(seen.has(file)) return false;
-        seen.add(file);
-        return true;
-      }).map((item) => ({
-        ...item,
-        file: String(item.file || '').trim(),
-        buttons: dedupeEntryButtonList(item.buttons)
-      }));
-    }
-    if(raw && typeof raw === 'object'){
-      if(Array.isArray(raw.entries)){
-        const seen = new Set();
-        return {
-          ...raw,
-          entries: raw.entries.filter((item) => {
-            const file = String(item?.file || '').trim();
-            if(!file) return false;
-            if(seen.has(file)) return false;
-            seen.add(file);
-            return true;
-          }).map((item) => ({
-            ...item,
-            file: String(item.file || '').trim(),
-            buttons: dedupeEntryButtonList(item.buttons)
-          }))
-        };
-      }
-      const out = {};
-      Object.keys(raw).forEach((fileRaw) => {
-        const file = String(fileRaw || '').trim();
-        if(!file) return;
-        const node = raw[fileRaw];
-        out[file] = (node && typeof node === 'object')
-          ? { ...node, buttons: dedupeEntryButtonList(node.buttons) }
-          : node;
-      });
-      return out;
-    }
-    return {};
-  }
   async function dedupeAndPersistLocalState(){
     auth = dedupeAuthRows(safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []));
     permMatrix = dedupePermMatrixShape(safeJsonParse(localStorage.getItem(PERM_MATRIX_KEY) || '{}', {}));
     localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
     localStorage.setItem(PERM_MATRIX_KEY, JSON.stringify(permMatrix));
-
-    const navButtons = dedupeNavButtonsShape(safeJsonParse(localStorage.getItem(NAV_KEY) || '[]', []));
-    localStorage.setItem(NAV_KEY, JSON.stringify(navButtons));
 
     const routes = dedupeRoutesShape(safeJsonParse(localStorage.getItem(ROUTE_KEY) || '{}', {}));
     setRouteStorageObject(routes);
@@ -1747,11 +1695,8 @@ function safeJsonParse(s, fallback){
     const authEntryButtons = dedupeAuthEntryButtonsShape(safeJsonParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || '{}', {}));
     localStorage.setItem(AUTH_ENTRY_BUTTONS_KEY, JSON.stringify(authEntryButtons));
 
-    const regRaw = safeJsonParse(localStorage.getItem(ENTRY_REGISTRY_KEY) || 'null', null);
-    if(regRaw !== null) localStorage.setItem(ENTRY_REGISTRY_KEY, JSON.stringify(dedupeEntryRegistryShape(regRaw)));
-
-    const selected = String(resolveEntryValue() || 'index.html').trim() || 'index.html';
-    localStorage.setItem(ENTRY_SELECTED_KEY, selected);
+    const entrySelected = String(localStorage.getItem(ENTRY_SELECTED_KEY) || '').trim();
+    if(entrySelected) localStorage.setItem(ENTRY_SELECTED_KEY, entrySelected);
 
     normalizeAuth();
     await saveLocal();
@@ -1769,6 +1714,8 @@ function safeJsonParse(s, fallback){
 
     current.role = getEffectiveRole();
     isAdmin = (getEffectiveRole() === 'admin');
+
+    clearTokenFlags();
 
     buildEntrySelect();
     loadSelectedEntry();
@@ -1793,7 +1740,8 @@ function safeJsonParse(s, fallback){
       const why = String(reason || 'boot');
       const token = getToken();
       const ctrl = getCloudCtrl();
-      setCloudState('雲端：啟動同步中…');
+      const cloudReady = canAutoCloud();
+      setCloudState(cloudReady ? '雲端：啟動同步中…' : '雲端：未設定Token');
 
       auth = safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []);
       if(!Array.isArray(auth)) auth = [];
@@ -1807,21 +1755,20 @@ function safeJsonParse(s, fallback){
 
       await d1PullAuthTable(why + '-d1-pre');
 
-      if(canAutoCloud() && ctrl && typeof ctrl.pullNow === 'function'){
-        await Promise.resolve(ctrl.pullNow()).catch(() => {});
-      }
-
-      if(canAutoCloud()){
+      if(cloudReady){
+        setCloudState('雲端：步驟1/4 下載中…');
         await cloudDownload(token, { silent:true, skipRender:true, skipPostPush:true });
       }
 
+      setCloudState(cloudReady ? '雲端：步驟2/4 本地去重刷新…' : '本機：去重刷新中…');
       await dedupeAndPersistLocalState();
 
-      if(canAutoCloud()){
-        let uploadResult = { ok:false, retry:false };
+      if(cloudReady){
+        setCloudState('雲端：步驟3/4 上傳比對中…');
         if(isAdmin){
-          uploadResult = await doUploadOnce(token).catch((err) => ({ ok:false, retry:false, error:String(err?.message || err) }));
+          let uploadResult = await doUploadOnce(token).catch((err) => ({ ok:false, retry:false, error:String(err?.message || err) }));
           if(uploadResult && uploadResult.retry){
+            setCloudState('雲端：發現版本差異，重新下載合併後重試…');
             await cloudDownload(token, { silent:true, skipRender:true, skipPostPush:true });
             await dedupeAndPersistLocalState();
             uploadResult = await doUploadOnce(token).catch((err) => ({ ok:false, retry:false, error:String(err?.message || err) }));
@@ -1831,19 +1778,15 @@ function safeJsonParse(s, fallback){
         if(ctrl && typeof ctrl.saveMerged === 'function'){
           await Promise.resolve(ctrl.saveMerged()).catch(() => {});
         }
-      }
 
-      if(canAutoCloud() && ctrl && typeof ctrl.pullNow === 'function'){
-        await Promise.resolve(ctrl.pullNow()).catch(() => {});
-      }
-      if(canAutoCloud()){
+        setCloudState('雲端：步驟4/4 最後校正下載…');
         await cloudDownload(token, { silent:true, skipRender:true, skipPostPush:true });
       }
 
       await d1PullAuthTable(why + '-d1-post');
       await dedupeAndPersistLocalState();
-      refreshFromLocal('已完成雲端先下載 → 本地去重刷新 → 回傳雲端 → 再次下載校正。');
-      setCloudState('雲端：同步完成');
+      refreshFromLocal(cloudReady ? '已完成雲端先下載 → 本地去重刷新 → 回傳雲端 → 再次下載校正。' : '未設定 Token，已使用本機資料並完成本地去重刷新。');
+      setCloudState(cloudReady ? '雲端：同步完成' : '雲端：未設定Token');
       return true;
     }catch(err){
       refreshFromLocal('啟動同步失敗，已改用本機資料。');
@@ -1892,6 +1835,7 @@ function safeJsonParse(s, fallback){
     const ctrl = getCloudCtrl();
     if(!ctrl || !ctrl.pullNow) return;
     if(!canAutoCloud()) return;
+    if(_bootSyncRunning || _loadRunning) return;
 
     const now = Date.now();
     if(now - _cloudLastPullAt < 3000) return; // 短時間別狂拉
@@ -1940,6 +1884,7 @@ function safeJsonParse(s, fallback){
     const ctrl = getCloudCtrl();
     if(!ctrl || !ctrl.saveMerged) return;
     if(!canAutoCloud()) return;
+    if(_bootSyncRunning || _loadRunning) return;
 
     // admin 才可能變更資料（但 entrySelect / 顯示也會變，不影響同步）
     // 仍允許同步，以利跨裝置一致。
@@ -1971,7 +1916,7 @@ function safeJsonParse(s, fallback){
   async function loadResourcesForAuthTable(){
     try{
       const url = (window.__withV ? window.__withV(RESOURCES_URL) : RESOURCES_URL);
-      const res = await fetch(url, { cache:'no-store' });
+      const res = await fetchWithTimeout(url, { cache:'no-store' }, 8000, '資源設定下載');
       if(!res.ok) throw new Error('HTTP ' + res.status);
       const json = await res.json();
       const node = json && json[RESOURCE_KEY];
@@ -2509,7 +2454,7 @@ function safeJsonParse(s, fallback){
     if(!file || /^https?:\/\//i.test(file)) return null;
     try{
       const url = (window.__withV ? window.__withV(file) : file);
-      const res = await fetch(url, { cache:'no-store' });
+      const res = await fetchWithTimeout(url, { cache:'no-store' }, 8000, '入口頁按鍵掃描');
       if(!res.ok) return null;
       const html = await res.text();
       const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -3218,7 +3163,7 @@ function safeJsonParse(s, fallback){
       headers.set('Authorization', 'Bearer ' + token);
       headers.set('Dropbox-API-Arg', arg);
 
-      const res = await fetch('https://content.dropboxapi.com/2/files/download', { method:'POST', headers });
+      const res = await fetchWithTimeout('https://content.dropboxapi.com/2/files/download', { method:'POST', headers }, 15000, 'Dropbox 下載');
 
       if(!res.ok){
         const t = await res.text().catch(()=> '');
@@ -3289,7 +3234,7 @@ function safeJsonParse(s, fallback){
     headers.set('Content-Type', 'application/octet-stream');
     headers.set('Dropbox-API-Arg', apiArg);
 
-    const res = await fetch('https://content.dropboxapi.com/2/files/upload', { method:'POST', headers, body });
+    const res = await fetchWithTimeout('https://content.dropboxapi.com/2/files/upload', { method:'POST', headers, body }, 18000, 'Dropbox 上傳');
     const text = await res.text().catch(()=>'');
 
     if(!res.ok){
@@ -3798,7 +3743,6 @@ function safeJsonParse(s, fallback){
   window.addEventListener('storage', async (e) => {
     if(_bootSyncRunning) return;
     if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY || e.key === AUTH_ENTRY_BUTTONS_KEY){
-      // routes/registry 變動 → 入口頁清單可更新
       buildEntrySelect();
       renderAll();
       updateStates('已同步按鍵/路由設定。');
@@ -3810,15 +3754,8 @@ function safeJsonParse(s, fallback){
   });
 
   window.addEventListener('tasun-auth-cloud-applied', () => {
-    if(_bootSyncRunning) return;
+    if(_bootSyncRunning || _loadRunning) return;
     refreshFromLocal('已套用雲端同步資料。');
-  });
-
-  // 視窗回到前台 → 拉一次雲端（不吵、節流）
-  document.addEventListener('visibilitychange', () => {
-    if(document.visibilityState === 'visible'){
-      scheduleCloudPull('visible');
-    }
   });
 
   // ✅ 先載入 resources → 再 load（確保 DROPBOX_PATH & entries/entryButtons 可取得）
@@ -3916,10 +3853,7 @@ function safeJsonParse(s, fallback){
   // 讓主程式可以拿到 ctrl，做到「按鈕儲存也立即同步」
   window.__TASUN_AUTH_CLOUD_CTRL = ctrl;
 
-  // 進站先拉一次
-  try{
-    ctrl && ctrl.pullNow && setTimeout(function(){ try{ ctrl.pullNow(); }catch(_){ } }, 250);
-  }catch(_){}
+  // 進站同步改由主程式 runBootCloudSync 統一接管，避免重複拉取造成頁面持續運轉。
 
   // 變更偵測（hash）→ 自動推（保底機制）
   var lastHash = 0;
@@ -3940,12 +3874,7 @@ function safeJsonParse(s, fallback){
   // 改為只記錄目前雜湊，後續由主程式既有的 debounce / visibility / 手動按鈕觸發同步。
   lastHash = hashNow();
 
-  // 回前景自動拉（避免別台剛更新）
-  document.addEventListener('visibilitychange', function(){
-    if(document.visibilityState==='visible'){
-      try{ ctrl && ctrl.pullNow && ctrl.pullNow(); }catch(_){}
-    }
-  });
+  // 回前景同步改由主程式控管，避免本頁背景持續重複請求。
 })();
 </script>
 
