@@ -1327,7 +1327,7 @@
   function snapshotAuthTableForCloud(){
     const navButtons = safeJsonParse(localStorage.getItem(NAV_KEY) || "[]", []);
     const routes     = safeJsonParse(localStorage.getItem(ROUTE_KEY) || "{}", {});
-    const entrySel   = safeJsonParse(localStorage.getItem(ENTRY_SELECTED_KEY) || JSON.stringify("index.html"), "index.html");
+    const entrySel   = readStoredEntrySelected();
     const entryReg   = safeJsonParse(localStorage.getItem(ENTRY_REGISTRY_KEY) || "[]", []);
     const authEntryButtons = safeJsonParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || "{}", {});
     const btnMetaLs  = safeJsonParse(localStorage.getItem(BTN_META_KEY) || "[]", []);
@@ -1390,7 +1390,7 @@
     }
     if(Array.isArray(d.btnMeta))    localStorage.setItem(BTN_META_KEY, JSON.stringify(d.btnMeta));
     if(d.permMatrix && typeof d.permMatrix==="object") localStorage.setItem(PERM_MATRIX_KEY, JSON.stringify(d.permMatrix));
-    if(typeof d.entrySelected === "string") localStorage.setItem(ENTRY_SELECTED_KEY, JSON.stringify(d.entrySelected));
+    if(typeof d.entrySelected === "string") writeStoredEntrySelected(d.entrySelected);
     if(Array.isArray(d.entryRegistry)) localStorage.setItem(ENTRY_REGISTRY_KEY, JSON.stringify(d.entryRegistry));
     if(d.authEntryButtons && typeof d.authEntryButtons === 'object') localStorage.setItem(AUTH_ENTRY_BUTTONS_KEY, JSON.stringify(d.authEntryButtons));
 
@@ -1450,272 +1450,9 @@
   let _cloudPullTimer = 0;
   let _cloudLastPushAt = 0;
   let _cloudLastPullAt = 0;
-  let _cloudLastReconcileAt = 0;
   let _cloudBusy = false;
-  let _bootSyncRunning = false;
-  let _loadRunning = false;
-  let _loadQueued = false;
-  let _applyRefreshMutedUntil = 0;
-  let _crossTabRefreshTimer = 0;
 
-  function muteRefresh(ms){
-    _applyRefreshMutedUntil = Date.now() + Math.max(300, Number(ms || 1200));
-  }
-
-  function isRefreshMuted(){
-    return Date.now() < _applyRefreshMutedUntil;
-  }
-
-  function refreshFromLocalState(reasonText){
-    auth = safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []);
-    if(!Array.isArray(auth)) auth = [];
-    normalizeAuth();
-
-    current = restoreCurrentFromAllSources();
-    current.user = String(current.user || current.name || '—');
-    current.role = String(current.role || current.level || 'read');
-
-    loadPermMatrix();
-
-    current.role = getEffectiveRole();
-    isAdmin = (getEffectiveRole() === 'admin');
-
-    buildEntrySelect();
-    loadSelectedEntry();
-
-    const inList = dynEntryFiles.includes(currentEntry);
-    if(inList){
-      entrySelect.value = currentEntry;
-      entryCustom.value = '';
-    }else{
-      entrySelect.value = '__custom__';
-      entryCustom.value = currentEntry;
-    }
-    applyEntrySelectionUI();
-
-    renderAll();
-    if(reasonText) updateStates(reasonText);
-    else updateStates();
-  }
-
-  window.__TASUN_AUTH_REFRESH_FROM_LOCAL__ = refreshFromLocalState;
-  window.muteRefresh = muteRefresh;
-
-  function scheduleSoftRefreshFromLocal(reasonText){
-    clearTimeout(_crossTabRefreshTimer);
-    _crossTabRefreshTimer = setTimeout(async () => {
-      if(isRefreshMuted()) return;
-      try{
-        await dedupeLocalState();
-      }catch(_e){}
-      refreshFromLocalState(reasonText || '已同步本機資料。');
-    }, 180);
-  }
-
-  function dedupeAuthRows(rows){
-    const list = Array.isArray(rows) ? rows : [];
-    const keepOrder = [];
-    const mergedMap = new Map();
-    list.forEach((raw) => {
-      if(!raw || typeof raw !== 'object') return;
-      const user = String(raw.user ?? raw.username ?? raw.name ?? raw.account ?? '').trim();
-      if(!user) return;
-      const key = user.toLowerCase();
-      const base = mergedMap.get(key) || {};
-      const row = Object.assign({}, base, raw);
-      row.user = user;
-      row.name = String(raw.name ?? base.name ?? user).trim() || user;
-      const role = String(raw.role ?? raw.level ?? base.role ?? 'read').toLowerCase().trim();
-      row.role = roleOptions.includes(role) ? role : 'read';
-      const passHash = String(raw.passHash ?? raw.passwordHash ?? raw.hash ?? base.passHash ?? '').trim();
-      const pass = String(raw.pass ?? raw.password ?? base.pass ?? '').trim();
-      if(passHash){
-        row.passHash = passHash;
-        row.pass = '';
-        delete row.password;
-        delete row.passwordHash;
-      }else if(pass){
-        row.pass = pass;
-      }
-      if(!mergedMap.has(key)) keepOrder.push(key);
-      mergedMap.set(key, row);
-    });
-    return keepOrder.map((key) => mergedMap.get(key));
-  }
-
-  function dedupePermMatrixShape(raw){
-    const src = (raw && typeof raw === 'object') ? raw : {};
-    const out = { users:{} };
-    const users = (src.users && typeof src.users === 'object') ? src.users : {};
-    Object.keys(users).forEach((userRaw) => {
-      const userKeyNorm = String(userRaw || '').trim().toLowerCase();
-      if(!userKeyNorm) return;
-      if(!out.users[userKeyNorm]) out.users[userKeyNorm] = {};
-      const entryMap = users[userRaw];
-      if(!entryMap || typeof entryMap !== 'object') return;
-      Object.keys(entryMap).forEach((entryRaw) => {
-        const entryKeyNorm = String(entryRaw || '').trim();
-        if(!entryKeyNorm) return;
-        if(!out.users[userKeyNorm][entryKeyNorm]) out.users[userKeyNorm][entryKeyNorm] = {};
-        const btnMap = entryMap[entryRaw];
-        if(!btnMap || typeof btnMap !== 'object') return;
-        Object.keys(btnMap).forEach((btnRaw) => {
-          const btnKeyNorm = String(btnRaw || '').trim();
-          if(!btnKeyNorm) return;
-          out.users[userKeyNorm][entryKeyNorm][btnKeyNorm] = !!btnMap[btnRaw];
-        });
-      });
-    });
-    return out;
-  }
-
-  function dedupeRoutesShape(raw){
-    const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
-    const out = {};
-    Object.keys(src).forEach((keyRaw) => {
-      const key = String(keyRaw || '').trim();
-      const val = String(src[keyRaw] || '').trim();
-      if(!key || !val) return;
-      out[key] = val;
-    });
-    return out;
-  }
-
-  function dedupeEntryButtonList(list){
-    const rows = Array.isArray(list) ? list : [];
-    const seen = new Set();
-    const out = [];
-    rows.forEach((item, idx) => {
-      if(!item || typeof item !== 'object') return;
-      const key = String(item.key || item.sourceId || ('btn' + (idx + 1))).trim() || ('btn' + (idx + 1));
-      const sourceId = String(item.sourceId || key).trim() || key;
-      const name = String(item.name || item.label || key).trim() || key;
-      const href = String(item.href || '').trim();
-      const target = String(item.target || '').trim();
-      const roles = Array.isArray(item.roles) ? item.roles.slice() : [];
-      const dedupeKey = [sourceId.toLowerCase(), href, name].join('::');
-      if(seen.has(dedupeKey)) return;
-      seen.add(dedupeKey);
-      out.push({ key, sourceId, name, label:name, href, target, roles });
-    });
-    return out;
-  }
-
-  function dedupeAuthEntryButtonsShape(raw){
-    const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
-    const out = {};
-    Object.keys(src).forEach((entryRaw) => {
-      const entry = String(entryRaw || '').trim();
-      if(!entry) return;
-      out[entry] = dedupeEntryButtonList(src[entryRaw]);
-    });
-    return out;
-  }
-
-  async function dedupeLocalState(){
-    auth = dedupeAuthRows(safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []));
-    permMatrix = dedupePermMatrixShape(safeJsonParse(localStorage.getItem(PERM_MATRIX_KEY) || '{}', {}));
-    localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
-    localStorage.setItem(PERM_MATRIX_KEY, JSON.stringify(permMatrix));
-
-    const routes = dedupeRoutesShape(safeJsonParse(localStorage.getItem(ROUTE_KEY) || '{}', {}));
-    setRouteStorageObject(routes);
-
-    const authEntryButtons = dedupeAuthEntryButtonsShape(safeJsonParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || '{}', {}));
-    localStorage.setItem(AUTH_ENTRY_BUTTONS_KEY, JSON.stringify(authEntryButtons));
-
-    const entrySelected = stripInvisibles(localStorage.getItem(ENTRY_SELECTED_KEY) || '') || 'index.html';
-    localStorage.setItem(ENTRY_SELECTED_KEY, entrySelected);
-
-    normalizeAuth();
-    await saveLocal();
-  }
-
-  async function runCloudReconcile(reason, opt){
-    if(_bootSyncRunning) return false;
-    const options = opt || {};
-    const allowUpload = options.allowUpload !== false;
-    const force = !!options.force;
-    const now = Date.now();
-    if(!force && _cloudLastReconcileAt && (now - _cloudLastReconcileAt) < 2500) return false;
-
-    if(!canAutoCloud()){
-      await dedupeLocalState().catch(() => {});
-      refreshFromLocalState('未設定 Token，已使用本機資料。');
-      setCloudState('雲端：未設定Token');
-      return false;
-    }
-
-    const token = getToken();
-    _bootSyncRunning = true;
-    _cloudBusy = true;
-    muteRefresh(5000);
-
-    try{
-      await d1PullAuthTable(String(reason || 'sync') + '-pre');
-
-      setCloudState('雲端：步驟1/4 下載中…');
-      await cloudDownload(token, { silent:true, skipRender:true, skipPostPush:true });
-
-      setCloudState('雲端：步驟2/4 本地去重刷新…');
-      await dedupeLocalState();
-
-      if(allowUpload && String(getEffectiveRole() || 'read').toLowerCase() === 'admin'){
-        setCloudState('雲端：步驟3/4 上傳中…');
-        let uploadResult = await doUploadOnce(token).catch((err) => ({ ok:false, retry:false, error:String(err && err.message || err) }));
-        if(uploadResult && uploadResult.retry){
-          setCloudState('雲端：偵測版本差異，重新下載合併後重試…');
-          await cloudDownload(token, { silent:true, skipRender:true, skipPostPush:true });
-          await dedupeLocalState();
-          uploadResult = await doUploadOnce(token).catch((err) => ({ ok:false, retry:false, error:String(err && err.message || err) }));
-        }
-        await d1PushAuthTable(String(reason || 'sync') + '-post').catch(() => {});
-      }
-
-      setCloudState('雲端：步驟4/4 最後校正下載…');
-      await cloudDownload(token, { silent:true, skipRender:true, skipPostPush:true });
-      await d1PullAuthTable(String(reason || 'sync') + '-final');
-      await dedupeLocalState();
-
-      _cloudLastReconcileAt = Date.now();
-      refreshFromLocalState(allowUpload ? '已完成雲端先下載 → 本地去重刷新 → 上傳雲端 → 再次下載校正。' : '已完成雲端下載與本地去重刷新。');
-      setCloudState('雲端：同步完成');
-      return true;
-    }catch(err){
-      await dedupeLocalState().catch(() => {});
-      refreshFromLocalState('雲端同步失敗，已改用本機資料。');
-      setCloudState('雲端：同步失敗', true);
-      setMsg('雲端同步失敗：' + (err && err.message || err), true);
-      return false;
-    }finally{
-      _bootSyncRunning = false;
-      _cloudBusy = false;
-      muteRefresh(1200);
-    }
-  }
-
-  function scheduleCloudPull(reason){
-    if(!canAutoCloud()) return;
-    clearTimeout(_cloudPullTimer);
-    _cloudPullTimer = setTimeout(() => {
-      const now = Date.now();
-      if(now - _cloudLastPullAt < 8000) return;
-      _cloudLastPullAt = now;
-      runCloudReconcile(reason || 'pull', { allowUpload:false }).catch(() => {});
-    }, 650);
-  }
-
-  function scheduleCloudPush(reason){
-    if(!canAutoCloud()) return;
-    clearTimeout(_cloudPushTimer);
-    _cloudPushTimer = setTimeout(() => {
-      const now = Date.now();
-      if(now - _cloudLastPushAt < 2200) return;
-      _cloudLastPushAt = now;
-      runCloudReconcile(reason || 'push', { allowUpload:true }).catch(() => {});
-    }, 900);
-  }
-
+  
   async function sha256Hex(str){
     const s = String(str ?? "");
     const data = new TextEncoder().encode(s);
@@ -1755,6 +1492,27 @@ function safeJsonParse(s, fallback){
       .replace(/[\u0000-\u001F\u007F]/g,'')
       .trim();
   }
+  function normalizeEntrySelectedValue(raw){
+    let s = stripInvisibles(raw);
+    if(!s) return 'index.html';
+    if((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))){
+      s = s.slice(1, -1).trim();
+    }
+    try{
+      const parsed = JSON.parse(s);
+      if(typeof parsed === 'string' && parsed.trim()) s = parsed.trim();
+    }catch(_e){}
+    s = stripInvisibles(s);
+    return s || 'index.html';
+  }
+  function readStoredEntrySelected(){
+    return normalizeEntrySelectedValue(localStorage.getItem(ENTRY_SELECTED_KEY) || '');
+  }
+  function writeStoredEntrySelected(value){
+    const entry = normalizeEntrySelectedValue(value);
+    localStorage.setItem(ENTRY_SELECTED_KEY, entry);
+    return entry;
+  }
   function escapeHtml(s){
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
@@ -1783,6 +1541,84 @@ function safeJsonParse(s, fallback){
     return true;
   }
 
+  function scheduleCloudPull(reason){
+    const ctrl = getCloudCtrl();
+    if(!ctrl || !ctrl.pullNow) return;
+    if(!canAutoCloud()) return;
+
+    const now = Date.now();
+    if(now - _cloudLastPullAt < 3000) return; // 短時間別狂拉
+
+    clearTimeout(_cloudPullTimer);
+    _cloudPullTimer = setTimeout(() => {
+      const c = getCloudCtrl();
+      if(!c || !c.pullNow) return;
+      if(!canAutoCloud()) return;
+
+      _cloudLastPullAt = Date.now();
+      setCloudState('雲端：同步中…');
+      Promise.resolve().then(() => c.pullNow()).then(() => {
+        setCloudState('雲端：已同步');
+      }).catch(() => {
+        // pull 失敗不打擾（token/網路問題由 cloud kit 自己處理）
+        setCloudState('雲端：同步失敗', true);
+      });
+    }, 500);
+  }
+
+  let _d1PushTimer = 0;
+  let _d1LastPushAt = 0;
+
+  function scheduleD1Push(reason){
+    const role = (getEffectiveRole() || 'read').toLowerCase();
+    if(role !== 'admin') return;
+
+    clearTimeout(_d1PushTimer);
+    _d1PushTimer = setTimeout(async () => {
+      const now = Date.now();
+      if(now - _d1LastPushAt < 1500) return;
+      _d1LastPushAt = now;
+      try{
+        const r = await d1PushAuthTable(reason || 'auto');
+        if(r && r.ok){
+          setCloudState('雲端：已同步 D1');
+        }
+      }catch(_){ }
+    }, 700);
+  }
+
+  function scheduleCloudPush(reason){
+    scheduleD1Push(reason);
+
+    const ctrl = getCloudCtrl();
+    if(!ctrl || !ctrl.saveMerged) return;
+    if(!canAutoCloud()) return;
+
+    // admin 才可能變更資料（但 entrySelect / 顯示也會變，不影響同步）
+    // 仍允許同步，以利跨裝置一致。
+    clearTimeout(_cloudPushTimer);
+    _cloudPushTimer = setTimeout(() => {
+      const c = getCloudCtrl();
+      if(!c || !c.saveMerged) return;
+      if(!canAutoCloud()) return;
+
+      const now = Date.now();
+      // 節流：避免連續打 API
+      if(now - _cloudLastPushAt < 2500) return;
+
+      _cloudLastPushAt = now;
+      _cloudBusy = true;
+      setCloudState('雲端：上傳中…');
+
+      Promise.resolve().then(() => c.saveMerged()).then(() => {
+        _cloudBusy = false;
+        setCloudState('雲端：已同步');
+      }).catch(() => {
+        _cloudBusy = false;
+        setCloudState('雲端：同步失敗', true);
+      });
+    }, 900);
+  }
 
   // ✅ 讀取 tasun-resources.json 的 auth-table 設定（路徑 + entries/entryButtons）
   async function loadResourcesForAuthTable(){
@@ -2144,22 +1980,10 @@ function safeJsonParse(s, fallback){
   }
 
   function loadSelectedEntry(){
-    let s = stripInvisibles(localStorage.getItem(ENTRY_SELECTED_KEY) || '') || 'index.html';
-    if((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))){
-      s = s.slice(1, -1).trim();
-    }
-    try{
-      const parsed = JSON.parse(s);
-      if(typeof parsed === 'string' && parsed.trim()) s = parsed.trim();
-    }catch(_e){}
-    currentEntry = s || 'index.html';
+    currentEntry = readStoredEntrySelected();
   }
   function saveSelectedEntry(v){
-    currentEntry = stripInvisibles(v) || 'index.html';
-    if((currentEntry.startsWith('"') && currentEntry.endsWith('"')) || (currentEntry.startsWith("'") && currentEntry.endsWith("'"))){
-      currentEntry = currentEntry.slice(1, -1).trim() || 'index.html';
-    }
-    localStorage.setItem(ENTRY_SELECTED_KEY, currentEntry);
+    currentEntry = writeStoredEntrySelected(v);
   }
 
   function buildEntrySelect(){
@@ -2857,30 +2681,38 @@ function safeJsonParse(s, fallback){
   }
   function jsonToAsciiSafe(obj){ return latin1Safe(JSON.stringify(obj)); }
 
-  downloadBtnD.addEventListener('click', async () => {
+  downloadBtnD.addEventListener('click', () => {
     const t = guardTokenOrHint(); if(!t) return;
-    await runCloudReconcile('manual-download', { allowUpload:false, force:true });
+    // 先 pull 一次（避免拿到舊本機），再下載 /權限表.json
+    scheduleCloudPull('manual-download');
+    cloudDownload(t);
   });
-  downloadBtnM.addEventListener('click', async () => {
+  downloadBtnM.addEventListener('click', () => {
     closeMoreMenu();
     const t = guardTokenOrHint(); if(!t) return;
-    await runCloudReconcile('manual-download', { allowUpload:false, force:true });
+    scheduleCloudPull('manual-download');
+    cloudDownload(t);
   });
 
-  uploadBtnD.addEventListener('click', async () => {
+  uploadBtnD.addEventListener('click', () => {
     const t = guardTokenOrHint(); if(!t) return;
-    await runCloudReconcile('manual-upload-btn', { allowUpload:true, force:true });
+    // 先把 localStorage 透過 cloud kit 推上去（永遠自動上雲端）
+    scheduleCloudPush('manual-upload-btn');
+    saveAndUpload(t);
   });
-  uploadBtnM.addEventListener('click', async () => {
+  uploadBtnM.addEventListener('click', () => {
     closeMoreMenu();
     const t = guardTokenOrHint(); if(!t) return;
-    await runCloudReconcile('manual-upload-btn', { allowUpload:true, force:true });
+    scheduleCloudPush('manual-upload-btn');
+    saveAndUpload(t);
   });
 
   saveLocalBtn.addEventListener('click', async () => {
     normalizeAuth();
     await saveLocal();
     updateStates('已儲存本機（localStorage）。\n並已排程同步雲端（若 Token OK）。');
+    // ✅ 一鍵寫入 D1（以權限表為主，需 admin + Session Cookie）
+    d1PushAuthTable('save-btn');
     scheduleCloudPush('save-btn');
   });
 
@@ -2899,6 +2731,11 @@ function safeJsonParse(s, fallback){
     applyEntrySelectionUI();
     const v = resolveEntryValue();
     saveSelectedEntry(v);
+    if(entrySelect.value !== '__custom__'){
+      entrySelect.value = currentEntry;
+    }else{
+      entryCustom.value = currentEntry;
+    }
     renderAll();
     updateStates(`已切換入口網頁：${v}\n（下方欄位與預覽已同步切換）`);
     scheduleCloudPush('entry-changed');
@@ -2960,8 +2797,6 @@ function safeJsonParse(s, fallback){
   // Dropbox
   async function cloudDownload(token, opt = {}){
     const silent = !!opt.silent;
-    const skipRender = !!opt.skipRender;
-    const skipPostPush = opt.skipPostPush !== undefined ? !!opt.skipPostPush : true;
     try{
       if(!silent) setMsg('雲端下載中…');
 
@@ -3011,14 +2846,11 @@ function safeJsonParse(s, fallback){
       current.role = getEffectiveRole();
       isAdmin = (getEffectiveRole() === 'admin');
 
-      if(!skipRender){
-        renderAll();
-        updateStates('雲端下載完成，已覆蓋本機並更新畫面。');
-      }
+      renderAll();
+      updateStates('雲端下載完成，已覆蓋本機並更新畫面。');
 
-      if(!skipPostPush){
-        scheduleCloudPush('after-cloudDownload');
-      }
+      // ✅ 下載後也推一次 cloud kit，讓其它裝置一致
+      scheduleCloudPush('after-cloudDownload');
     }catch(err){
       setMsg('雲端下載失敗：' + (err?.message || err), true);
     }
@@ -3517,55 +3349,75 @@ function safeJsonParse(s, fallback){
 
   // 初始化
   async function load(){
-    if(_loadRunning){
-      _loadQueued = true;
-      return;
+    if(!ensureRequiredDom()) return;
+    const blockerBtn = el('loginBlockerBackBtn');
+    if(blockerBtn && !blockerBtn.__tasunBound){
+      blockerBtn.__tasunBound = true;
+      blockerBtn.addEventListener('click', function(){
+        const href = (window.__withV ? window.__withV('index.html') : 'index.html');
+        location.assign(href);
+      });
     }
-    _loadRunning = true;
-    try{
-      if(!ensureRequiredDom()) return;
-      const blockerBtn = el('loginBlockerBackBtn');
-      if(blockerBtn && !blockerBtn.__tasunBound){
-        blockerBtn.__tasunBound = true;
-        blockerBtn.addEventListener('click', function(){
-          const href = (window.__withV ? window.__withV('index.html') : 'index.html');
-          location.assign(href);
-        });
-      }
-      const activeCurrent = enforceSessionOnlyLogin();
-      if(!activeCurrent) return;
+    const activeCurrent = enforceSessionOnlyLogin();
+    if(!activeCurrent) return;
+    try{ await migrateAuthToHashedIfNeeded(); }catch(_){ }
 
-      clearTokenFlags();
-      try{ await migrateAuthToHashedIfNeeded(); }catch(_){ }
-      seedAuthIfMissing();
+    seedAuthIfMissing();
 
-      await d1PullAuthTable('page-load-pre');
-      await dedupeLocalState();
-      refreshFromLocalState(current && current.user && current.user !== '—' ? ('已載入本機資料，目前使用者：' + current.user + '。') : '已載入本機資料。');
+    // ✅ 先拉雲端權限表（D1）→ 再以本機渲染（確保跨裝置一致）
+    await d1PullAuthTable('page-load');
 
-      if(canAutoCloud()) await runCloudReconcile('page-load', { allowUpload:true, force:true });
-      else setCloudState('雲端：未設定Token');
-    }finally{
-      _loadRunning = false;
-      if(_loadQueued){
-        _loadQueued = false;
-        setTimeout(load, 0);
-      }
+    auth = safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []);
+    if(!Array.isArray(auth)) auth = [];
+    normalizeAuth();
+
+    current = restoreCurrentFromAllSources();
+    current.user = String(current.user || current.name || '—');
+    current.role = String(current.role || current.level || 'read');
+
+    loadPermMatrix();
+
+    current.role = getEffectiveRole();
+    isAdmin = (getEffectiveRole() === 'admin');
+
+    clearTokenFlags();
+
+    buildEntrySelect();
+    loadSelectedEntry();
+
+    const inList = dynEntryFiles.includes(currentEntry);
+    if(inList){
+      entrySelect.value = currentEntry;
+      entryCustom.value = '';
+    }else{
+      entrySelect.value = '__custom__';
+      entryCustom.value = currentEntry;
     }
+    applyEntrySelectionUI();
+
+    renderAll();
+    updateStates(current && current.user && current.user !== '—' ? ('已載入本機資料，目前使用者：' + current.user + '。') : '已載入本機資料。');
+
+    // 可見時仍保留舊 Dropbox pull（相容）；D1 已在上方優先拉取
+    scheduleCloudPull('page-load');
   }
 
-  window.addEventListener('storage', (e) => {
-    if(isRefreshMuted()) return;
-    const key = String((e && e.key) || '').trim();
-    if(!key) return;
-    if([NAV_KEY, BTN_META_KEY, ROUTE_KEY, ENTRY_REGISTRY_KEY, AUTH_ENTRY_BUTTONS_KEY, AUTH_KEY, CURRENT_KEY, TOKEN_KEY, PERM_MATRIX_KEY, ENTRY_SELECTED_KEY].includes(key)) {
-      scheduleSoftRefreshFromLocal('已同步其他分頁／裝置資料。');
+  window.addEventListener('storage', async (e) => {
+    if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY || e.key === AUTH_ENTRY_BUTTONS_KEY){
+      // routes/registry 變動 → 入口頁清單可更新
+      buildEntrySelect();
+      renderAll();
+      updateStates('已同步按鍵/路由設定。');
+      return;
+    }
+    if(e.key === AUTH_KEY || e.key === CURRENT_KEY || e.key === TOKEN_KEY || e.key === PERM_MATRIX_KEY || e.key === ENTRY_SELECTED_KEY){
+      await load();
     }
   });
 
   // 視窗回到前台 → 拉一次雲端（不吵、節流）
   document.addEventListener('visibilitychange', () => {
-    if(document.visibilityState === 'visible' && canAutoCloud()){
+    if(document.visibilityState === 'visible'){
       scheduleCloudPull('visible');
     }
   });
@@ -3573,8 +3425,9 @@ function safeJsonParse(s, fallback){
   // ✅ 先載入 resources → 再 load（確保 DROPBOX_PATH & entries/entryButtons 可取得）
   (async () => {
     await loadResourcesForAuthTable();
+    // resources 可能提供 entries/buttons → 先融合一次
     rebuildDynEntryData();
-    await load();
+    load();
   })();
 
   // ======（可選）未來新頁面自動註冊範例（貼到新頁 JS 即可）======
@@ -3628,23 +3481,24 @@ function safeJsonParse(s, fallback){
 
   function apply(rows){
     if(!Array.isArray(rows)) return;
-    try{ if(window.muteRefresh) window.muteRefresh(1800); }catch(_e){}
+    var touched=[];
     for(var i=0;i<rows.length;i++){
       var r=rows[i];
       if(!r||typeof r.k!=='string') continue;
       if(r.v==null){
         localStorage.removeItem(r.k);
+        touched.push(r.k);
         continue;
       }
       localStorage.setItem(r.k, String(r.v));
+      touched.push(r.k);
     }
-    try{
-      if(typeof window.__TASUN_AUTH_REFRESH_FROM_LOCAL__ === 'function'){
-        setTimeout(function(){
-          try{ window.__TASUN_AUTH_REFRESH_FROM_LOCAL__('已套用雲端資料。'); }catch(_){ }
-        }, 80);
-      }
-    }catch(_e){}
+    // 觸發頁面內的監聽（用 storage event 模擬）
+    for(var j=0;j<touched.length;j++){
+      var key=touched[j];
+      try{ window.dispatchEvent(new StorageEvent('storage',{ key:key, storageArea:localStorage })); }
+      catch(e){ try{ window.dispatchEvent(new Event('storage')); }catch(_){ } }
+    }
   }
 
   if(!window.TasunCloudKit || !window.TasunCloudKit.init || !window.TasunCloudKit.mount){
@@ -3663,8 +3517,43 @@ function safeJsonParse(s, fallback){
   });
 
   var ctrl = window.TasunCloudKit.mount();
-  // 讓主程式可以拿到 ctrl，但實際同步由主流程統一控制，避免重複運轉
+  // 讓主程式可以拿到 ctrl，做到「按鈕儲存也立即同步」
   window.__TASUN_AUTH_CLOUD_CTRL = ctrl;
+
+  // 進站先拉一次
+  try{
+    ctrl && ctrl.pullNow && setTimeout(function(){ try{ ctrl.pullNow(); }catch(_){ } }, 250);
+  }catch(_){}
+
+  // 變更偵測（hash）→ 自動推（保底機制）
+  var lastHash = 0;
+  function hashNow(){
+    var h=2166136261>>>0;
+    for(var i=0;i<KEYS.length;i++){
+      var s=(localStorage.getItem(KEYS[i])||'');
+      for(var c=0;c<s.length;c++){
+        h^=s.charCodeAt(c);
+        h=Math.imul(h,16777619)>>>0;
+      }
+      h^=KEYS[i].length;
+    }
+    return h>>>0;
+  }
+
+  setInterval(function(){
+    var h=hashNow();
+    if(h!==lastHash){
+      lastHash=h;
+      try{ ctrl && ctrl.saveMerged && ctrl.saveMerged(); }catch(e){ }
+    }
+  }, 10000);
+
+  // 回前景自動拉（避免別台剛更新）
+  document.addEventListener('visibilitychange', function(){
+    if(document.visibilityState==='visible'){
+      try{ ctrl && ctrl.pullNow && ctrl.pullNow(); }catch(_){}
+    }
+  });
 })();
 </script>
 
