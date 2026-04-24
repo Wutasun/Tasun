@@ -1521,6 +1521,9 @@
   let _cloudLastPushAt = 0;
   let _cloudLastPullAt = 0;
   let _cloudBusy = false;
+  let _bootSyncRunning = false;
+  let _loadRunning = false;
+  let _loadQueued = false;
 
   
   async function sha256Hex(str){
@@ -1555,6 +1558,301 @@
   }
 function safeJsonParse(s, fallback){
     try{ return JSON.parse(s); }catch(e){ return fallback; }
+  }
+  function boolish(v){ return !!v; }
+  function dedupeAuthRows(rows){
+    const list = Array.isArray(rows) ? rows : [];
+    const order = [];
+    const map = new Map();
+    list.forEach((raw) => {
+      if(!raw || typeof raw !== 'object') return;
+      const user = String(raw.user ?? raw.username ?? raw.name ?? raw.account ?? '').trim();
+      if(!user) return;
+      const key = user.toLowerCase();
+      if(!map.has(key)){
+        map.set(key, {
+          user,
+          name: String(raw.name ?? user).trim() || user,
+          role: roleOptions.includes(String(raw.role ?? raw.level ?? 'read').toLowerCase().trim()) ? String(raw.role ?? raw.level ?? 'read').toLowerCase().trim() : 'read',
+          passHash: String(raw.passHash ?? raw.passwordHash ?? raw.hash ?? '').trim(),
+          pass: String(raw.pass ?? raw.password ?? '').trim()
+        });
+        order.push(key);
+        return;
+      }
+      const cur = map.get(key);
+      const nextRole = String(raw.role ?? raw.level ?? '').toLowerCase().trim();
+      const nextHash = String(raw.passHash ?? raw.passwordHash ?? raw.hash ?? '').trim();
+      const nextPass = String(raw.pass ?? raw.password ?? '').trim();
+      const nextName = String(raw.name ?? '').trim();
+      cur.user = user || cur.user;
+      if(nextName) cur.name = nextName;
+      if(roleOptions.includes(nextRole)) cur.role = nextRole;
+      if(nextHash){
+        cur.passHash = nextHash;
+        cur.pass = '';
+      }else if(!cur.passHash && nextPass){
+        cur.pass = nextPass;
+      }
+    });
+    return order.map((key) => map.get(key));
+  }
+  function dedupePermMatrixShape(raw){
+    const src = (raw && typeof raw === 'object') ? raw : {};
+    const out = { users:{} };
+    const users = (src.users && typeof src.users === 'object') ? src.users : {};
+    Object.keys(users).forEach((userRaw) => {
+      const userKeyNorm = String(userRaw || '').trim().toLowerCase();
+      if(!userKeyNorm) return;
+      if(!out.users[userKeyNorm]) out.users[userKeyNorm] = {};
+      const entryMap = users[userRaw];
+      if(!entryMap || typeof entryMap !== 'object') return;
+      Object.keys(entryMap).forEach((entryRaw) => {
+        const entryKeyNorm = String(entryRaw || '').trim();
+        if(!entryKeyNorm) return;
+        if(!out.users[userKeyNorm][entryKeyNorm]) out.users[userKeyNorm][entryKeyNorm] = {};
+        const btnMap = entryMap[entryRaw];
+        if(!btnMap || typeof btnMap !== 'object') return;
+        Object.keys(btnMap).forEach((btnRaw) => {
+          const btnKeyNorm = String(btnRaw || '').trim();
+          if(!btnKeyNorm) return;
+          out.users[userKeyNorm][entryKeyNorm][btnKeyNorm] = boolish(btnMap[btnRaw]);
+        });
+      });
+    });
+    return out;
+  }
+  function dedupeNavButtonsShape(raw){
+    const list = Array.isArray(raw) ? raw : [];
+    const seen = new Set();
+    const out = [];
+    list.forEach((item, idx) => {
+      if(!item || typeof item !== 'object') return;
+      const id = String(item.id || ('btn' + (idx + 1))).trim() || ('btn' + (idx + 1));
+      const sourceId = String(item.sourceId || id).trim() || id;
+      const label = String(item.label || item.name || sourceId).trim() || sourceId;
+      const href = String(item.href || '').trim();
+      const target = String(item.target || '').trim();
+      const dedupeKey = [sourceId.toLowerCase(), href, label].join('::');
+      if(seen.has(dedupeKey)) return;
+      seen.add(dedupeKey);
+      out.push({
+        id,
+        sourceId,
+        label,
+        href,
+        target,
+        roles: Array.isArray(item.roles) ? item.roles.slice() : []
+      });
+    });
+    return out;
+  }
+  function dedupeEntryButtonList(list){
+    const rows = Array.isArray(list) ? list : [];
+    const seen = new Set();
+    const out = [];
+    rows.forEach((item, idx) => {
+      if(!item || typeof item !== 'object') return;
+      const key = String(item.key || item.sourceId || ('btn' + (idx + 1))).trim() || ('btn' + (idx + 1));
+      const sourceId = String(item.sourceId || key).trim() || key;
+      const name = String(item.name || item.label || key).trim() || key;
+      const href = String(item.href || '').trim();
+      const target = String(item.target || '').trim();
+      const dedupeKey = [sourceId.toLowerCase(), href, name].join('::');
+      if(seen.has(dedupeKey)) return;
+      seen.add(dedupeKey);
+      out.push({ key, sourceId, name, label:name, href, target, roles: Array.isArray(item.roles) ? item.roles.slice() : [] });
+    });
+    return out;
+  }
+  function dedupeAuthEntryButtonsShape(raw){
+    const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+    const out = {};
+    Object.keys(src).forEach((entryRaw) => {
+      const entry = String(entryRaw || '').trim();
+      if(!entry) return;
+      out[entry] = dedupeEntryButtonList(src[entryRaw]);
+    });
+    return out;
+  }
+  function dedupeRoutesShape(raw){
+    const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+    const out = {};
+    Object.keys(src).forEach((keyRaw) => {
+      const key = String(keyRaw || '').trim();
+      const val = String(src[keyRaw] || '').trim();
+      if(!key || !val) return;
+      out[key] = val;
+    });
+    return out;
+  }
+  function dedupeEntryRegistryShape(raw){
+    if(Array.isArray(raw)){
+      const seen = new Set();
+      return raw.filter((item) => {
+        const file = String(item?.file || '').trim();
+        if(!file) return false;
+        if(seen.has(file)) return false;
+        seen.add(file);
+        return true;
+      }).map((item) => ({
+        ...item,
+        file: String(item.file || '').trim(),
+        buttons: dedupeEntryButtonList(item.buttons)
+      }));
+    }
+    if(raw && typeof raw === 'object'){
+      if(Array.isArray(raw.entries)){
+        const seen = new Set();
+        return {
+          ...raw,
+          entries: raw.entries.filter((item) => {
+            const file = String(item?.file || '').trim();
+            if(!file) return false;
+            if(seen.has(file)) return false;
+            seen.add(file);
+            return true;
+          }).map((item) => ({
+            ...item,
+            file: String(item.file || '').trim(),
+            buttons: dedupeEntryButtonList(item.buttons)
+          }))
+        };
+      }
+      const out = {};
+      Object.keys(raw).forEach((fileRaw) => {
+        const file = String(fileRaw || '').trim();
+        if(!file) return;
+        const node = raw[fileRaw];
+        out[file] = (node && typeof node === 'object')
+          ? { ...node, buttons: dedupeEntryButtonList(node.buttons) }
+          : node;
+      });
+      return out;
+    }
+    return {};
+  }
+  async function dedupeAndPersistLocalState(){
+    auth = dedupeAuthRows(safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []));
+    permMatrix = dedupePermMatrixShape(safeJsonParse(localStorage.getItem(PERM_MATRIX_KEY) || '{}', {}));
+    localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
+    localStorage.setItem(PERM_MATRIX_KEY, JSON.stringify(permMatrix));
+
+    const navButtons = dedupeNavButtonsShape(safeJsonParse(localStorage.getItem(NAV_KEY) || '[]', []));
+    localStorage.setItem(NAV_KEY, JSON.stringify(navButtons));
+
+    const routes = dedupeRoutesShape(safeJsonParse(localStorage.getItem(ROUTE_KEY) || '{}', {}));
+    setRouteStorageObject(routes);
+
+    const authEntryButtons = dedupeAuthEntryButtonsShape(safeJsonParse(localStorage.getItem(AUTH_ENTRY_BUTTONS_KEY) || '{}', {}));
+    localStorage.setItem(AUTH_ENTRY_BUTTONS_KEY, JSON.stringify(authEntryButtons));
+
+    const regRaw = safeJsonParse(localStorage.getItem(ENTRY_REGISTRY_KEY) || 'null', null);
+    if(regRaw !== null) localStorage.setItem(ENTRY_REGISTRY_KEY, JSON.stringify(dedupeEntryRegistryShape(regRaw)));
+
+    const selected = String(resolveEntryValue() || 'index.html').trim() || 'index.html';
+    localStorage.setItem(ENTRY_SELECTED_KEY, selected);
+
+    normalizeAuth();
+    await saveLocal();
+  }
+  function refreshFromLocal(reasonText){
+    auth = safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []);
+    if(!Array.isArray(auth)) auth = [];
+    normalizeAuth();
+
+    current = restoreCurrentFromAllSources();
+    current.user = String(current.user || current.name || '—');
+    current.role = String(current.role || current.level || 'read');
+
+    loadPermMatrix();
+
+    current.role = getEffectiveRole();
+    isAdmin = (getEffectiveRole() === 'admin');
+
+    buildEntrySelect();
+    loadSelectedEntry();
+
+    const inList = dynEntryFiles.includes(currentEntry);
+    if(inList){
+      entrySelect.value = currentEntry;
+      entryCustom.value = '';
+    }else{
+      entrySelect.value = '__custom__';
+      entryCustom.value = currentEntry;
+    }
+    applyEntrySelectionUI();
+
+    renderAll();
+    updateStates(reasonText || (current && current.user && current.user !== '—' ? ('已載入本機資料，目前使用者：' + current.user + '。') : '已載入本機資料。'));
+  }
+  async function runBootCloudSync(reason){
+    if(_bootSyncRunning) return false;
+    _bootSyncRunning = true;
+    try{
+      const why = String(reason || 'boot');
+      const token = getToken();
+      const ctrl = getCloudCtrl();
+      setCloudState('雲端：啟動同步中…');
+
+      auth = safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []);
+      if(!Array.isArray(auth)) auth = [];
+      normalizeAuth();
+      current = restoreCurrentFromAllSources();
+      current.user = String(current.user || current.name || '—');
+      current.role = String(current.role || current.level || 'read');
+      loadPermMatrix();
+      current.role = getEffectiveRole();
+      isAdmin = (getEffectiveRole() === 'admin');
+
+      await d1PullAuthTable(why + '-d1-pre');
+
+      if(canAutoCloud() && ctrl && typeof ctrl.pullNow === 'function'){
+        await Promise.resolve(ctrl.pullNow()).catch(() => {});
+      }
+
+      if(canAutoCloud()){
+        await cloudDownload(token, { silent:true, skipRender:true, skipPostPush:true });
+      }
+
+      await dedupeAndPersistLocalState();
+
+      if(canAutoCloud()){
+        let uploadResult = { ok:false, retry:false };
+        if(isAdmin){
+          uploadResult = await doUploadOnce(token).catch((err) => ({ ok:false, retry:false, error:String(err?.message || err) }));
+          if(uploadResult && uploadResult.retry){
+            await cloudDownload(token, { silent:true, skipRender:true, skipPostPush:true });
+            await dedupeAndPersistLocalState();
+            uploadResult = await doUploadOnce(token).catch((err) => ({ ok:false, retry:false, error:String(err?.message || err) }));
+          }
+          await d1PushAuthTable(why + '-d1-push').catch(() => {});
+        }
+        if(ctrl && typeof ctrl.saveMerged === 'function'){
+          await Promise.resolve(ctrl.saveMerged()).catch(() => {});
+        }
+      }
+
+      if(canAutoCloud() && ctrl && typeof ctrl.pullNow === 'function'){
+        await Promise.resolve(ctrl.pullNow()).catch(() => {});
+      }
+      if(canAutoCloud()){
+        await cloudDownload(token, { silent:true, skipRender:true, skipPostPush:true });
+      }
+
+      await d1PullAuthTable(why + '-d1-post');
+      await dedupeAndPersistLocalState();
+      refreshFromLocal('已完成雲端先下載 → 本地去重刷新 → 回傳雲端 → 再次下載校正。');
+      setCloudState('雲端：同步完成');
+      return true;
+    }catch(err){
+      refreshFromLocal('啟動同步失敗，已改用本機資料。');
+      setCloudState('雲端：同步失敗', true);
+      setMsg('啟動雲端同步失敗：' + (err?.message || err), true);
+      return false;
+    }finally{
+      _bootSyncRunning = false;
+    }
   }
   function stripInvisibles(s){
     return String(s ?? '')
@@ -2909,6 +3207,8 @@ function safeJsonParse(s, fallback){
   // Dropbox
   async function cloudDownload(token, opt = {}){
     const silent = !!opt.silent;
+    const skipRender = !!opt.skipRender;
+    const skipPostPush = !!opt.skipPostPush;
     try{
       if(!silent) setMsg('雲端下載中…');
 
@@ -2958,11 +3258,13 @@ function safeJsonParse(s, fallback){
       current.role = getEffectiveRole();
       isAdmin = (getEffectiveRole() === 'admin');
 
-      renderAll();
-      updateStates('雲端下載完成，已覆蓋本機並更新畫面。');
+      if(!skipRender){
+        renderAll();
+        updateStates('雲端下載完成，已覆蓋本機並更新畫面。');
+      }
 
       // ✅ 下載後也推一次 cloud kit，讓其它裝置一致
-      scheduleCloudPush('after-cloudDownload');
+      if(!skipPostPush) scheduleCloudPush('after-cloudDownload');
     }catch(err){
       setMsg('雲端下載失敗：' + (err?.message || err), true);
     }
@@ -3461,60 +3763,40 @@ function safeJsonParse(s, fallback){
 
   // 初始化
   async function load(){
-    if(!ensureRequiredDom()) return;
-    const blockerBtn = el('loginBlockerBackBtn');
-    if(blockerBtn && !blockerBtn.__tasunBound){
-      blockerBtn.__tasunBound = true;
-      blockerBtn.addEventListener('click', function(){
-        const href = (window.__withV ? window.__withV('index.html') : 'index.html');
-        location.assign(href);
-      });
+    if(_loadRunning){
+      _loadQueued = true;
+      return;
     }
-    const activeCurrent = enforceSessionOnlyLogin();
-    if(!activeCurrent) return;
-    try{ await migrateAuthToHashedIfNeeded(); }catch(_){ }
+    _loadRunning = true;
+    try{
+      if(!ensureRequiredDom()) return;
+      const blockerBtn = el('loginBlockerBackBtn');
+      if(blockerBtn && !blockerBtn.__tasunBound){
+        blockerBtn.__tasunBound = true;
+        blockerBtn.addEventListener('click', function(){
+          const href = (window.__withV ? window.__withV('index.html') : 'index.html');
+          location.assign(href);
+        });
+      }
+      const activeCurrent = enforceSessionOnlyLogin();
+      if(!activeCurrent) return;
+      try{ await migrateAuthToHashedIfNeeded(); }catch(_){ }
 
-    seedAuthIfMissing();
+      seedAuthIfMissing();
+      clearTokenFlags();
 
-    // ✅ 先拉雲端權限表（D1）→ 再以本機渲染（確保跨裝置一致）
-    await d1PullAuthTable('page-load');
-
-    auth = safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []);
-    if(!Array.isArray(auth)) auth = [];
-    normalizeAuth();
-
-    current = restoreCurrentFromAllSources();
-    current.user = String(current.user || current.name || '—');
-    current.role = String(current.role || current.level || 'read');
-
-    loadPermMatrix();
-
-    current.role = getEffectiveRole();
-    isAdmin = (getEffectiveRole() === 'admin');
-
-    clearTokenFlags();
-
-    buildEntrySelect();
-    loadSelectedEntry();
-
-    const inList = dynEntryFiles.includes(currentEntry);
-    if(inList){
-      entrySelect.value = currentEntry;
-      entryCustom.value = '';
-    }else{
-      entrySelect.value = '__custom__';
-      entryCustom.value = currentEntry;
+      await runBootCloudSync('page-load');
+    } finally {
+      _loadRunning = false;
+      if(_loadQueued){
+        _loadQueued = false;
+        setTimeout(load, 0);
+      }
     }
-    applyEntrySelectionUI();
-
-    renderAll();
-    updateStates(current && current.user && current.user !== '—' ? ('已載入本機資料，目前使用者：' + current.user + '。') : '已載入本機資料。');
-
-    // 可見時仍保留舊 Dropbox pull（相容）；D1 已在上方優先拉取
-    scheduleCloudPull('page-load');
   }
 
   window.addEventListener('storage', async (e) => {
+    if(_bootSyncRunning) return;
     if(e.key === NAV_KEY || e.key === BTN_META_KEY || e.key === ROUTE_KEY || e.key === ENTRY_REGISTRY_KEY || e.key === AUTH_ENTRY_BUTTONS_KEY){
       // routes/registry 變動 → 入口頁清單可更新
       buildEntrySelect();
@@ -3525,6 +3807,11 @@ function safeJsonParse(s, fallback){
     if(e.key === AUTH_KEY || e.key === CURRENT_KEY || e.key === TOKEN_KEY || e.key === PERM_MATRIX_KEY || e.key === ENTRY_SELECTED_KEY){
       await load();
     }
+  });
+
+  window.addEventListener('tasun-auth-cloud-applied', () => {
+    if(_bootSyncRunning) return;
+    refreshFromLocal('已套用雲端同步資料。');
   });
 
   // 視窗回到前台 → 拉一次雲端（不吵、節流）
@@ -3605,12 +3892,9 @@ function safeJsonParse(s, fallback){
       localStorage.setItem(r.k, String(r.v));
       touched.push(r.k);
     }
-    // 觸發頁面內的監聽（用 storage event 模擬）
-    for(var j=0;j<touched.length;j++){
-      var key=touched[j];
-      try{ window.dispatchEvent(new StorageEvent('storage',{ key:key, storageArea:localStorage })); }
-      catch(e){ try{ window.dispatchEvent(new Event('storage')); }catch(_){ } }
-    }
+    try{
+      window.dispatchEvent(new CustomEvent('tasun-auth-cloud-applied', { detail:{ keys:touched } }));
+    }catch(_e){}
   }
 
   if(!window.TasunCloudKit || !window.TasunCloudKit.init || !window.TasunCloudKit.mount){
