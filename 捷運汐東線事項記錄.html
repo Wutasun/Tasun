@@ -1,14 +1,15 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
+  <!-- tasun-sxdh-notes-silent-loader-hotfix-20260424-r4 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>捷運汐東線事項記錄 · Tasun</title>
   <meta http-equiv="Cache-Control" content="no-cache" />
   <style>
     html,body{height:100%;margin:0;font-family:"Noto Sans TC",system-ui,-apple-system,"Segoe UI",Arial,sans-serif;background:linear-gradient(180deg,#dbe3e1,#c7d4d1);color:#111;}
-    .tasunBoot{height:100%;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;box-sizing:border-box;}
-    .tasunBootBox{max-width:720px;border:1px solid rgba(0,0,0,.22);border-radius:22px;background:rgba(255,255,255,.92);box-shadow:0 18px 50px rgba(0,0,0,.12);padding:22px;line-height:1.8;font-weight:800;}
+    .tasunBoot{height:100%;display:none!important;opacity:0!important;visibility:hidden!important;align-items:center;justify-content:center;text-align:center;padding:24px;box-sizing:border-box;pointer-events:none!important;}
+    .tasunBootBox{display:none!important;max-width:720px;border:1px solid rgba(0,0,0,.22);border-radius:22px;background:rgba(255,255,255,.92);box-shadow:0 18px 50px rgba(0,0,0,.12);padding:22px;line-height:1.8;font-weight:800;}
     .tasunBootTitle{font-family:"Noto Serif TC","Noto Sans TC",serif;font-size:clamp(24px,4vw,38px);letter-spacing:.12em;color:#9a6418;margin-bottom:8px;}
     .tasunBootMsg{font-size:15px;color:rgba(0,0,0,.72);}
   </style>
@@ -21,23 +22,92 @@
     </div>
   </div>
 
-<script id="tasun-sxdh-notes-hotfix-loader-20260424-r3">
+<script id="tasun-sxdh-notes-hotfix-loader-20260424-r4">
 (function(){
   'use strict';
 
-  var SOURCE_URL = 'https://raw.githubusercontent.com/Wutasun/Tasun/576a499e2ad1c55fc67c0481ad52fc05a06c956b/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%9D%B1%E7%B7%9A%E4%BA%8B%E9%A0%85%E8%A8%98%E9%8C%84.html';
+  var COMMIT_SHA = '576a499e2ad1c55fc67c0481ad52fc05a06c956b';
+  var PAGE_PATH = '%E6%8D%B7%E9%81%8B%E6%B1%90%E6%9D%B1%E7%B7%9A%E4%BA%8B%E9%A0%85%E8%A8%98%E9%8C%84.html';
+  var SOURCE_URL = 'https://raw.githubusercontent.com/Wutasun/Tasun/' + COMMIT_SHA + '/' + PAGE_PATH;
+  var SOURCE_URLS = [
+    SOURCE_URL,
+    'https://cdn.jsdelivr.net/gh/Wutasun/Tasun@' + COMMIT_SHA + '/' + PAGE_PATH,
+    'https://api.github.com/repos/Wutasun/Tasun/contents/' + PAGE_PATH + '?ref=' + COMMIT_SHA
+  ];
+  var LAST_GOOD_KEY = 'tasun_sxdh_notes_last_good_html_v1';
+  var bootAttempts = 0;
+  var MAX_ATTEMPTS = 30;
 
   function norm(v){ return v == null ? '' : String(v).trim(); }
 
+  function hideBoot(){
+    try{
+      var el = document.getElementById('tasunBoot');
+      if(el){
+        el.style.display = 'none';
+        el.style.opacity = '0';
+        el.style.visibility = 'hidden';
+        el.setAttribute('aria-hidden', 'true');
+      }
+    }catch(_e){}
+  }
+
   function showError(msg){
-    var el = document.getElementById('tasunBoot');
-    if(el){
-      el.innerHTML = '<div class="tasunBootBox"><div class="tasunBootTitle">載入失敗</div><div class="tasunBootMsg"></div></div>';
-      var m = el.querySelector('.tasunBootMsg');
-      if(m) m.textContent = msg || '請重新整理或確認 GitHub Pages 網路連線。';
-    }else{
-      alert(msg || '載入失敗');
+    hideBoot();
+    try{ console.warn('[Tasun][捷運汐東線事項記錄] 背景載入尚未完成：' + (msg || '')); }catch(_e){}
+  }
+
+  function addCacheBust(url){
+    return url + (url.indexOf('?') >= 0 ? '&' : '?') + '_=' + Date.now();
+  }
+
+  function decodeBase64Utf8(b64){
+    try{
+      var bin = atob(String(b64 || '').replace(/\s+/g,''));
+      var bytes = new Uint8Array(bin.length);
+      for(var i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+      if(window.TextDecoder) return new TextDecoder('utf-8').decode(bytes);
+      var esc = '';
+      for(var j=0;j<bin.length;j++) esc += '%' + ('00' + bin.charCodeAt(j).toString(16)).slice(-2);
+      return decodeURIComponent(esc);
+    }catch(_e){ return ''; }
+  }
+
+  async function fetchWithTimeout(url, ms){
+    var ctl = null, tm = null;
+    try{
+      if(window.AbortController){
+        ctl = new AbortController();
+        tm = setTimeout(function(){ try{ ctl.abort(); }catch(_e){} }, ms || 9000);
+      }
+      var res = await fetch(addCacheBust(url), { cache:'no-store', credentials:'omit', signal: ctl ? ctl.signal : undefined });
+      if(tm) clearTimeout(tm);
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      return res;
+    }catch(err){
+      if(tm) clearTimeout(tm);
+      throw err;
     }
+  }
+
+  async function fetchHtmlFrom(url){
+    var res = await fetchWithTimeout(url, 9000);
+    if(/api\.github\.com\/repos\/Wutasun\/Tasun\/contents/i.test(url)){
+      var data = await res.json();
+      var html = decodeBase64Utf8(data && data.content);
+      if(!html) throw new Error('GitHub API content decode failed');
+      return html;
+    }
+    return await res.text();
+  }
+
+  function writePage(html){
+    if(!html || html.indexOf('捷運汐東線事項記錄') < 0) throw new Error('遠端 HTML 身分不符');
+    var patched = patchHtml(html);
+    try{ localStorage.setItem(LAST_GOOD_KEY, patched); }catch(_e){}
+    document.open();
+    document.write(patched);
+    document.close();
   }
 
   function actionMenuStyle(){
@@ -328,25 +398,40 @@
     }
 
     // 4) 標記本次修正，避免「說明有改、網頁未改」無法辨識
-    if(out.indexOf('tasun-sxdh-notes-ui-search-float-hotfix-20260424-r3') < 0){
-      out = out.replace(/<head>/i, '<head>\n  <!-- tasun-sxdh-notes-ui-search-float-hotfix-20260424-r3 -->');
+    if(out.indexOf('tasun-sxdh-notes-ui-search-float-hotfix-20260424-r4') < 0){
+      out = out.replace(/<head>/i, '<head>\n  <!-- tasun-sxdh-notes-ui-search-float-hotfix-20260424-r4 -->');
     }
     return out;
   }
 
   async function boot(){
+    hideBoot();
+    var lastErr = null;
+    for(var i=0;i<SOURCE_URLS.length;i++){
+      try{
+        var html = await fetchHtmlFrom(SOURCE_URLS[i]);
+        writePage(html);
+        return;
+      }catch(err){
+        lastErr = err;
+        try{ console.warn('[Tasun][捷運汐東線事項記錄] source failed', SOURCE_URLS[i], err); }catch(_e){}
+      }
+    }
+
     try{
-      var res = await fetch(SOURCE_URL + '?_=' + Date.now(), { cache:'no-store', credentials:'omit' });
-      if(!res.ok) throw new Error('HTTP ' + res.status);
-      var html = await res.text();
-      if(!html || html.indexOf('捷運汐東線事項記錄') < 0) throw new Error('遠端 HTML 身分不符');
-      var patched = patchHtml(html);
-      document.open();
-      document.write(patched);
-      document.close();
-    }catch(err){
-      try{ console.error('[Tasun][捷運汐東線事項記錄] hotfix loader failed', err); }catch(_e){}
-      showError('修正版載入失敗：' + (err && err.message ? err.message : err) + '。請確認 GitHub Pages / raw.githubusercontent.com 可連線後重新整理。');
+      var cached = localStorage.getItem(LAST_GOOD_KEY);
+      if(cached && cached.indexOf('捷運汐東線事項記錄') >= 0){
+        document.open();
+        document.write(cached);
+        document.close();
+        return;
+      }
+    }catch(_e){}
+
+    bootAttempts++;
+    showError('背景載入重試中：' + (lastErr && lastErr.message ? lastErr.message : lastErr));
+    if(bootAttempts < MAX_ATTEMPTS){
+      setTimeout(boot, Math.min(15000, 900 + bootAttempts * 850));
     }
   }
   boot();
