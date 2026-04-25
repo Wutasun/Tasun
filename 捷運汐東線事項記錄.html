@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-sxdh-notes-no-wrong-page-loader-20260425-r21 cloud-token-refresh-post-sync-r21 -->
+  <!-- tasun-sxdh-notes-no-wrong-page-loader-20260425-r22 cloud-session-token-localstorage-sync-r22 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>捷運汐東線事項記錄 · Tasun</title>
@@ -19,7 +19,7 @@
 </head>
 <body>
 <div id="fail"><div class="box"><div class="title">捷運汐東線事項記錄</div><div class="msg">載入最新版畫面未完成，請稍後重新整理。</div></div></div>
-<script id="tasun-sxdh-notes-no-wrong-page-loader-r21">
+<script id="tasun-sxdh-notes-no-wrong-page-loader-r22">
 (function(){
   'use strict';
 
@@ -27,7 +27,7 @@
   var VERSION_FILE = 'tasun-version.json';
   var RESOURCE_KEY = 'sxdh-notes';
   var ALIAS_FILE = '捷運汐東線事項記錄.html';
-  var LAST_GOOD = 'tasun_sxdh_notes_alias_last_good_html_r21';
+  var LAST_GOOD = 'tasun_sxdh_notes_alias_last_good_html_r22';
   var BAD_TITLE = String.fromCharCode(27402,36012,20998,24037,31934,31777,29256);
   var BAD_SIG = [BAD_TITLE, 'ra'+'ciTable', 'tasun'+'RACI'+'_Simple', '__TASUN_'+'RACI'+'_CFG__'];
 
@@ -37,7 +37,7 @@
     RESOURCE_KEY: RESOURCE_KEY,
     CANONICAL_SOURCE_FILE: SOURCE_FILE,
     VERSION_JSON: VERSION_FILE,
-    ALIAS_FIX_ID: 'tasun-sxdh-notes-no-wrong-page-loader-20260425-r21'
+    ALIAS_FIX_ID: 'tasun-sxdh-notes-no-wrong-page-loader-20260425-r22'
   });
   window.__TASUN_PAGE_KEY__ = RESOURCE_KEY;
   window.__TASUN_RESOURCE_KEY__ = RESOURCE_KEY;
@@ -57,7 +57,7 @@
     var v = norm(ver || window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || query('v'));
     if(v) u.searchParams.set('v', v);
     u.searchParams.set('_', String(Date.now()));
-    u.searchParams.set('_src', 'sxdh-notes-r21');
+    u.searchParams.set('_src', 'sxdh-notes-r22');
     return u.toString();
   }
   async function getVersion(){
@@ -95,7 +95,7 @@
   }
 
   function buildSessionBridgeHead(){
-    return scriptTag('tasun-sxdh-notes-session-bridge-r21', String.raw`
+    return scriptTag('tasun-sxdh-notes-session-bridge-r22', String.raw`
 (function(){
   "use strict";
 
@@ -191,15 +191,18 @@
       [KEYS.SSO2,"sso2"],
       [KEYS.SSO1,"sso1"]
     ].forEach(function(pair){
-      var o = normalize(parse(ss(pair[0])), pair[1]);
+      /* r22：首頁/測試頁可能在不同分頁；sessionStorage 不共用，必須同時讀 localStorage，否則會誤判「未找到登入憑證」。 */
+      var o = normalize(parse(ss(pair[0])) || parse(ls(pair[0])), pair[1]);
       if(o) out.push(o);
     });
     return out;
   }
   function hasSessionProof(cands){
+    /* r22：修正跨頁/跨分頁進入時 sessionStorage 無 token，localStorage 仍有首頁 bridge 的狀況。 */
     if(ss(KEYS.INDEX) === "1" || ss(KEYS.CHILD) === "1" || ss(KEYS.TAB) === "1") return true;
+    if(ls(KEYS.INDEX) === "1" || ls(KEYS.CHILD) === "1" || ls(KEYS.TAB) === "1") return true;
     for(var i=0; i<cands.length; i++){ if(cands[i].source === "cookie") return true; }
-    return cands.length > 0 && !!ss(KEYS.SESSION);
+    return cands.length > 0 && !!(ss(KEYS.SESSION) || ls(KEYS.SESSION) || ss(KEYS.CURRENT) || ls(KEYS.CURRENT));
   }
   function setCookie(user){
     try{
@@ -304,7 +307,7 @@
   }
 
   function buildSessionBridgePost(){
-    return scriptTag('tasun-sxdh-notes-session-postfix-r21', String.raw`
+    return scriptTag('tasun-sxdh-notes-session-postfix-r22', String.raw`
 (function(){
   "use strict";
 
@@ -320,11 +323,24 @@
   }
   function reMirror(a){
     try{
-      var s = JSON.stringify({user:a.user, username:a.user, name:a.user, role:a.role, level:a.role, at:new Date().toISOString(), exp:a.exp || Date.now()+43200000});
+      var token = String((a && (a.token || a.accessToken || a.authToken || a.bearer || a.workerToken || a.cloudToken || a.apiKey)) || "").replace(/^Bearer\s+/i, "").trim();
+      var tokenKeys = [
+        "tasunCloudToken_v1__sxdh-notes", "tasunCloudToken_v1__捷運汐東線事項記錄.html", "tasunCloudToken_v1__index",
+        "tasunCloudToken_v1", "tasunBearerToken_v1", "tasunAccessToken_v1", "tasunAuthToken_v1", "tasunSessionToken_v1",
+        "tasunWorkerToken", "tasunWorkerToken_v1", "tasun_token", "tasunToken", "tasun_auth_token", "tasun_session_token",
+        "authToken", "access_token", "token"
+      ];
+      if(!token){
+        tokenKeys.some(function(k){ token = String(sessionStorage.getItem(k) || localStorage.getItem(k) || "").replace(/^Bearer\s+/i, "").trim(); return !!token; });
+      }
+      var o = {user:a.user, username:a.user, name:a.user, role:a.role, level:a.role, at:new Date().toISOString(), exp:a.exp || Date.now()+43200000};
+      if(token){ o.token = token; o.accessToken = token; o.authToken = token; o.bearer = token; o.cloudToken = token; }
+      var s = JSON.stringify(o);
       ["tasunCurrentUser_v1","tasunSessionBridge_v1","tasunSession_v1"].forEach(function(k){
         sessionStorage.setItem(k, s);
         localStorage.setItem(k, s);
       });
+      if(token){ tokenKeys.forEach(function(k){ sessionStorage.setItem(k, token); localStorage.setItem(k, token); }); }
       sessionStorage.setItem("tasunIndexSessionAuthed_v2", "1");
       sessionStorage.setItem("tasunIndexSession_v1", "1");
       localStorage.setItem("tasunIndexSessionAuthed_v2", "1");
@@ -360,7 +376,8 @@
       masks.forEach(function(m){ if(isShown(m)) open = true; });
       if(open) return;
       var r = String(o.role || o.level || "read").trim().toLowerCase() || "read";
-      window.__TASUN_SESSION_ONLY_AUTH__ = {user:u, username:u, name:u, role:r, level:r, exp:Date.now()+43200000};
+      var tok = String(o.token || o.accessToken || o.authToken || o.bearer || o.workerToken || o.cloudToken || o.apiKey || "").replace(/^Bearer\s+/i, "").trim();
+      window.__TASUN_SESSION_ONLY_AUTH__ = {user:u, username:u, name:u, role:r, level:r, exp:Date.now()+43200000, token:tok, accessToken:tok, authToken:tok, bearer:tok, cloudToken:tok};
       unlock();
     }catch(e){}
   }
@@ -377,7 +394,7 @@
 
 
   function buildCloudBridge(){
-    return scriptTag('tasun-sxdh-notes-cloud-bridge-r21', String.raw`
+    return scriptTag('tasun-sxdh-notes-cloud-bridge-r22', String.raw`
 (function(){
   "use strict";
 
@@ -401,7 +418,7 @@
     API_READ_ENDPOINT:ENDPOINTS.read,
     API_MERGE_ENDPOINT:ENDPOINTS.merge,
     CLOUD_RESOURCE_KEY:PAGE_KEY,
-    CLOUD_READY_KEY:"tasun_sxdh_notes_cloud_ready_r21",
+    CLOUD_READY_KEY:"tasun_sxdh_notes_cloud_ready_r22",
     TOKEN_KEYS:[
       "tasunCloudToken_v1__sxdh-notes",
       "tasunCloudToken_v1__捷運汐東線事項記錄.html",
@@ -440,7 +457,7 @@
   window.__TASUN_API_BASE__ = API_BASE;
   window.TASUN_CLOUD_READY = true;
   window.TASUN_CLOUD_CONFIGURED = true;
-  /* r21：先修正 token bridge / 401 重新登入 / GET Read 轉 POST；只有真正 Read/Merge 成功才顯示「已同步」。 */
+  /* r22：先修正 token bridge / 401 重新登入 / GET Read 轉 POST；只有真正 Read/Merge 成功才顯示「已同步」。 */
   R.cloudStatus = "待同步";
   G.CLOUD.status = "待同步";
   window.__TASUN_CLOUD_STATUS__ = "待同步";
@@ -484,14 +501,32 @@
     var u = norm(user && (user.user || user.username || user.name));
     var keys = [];
     if(u) keys.push("tasunLastLoginPass_v1__" + u);
-    keys.push("tasunLastLoginPass_v1", "tasunPassword_v1", "tasun_login_password_v1");
+    keys.push("tasunLastLoginPass_v1", "tasunPassword_v1", "tasun_login_password_v1", "tasun_login_pass_v1");
     for(var i=0;i<keys.length;i++){
       var p = norm(ss(keys[i]) || ls(keys[i]));
       if(p) return p;
     }
+    var sessKeys = ["tasunCurrentUser_v1", "tasunSessionBridge_v1", "tasunSession_v1", "tasunSessionLogin_v2", "tasunSso_v2", "tasunSso_v1"];
+    for(var j=0;j<sessKeys.length;j++){
+      var o = parse(ss(sessKeys[j])) || parse(ls(sessKeys[j]));
+      if(o && typeof o === "object"){
+        var p2 = norm(o.password || o.pass || o.loginPass || o.lastPass || o.pwd || "");
+        if(p2) return p2;
+      }
+    }
     return "";
   }
   function findToken(){
+    try{
+      if(window.TasunAuthV4 && typeof window.TasunAuthV4.getToken === "function"){
+        var tv4 = cleanToken(window.TasunAuthV4.getToken());
+        if(tv4) return tv4;
+      }
+      if(typeof window.__TASUN_GET_TOKEN__ === "function"){
+        var tg = cleanToken(window.__TASUN_GET_TOKEN__());
+        if(tg) return tg;
+      }
+    }catch(_e){}
     var keys = C.TOKEN_KEYS || [];
     for(var i=0;i<keys.length;i++){
       var t = cleanToken(ss(keys[i]) || ls(keys[i]));
@@ -519,18 +554,24 @@
         setSS(k, JSON.stringify(full)); setLS(k, JSON.stringify(full));
       });
     }
-    setSS("tasun_sxdh_notes_cloud_token_ready_r21", "1");
-    setLS("tasun_sxdh_notes_cloud_token_ready_r21", "1");
+    setSS("tasun_sxdh_notes_cloud_token_ready_r22", "1");
+    setLS("tasun_sxdh_notes_cloud_token_ready_r22", "1");
     return token;
   }
   function clearToken(){
     (C.TOKEN_KEYS || []).forEach(function(k){ delSS(k); delLS(k); });
   }
   var tokenPromise = null;
+  var loginFailUntil = 0;
+  var loginFailCount = 0;
   async function loginForToken(){
+    if(Date.now() < loginFailUntil) return "";
     var user = currentUser();
     var pass = currentPass(user);
-    if(!user || !user.user || !pass) return "";
+    if(!user || !user.user || !pass){
+      setCloudStatus("待同步", "no worker login credential");
+      return "";
+    }
     try{
       if(window.TasunAuthV4 && typeof window.TasunAuthV4.login === "function"){
         try{
@@ -546,11 +587,15 @@
         headers:{ "content-type":"application/json", "accept":"application/json" },
         body: JSON.stringify({ username:user.user, user:user.user, password:pass, pass:pass, pageKey:PAGE_FILE, resourceKey:PAGE_KEY })
       });
-      if(!res.ok) return "";
+      if(!res.ok){
+        if(res.status === 401){ loginFailCount++; loginFailUntil = Date.now() + Math.min(60000, 5000 * loginFailCount); setCloudStatus("待同步", "login HTTP 401"); }
+        return "";
+      }
       var json = await res.json().catch(function(){ return {}; });
       var token = cleanToken(json.token || json.accessToken || json.authToken || json.bearer || json.workerToken || json.cloudToken || json.apiKey ||
         (json.auth && (json.auth.token || json.auth.accessToken || json.auth.authToken || json.auth.bearer || json.auth.apiKey)) ||
         (json.data && (json.data.token || json.data.accessToken || json.data.authToken || json.data.bearer || json.data.apiKey)) || "");
+      if(token){ loginFailCount = 0; loginFailUntil = 0; }
       return mirrorToken(token);
     }catch(e){ return ""; }
   }
@@ -605,7 +650,7 @@
     return s;
   }
   function storedCloudStatus(){
-    var raw = ss("tasun_sxdh_notes_cloud_status_r21") || ls("tasun_sxdh_notes_cloud_status_r21") || window.__TASUN_CLOUD_STATUS__ || R.cloudStatus || "";
+    var raw = ss("tasun_sxdh_notes_cloud_status_r22") || ls("tasun_sxdh_notes_cloud_status_r22") || window.__TASUN_CLOUD_STATUS__ || R.cloudStatus || "";
     var s = normalizeCloudStatus(raw);
     return s || "待同步";
   }
@@ -662,7 +707,7 @@
     G.CLOUD.status = status;
     G.CLOUD.lastDetail = R.cloudLastDetail;
     window.__TASUN_CLOUD_STATUS__ = status;
-    try{ setSS("tasun_sxdh_notes_cloud_status_r21", status); setLS("tasun_sxdh_notes_cloud_status_r21", status); }catch(e){}
+    try{ setSS("tasun_sxdh_notes_cloud_status_r22", status); setLS("tasun_sxdh_notes_cloud_status_r22", status); }catch(e){}
     updateCloudText();
   }
   function markCloudByResponse(res, url){
@@ -782,14 +827,14 @@
 
   function fixCloudText(){
     try{
-      /* r21：雲端狀態必須依正式測試結果顯示；未完成或 HTTP 401 時顯示「待同步」，不可誤顯示其他錯誤狀態。 */
+      /* r22：雲端狀態必須依正式測試結果顯示；未完成或 HTTP 401 時顯示「待同步」，不可誤顯示其他錯誤狀態。 */
       updateCloudText();
     }catch(e){}
   }
   window.__TASUN_GET_WORKER_TOKEN__ = ensureToken;
   window.__TASUN_MIRROR_WORKER_TOKEN__ = mirrorToken;
   [0,80,220,600,1200,2500,4200].forEach(function(t){ setTimeout(function(){ ensureToken(false); fixCloudText(); if(t === 220 || t === 1200) activeCloudProbe("timer-" + t); }, t); });
-  ["DOMContentLoaded","load","pageshow","focus","tasun:auth-restored","tasun:session-bridge-ready"].forEach(function(ev){
+  ["DOMContentLoaded","load","pageshow","focus","storage","tasun:auth-restored","tasun:session-bridge-ready"].forEach(function(ev){
     window.addEventListener(ev, function(){ setTimeout(function(){ ensureToken(false); fixCloudText(); activeCloudProbe(ev); }, 0); }, {passive:true});
   });
 })();
@@ -797,10 +842,10 @@
   }
 
   function buildStatusHintFormat(){
-    return scriptTag('tasun-sxdh-notes-status-hint-format-r21', String.raw`
+    return scriptTag('tasun-sxdh-notes-status-hint-format-r22', String.raw`
 (function(){
   "use strict";
-  var STYLE_ID = "tasun-sxdh-notes-status-hint-format-style-r21";
+  var STYLE_ID = "tasun-sxdh-notes-status-hint-format-style-r22";
   var RUN_KEY = "__TASUN_STATUS_HINT_FORMAT_R21__";
   function addStyle(){
     try{
@@ -901,7 +946,7 @@
   }
 
   function buildTopStrayCleaner(){
-    return scriptTag('tasun-sxdh-notes-top-stray-cleaner-r21', String.raw`
+    return scriptTag('tasun-sxdh-notes-top-stray-cleaner-r22', String.raw`
 (function(){
   "use strict";
   function isBadText(s){
@@ -939,7 +984,7 @@
   }
 
   function buildIdentityGuard(){
-    return scriptTag('tasun-sxdh-notes-identity-guard-r21', String.raw`
+    return scriptTag('tasun-sxdh-notes-identity-guard-r22', String.raw`
 (function(){
   "use strict";
   window.__TASUN_PAGE_KEY__ = "sxdh-notes";
@@ -953,7 +998,7 @@
   function patch(html){
     if(!isGood(html)) throw new Error('HTML 身分檢查未通過');
     html = html.replace(/<title>[^<]*<\/title>/i, '<title>捷運汐東線事項記錄 · Tasun</title>');
-    /* r21：移除舊版 identity guard 與已外露的 guard 尾段文字。 */
+    /* r22：移除舊版 identity guard 與已外露的 guard 尾段文字。 */
     html = html.replace(/<script\b[^>]*id=["']tasun-sxdh-notes-identity-guard-r\d+["'][\s\S]*?<\/script>\s*/ig, '');
     html = html.replace(/\s*\}?\s*;?\s*\}?\s*if\s*\(\s*document\.readyState\s*={2,3}\s*["']loading["']\s*\)\s*document\.addEventListener\s*\(\s*["']DOMContentLoaded["']\s*,\s*stop\s*,\s*\{\s*once\s*:\s*true\s*\}\s*\)\s*;\s*else\s*stop\s*\(\s*\)\s*;\s*window\.addEventListener\s*\(\s*["']pageshow["']\s*,\s*stop\s*,\s*\{\s*passive\s*:\s*true\s*\}\s*\)\s*;\s*\}\s*\)\s*\(\s*\)\s*;?/ig, '');
     var __vv = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || query('v'));
@@ -961,22 +1006,22 @@
     html = html.replace(/tasun-guard-v4\.js(?:\?[^\"'<>]*)?/ig, 'tasun-guard-v5.js' + __vqs);
     html = html.replace(/<script\b[^>]+src=[\"'][^\"']*(?:tasun-worker_wutasun|tasun-worker\.wutasun)[^\"']*[\"'][^>]*>\s*<\/script>\s*/ig, '');
     html = html.replace(/(src=[\"']tasun-auth-v4\.js)(?:\?[^\"']*)?([\"'])/ig, '$1' + __vqs + '$2');
-    if(html.indexOf('tasun-sxdh-notes-session-bridge-r21') < 0){
-      html = html.replace(/<head>/i, '<head>\n  <!-- tasun-sxdh-notes-session-bridge-20260425-r21 -->\n' + buildSessionBridgeHead());
+    if(html.indexOf('tasun-sxdh-notes-session-bridge-r22') < 0){
+      html = html.replace(/<head>/i, '<head>\n  <!-- tasun-sxdh-notes-session-bridge-20260425-r22 -->\n' + buildSessionBridgeHead());
     }
-    if(html.indexOf('tasun-sxdh-notes-cloud-bridge-r21') < 0){
-      html = html.replace(/<head>/i, '<head>\n  <!-- tasun-sxdh-notes-cloud-bridge-20260425-r21 -->\n' + buildCloudBridge());
+    if(html.indexOf('tasun-sxdh-notes-cloud-bridge-r22') < 0){
+      html = html.replace(/<head>/i, '<head>\n  <!-- tasun-sxdh-notes-cloud-bridge-20260425-r22 -->\n' + buildCloudBridge());
     }
-    if(html.indexOf('tasun-sxdh-notes-status-hint-format-r21') < 0){
-      html = html.replace(/<head>/i, '<head>\n  <!-- tasun-sxdh-notes-status-hint-format-20260425-r21 -->\n' + buildStatusHintFormat());
+    if(html.indexOf('tasun-sxdh-notes-status-hint-format-r22') < 0){
+      html = html.replace(/<head>/i, '<head>\n  <!-- tasun-sxdh-notes-status-hint-format-20260425-r22 -->\n' + buildStatusHintFormat());
     }
-    if(html.indexOf('tasun-sxdh-notes-top-stray-cleaner-r21') < 0){
-      html = html.replace(/<head>/i, '<head>\n  <!-- tasun-sxdh-notes-top-stray-cleaner-20260425-r21 -->\n' + buildTopStrayCleaner());
+    if(html.indexOf('tasun-sxdh-notes-top-stray-cleaner-r22') < 0){
+      html = html.replace(/<head>/i, '<head>\n  <!-- tasun-sxdh-notes-top-stray-cleaner-20260425-r22 -->\n' + buildTopStrayCleaner());
     }
-    if(html.indexOf('tasun-sxdh-notes-identity-guard-r21') < 0){
-      html = html.replace(/<head>/i, '<head>\n  <!-- tasun-sxdh-notes-no-wrong-page-loader-20260425-r21 -->\n' + buildIdentityGuard());
+    if(html.indexOf('tasun-sxdh-notes-identity-guard-r22') < 0){
+      html = html.replace(/<head>/i, '<head>\n  <!-- tasun-sxdh-notes-no-wrong-page-loader-20260425-r22 -->\n' + buildIdentityGuard());
     }
-    if(html.indexOf('tasun-sxdh-notes-session-postfix-r21') < 0){
+    if(html.indexOf('tasun-sxdh-notes-session-postfix-r22') < 0){
       if(/<\/body>/i.test(html)) html = html.replace(/<\/body>/i, buildSessionBridgePost() + '\n</body>');
       else html += buildSessionBridgePost();
     }
