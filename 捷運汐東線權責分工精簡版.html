@@ -1,13 +1,13 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r117-integrated-notes-cloudsync-editmenu-dom-first-viewport-5mm based-on-upload-20260430 -->
+  <!-- tasun-raci-r118-cloudsync-schema-bridge-editmenu-dom-first-viewport-5mm based-on-upload-20260430 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工精簡版 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260430_tasun_v5_raci_editmenu_notes_cloudsync_r117">
+  <meta name="tasun-build-stamp" content="20260430_tasun_v5_raci_cloudsync_schema_bridge_r118">
     
 <script id="tasun-github-pages-html-once-refresh-r4">
 (function(){
@@ -3672,7 +3672,7 @@ body.searchOpen .panelHead,
     .editorSectionHead{ margin-bottom:12px; }
   }
 
-/* r117 integrated verification: edit-menu is the single maintenance entry; notes-page mutation-first cloud upload/download sync is integrated; table identity/database metadata retained. */
+/* r118 integrated verification: edit-menu is the single maintenance entry; Worker token login + browser-session bridge + mutation-first cloud upload/download sync; table identity/database metadata retained. */
 #raciTable[data-has-individual-id="true"]{--tasun-table-identity:1;}
 @media (min-width:921px){.wrap{width:calc(100vw - 1cm)!important;margin-left:auto!important;margin-right:auto!important;}}
 @media (max-width:920px){#raciTable tbody td{overflow-wrap:anywhere!important;word-break:break-word!important;}}
@@ -4138,7 +4138,7 @@ body.searchOpen .panelHead,
     RESOURCE_KEY: CFG.RESOURCE_KEY,
     DB_NAME: CFG.DB_NAME,
     DB_STORE: CFG.DB_STORE,
-    DATA_SYNC: { uid:true, rev:true, updatedAt:true, deleted:true, dedupe:true, source:'integrated-r117-notes-cloudsync' },
+    DATA_SYNC: { uid:true, rev:true, updatedAt:true, deleted:true, dedupe:true, source:'integrated-r118-cloudsync-schema-bridge' },
     MANAGE_PAGE: CFG.MANAGE_PAGE
   });
   window.__TASUN_PAGE_KEY__ = CFG.PAGE_KEY;
@@ -4637,6 +4637,59 @@ body.searchOpen .panelHead,
     return '';
   }
 
+
+  function findLocalLoginPassword(){
+    try{
+      const u = norm(currentUser && currentUser.user);
+      const auth = u ? findAuthUser(u) : null;
+      const pass = norm(auth && auth.pass);
+      if(pass) return pass;
+      const keys = [];
+      if(u) keys.push('tasunLastLoginPass_v1__' + u);
+      keys.push('tasunLastLoginPass_v1','tasunPassword_v1','tasun_login_password_v1','tasun_login_pass_v1');
+      for(const k of keys){
+        const v = norm(sessionStorage.getItem(k) || localStorage.getItem(k) || '');
+        if(v) return v;
+      }
+    }catch(_e){}
+    return '';
+  }
+
+  async function loginWorkerToken(force){
+    if(!force){
+      const cached = getWorkerToken();
+      if(cached) return cached;
+    }
+    const u = norm(currentUser && currentUser.user);
+    const p = findLocalLoginPassword();
+    if(!u || !p) return '';
+    try{
+      const res = await fetch(CFG.API_BASE + '/api/tasun/login', {
+        method:'POST',
+        cache:'no-store',
+        credentials:'include',
+        headers:{'content-type':'application/json','accept':'application/json','x-tasun-page-key':CFG.PAGE_KEY,'x-tasun-resource-key':CFG.RESOURCE_KEY,'x-tasun-page-file':CFG.PAGE_FILE},
+        body:JSON.stringify({username:u, user:u, password:p, pass:p, pageKey:CFG.PAGE_KEY, pageFile:CFG.PAGE_FILE, resourceKey:CFG.RESOURCE_KEY, reason:'r118-worker-login-token'})
+      });
+      window.__TASUN_RACI_LAST_LOGIN_STATUS__ = res ? res.status : 0;
+      if(!res || !res.ok) return '';
+      const j = await res.clone().json().catch(() => ({}));
+      const t = mirrorWorkerToken(j.token || j.accessToken || j.authToken || j.bearer || j.workerToken || j.cloudToken || j.apiKey || '');
+      if(t){
+        try{
+          const patched = Object.assign({}, currentUser || {}, {user:u, username:u, token:t, accessToken:t, authToken:t, bearer:t, workerToken:t, cloudToken:t, exp:j.exp || (Date.now()+8*60*60*1000), at:new Date().toISOString()});
+          sessionStorage.setItem(CFG.CURRENT_KEY, JSON.stringify(patched));
+          localStorage.setItem(CFG.CURRENT_KEY, JSON.stringify(patched));
+        }catch(_e){}
+      }
+      return t;
+    }catch(err){
+      window.__TASUN_RACI_LAST_LOGIN_STATUS__ = 0;
+      window.__TASUN_RACI_LAST_CLOUD_ERROR__ = {path:'/api/tasun/login', message:String(err && err.message || err), at:Date.now()};
+      return '';
+    }
+  }
+
   function clearWorkerTokens(){
     tokenKeys().forEach((key) => {
       try{ sessionStorage.removeItem(key); }catch(_e){}
@@ -4653,24 +4706,37 @@ body.searchOpen .panelHead,
 
   async function cloudPost(path, body){
     const payload = Object.assign({pageKey:CFG.PAGE_KEY, pageFile:CFG.PAGE_FILE, resourceKey:CFG.RESOURCE_KEY, resource:CFG.RESOURCE_KEY}, body || {});
-    async function post(token){
-      return fetch(CFG.API_BASE + path, {
+    async function post(token, mode){
+      const res = await fetch(CFG.API_BASE + path, {
         method:'POST',
         cache:'no-store',
         credentials:'include',
         headers:cloudHeaders(token),
         body:JSON.stringify(payload)
       });
+      window.__TASUN_RACI_LAST_CLOUD_HTTP__ = {path:path, status:res ? res.status : 0, ok:!!(res && res.ok), mode:mode || '', resourceKey:payload.resourceKey || CFG.RESOURCE_KEY, at:Date.now()};
+      return res;
     }
-    let token = getWorkerToken();
-    let res = await post(token);
-    if(res && res.status === 401){
-      clearWorkerTokens();
-      token = getWorkerToken();
-      if(token) res = await post(token);
-      if(res && res.status === 401) res = await post('');
+    try{
+      let token = getWorkerToken() || await loginWorkerToken(false);
+      let res = await post(token, token ? 'bearer' : 'bridge');
+      if(res && (res.status === 401 || res.status === 403)){
+        clearWorkerTokens();
+        token = await loginWorkerToken(true);
+        if(token) res = await post(token, 'fresh-bearer');
+      }
+      if(res && res.status === 401){
+        res = await post('', 'bridge-fallback');
+      }
+      if(res && !res.ok){
+        const msg = await res.clone().text().catch(() => '');
+        window.__TASUN_RACI_LAST_CLOUD_ERROR__ = {path:path, status:res.status, body:msg.slice(0,400), resourceKey:payload.resourceKey || CFG.RESOURCE_KEY, at:Date.now()};
+      }
+      return res;
+    }catch(err){
+      window.__TASUN_RACI_LAST_CLOUD_ERROR__ = {path:path, status:0, message:String(err && err.message || err), resourceKey:payload.resourceKey || CFG.RESOURCE_KEY, at:Date.now()};
+      return null;
     }
-    return res;
   }
 
   function extractCloudRows(obj){
@@ -4692,13 +4758,18 @@ body.searchOpen .panelHead,
   }
 
   async function readCloudRows(){
-    const keys = [CFG.RESOURCE_KEY, CFG.PAGE_KEY, CFG.PAGE_FILE, '捷運汐東線權責分工精簡版'];
+    const keys = Array.from(new Set([CFG.RESOURCE_KEY, CFG.PAGE_KEY, CFG.PAGE_FILE, '捷運汐東線權責分工精簡版']));
     let out = [];
     for(const key of keys){
       try{
-        const res = await cloudPost('/api/tasun/read', {phase:'r117-notes-style-download-before-render', resourceKey:key, resource:key});
-        if(res && res.ok){ const json = await res.clone().json().catch(() => ({})); out = out.concat(extractCloudRows(json)); }
-      }catch(_){ }
+        const res = await cloudPost('/api/tasun/read', {phase:'r118-cloud-download-before-render', resourceKey:key, resource:key});
+        if(res && res.ok){
+          const json = await res.clone().json().catch(() => ({}));
+          out = out.concat(extractCloudRows(json));
+        }
+      }catch(err){
+        window.__TASUN_RACI_LAST_CLOUD_ERROR__ = {path:'/api/tasun/read', resourceKey:key, message:String(err && err.message || err), at:Date.now()};
+      }
     }
     return dedupeRows(out, true);
   }
@@ -4707,9 +4778,12 @@ body.searchOpen .panelHead,
     const all = dedupeRows(rows, true);
     if(!all.length) return false;
     try{
-      const res = await cloudPost('/api/tasun/merge', {phase:'r117-notes-style-dedupe-upload', rows:all, payload:{rows:all, db:all}});
+      const res = await cloudPost('/api/tasun/merge', {phase:'r118-cloud-dedupe-upload', resourceKey:CFG.RESOURCE_KEY, resource:CFG.RESOURCE_KEY, rows:all, db:all, payload:{rows:all, db:all}});
       return !!(res && res.ok);
-    }catch(_){ return false; }
+    }catch(err){
+      window.__TASUN_RACI_LAST_CLOUD_ERROR__ = {path:'/api/tasun/merge', message:String(err && err.message || err), at:Date.now()};
+      return false;
+    }
   }
 
   function scheduleCloudSync(reason, delay=CFG.SYNC_THROTTLE_MS){
@@ -4721,7 +4795,7 @@ body.searchOpen .panelHead,
     const s = norm(status) || '待同步';
     const payload = Object.assign({status:s, displayStatus:(s === '同步中' ? '已同步' : s), reason:String(reason||''), at:Date.now(), count:db.length}, extra || {});
     window.__TASUN_RACI_CLOUD_STATUS__ = payload;
-    try{ localStorage.setItem('tasunRACI_Simple_cloud_status_v117', JSON.stringify(payload)); }catch(_){ }
+    try{ localStorage.setItem('tasunRACI_Simple_cloud_status_v118', JSON.stringify(payload)); }catch(_){ }
   }
 
   async function syncCloud(reason){
