@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r147-worker-auth-bridge-sync-stable based-on-latest-upload-20260502 -->
+  <!-- tasun-raci-r148-worker-auth-bridge-body-sync-stable based-on-latest-upload-20260502 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工精簡版 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260502_tasun_v5_raci_r147_worker_auth_bridge_sync_stable">
+  <meta name="tasun-build-stamp" content="20260502_tasun_v5_raci_r148_worker_auth_bridge_body_sync_stable">
     
 
 <script id="tasun-github-pages-network-once-r135">
@@ -5279,51 +5279,71 @@ body.searchOpen .panelHead,
       'x-tasun-page-key':CFG.PAGE_KEY,
       'x-tasun-resource-key':CFG.RESOURCE_KEY,
       'x-tasun-page-file':CFG.PAGE_FILE,
-      'x-tasun-session-bridge':'raci-r147-worker-auth-bridge',
-      'x-tasun-client':'github-pages-raci-r147'
+      'x-tasun-session-bridge':'raci-r148-worker-auth-bridge-body',
+      'x-tasun-client':'github-pages-raci-r148'
     };
     const bu = getBridgeUserR146();
     h['x-tasun-user'] = bu.user;
     h['x-tasun-role'] = bu.role;
-    if(token) h.authorization = 'Bearer ' + token;
+    const t = extractTokenValue(token);
+    if(t){
+      h.authorization = 'Bearer ' + t;
+      h['x-tasun-token'] = t;
+      h['x-tasun-auth-token'] = t;
+      h['x-tasun-worker-token'] = t;
+      h['x-worker-token'] = t;
+      h['x-api-key'] = t;
+      h['x-tasun-api-key'] = t;
+    }
     return h;
   }
 
   async function cloudPost(path, body){
-    const payload = Object.assign({pageKey:CFG.PAGE_KEY, pageFile:CFG.PAGE_FILE, resourceKey:CFG.RESOURCE_KEY, resource:CFG.RESOURCE_KEY}, body || {});
+    const bu = getBridgeUserR146();
+    const payload = Object.assign({
+      pageKey:CFG.PAGE_KEY,
+      pageFile:CFG.PAGE_FILE,
+      resourceKey:CFG.RESOURCE_KEY,
+      resource:CFG.RESOURCE_KEY,
+      sessionBridge:'raci-r148-worker-auth-bridge-body',
+      bridgeUser:bu.user,
+      bridgeRole:bu.role,
+      user:bu.user,
+      role:bu.role
+    }, body || {});
     async function post(token, mode){
-      const headers = cloudHeaders(token && mode !== 'bridge-first' && mode !== 'bridge-fallback' ? token : '');
+      const headers = cloudHeaders(token || '');
       const res = await fetch(CFG.API_BASE + path, {
         method:'POST',
         cache:'no-store',
         credentials:'include',
         headers:headers,
-        body:JSON.stringify(payload)
+        body:JSON.stringify(Object.assign({}, payload, {authMode:mode || '', tokenBridge:!!extractTokenValue(token)}))
       });
-      window.__TASUN_RACI_LAST_CLOUD_HTTP__ = {path:path, status:res ? res.status : 0, ok:!!(res && res.ok), mode:mode || '', resourceKey:payload.resourceKey || CFG.RESOURCE_KEY, at:Date.now()};
+      window.__TASUN_RACI_LAST_CLOUD_HTTP__ = {path:path, status:res ? res.status : 0, ok:!!(res && res.ok), mode:mode || '', resourceKey:payload.resourceKey || CFG.RESOURCE_KEY, user:bu.user, role:bu.role, at:Date.now()};
       return res;
     }
     try{
-      /* r147：先走 x-tasun-session-bridge，不讓過期或舊版 bearer 先造成 401，
-         若 Worker 已更新，read/merge 會直接依首頁登入橋接通過；若舊 Worker 尚未更新，再補登入 token 重試。 */
-      let res = await post('', 'bridge-first');
+      /* r148：先送首頁登入橋接 + body 備援；若 Worker 未更新或橋接未通，再用所有 token header 重試。 */
+      let token = getWorkerToken();
+      let res = await post('', 'bridge-body-first');
       if(res && res.ok) return res;
 
-      let token = getWorkerToken() || await loginWorkerToken(false);
+      if(!token) token = await loginWorkerToken(false);
       if(token && (!res || res.status === 401 || res.status === 403 || res.status === 0)){
-        res = await post(token, 'bearer-after-bridge');
+        res = await post(token, 'bearer-all-headers-after-bridge');
       }
       if(res && (res.status === 401 || res.status === 403)){
         clearWorkerTokens();
         token = await loginWorkerToken(true);
-        if(token) res = await post(token, 'fresh-bearer-after-bridge');
+        if(token) res = await post(token, 'fresh-bearer-all-headers');
       }
       if(res && (res.status === 401 || res.status === 403)){
-        res = await post('', 'bridge-final');
+        res = await post('', 'bridge-body-final');
       }
       if(res && !res.ok){
         const msg = await res.clone().text().catch(() => '');
-        window.__TASUN_RACI_LAST_CLOUD_ERROR__ = {path:path, status:res.status, body:msg.slice(0,400), resourceKey:payload.resourceKey || CFG.RESOURCE_KEY, at:Date.now()};
+        window.__TASUN_RACI_LAST_CLOUD_ERROR__ = {path:path, status:res.status, body:msg.slice(0,400), resourceKey:payload.resourceKey || CFG.RESOURCE_KEY, mode:window.__TASUN_RACI_LAST_CLOUD_HTTP__ && window.__TASUN_RACI_LAST_CLOUD_HTTP__.mode, at:Date.now()};
       }
       return res;
     }catch(err){
