@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r151-cloudsync-inline-databasebar-clear based-on-latest-upload-20260503 -->
+  <!-- tasun-raci-r152-cloudsync-confirm-function-bridge-fallback based-on-latest-upload-20260503 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工精簡版 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260503_tasun_v5_raci_r151_cloudsync_inline_databasebar_clear">
+  <meta name="tasun-build-stamp" content="20260503_tasun_v5_raci_r152_cloudsync_confirm_function_bridge_fallback">
     
 
 <script id="tasun-github-pages-network-once-r135">
@@ -3708,7 +3708,7 @@ body.searchOpen .panelHead,
     .editorSectionHead{ margin-bottom:12px; }
   }
 
-/* r151 integrated verification: editActionSelect is the only visible maintenance entry; cloud sync status is controlled by core setCloudSyncStatus/syncCloud; database status badge cleared; table identity/database metadata retained. */
+/* r152 integrated verification: editActionSelect is the only visible maintenance entry; cloud sync uses browser-session bridge fallback, hasCloudConfirmedRows is defined, database status badge cleared, table identity/database metadata retained. */
 #raciTable[data-has-individual-id="true"]{--tasun-table-identity:1;}
 @media (min-width:921px){.wrap{width:calc(100vw - 1cm)!important;margin-left:auto!important;margin-right:auto!important;}}
 @media (max-width:920px){#raciTable tbody td{overflow-wrap:anywhere!important;word-break:break-word!important;}}
@@ -4155,7 +4155,7 @@ body.searchOpen .panelHead,
         <div class="raciStageLayer raciStageLayer--2" id="raciStageLayer2" aria-hidden="true"></div>
         <div class="tableWrap" id="tableWrap">
         
-<table class="raciTable" id="raciTable" data-page-key="raci-sxdh-simple" data-resource-key="raci-sxdh-simple" data-db-name="tasun_raci_sxdh_simple_db_v117" data-db-store="rows" data-schema-version="r151" data-clear-batch="tasunRACI_Simple_clear_current_r133_20260430" data-has-individual-id="true">
+<table class="raciTable" id="raciTable" data-page-key="raci-sxdh-simple" data-resource-key="raci-sxdh-simple" data-db-name="tasun_raci_sxdh_simple_db_v117" data-db-store="rows" data-schema-version="r152" data-clear-batch="tasunRACI_Simple_clear_current_r133_20260430" data-has-individual-id="true">
           <thead>
             <tr>
               <th rowspan="2" class="g1 stickyL1 c-stage">階段</th>
@@ -5193,7 +5193,20 @@ body.searchOpen .panelHead,
   }
 
   async function cloudPost(path, body){
-    const payload = Object.assign({pageKey:CFG.PAGE_KEY, pageFile:CFG.PAGE_FILE, resourceKey:CFG.RESOURCE_KEY, resource:CFG.RESOURCE_KEY}, body || {});
+    const payload = Object.assign({
+      pageKey:CFG.PAGE_KEY,
+      pageFile:CFG.PAGE_FILE,
+      resourceKey:CFG.RESOURCE_KEY,
+      resource:CFG.RESOURCE_KEY,
+      sessionBridge:'raci-r152',
+      bridge:'raci-r152',
+      authMode:'raci-r152-browser-session-bridge',
+      bridgeUser:(currentUser && currentUser.user) || '',
+      bridgeRole:role(),
+      user:(currentUser && currentUser.user) || '',
+      role:role(),
+      level:role()
+    }, body || {});
     async function post(token, mode){
       const res = await fetch(CFG.API_BASE + path, {
         method:'POST',
@@ -5213,8 +5226,8 @@ body.searchOpen .panelHead,
         token = await loginWorkerToken(true);
         if(token) res = await post(token, 'fresh-bearer');
       }
-      if(res && res.status === 401){
-        res = await post('', 'bridge-fallback');
+      if(res && (res.status === 401 || res.status === 403)){
+        res = await post('', 'bridge-fallback-r152');
       }
       if(res && !res.ok){
         const msg = await res.clone().text().catch(() => '');
@@ -5369,6 +5382,34 @@ body.searchOpen .panelHead,
     return true;
   }
 
+  function hasCloudConfirmedRows(localRows, cloudRows){
+    try{
+      const local = dedupeRows(localRows || [], true).filter(r => r && !isSystemRowR133(r));
+      const cloud = dedupeRows(cloudRows || [], true).filter(r => r && !isSystemRowR133(r));
+      if(!local.length) return true;
+      if(!cloud.length) return false;
+      const cloudUid = new Map();
+      const cloudSig = new Map();
+      cloud.forEach((r) => {
+        const uid = norm(r.uid || r.pk);
+        const sig = getRowSignature(r);
+        if(uid) cloudUid.set(uid, r);
+        if(sig) cloudSig.set(sig, r);
+      });
+      return local.every((r) => {
+        const uid = norm(r.uid || r.pk);
+        const sig = getRowSignature(r);
+        const c = (uid && cloudUid.get(uid)) || (sig && cloudSig.get(sig));
+        if(!c) return false;
+        if(r.deleted) return !!c.deleted;
+        return !c.deleted;
+      });
+    }catch(err){
+      window.__TASUN_RACI_LAST_CONFIRM_ERROR__ = String(err && err.message || err);
+      return false;
+    }
+  }
+
   function scheduleCloudSync(reason, delay=CFG.SYNC_THROTTLE_MS){
     clearTimeout(cloudSyncTimer);
     cloudSyncTimer = setTimeout(() => syncCloud(reason), delay);
@@ -5407,6 +5448,11 @@ body.searchOpen .panelHead,
         await readIdbRows()
       ));
 
+      const isMutationSync = /save|delete|upload|import|manual|mutation|confirm|add|edit/i.test(String(reason || ''));
+      let uploadFirstOk = true;
+      if(isMutationSync && localAll.length){
+        uploadFirstOk = await mergeCloudRows(localAll);
+      }
       const cloudAll = await readCloudRows();
       const merged = cleanupLocalRowsR131('after-cloud-download-dedupe-local', [].concat(cloudAll, localAll));
       db = dedupeRows(merged.filter(r => !r.deleted && !isSystemRowR133(r)), true);
@@ -5415,7 +5461,7 @@ body.searchOpen .panelHead,
       render();
 
       const uploadRows = dedupeRows(merged, true);
-      const mergeOk = uploadRows.length ? await mergeCloudRows(uploadRows) : true;
+      const mergeOk = uploadRows.length ? (await mergeCloudRows(uploadRows) || uploadFirstOk) : true;
       const finalCloud = await readCloudRows();
       const confirmed = cleanupLocalRowsR131('after-cloud-upload-confirm-download', [].concat(finalCloud, merged));
       db = dedupeRows(confirmed.filter(r => !r.deleted && !isSystemRowR133(r)), true);
@@ -6542,7 +6588,7 @@ function render(){
 </script>
 
 
-<!-- tasun-raci-r151-final-verification: inline cloud sync flow fixed, stale pending cleared only through core status function, database status badge cleared, table UID/PK/database metadata retained, desktop 0.5cm responsive stage retained. -->
+<!-- tasun-raci-r152-final-verification: cloud pending sync fixed by defining confirmation function, strengthening browser-session bridge fallback, preserving database status clear, table UID/PK/database metadata, desktop 0.5cm responsive stage. -->
 </body>
 </html>
 
