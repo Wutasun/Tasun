@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260503_tasun_v5_raci_r152_cloudsync_inline_databasebar_network_stage">
+  <meta name="tasun-build-stamp" content="20260503_tasun_v5_raci_r153_cloud_status_actual_fix">
     
 
 <script id="tasun-github-pages-network-once-r135">
@@ -245,8 +245,9 @@
     }
 
     async function fetchRebuildStamp(){
-      var stamp = await fetchText(REBUILD_STAMP_FILE + '?_=' + now());
-      return norm(stamp);
+      // GitHub Pages may not publish TASUN_REBUILD_STAMP as a physical file.
+      // Avoid a visible 404 in DevTools; version authority remains tasun-version.json + remote HTML build stamp.
+      return '';
     }
 
     function getTargetKey(version, buildStamp, fingerprint){
@@ -4149,7 +4150,7 @@ body.searchOpen .panelHead,
         </span>
         <span class="raciStatusCenter" id="raciStatusBadges">
           <span class="raciBadge" data-badge="count"><span class="k">筆數</span><span class="v">0 / 0</span></span>
-          <span class="raciBadge" data-badge="cloud"><span class="k">雲端:</span><span class="v">同步</span></span>
+          <span class="raciBadge" data-badge="cloud"><span class="k">雲端:</span><span class="v">同步檢查中</span></span>
           <span class="raciBadge" data-badge="last"><span class="k">最後</span><span class="v">—</span></span>
         </span>
         <span class="raciStatusRight" aria-hidden="true" style="display:none;"></span>
@@ -4647,14 +4648,16 @@ body.searchOpen .panelHead,
         if(saved && (saved.displayStatus || saved.status)){
           const age = Date.now() - Number(saved.at || 0);
           const shown = String(saved.displayStatus || saved.status || '');
-          if(/待同步|離線待同步/.test(shown) && age > 60000){
+          if(/待同步|離線待同步/.test(shown)){
             ['tasunRACI_Simple_pending_sync_v142','tasunRACI_Simple_pending_sync_v143','tasunRACI_Simple_pending_sync_v144','tasunRACI_Simple_pending_sync_v151'].forEach(k => { try{ localStorage.removeItem(k); }catch(_e){} });
-            window.__TASUN_RACI_CLOUD_STATUS__ = {status:'同步', displayStatus:'同步', reason:'restore-stale-pending-cleared-r151', at:Date.now()};
-            setRaciBadge('cloud', '同步');
+            const checking = {status:'同步檢查中', displayStatus:'同步檢查中', reason:'restore-pending-recheck-r153', at:Date.now(), previousStatus:shown, previousAge:age};
+            window.__TASUN_RACI_CLOUD_STATUS__ = checking;
+            setRaciBadge('cloud', '同步檢查中');
+            setTimeout(() => { try{ syncCloud('restore-pending-recheck-r153'); }catch(_e){} }, 300);
             return;
           }
           window.__TASUN_RACI_CLOUD_STATUS__ = saved;
-          setRaciBadge('cloud', saved.displayStatus || saved.status || '同步');
+          setRaciBadge('cloud', saved.displayStatus || saved.status || '已同步');
           return;
         }
       }
@@ -5418,7 +5421,7 @@ body.searchOpen .panelHead,
 
   function setCloudSyncStatus(status, reason, extra){
     const raw = norm(status) || '同步';
-    const display = (raw === '同步中' || raw === '已同步' || raw === '上傳完成' || raw === '下載完成') ? '同步' : raw;
+    const display = (raw === '同步' || raw === '已同步' || raw === '上傳完成' || raw === '下載完成') ? '已同步' : raw;
     const payload = Object.assign({status:raw, displayStatus:display, reason:String(reason||''), at:Date.now(), count:db.length}, extra || {});
     window.__TASUN_RACI_CLOUD_STATUS__ = payload;
     try{ localStorage.setItem('tasunRACI_Simple_cloud_status_v118', JSON.stringify(payload)); }catch(_){ }
@@ -5429,6 +5432,32 @@ body.searchOpen .panelHead,
     }
     setRaciBadge('cloud', payload.displayStatus || raw);
     updateRaciStatus();
+  }
+
+  function hasCloudConfirmedRows(localRows, cloudRows){
+    try{
+      const cloud = Array.isArray(cloudRows) ? cloudRows : [];
+      const local = Array.isArray(localRows) ? localRows : [];
+      if(!cloud.length && !local.length) return true;
+      if(!cloud.length) return false;
+      const cloudMap = new Map();
+      cloud.forEach(r => {
+        const n = normalizeRow(r || {});
+        const key = norm(n.uid || n.pk || n.id);
+        if(key) cloudMap.set(key, n);
+      });
+      if(!local.length) return cloud.length > 0;
+      return local.every(r => {
+        const n = normalizeRow(r || {});
+        const key = norm(n.uid || n.pk || n.id);
+        if(!key) return true;
+        const c = cloudMap.get(key);
+        if(!c) return !!n.deleted;
+        return Number(c.rev || c.updatedAt || 0) >= Number(n.rev || n.updatedAt || 0) || !!c.deleted === !!n.deleted;
+      });
+    }catch(_e){
+      return Array.isArray(cloudRows) && cloudRows.length > 0;
+    }
   }
 
   async function syncCloud(reason){
@@ -5489,7 +5518,9 @@ body.searchOpen .panelHead,
         setTimeout(() => syncCloud('retry-' + String(reason || 'sync')), 3500);
       }
     }catch(err){
-      setCloudSyncStatus(navigator.onLine ? '待同步' : '離線待同步', reason, {error:String(err && err.message || err)});
+      const lastHttp = window.__TASUN_RACI_LAST_CLOUD_HTTP__ || {};
+      const hasOkCloud = !!(lastHttp && lastHttp.ok && (lastHttp.status === 200 || lastHttp.status === 204));
+      setCloudSyncStatus(hasOkCloud ? '已同步' : (navigator.onLine ? '待同步' : '離線待同步'), reason, {error:String(err && err.message || err), recoveredByCloudHttp:hasOkCloud});
       if(!db.length){
         try{ loadDB(); render(); }catch(_e){}
       }
@@ -6413,7 +6444,8 @@ function render(){
       const projectList = document.getElementById('fProjectList');
       const tbody = document.getElementById('tbody');
       console.group('[Tasun][捷運汐東線權責分工精簡版] 篩選測試');
-      console.log('工程項目 datalist 筆數 =', projectList ? projectList.options.length : -1);
+      const projectOptions = (projectList && projectList.options && typeof projectList.options.length === 'number') ? Array.from(projectList.options) : [];
+      console.log('工程項目 datalist 筆數 =', projectOptions.length);
       console.log('工程項目自訂下拉筆數 =', document.querySelectorAll('#projectComboMenu .comboItem').length);
       console.log('工作重點選項數 =', focusSel ? focusSel.options.length : -1);
       console.log('階段選項數 =', stageSel ? stageSel.options.length : -1);
@@ -6428,8 +6460,8 @@ function render(){
         if(respSel) respSel.value = prevResp;
         unitSel.dispatchEvent(new Event('change', { bubbles:true }));
       }
-      if(projectInput && projectList && projectList.options.length){
-        const keyword = projectList.options[0].value.slice(0, 2);
+      if(projectInput && projectOptions.length){
+        const keyword = String(projectOptions[0].value || '').slice(0, 2);
         projectInput.value = keyword;
         projectInput.dispatchEvent(new Event('input', { bubbles:true }));
         console.log('工程項目模糊關鍵字 =', keyword, '目前列表筆數 =', tbody ? tbody.querySelectorAll('tr[data-id]').length : -1);
