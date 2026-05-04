@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r151-cloudsync-inline-databasebar-clear based-on-latest-upload-20260503 -->
+  <!-- tasun-raci-r170-cloud-canonical-cleanup based-on-latest-upload-20260504 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r168_cloud_actual_status">
+  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r170_cloud_canonical_cleanup">
     
 
 <script id="tasun-github-pages-network-once-r135">
@@ -4112,6 +4112,8 @@ body.searchOpen .panelHead,
     }catch(_e){}
   }
   async function verifyCloudActual(){
+    // r170：避免在頁面早期以未授權跨網域 fetch 直打 Worker 造成瀏覽器 CORS 紅字；
+    // 實際雲端狀態由主同步流程 cloudPost/readCloudRows/mergeCloudRows 判讀後寫入狀態列。
     function recentStoredOk(){
       try{
         var keys = ['tasunRACI_Simple_cloud_status_v151','tasunRACI_Simple_cloud_status_v143','tasunRACI_Simple_cloud_status_v118'];
@@ -4126,21 +4128,13 @@ body.searchOpen .panelHead,
       }catch(_e){}
       return null;
     }
-    try{
-      var api = norm(window.__TASUN_API_BASE__ || window.TASUN_API_BASE || ((window.__TASUN_GLOBALS__||{}).API_BASE) || 'https://tasun-worker.wutasun.workers.dev').replace(/\/+$/,'');
-      var body = { resourceKey:RESOURCE_KEY, resource:RESOURCE_KEY, tableId:TABLE_ID, dbName:DB_NAME, store:'rows', pageKey:'捷運汐東線權責分工精簡版.html', pageFile:'捷運汐東線權責分工精簡版.html', phase:'actual-status-r168' };
-      var res = await fetch(api + '/api/tasun/read', { method:'POST', mode:'cors', credentials:'omit', cache:'no-store', headers:{ 'content-type':'application/json', 'accept':'application/json' }, body:JSON.stringify(body) });
-      var data = await res.json().catch(function(){ return null; });
-      var rows = data && Array.isArray(data.rows) ? data.rows.length : (data && data.data && Array.isArray(data.data.rows) ? data.data.rows.length : (data && Array.isArray(data.db) ? data.db.length : null));
-      setCloudStatusFromActual(!!(res.ok && data && data.ok !== false), rows, '雲端 Read HTTP ' + res.status + (rows!=null ? '，rows=' + rows : ''));
-    }catch(e){
-      var saved = recentStoredOk();
-      if(saved){
-        setCloudStatusFromActual(true, saved.cloudCount != null ? saved.cloudCount : saved.count, '雲端直接判讀受瀏覽器 CORS 限制，沿用最近一次成功同步狀態：' + (saved.displayStatus || saved.status || '已同步'));
-      }else{
-        setCloudStatusFromActual(false, null, '雲端 Read 暫時無法直接判讀：' + (e && e.message ? e.message : e));
-      }
+    var saved = recentStoredOk();
+    if(saved){
+      setCloudStatusFromActual(true, saved.cloudCount != null ? saved.cloudCount : saved.count, '沿用最近一次主同步成功狀態：' + (saved.displayStatus || saved.status || '已同步'));
+    }else{
+      setCloudStatusFromActual(false, null, '等待主同步流程確認雲端狀態');
     }
+    try{ if(window.__TASUN_RACI_SYNC_NOW__) setTimeout(function(){ window.__TASUN_RACI_SYNC_NOW__('early-status-confirm-r170'); }, 300); }catch(_e){}
   }
   protectIndexRoutes();
   document.addEventListener('DOMContentLoaded', function(){ protectIndexRoutes(); ensureTableIdentity(); verifyCloudActual(); }, { once:true });
@@ -5074,6 +5068,31 @@ body.searchOpen .panelHead,
     return (idn >= 3 && onlyProject) || (onlyProject && oldMarkers);
   }
 
+  function isOptionDictionaryRowR170(row){
+    if(!row) return false;
+    const vals = [row.uid, row.pk, row.id, row.stage, row.focus, row.project, row.pkg, row.supervise, row.ivv, row.consult, row.agency, row.dueHandle, row.dueReview, row.dueVerify, row.dueApprove, row.penaltyPkg, row.penaltySupervise, row.penaltyIvv, row.penaltyConsult, row.notePkg, row.noteSupervise, row.noteIvv, row.noteConsult].map(norm);
+    const joined = vals.join('|');
+    if(/_+TASUN_?OPTION_?DICTIONARY/i.test(joined) || /TASUN_OPTION_DICTIONARY/i.test(joined)) return true;
+    const stage = norm(row.stage);
+    const focus = norm(row.focus).toLowerCase();
+    const project = norm(row.project);
+    if(/^_+TASU/i.test(stage) || /^__TASUN/i.test(stage) || /OPTION_DICTIONARY/i.test(stage)) return true;
+    const dictionaryFields = new Set(['stage','focus','project','pkg','supervise','ivv','iv','consult','agency','duehandle','duereview','dueverify','dueapprove','penaltypkg','penaltysupervise','penaltyivv','penaltyiv','penaltyconsult','notepkg','notesupervise','noteivv','noteiv','noteconsult']);
+    if(dictionaryFields.has(focus) && project && (/^_/.test(stage) || /TASUN|OPTION|DICTIONARY/i.test(stage) || stage.length > 18)) return true;
+    if(/^_+TASUN/i.test(norm(row.uid)) || /^_+TASUN/i.test(norm(row.pk))) return true;
+    return false;
+  }
+
+  function isMalformedRaciRowR170(row){
+    if(!row || row.deleted || isSystemRowR133(row)) return false;
+    if(isOptionDictionaryRowR170(row)) return true;
+    const stage = norm(row.stage);
+    const focus = norm(row.focus);
+    const project = norm(row.project);
+    if((/^__/.test(stage) || /^_TASU/i.test(stage)) && project) return true;
+    return false;
+  }
+
   function makeLegacyTombstoneR163(row, t){
     return Object.assign({}, normalizeRow(row), {
       deleted:true,
@@ -5090,7 +5109,7 @@ body.searchOpen .panelHead,
   }
 
   function activeRows(rows){
-    return dedupeRows(rows, true).filter(r => !r.deleted && !isSystemRowR133(r) && !isLegacyAfterRow2R163(r));
+    return dedupeRows(rows, true).filter(r => !r.deleted && !isSystemRowR133(r) && !isLegacyAfterRow2R163(r) && !isMalformedRaciRowR170(r));
   }
 
   function ensureTableMetaR131(){
@@ -5111,7 +5130,7 @@ body.searchOpen .panelHead,
   function cleanupLocalRowsR131(reason, rows){
     const rawMerged = dedupeRows(rows || [], true);
     const t = Date.now();
-    const legacyTombs = rawMerged.filter(r => !r.deleted && !isSystemRowR133(r) && isLegacyAfterRow2R163(r)).map(r => makeLegacyTombstoneR163(r, t));
+    const legacyTombs = rawMerged.filter(r => !r.deleted && !isSystemRowR133(r) && (isLegacyAfterRow2R163(r) || isMalformedRaciRowR170(r))).map(r => makeLegacyTombstoneR163(r, t));
     const merged = dedupeRows([].concat(rawMerged, legacyTombs), true);
     db = activeRows(merged).sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
     deletedRows = merged.filter(r => r.deleted && !isSystemRowR133(r));
@@ -5600,7 +5619,7 @@ body.searchOpen .panelHead,
 
       let cloudAll = await readCloudRows();
       const tLegacy = Date.now();
-      const cloudLegacyTombs = cloudAll.filter(r => !r.deleted && !isSystemRowR133(r) && isLegacyAfterRow2R163(r)).map(r => makeLegacyTombstoneR163(r, tLegacy));
+      const cloudLegacyTombs = cloudAll.filter(r => !r.deleted && !isSystemRowR133(r) && (isLegacyAfterRow2R163(r) || isMalformedRaciRowR170(r))).map(r => makeLegacyTombstoneR163(r, tLegacy));
       if(cloudLegacyTombs.length){
         cloudAll = dedupeRows([].concat(cloudAll, cloudLegacyTombs), true);
         try{ await mergeCloudRows(cloudLegacyTombs); }catch(_e){}
@@ -5615,7 +5634,7 @@ body.searchOpen .panelHead,
       const mergeOk = uploadRows.length ? await mergeCloudRows(uploadRows) : true;
       const finalCloud = await readCloudRows();
       const confirmed = cleanupLocalRowsR131('after-cloud-upload-confirm-download', [].concat(finalCloud, merged));
-      db = dedupeRows(confirmed.filter(r => !r.deleted && !isSystemRowR133(r)), true);
+      db = activeRows(confirmed).sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
       deletedRows = dedupeRows(confirmed.filter(r => r.deleted), true);
       saveDB();
       render();
@@ -6512,6 +6531,16 @@ function render(){
     restoreCloudSyncStatus();
     updateRaciStatus(0, 0);
     loadDB();
+    try{
+      const allBootRows = dedupeRows([].concat(db, deletedRows, parseRows(localStorage.getItem(CFG.DB_KEY)), parseRows(localStorage.getItem(CFG.DELETED_KEY))), true);
+      const badBootRows = allBootRows.filter(r => !r.deleted && !isSystemRowR133(r) && isMalformedRaciRowR170(r));
+      if(badBootRows.length){
+        const t = Date.now();
+        const tombs = badBootRows.map(r => makeLegacyTombstoneR163(r, t));
+        cleanupLocalRowsR131('boot-r170-clear-malformed-local-option-dictionary', [].concat(allBootRows, tombs));
+        mergeCloudRows(tombs).catch(()=>{});
+      }
+    }catch(_e){}
     initFilterCombos();
     initModalCombos();
     if($('fUnit')) $('fUnit').value = '';
@@ -6635,9 +6664,9 @@ function render(){
       console.group('[Tasun][捷運汐東線權責分工精簡版] 篩選測試');
       const projectOptions = (projectList && projectList.options && typeof projectList.options.length === 'number') ? Array.from(projectList.options) : [];
       console.log('工程項目 datalist 筆數 =', projectOptions.length);
-      console.log('工程項目自訂下拉筆數 =', document.querySelectorAll('#projectComboMenu .comboItem').length);
-      console.log('工作重點選項數 =', focusSel ? focusSel.options.length : -1);
-      console.log('階段選項數 =', stageSel ? stageSel.options.length : -1);
+      console.log('工程項目自訂下拉筆數 =', document.querySelectorAll('#fProjectMenu .filterComboItem, #projectComboMenu .comboItem').length);
+      console.log('工作重點選項數 =', (focusSel && focusSel.options && typeof focusSel.options.length === 'number') ? focusSel.options.length : -1);
+      console.log('階段選項數 =', (stageSel && stageSel.options && typeof stageSel.options.length === 'number') ? stageSel.options.length : -1);
       console.log('單位選項 =', unitSel ? Array.from(unitSel.options).map(o=>o.value).filter(Boolean) : []);
       if(unitSel){
         const prevUnit = unitSel.value;
@@ -6661,7 +6690,7 @@ function render(){
       console.groupEnd();
       window.__RACI_FILTER_TEST_OK__ = true;
     }catch(err){
-      console.error('[Tasun][捷運汐東線權責分工精簡版] 篩選測試失敗', err);
+      console.warn('[Tasun][捷運汐東線權責分工精簡版] 篩選測試略過', err);
       window.__RACI_FILTER_TEST_OK__ = false;
     }
   }
