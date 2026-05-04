@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r165-cloudsave-modalfix based-on-latest-upload-20260504 -->
+  <!-- tasun-raci-r166-cloudsave-display-modal-lock based-on-latest-upload-20260504 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r165_cloudsave_modalfix">
+  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r166_cloudsave_display_modal_lock">
     
 
 <script id="tasun-github-pages-network-once-r135">
@@ -5109,8 +5109,10 @@ body.searchOpen .panelHead,
     const focusBlank = isBlankishR163(row.focus);
     const onlyProject = stageBlank && focusBlank;
     const oldMarkers = /工程材料設備採購送審|初步測試計畫|測試程序|穩定性測試|施工估驗計價|竣工圖|履約階段竣工圖|展延|遲延履約|系統整合測試|RAM查證|DVD|BIM|風險管理計畫|申請發還履約保證金/i.test(project);
-    const idn = Number(row.id) || 0;
-    return (idn >= 3 && onlyProject) || (onlyProject && oldMarkers);
+    // r166：舊版 r163 會把「只有工程項目、階段/工作重點空白」的新資料誤判為舊殘留，
+    // 導致新增後表格不顯示。正式版不再用 id>=3 這種補釘條件刪資料；
+    // 只保留明確系統清除標記由 isSystemRowR133 處理。
+    return false;
   }
 
   function makeLegacyTombstoneR163(row, t){
@@ -5495,6 +5497,51 @@ body.searchOpen .panelHead,
     }
     try{ window.__TASUN_RACI_LAST_CLOUD_SAVE_FAIL__ = {status:last && last.status, rows:all.length, at:Date.now()}; }catch(_e){}
     return false;
+  }
+
+
+  async function forceCloudSaveR166(rows, reason){
+    const all = dedupeRows(rows || [], true);
+    if(!all.length) return { ok:true, confirmed:true, cloudRows:[], reason:reason || '' };
+    const basePayload = {
+      phase:'r166-save-button-force-cloud-upload',
+      reason:String(reason || ''),
+      resourceKey:CFG.RESOURCE_KEY,
+      resource:CFG.RESOURCE_KEY,
+      pageKey:CFG.PAGE_KEY,
+      pageFile:CFG.PAGE_FILE,
+      tableId:CFG.TABLE_ID,
+      dbName:CFG.DB_NAME,
+      store:CFG.DB_STORE,
+      rows:all,
+      db:all,
+      data:{rows:all, db:all},
+      payload:{rows:all, db:all},
+      value: JSON.stringify(all)
+    };
+    let ok = false;
+    try{ ok = await mergeCloudRows(all); }catch(_e){ ok = false; }
+    let cloudRows = [];
+    try{ cloudRows = await readCloudRows(); }catch(_e){ cloudRows = []; }
+    let confirmed = hasCloudConfirmedRows(all.filter(r => !r.deleted), cloudRows);
+    if(ok && confirmed) return { ok:true, confirmed:true, cloudRows, reason:reason || '' };
+
+    const endpoints = ['/api/tasun/merge','/api/tasun/write','/api/tasun/save','/api/tasun/upload','/api/tasun/update'];
+    for(const ep of endpoints){
+      try{
+        const res = await cloudPost(ep, basePayload);
+        if(res && res.ok) ok = true;
+        cloudRows = await readCloudRows();
+        confirmed = hasCloudConfirmedRows(all.filter(r => !r.deleted), cloudRows);
+        if(ok && confirmed) break;
+      }catch(err){
+        window.__TASUN_RACI_LAST_CLOUD_ERROR__ = {path:ep, message:String(err && err.message || err), phase:'forceCloudSaveR166', at:Date.now()};
+      }
+    }
+    try{
+      window.__TASUN_RACI_R166_FORCE_SAVE_RESULT__ = { ok:!!ok, confirmed:!!confirmed, uploadRows:all.length, cloudRows:cloudRows.length, reason:String(reason || ''), at:Date.now() };
+    }catch(_e){}
+    return { ok:!!ok, confirmed:!!confirmed, cloudRows, reason:reason || '' };
   }
 
   async function clearCurrentDisplayedDataR133(){
@@ -6139,18 +6186,21 @@ function render(){
     try{ if(btnSave){ btnSave.disabled = true; btnSave.textContent = '儲存中…'; } }catch(_e){}
     try{
       const uploadRows = dedupeRows([].concat(db, deletedRows), true);
-      const mergeOk = await mergeCloudRows(uploadRows);
-      const finalCloud = await readCloudRows();
-      const confirmed = finalCloud && finalCloud.length ? cleanupLocalRowsR131('save-confirm-cloud-download-r165', [].concat(finalCloud, uploadRows)) : cleanupLocalRowsR131('save-local-preserve-r165', uploadRows);
+      const saveResult = await forceCloudSaveR166(uploadRows, isNewRow ? 'add-save-r166' : 'edit-save-r166');
+      const finalCloud = Array.isArray(saveResult.cloudRows) ? saveResult.cloudRows : [];
+      // r166：只有在雲端回傳有效列時才合併回本端；若雲端讀不到，保留剛剛儲存的本端資料，避免表格空白。
+      const confirmed = finalCloud.length ? cleanupLocalRowsR131('save-confirm-cloud-download-r166', [].concat(finalCloud, uploadRows)) : cleanupLocalRowsR131('save-local-preserve-r166', uploadRows);
       db = activeRows(confirmed).sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
       deletedRows = dedupeRows(confirmed.filter(r => r.deleted && !isSystemRowR133(r)), true);
       saveDB();
+      clearFilterInputs();
+      selectedId = Number(row.id) || selectedId;
       render();
-      setCloudSyncStatus(mergeOk ? '同步' : '待同步', isNewRow ? 'add-save-r165' : 'edit-save-r165', {mergeOk:!!mergeOk, cloudCount:finalCloud.length, localCount:uploadRows.length});
-      if(!mergeOk) scheduleCloudSync(isNewRow ? 'add-save-retry-r165' : 'edit-save-retry-r165', 3500);
+      setCloudSyncStatus((saveResult.ok && saveResult.confirmed) ? '同步' : '待同步', isNewRow ? 'add-save-r166' : 'edit-save-r166', {mergeOk:!!saveResult.ok, confirmed:!!saveResult.confirmed, cloudCount:finalCloud.length, localCount:uploadRows.length});
+      if(!(saveResult.ok && saveResult.confirmed)) scheduleCloudSync(isNewRow ? 'add-save-retry-r166' : 'edit-save-retry-r166', 3500);
     }catch(err){
-      setCloudSyncStatus('待同步', isNewRow ? 'add-save-error-r165' : 'edit-save-error-r165', {error:String(err && err.message || err)});
-      scheduleCloudSync(isNewRow ? 'add-save-error-retry-r165' : 'edit-save-error-retry-r165', 3500);
+      setCloudSyncStatus('待同步', isNewRow ? 'add-save-error-r166' : 'edit-save-error-r166', {error:String(err && err.message || err)});
+      scheduleCloudSync(isNewRow ? 'add-save-error-retry-r166' : 'edit-save-error-retry-r166', 3500);
     }finally{
       try{ if(btnSave){ btnSave.disabled = false; btnSave.textContent = oldSaveText || '儲存'; } }catch(_e){}
     }
@@ -6390,6 +6440,10 @@ function render(){
     $('btnSave').onclick = () => saveItem({ closeAfterSave:true });
     $('btnDelete').onclick = deleteItem;
     // r165：表單只能由表單按鍵關閉，背景點擊不自動關閉。
+    // r166：再次封鎖背景/浮動層誤觸關閉；只有「關閉 / 取消 / 儲存 / 刪除」按鍵可關閉表單。
+    $('mask').addEventListener('click', (e) => {
+      if(e.target === $('mask')){ e.preventDefault(); e.stopPropagation(); }
+    }, true);
 
     $('tbody').addEventListener('click', (e) => {
       const viewBtn = e.target.closest('[data-act="view"]');
