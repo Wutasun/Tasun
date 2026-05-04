@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r178-admin-duplicate-cloud-status-split based-on-latest-upload-20260504 -->
+  <!-- tasun-raci-r179-raw-cloud-duplicate-before-dedupe based-on-latest-upload-20260504 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r178_admin_duplicate_cloud_status_split">
+  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r179_raw_cloud_duplicate_before_dedupe">
     
 
 
@@ -4069,7 +4069,7 @@ body.searchOpen .panelHead,
   }
 }
 
-/* tasun-raci-r178: admin duplicate cloud status split; duplicate button only when duplicated */
+/* tasun-raci-r179: raw cloud duplicate check before dedupe; duplicate button only when duplicated */
 .dupMask{
   position:fixed;
   inset:0;
@@ -5541,26 +5541,30 @@ body.searchOpen .panelHead,
       ['rows','db','data','items','records','list','payload','result','body','value'].forEach(k => { if(x[k] != null) walk(x[k], depth+1); });
     };
     walk(obj);
-    return dedupeRows(out, true);
+    // r179：這裡必須保留「雲端原始列」，禁止先去重；重複判斷要先看 raw，再另行產生同步用去重資料。
+    return out.map(r => normalizeRow(r));
   }
 
   async function readCloudRows(){
     const keys = Array.from(new Set([CFG.RESOURCE_KEY, CFG.PAGE_KEY, CFG.PAGE_FILE, '捷運汐東線權責分工精簡版']));
-    let out = [];
+    let rawOut = [];
     for(const key of keys){
       try{
-        const res = await cloudPost('/api/tasun/read', {phase:'r133-cloud-download-before-render', resourceKey:key, resource:key});
+        const res = await cloudPost('/api/tasun/read', {phase:'r179-cloud-download-raw-before-dedupe', resourceKey:key, resource:key});
         if(res && res.ok){
           const json = await res.clone().json().catch(() => ({}));
-          out = out.concat(extractCloudRows(json));
+          rawOut = rawOut.concat(extractCloudRows(json).map(function(row){
+            return Object.assign({}, normalizeRow(row), { __cloudSourceKey: key });
+          }));
         }
       }catch(err){
         window.__TASUN_RACI_LAST_CLOUD_ERROR__ = {path:'/api/tasun/read', resourceKey:key, message:String(err && err.message || err), at:Date.now()};
       }
     }
-    window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ = out.map(r => normalizeRow(r));
-    try{ updateDuplicateStatusFromRows(out, 'cloud-read'); }catch(_e){}
-    return dedupeRows(out, true);
+    // r179：raw cache 只供重複檢查/報表使用，不能用 dedupeRows 先壓掉不同 uid 的同內容資料。
+    window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ = rawOut.map(r => normalizeRow(r));
+    try{ updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__, 'cloud-read-raw-before-dedupe'); }catch(_e){}
+    return dedupeRows(rawOut, true);
   }
 
   async function mergeCloudRows(rows){
