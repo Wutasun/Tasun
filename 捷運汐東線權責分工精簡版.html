@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r151-cloudsync-inline-databasebar-clear based-on-latest-upload-20260503 -->
+  <!-- tasun-raci-r165-cloudsave-modalfix based-on-latest-upload-20260504 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r162_manager_direct_return">
+  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r165_cloudsave_modalfix">
     
 
 <script id="tasun-github-pages-network-once-r135">
@@ -4034,6 +4034,28 @@ body.searchOpen .panelHead,
 /* tasun-raci-r151: 清除資料庫狀態列，保留雲端狀態列 */
 .raciStatusRight{display:none!important;}
 #statusBar{grid-template-columns:auto minmax(0,1fr)!important;}
+
+
+/* tasun-raci-r165: modal top-layer + unsaved yes/no dialog + disable backdrop auto-close */
+.mask{ z-index:5000 !important; }
+.modal{ z-index:5001 !important; position:relative !important; }
+.editorSection{ overflow:visible !important; }
+.editorFormLayout, .editorGrid, .editorSection .field, .modalCombo{ overflow:visible !important; }
+.modalCombo{ position:relative !important; z-index:1 !important; }
+.modalCombo:focus-within, .modalCombo.menuOpen{ z-index:6400 !important; }
+.modalComboMenu{ z-index:6450 !important; }
+.modalComboMenu.open{ z-index:6450 !important; display:block !important; }
+.pMask{ z-index:6500 !important; }
+.loginMask{ z-index:9000 !important; }
+.toast{ z-index:9500 !important; }
+.tasunUnsavedMask{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; padding:20px; background:rgba(0,0,0,.68); z-index:8000; }
+.tasunUnsavedMask.show{ display:flex; }
+.tasunUnsavedModal{ width:min(480px,94vw); border-radius:22px; border:1px solid rgba(246,211,122,.42); background:linear-gradient(180deg,rgba(33,24,15,.98),rgba(22,16,10,.98)); box-shadow:0 30px 90px rgba(0,0,0,.78), inset 0 1px 0 rgba(255,255,255,.08); color:#fff6de; overflow:hidden; }
+.tasunUnsavedHead{ padding:14px 16px; border-bottom:1px solid rgba(255,255,255,.10); font-weight:900; color:#f6d37a; letter-spacing:.06em; }
+.tasunUnsavedBody{ padding:18px 16px; line-height:1.7; font-weight:800; }
+.tasunUnsavedFoot{ padding:14px 16px; border-top:1px solid rgba(255,255,255,.10); display:flex; justify-content:flex-end; gap:10px; flex-wrap:wrap; }
+.tasunUnsavedFoot .btn{ min-width:88px; }
+
 </style>
 
 
@@ -5428,7 +5450,7 @@ body.searchOpen .panelHead,
     let out = [];
     for(const key of keys){
       try{
-        const res = await cloudPost('/api/tasun/read', {phase:'r133-cloud-download-before-render', resourceKey:key, resource:key});
+        const res = await cloudPost('/api/tasun/read', {phase:'r165-cloud-download-before-render', resourceKey:key, resource:key, tableId:CFG.TABLE_ID, dbName:CFG.DB_NAME, store:CFG.DB_STORE});
         if(res && res.ok){
           const json = await res.clone().json().catch(() => ({}));
           out = out.concat(extractCloudRows(json));
@@ -5443,108 +5465,46 @@ body.searchOpen .panelHead,
   async function mergeCloudRows(rows){
     const all = dedupeRows(rows, true);
     if(!all.length) return false;
-    try{
-      const res = await cloudPost('/api/tasun/merge', {phase:'r133-cloud-dedupe-upload', resourceKey:CFG.RESOURCE_KEY, resource:CFG.RESOURCE_KEY, rows:all, db:all, payload:{rows:all, db:all}});
-      return !!(res && res.ok);
-    }catch(err){
-      window.__TASUN_RACI_LAST_CLOUD_ERROR__ = {path:'/api/tasun/merge', message:String(err && err.message || err), at:Date.now()};
-      return false;
+    const payload = {
+      phase:'r165-cloud-dedupe-upload',
+      resourceKey:CFG.RESOURCE_KEY,
+      resource:CFG.RESOURCE_KEY,
+      pageKey:CFG.PAGE_KEY,
+      pageFile:CFG.PAGE_FILE,
+      tableId:CFG.TABLE_ID,
+      dbName:CFG.DB_NAME,
+      store:CFG.DB_STORE,
+      rows:all,
+      db:all,
+      data:{rows:all, db:all},
+      payload:{rows:all, db:all}
+    };
+    const endpoints = ['/api/tasun/merge','/api/tasun/write','/api/tasun/save'];
+    let last = null;
+    for(const ep of endpoints){
+      try{
+        const res = await cloudPost(ep, payload);
+        last = res;
+        if(res && res.ok){
+          window.__TASUN_RACI_LAST_CLOUD_SAVE_OK__ = {endpoint:ep, rows:all.length, at:Date.now()};
+          return true;
+        }
+      }catch(err){
+        window.__TASUN_RACI_LAST_CLOUD_ERROR__ = {path:ep, message:String(err && err.message || err), at:Date.now()};
+      }
     }
+    try{ window.__TASUN_RACI_LAST_CLOUD_SAVE_FAIL__ = {status:last && last.status, rows:all.length, at:Date.now()}; }catch(_e){}
+    return false;
   }
 
   async function clearCurrentDisplayedDataR133(){
-    const doneKey = CFG.CLEAR_BATCH_KEY + '::done';
-    const pendingKey = CFG.CLEAR_BATCH_KEY + '::pending';
+    // r165：停止開頁自動清空/刪除雲端資料。開頁僅做下載、去重與合併同步，避免新增後資料又被舊清除流程覆蓋。
     try{
-      if(localStorage.getItem(doneKey) === '1') return false;
-      if(localStorage.getItem(pendingKey) === '1' && (Date.now() - Number(localStorage.getItem(CFG.CLEAR_BATCH_KEY + '::pendingAt') || 0)) < 20000) return false;
-      localStorage.setItem(pendingKey, '1');
-      localStorage.setItem(CFG.CLEAR_BATCH_KEY + '::pendingAt', String(Date.now()));
+      localStorage.setItem(CFG.CLEAR_BATCH_KEY + '::disabledAt_r165', String(Date.now()));
+      localStorage.removeItem(CFG.CLEAR_BATCH_KEY + '::pending');
     }catch(_e){}
-
-    const t = Date.now();
-    const cloudCandidates = await readCloudRows();
-    const cloudAlreadyMarked = cloudCandidates.some(isCurrentClearMarkerR133);
-    if(cloudAlreadyMarked){
-      db = [];
-      deletedRows = [];
-      try{ localStorage.setItem(CFG.DB_KEY, '[]'); }catch(_e){}
-      try{ localStorage.setItem(CFG.DELETED_KEY, '[]'); }catch(_e){}
-      try{ localStorage.setItem(CFG.COUNTER_KEY, '0'); }catch(_e){}
-      try{ localStorage.removeItem(CFG.LEGACY_DB_KEY); }catch(_e){}
-      try{ localStorage.removeItem(CFG.LEGACY_COUNTER_KEY); }catch(_e){}
-      try{ await clearIdbRowsR132(); }catch(_e){}
-      try{
-        localStorage.setItem(doneKey, '1');
-        localStorage.removeItem(pendingKey);
-        localStorage.setItem(CFG.CLEAR_BATCH_KEY + '::doneAt', String(Date.now()));
-      }catch(_e){}
-      setCloudSyncStatus('同步', 'r133-clear-already-applied-cloud-marker', {clearBatch:CFG.CLEAR_BATCH_KEY, cleared:0});
-      ensureTableMetaR131();
-      return true;
-    }
-    const localCandidates = [].concat(
-      db,
-      deletedRows,
-      parseRows(localStorage.getItem(CFG.DB_KEY)),
-      parseRows(localStorage.getItem(CFG.DELETED_KEY)),
-      parseRows(localStorage.getItem(CFG.LEGACY_DB_KEY)),
-      await readIdbRows()
-    );
-    const all = dedupeRows([].concat(localCandidates, cloudCandidates), true);
-    const alreadyMarked = all.some(isCurrentClearMarkerR133);
-    const tombstones = all
-      .filter(r => !isSystemRowR133(r) && !r.deleted)
-      .map((old) => Object.assign({}, normalizeRow(old), {
-        deleted:true,
-        _deleted:true,
-        updatedAt:t,
-        rev:t,
-        deletedAt:t,
-        clearBatch:CFG.CLEAR_BATCH_KEY,
-        pageKey:CFG.PAGE_KEY,
-        resourceKey:CFG.RESOURCE_KEY,
-        pageFile:CFG.PAGE_FILE
-      }));
-    const marker = Object.assign({}, blankRow(), {
-      uid:CFG.CLEAR_MARKER_UID,
-      pk:CFG.CLEAR_MARKER_UID,
-      id:0,
-      project:'__TASUN_CLEAR_MARKER_R133__',
-      systemRow:true,
-      _system:true,
-      clearBatch:CFG.CLEAR_BATCH_KEY,
-      deleted:false,
-      updatedAt:t,
-      rev:t,
-      pageKey:CFG.PAGE_KEY,
-      resourceKey:CFG.RESOURCE_KEY,
-      pageFile:CFG.PAGE_FILE
-    });
-
-    db = [];
-    deletedRows = tombstones;
-    try{ localStorage.setItem(CFG.DB_KEY, '[]'); }catch(_e){}
-    try{ localStorage.setItem(CFG.DELETED_KEY, JSON.stringify(tombstones)); }catch(_e){}
-    try{ localStorage.setItem(CFG.COUNTER_KEY, '0'); }catch(_e){}
-    try{ localStorage.removeItem(CFG.LEGACY_DB_KEY); }catch(_e){}
-    try{ localStorage.removeItem(CFG.LEGACY_COUNTER_KEY); }catch(_e){}
-    try{ localStorage.removeItem(CFG.LAST_GOOD_KEY); }catch(_e){}
-    try{ await clearIdbRowsR132(); }catch(_e){}
-    try{ await saveIdbRows(tombstones); }catch(_e){}
-
-    if(!alreadyMarked || tombstones.length){
-      try{ await mergeCloudRows(dedupeRows([].concat(tombstones, [marker]), true)); }catch(_e){}
-      try{ await readCloudRows(); }catch(_e){}
-    }
-    try{
-      localStorage.setItem(doneKey, '1');
-      localStorage.removeItem(pendingKey);
-      localStorage.setItem(CFG.CLEAR_BATCH_KEY + '::doneAt', String(Date.now()));
-    }catch(_e){}
-    setCloudSyncStatus('同步', 'r133-clear-current-local-cloud-data', {clearBatch:CFG.CLEAR_BATCH_KEY, cleared:tombstones.length});
     ensureTableMetaR131();
-    return true;
+    return false;
   }
 
   function scheduleCloudSync(reason, delay=CFG.SYNC_THROTTLE_MS){
@@ -5667,7 +5627,7 @@ body.searchOpen .panelHead,
   }
 
   function closeMenus(selector){
-    document.querySelectorAll(selector + '.open').forEach(node => node.classList.remove('open'));
+    document.querySelectorAll(selector + '.open').forEach(node => { node.classList.remove('open'); try{ const c=node.closest('.modalCombo'); if(c) c.classList.remove('menuOpen'); }catch(_e){} });
   }
 
   function getFilterRows(exclude=[]){
@@ -5777,7 +5737,7 @@ body.searchOpen .panelHead,
     menu.innerHTML = items.length
       ? items.map(v => `<button class="modalComboItem" type="button" data-target="${inputId}" data-value="${escHtml(v)}">${escHtml(v)}</button>`).join('')
       : '<div class="modalComboEmpty">目前沒有可用選項，可直接手動輸入</div>';
-    if(forceOpen) menu.classList.add('open');
+    if(forceOpen){ menu.classList.add('open'); try{ input.closest('.modalCombo').classList.add('menuOpen'); }catch(_e){} }
     applyAsciiTight(input);
   }
 
@@ -6070,22 +6030,53 @@ function render(){
     }catch(_e){}
   }
 
-  function closeModal(forceClose){
+  function ensureUnsavedDialog(){
+    let mask = document.getElementById('tasunUnsavedMask');
+    if(mask) return mask;
+    mask = document.createElement('div');
+    mask.id = 'tasunUnsavedMask';
+    mask.className = 'tasunUnsavedMask';
+    mask.innerHTML = '<div class="tasunUnsavedModal" role="dialog" aria-modal="true" aria-label="資料有變動是否儲存"><div class="tasunUnsavedHead">資料確認</div><div class="tasunUnsavedBody">資料有變動是否儲存</div><div class="tasunUnsavedFoot"><button class="btn" id="tasunUnsavedYes" type="button">是</button><button class="btn ghost" id="tasunUnsavedNo" type="button">否</button></div></div>';
+    document.body.appendChild(mask);
+    return mask;
+  }
+
+  function askUnsavedSave(){
+    return new Promise((resolve) => {
+      const mask = ensureUnsavedDialog();
+      const yes = document.getElementById('tasunUnsavedYes');
+      const no = document.getElementById('tasunUnsavedNo');
+      const done = (val) => {
+        mask.classList.remove('show');
+        if(yes) yes.onclick = null;
+        if(no) no.onclick = null;
+        resolve(val);
+      };
+      if(yes) yes.onclick = () => done(true);
+      if(no) no.onclick = () => done(false);
+      mask.classList.add('show');
+      try{ if(yes) yes.focus(); }catch(_e){}
+    });
+  }
+
+  async function closeModal(forceClose){
     if(forceClose === true){
       hardCloseModal();
       return;
     }
     if(MODAL_STATE.mode === 'edit' && modalIsDirty()){
-      const goSave = confirm('表單尚未儲存，是否先儲存？\n按「確定」先儲存後關閉；按「取消」直接關閉不儲存。');
+      const goSave = await askUnsavedSave();
       if(goSave){
-        saveItem({ closeAfterSave:true });
+        await saveItem({ closeAfterSave:true });
         return;
       }
+      hardCloseModal();
+      return;
     }
     hardCloseModal();
   }
 
-  function saveItem(options){
+  async function saveItem(options){
     validateSession();
     if(!canWrite()){
       toast('目前帳號不可儲存');
@@ -6142,9 +6133,29 @@ function render(){
     editingId = Number(row.id) || null;
     render();
     captureModalSnapshot();
+
+    const btnSave = $('btnSave');
+    const oldSaveText = btnSave ? btnSave.textContent : '';
+    try{ if(btnSave){ btnSave.disabled = true; btnSave.textContent = '儲存中…'; } }catch(_e){}
+    try{
+      const uploadRows = dedupeRows([].concat(db, deletedRows), true);
+      const mergeOk = await mergeCloudRows(uploadRows);
+      const finalCloud = await readCloudRows();
+      const confirmed = finalCloud && finalCloud.length ? cleanupLocalRowsR131('save-confirm-cloud-download-r165', [].concat(finalCloud, uploadRows)) : cleanupLocalRowsR131('save-local-preserve-r165', uploadRows);
+      db = activeRows(confirmed).sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
+      deletedRows = dedupeRows(confirmed.filter(r => r.deleted && !isSystemRowR133(r)), true);
+      saveDB();
+      render();
+      setCloudSyncStatus(mergeOk ? '同步' : '待同步', isNewRow ? 'add-save-r165' : 'edit-save-r165', {mergeOk:!!mergeOk, cloudCount:finalCloud.length, localCount:uploadRows.length});
+      if(!mergeOk) scheduleCloudSync(isNewRow ? 'add-save-retry-r165' : 'edit-save-retry-r165', 3500);
+    }catch(err){
+      setCloudSyncStatus('待同步', isNewRow ? 'add-save-error-r165' : 'edit-save-error-r165', {error:String(err && err.message || err)});
+      scheduleCloudSync(isNewRow ? 'add-save-error-retry-r165' : 'edit-save-error-retry-r165', 3500);
+    }finally{
+      try{ if(btnSave){ btnSave.disabled = false; btnSave.textContent = oldSaveText || '儲存'; } }catch(_e){}
+    }
     hardCloseModal();
-    toast(isNewRow ? '已新增並同步雲端' : '已儲存並同步雲端');
-    scheduleCloudSync(isNewRow ? 'add-save' : 'edit-save', 50);
+    toast(isNewRow ? '已新增，資料已送出雲端同步' : '已儲存，資料已送出雲端同步');
     return true;
   }
 
@@ -6374,11 +6385,11 @@ function render(){
     $('btnUpload').onclick = () => runEditMenuAction('upload');
     $('fileInput').addEventListener('change', () => { const f = $('fileInput').files?.[0]; if(f) importExcel(f); });
 
-    $('btnClose').onclick = closeModal;
-    $('btnCancel').onclick = closeModal;
-    $('btnSave').onclick = saveItem;
+    $('btnClose').onclick = () => closeModal();
+    $('btnCancel').onclick = () => closeModal();
+    $('btnSave').onclick = () => saveItem({ closeAfterSave:true });
     $('btnDelete').onclick = deleteItem;
-    $('mask').addEventListener('click', (e) => { if(e.target === $('mask')) closeModal(); });
+    // r165：表單只能由表單按鍵關閉，背景點擊不自動關閉。
 
     $('tbody').addEventListener('click', (e) => {
       const viewBtn = e.target.closest('[data-act="view"]');
@@ -6397,7 +6408,7 @@ function render(){
       if(e.key === 'Escape'){
         if(document.body.classList.contains('searchOpen')) closeSearchPanel();
         else if($('loginMask').classList.contains('show')) closeLoginModal();
-        else if($('mask').style.display === 'flex') closeModal();
+        else if($('mask').style.display === 'flex') closeMenus('.modalComboMenu');
       }
       if(e.key === 'Enter'){
         if($('loginMask').classList.contains('show')) doLogin();
@@ -6463,14 +6474,9 @@ function render(){
     closeSearchPanel();
     updateSearchPanelPosition();
     render();
-    clearCurrentDisplayedDataR133().then(function(cleared){
-      loadDB();
-      render();
-      scheduleCloudSync(cleared ? 'boot-r133-clear-confirm-download-upload' : 'boot-download', cleared ? 80 : 300);
-      try{ if(window.__TASUN_RACI_RESYNC_STAGE__) window.__TASUN_RACI_RESYNC_STAGE__(); }catch(_e){}
-    }).catch(function(){
-      scheduleCloudSync('boot-download-after-clear-error', 300);
-    });
+    // r165：開頁不再執行舊版自動清空流程，直接下載雲端、去重、合併後再上傳確認。
+    scheduleCloudSync('boot-download-r165-no-autoclear', 300);
+    try{ if(window.__TASUN_RACI_RESYNC_STAGE__) window.__TASUN_RACI_RESYNC_STAGE__(); }catch(_e){}
   }
 
   bindUI();
