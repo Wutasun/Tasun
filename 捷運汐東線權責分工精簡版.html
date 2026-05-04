@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r172-delete-pick-confirm-sync based-on-latest-upload-20260504 -->
+  <!-- tasun-raci-r173-delete-yes-immediate-local-cloud-sync based-on-latest-upload-20260504 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r172_delete_pick_confirm_sync">
+  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r173_delete_yes_immediate_local_cloud_sync">
     
 
 <script id="tasun-github-pages-html-network-once-v5">
@@ -6334,6 +6334,78 @@ function render(){
   }
 
 
+  function persistDeleteLocalNow(activeRowsNext, tombRowsNext, reason){
+    db = activeRowsNext.map(r => normalizeRow(r)).filter(r => !r.deleted);
+    deletedRows = dedupeRows(tombRowsNext || [], true).filter(r => r.deleted && !isSystemRowR133(r));
+    try{ localStorage.setItem(CFG.DB_KEY, JSON.stringify(db)); }catch(_e){}
+    try{ localStorage.setItem(CFG.DELETED_KEY, JSON.stringify(deletedRows)); }catch(_e){}
+    try{ saveIdbRows([].concat(db, deletedRows)); }catch(_e){}
+    try{ localStorage.setItem('tasunRACI_Simple_pending_sync_v151', JSON.stringify({reason:String(reason||'delete-local'), at:Date.now(), count:db.length, deletedCount:deletedRows.length})); }catch(_e){}
+    updateRaciStatus();
+  }
+
+  function syncDeleteNow(reason){
+    try{ clearTimeout(cloudSyncTimer); }catch(_e){}
+    setCloudSyncStatus('同步中', reason || 'delete-confirm');
+    setTimeout(function(){
+      Promise.resolve(syncCloud(reason || 'delete-confirm-immediate'))
+        .then(function(){ try{ loadDB(); render(); }catch(_e){} })
+        .catch(function(){ scheduleCloudSync((reason || 'delete-confirm-immediate') + '-retry', 650); });
+    }, 0);
+  }
+
+  function performDeleteRowByIdentity(targetId, targetUid, reason){
+    validateSession();
+    if(!isAdmin()){ toast('僅 admin 可刪除'); return false; }
+    const id = Number(targetId) || 0;
+    const uid = norm(targetUid || '');
+    const target = findRowByIdentity(id, uid);
+    if(!target){ toast('找不到要刪除的資料，請重新點選資料列'); return false; }
+    const t = Date.now();
+    const safeTarget = normalizeRow(target);
+    const safeUid = norm(safeTarget.uid || safeTarget.pk || uid || createUid(safeTarget));
+    const safeId = Number(safeTarget.id || id) || 0;
+    const safeSig = getRowSignature(safeTarget);
+    const tomb = Object.assign({}, safeTarget, {
+      id: safeId || safeTarget.id,
+      uid: safeUid,
+      pk: safeUid,
+      deleted: true,
+      _deleted: true,
+      updatedAt: t,
+      rev: t,
+      deletedAt: t,
+      pendingDelete: true,
+      pageKey: CFG.PAGE_KEY,
+      resourceKey: CFG.RESOURCE_KEY,
+      pageFile: CFG.PAGE_FILE,
+      deleteReason: String(reason || 'delete-confirm-yes')
+    });
+
+    const oldDeleted = parseRows(localStorage.getItem(CFG.DELETED_KEY));
+    const nextDeleted = dedupeRows([].concat(deletedRows, oldDeleted, [tomb]), true).filter(r => r.deleted && !isSystemRowR133(r));
+    const nextDb = db.map(function(x){ return normalizeRow(x || {}); }).filter(function(x){
+      const xUid = norm(x.uid || x.pk);
+      const xId = Number(x.id) || 0;
+      const xSig = getRowSignature(x);
+      if(safeUid && xUid === safeUid) return false;
+      if(safeId && xId === safeId) return false;
+      if(safeSig && xSig === safeSig) return false;
+      return true;
+    });
+
+    pendingDeletePick = false;
+    editingId = null;
+    if(Number(selectedId) === safeId || selectedUid === safeUid){ selectedId = null; selectedUid = ''; }
+    persistDeleteLocalNow(nextDb, nextDeleted, reason || 'delete-confirm-yes');
+    hideUnsavedConfirm();
+    closeModal(true);
+    render();
+    toast('已刪除此列，正在同步雲端');
+    syncDeleteNow(reason || 'delete-confirm-yes');
+    return true;
+  }
+
   function deleteItem(request){
     validateSession();
     if(!isAdmin()){ toast('僅 admin 可刪除'); return false; }
@@ -6342,9 +6414,12 @@ function render(){
     const targetUid = norm(req.selectedUid || req.targetUid || selectedUid || '');
     const target = findRowByIdentity(targetId, targetUid);
     if(!target){ toast('找不到要刪除的資料，請重新點選資料列'); return false; }
+    const safe = normalizeRow(target);
+    const deleteId = Number(safe.id || targetId) || 0;
+    const deleteUid = norm(safe.uid || safe.pk || targetUid);
+    selectedId = deleteId || selectedId || null;
+    selectedUid = deleteUid || selectedUid || '';
     if(!req.skipConfirm){
-      selectedId = Number(target.id) || targetId || null;
-      selectedUid = norm(target.uid || target.pk || targetUid);
       render();
       return showTasunConfirm({
         title: '刪除資料確認',
@@ -6352,35 +6427,14 @@ function render(){
         yesText: '是',
         noText: '否',
         onYes: function(){
-          return deleteItem({ source:'deleteItem-confirm', targetId:selectedId, selectedUid:selectedUid, skipConfirm:true });
+          return performDeleteRowByIdentity(deleteId, deleteUid, 'deleteItem-confirm-yes');
         },
         onNo: function(){
           pendingDeletePick = false;
         }
       });
     }
-    const t = Date.now();
-    const safeTarget = normalizeRow(target);
-    const safeUid = norm(safeTarget.uid || safeTarget.pk || targetUid);
-    const tomb = Object.assign({}, safeTarget, {uid:safeUid, pk:safeUid, deleted:true, _deleted:true, updatedAt:t, rev:t, deletedAt:t, pendingDelete:true, pageKey:CFG.PAGE_KEY, resourceKey:CFG.RESOURCE_KEY, pageFile:CFG.PAGE_FILE});
-    deletedRows = dedupeRows([].concat(deletedRows, [tomb]), true).filter(r => r.deleted);
-    saveDeletedRows(deletedRows);
-    db = db.filter(function(x){
-      const nx = normalizeRow(x || {});
-      const xUid = norm(nx.uid || nx.pk);
-      if(safeUid && xUid === safeUid) return false;
-      if(Number(nx.id) && Number(nx.id) === Number(safeTarget.id)) return false;
-      return true;
-    });
-    pendingDeletePick = false;
-    saveDB();
-    if(Number(selectedId) === Number(safeTarget.id) || selectedUid === safeUid){ selectedId = null; selectedUid = ''; }
-    editingId = null;
-    closeModal(true);
-    render();
-    scheduleCloudSync('delete-save-immediate', 50);
-    toast('已刪除並同步雲端');
-    return true;
+    return performDeleteRowByIdentity(deleteId, deleteUid, req.source || 'deleteItem-skip-confirm-yes');
   }
 
   function locateHeaders(rows){
@@ -6564,8 +6618,10 @@ function render(){
   function confirmDeleteRow(row){
     if(!row){ toast('找不到要刪除的資料，請重新點選資料列'); return false; }
     const safe = normalizeRow(row);
-    selectedId = Number(safe.id) || selectedId || null;
-    selectedUid = norm(safe.uid || safe.pk || selectedUid);
+    const deleteId = Number(safe.id || selectedId) || 0;
+    const deleteUid = norm(safe.uid || safe.pk || selectedUid);
+    selectedId = deleteId || selectedId || null;
+    selectedUid = deleteUid || selectedUid || '';
     editingId = null;
     render();
     return showTasunConfirm({
@@ -6574,7 +6630,7 @@ function render(){
       yesText: '是',
       noText: '否',
       onYes: function(){
-        return deleteItem({ source:'row-click-delete-confirm', targetId:selectedId, selectedUid:selectedUid, skipConfirm:true });
+        return performDeleteRowByIdentity(deleteId, deleteUid, 'row-click-delete-confirm-yes');
       },
       onNo: function(){
         pendingDeletePick = false;
