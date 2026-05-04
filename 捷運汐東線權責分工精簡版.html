@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r171-cloud-rowid-delete-stage-fix based-on-latest-upload-20260504 -->
+  <!-- tasun-raci-r172-delete-pick-confirm-sync based-on-latest-upload-20260504 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r171_cloud_rowid_delete_stage_fix">
+  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r172_delete_pick_confirm_sync">
     
 
 <script id="tasun-github-pages-html-network-once-v5">
@@ -4722,6 +4722,7 @@ body.searchOpen .panelHead,
   let editingId = null;
   let selectedId = null;
   let selectedUid = '';
+  let pendingDeletePick = false;
   let deletedRows = [];
   let idb = null;
   let idbOpening = null;
@@ -5904,7 +5905,7 @@ body.searchOpen .panelHead,
   function renderTable(rows){
     const tbody = $('tbody');
     tbody.innerHTML = rows.length ? rows.map(r => `
-      <tr data-id="${r.id}" data-uid="${escHtml(r.uid)}" data-pk="${escHtml(r.pk || r.uid)}" data-resource-key="${escHtml(r.resourceKey || CFG.RESOURCE_KEY)}" class="${selectedId === r.id ? 'sel' : ''}">
+      <tr data-id="${r.id}" data-uid="${escHtml(r.uid)}" data-pk="${escHtml(r.pk || r.uid)}" data-resource-key="${escHtml(r.resourceKey || CFG.RESOURCE_KEY)}" class="${(Number(selectedId) === Number(r.id) || (selectedUid && selectedUid === norm(r.uid || r.pk))) ? 'sel' : ''}">
         <td>${escHtml(r.stage) || '<span class="muted">—</span>'}</td>
         <td>${escHtml(r.focus) || '<span class="muted">—</span>'}</td>
         <td>${escHtml(r.project) || '<span class="muted">—</span>'}</td>
@@ -6166,8 +6167,8 @@ function render(){
     panel.setAttribute('aria-modal', 'true');
     panel.innerHTML = [
       '<div class="tasunUnsavedModal">',
-      '  <div class="tasunUnsavedHead">資料儲存確認</div>',
-      '  <div class="tasunUnsavedBody">資料有變動是否儲存</div>',
+      '  <div class="tasunUnsavedHead" id="tasunConfirmHead">資料儲存確認</div>',
+      '  <div class="tasunUnsavedBody" id="tasunConfirmBody">資料有變動是否儲存</div>',
       '  <div class="tasunUnsavedFoot">',
       '    <button class="btn" id="tasunUnsavedYes" type="button">是</button>',
       '    <button class="btn ghost" id="tasunUnsavedNo" type="button">否</button>',
@@ -6189,29 +6190,60 @@ function render(){
     if(panel) panel.classList.remove('show');
   }
 
-  function showUnsavedConfirm(onYes, onNo){
+  function showTasunConfirm(options){
+    var opt = options || {};
     var panel = ensureUnsavedConfirmDom();
+    var head = $('tasunConfirmHead');
+    var body = $('tasunConfirmBody');
     var yes = $('tasunUnsavedYes');
     var no = $('tasunUnsavedNo');
-    if(!panel || !yes || !no){
-      toast('找不到儲存確認表單，新增/編輯表單維持開啟');
-      return;
+    if(!panel || !yes || !no || !head || !body){
+      toast(opt.fallback || opt.message || '確認表單載入失敗');
+      return false;
     }
-    yes.onclick = function(e){
+    head.textContent = norm(opt.title || '系統訊息');
+    body.textContent = norm(opt.message || '請確認');
+    yes.textContent = norm(opt.yesText || '是');
+    no.textContent = norm(opt.noText || '否');
+    no.style.display = (opt.showNo === false) ? 'none' : '';
+    yes.onclick = async function(e){
       e.preventDefault();
       e.stopPropagation();
       var ok = true;
-      try{ ok = onYes ? onYes() !== false : true; }catch(err){ ok = false; console.error(err); }
+      try{ ok = opt.onYes ? (await opt.onYes()) !== false : true; }catch(err){ ok = false; console.error(err); }
       if(ok) hideUnsavedConfirm();
     };
     no.onclick = function(e){
       e.preventDefault();
       e.stopPropagation();
-      try{ if(onNo) onNo(); }catch(err){ console.error(err); }
+      try{ if(opt.onNo) opt.onNo(); }catch(err){ console.error(err); }
       hideUnsavedConfirm();
     };
     panel.classList.add('show');
     try{ yes.focus(); }catch(_e){}
+    return true;
+  }
+
+  function showInfoDialog(message, title, onClose){
+    return showTasunConfirm({
+      title: title || '系統訊息',
+      message: message || '請確認',
+      yesText: '知道了',
+      showNo: false,
+      onYes: onClose || null
+    });
+  }
+
+  function showUnsavedConfirm(onYes, onNo){
+    return showTasunConfirm({
+      title: '資料儲存確認',
+      message: '資料有變動是否儲存',
+      yesText: '是',
+      noText: '否',
+      onYes: onYes,
+      onNo: onNo,
+      fallback: '找不到儲存確認表單，新增/編輯表單維持開啟'
+    });
   }
 
   function closeModal(request){
@@ -6305,24 +6337,48 @@ function render(){
   function deleteItem(request){
     validateSession();
     if(!isAdmin()){ toast('僅 admin 可刪除'); return false; }
-    const req = request || {};
-    const targetId = Number(editingId != null ? editingId : selectedId) || 0;
-    const targetUid = norm(req.selectedUid || selectedUid || '');
-    let target = targetId ? db.find(x => Number(x.id) === Number(targetId)) : null;
-    if(!target && targetUid) target = db.find(x => norm(x.uid) === targetUid || norm(x.pk) === targetUid);
+    const req = (request && request.type) ? {} : (request || {});
+    const targetId = Number(req.targetId || req.id || (editingId != null ? editingId : selectedId)) || 0;
+    const targetUid = norm(req.selectedUid || req.targetUid || selectedUid || '');
+    const target = findRowByIdentity(targetId, targetUid);
     if(!target){ toast('找不到要刪除的資料，請重新點選資料列'); return false; }
-    if(!confirm('確定刪除這筆資料？')) return false;
+    if(!req.skipConfirm){
+      selectedId = Number(target.id) || targetId || null;
+      selectedUid = norm(target.uid || target.pk || targetUid);
+      render();
+      return showTasunConfirm({
+        title: '刪除資料確認',
+        message: '要刪除列嗎?',
+        yesText: '是',
+        noText: '否',
+        onYes: function(){
+          return deleteItem({ source:'deleteItem-confirm', targetId:selectedId, selectedUid:selectedUid, skipConfirm:true });
+        },
+        onNo: function(){
+          pendingDeletePick = false;
+        }
+      });
+    }
     const t = Date.now();
     const safeTarget = normalizeRow(target);
-    const tomb = Object.assign({}, safeTarget, {deleted:true, _deleted:true, updatedAt:t, rev:t, deletedAt:t, pendingDelete:true, pageKey:CFG.PAGE_KEY, resourceKey:CFG.RESOURCE_KEY, pageFile:CFG.PAGE_FILE});
+    const safeUid = norm(safeTarget.uid || safeTarget.pk || targetUid);
+    const tomb = Object.assign({}, safeTarget, {uid:safeUid, pk:safeUid, deleted:true, _deleted:true, updatedAt:t, rev:t, deletedAt:t, pendingDelete:true, pageKey:CFG.PAGE_KEY, resourceKey:CFG.RESOURCE_KEY, pageFile:CFG.PAGE_FILE});
     deletedRows = dedupeRows([].concat(deletedRows, [tomb]), true).filter(r => r.deleted);
     saveDeletedRows(deletedRows);
-    db = db.filter(x => norm(x.uid) !== norm(safeTarget.uid));
+    db = db.filter(function(x){
+      const nx = normalizeRow(x || {});
+      const xUid = norm(nx.uid || nx.pk);
+      if(safeUid && xUid === safeUid) return false;
+      if(Number(nx.id) && Number(nx.id) === Number(safeTarget.id)) return false;
+      return true;
+    });
+    pendingDeletePick = false;
     saveDB();
-    if(Number(selectedId) === Number(safeTarget.id) || selectedUid === safeTarget.uid){ selectedId = null; selectedUid = ''; }
+    if(Number(selectedId) === Number(safeTarget.id) || selectedUid === safeUid){ selectedId = null; selectedUid = ''; }
+    editingId = null;
     closeModal(true);
     render();
-    scheduleCloudSync('delete-save', 50);
+    scheduleCloudSync('delete-save-immediate', 50);
     toast('已刪除並同步雲端');
     return true;
   }
@@ -6471,6 +6527,61 @@ function render(){
     toast(`已全部顯示：${db.length} 筆`);
   }
 
+  function findRowByIdentity(id, uid){
+    const targetId = Number(id) || 0;
+    const targetUid = norm(uid || '');
+    let row = targetId ? db.find(x => Number(x.id) === Number(targetId)) : null;
+    if(!row && targetUid) row = db.find(x => norm(x.uid) === targetUid || norm(x.pk) === targetUid);
+    return row || null;
+  }
+
+  function selectRowFromDom(tr){
+    if(!tr) return null;
+    const id = Number(tr.dataset.id) || 0;
+    const uid = norm(tr.dataset.uid || tr.dataset.pk || '');
+    const row = findRowByIdentity(id, uid);
+    if(row){
+      selectedId = Number(row.id) || id || null;
+      selectedUid = norm(row.uid || row.pk || uid);
+      return row;
+    }
+    selectedId = id || null;
+    selectedUid = uid;
+    return null;
+  }
+
+  function beginDeletePickMode(){
+    if(!isAdmin()){ toast('僅 admin 可刪除'); return false; }
+    pendingDeletePick = true;
+    editingId = null;
+    selectedId = null;
+    selectedUid = '';
+    render();
+    showInfoDialog('請選擇要刪除列', '刪除資料');
+    return true;
+  }
+
+  function confirmDeleteRow(row){
+    if(!row){ toast('找不到要刪除的資料，請重新點選資料列'); return false; }
+    const safe = normalizeRow(row);
+    selectedId = Number(safe.id) || selectedId || null;
+    selectedUid = norm(safe.uid || safe.pk || selectedUid);
+    editingId = null;
+    render();
+    return showTasunConfirm({
+      title: '刪除資料確認',
+      message: '要刪除列嗎?',
+      yesText: '是',
+      noText: '否',
+      onYes: function(){
+        return deleteItem({ source:'row-click-delete-confirm', targetId:selectedId, selectedUid:selectedUid, skipConfirm:true });
+      },
+      onNo: function(){
+        pendingDeletePick = false;
+      }
+    });
+  }
+
   function runEditMenuAction(action){
     if(!canWrite()){ toast('唯讀不可使用編輯功能'); return; }
     action = norm(action);
@@ -6484,10 +6595,7 @@ function render(){
       return;
     }
     if(action === 'delete'){
-      if(!isAdmin()){ toast('僅 admin 可刪除'); return; }
-      if(!selectedId && !selectedUid){ toast('請先點選一列再刪除'); return; }
-      editingId = selectedId ? Number(selectedId) : editingId;
-      deleteItem({ source:'editActionSelect', selectedUid:selectedUid });
+      beginDeletePickMode();
       return;
     }
     if(action === 'download'){
@@ -6504,6 +6612,7 @@ function render(){
   window.__TASUN_RACI_RUN_EDIT_ACTION__ = runEditMenuAction;
 
   function bindUI(){
+    if(!requireDom(['navHome','mBack','btnSearch','mSearchBtn','btnShowAll','editActionSelect','searchBackdrop','mMoreBtn','mMoreMenu','btnClear','btnAdd','btnEdit','btnTemplate','btnUpload','fileInput','btnClose','btnCancel','btnSave','btnDelete','mask','tbody','loginClose','loginToAuth','loginBtn','loginMask','loginUser','loginPass'], 'bindUI')){ window.__TASUN_RACI_DOM_ABORTED__ = true; return false; }
     $('navHome').onclick = () => go(CFG.MANAGE_PAGE);
     $('mBack').onclick = () => go(CFG.MANAGE_PAGE);
     $('btnSearch').onclick = (e) => { e.preventDefault(); e.stopPropagation(); toggleSearchPanel(); };
@@ -6539,12 +6648,19 @@ function render(){
     $('mask').addEventListener('click', (e) => { if(e.target === $('mask')){ e.preventDefault(); e.stopPropagation(); toast('請使用表單上的按鍵關閉'); } });
 
     $('tbody').addEventListener('click', (e) => {
-      const viewBtn = e.target.closest('[data-act="view"]');
-      if(viewBtn){ const id = Number(viewBtn.dataset.id); if(Number.isFinite(id)) openModal(id, false); return; }
       const tr = e.target.closest('tr[data-id]');
       if(!tr) return;
-      selectedId = Number(tr.dataset.id) || null;
-      selectedUid = norm(tr.dataset.uid || '');
+      if(pendingDeletePick){
+        e.preventDefault();
+        e.stopPropagation();
+        const row = selectRowFromDom(tr);
+        render();
+        confirmDeleteRow(row);
+        return;
+      }
+      const viewBtn = e.target.closest('[data-act="view"]');
+      if(viewBtn){ const id = Number(viewBtn.dataset.id); if(Number.isFinite(id)) openModal(id, false); return; }
+      selectRowFromDom(tr);
       render();
     });
 
@@ -6569,6 +6685,7 @@ function render(){
       el.dataset.modalDirtyBound = '1';
       ['input','change'].forEach((evtName) => el.addEventListener(evtName, () => { modalIsDirty(); }));
     });
+    return true;
   }
 
 
@@ -6642,7 +6759,7 @@ function render(){
     });
   }
 
-  bindUI();
+  if(bindUI() !== false){
   startSessionWatch();
   try{
     window.__TASUN_RACI_CLEAR_LEGACY_AFTER_ROW2_R163__ = async function(){
@@ -6664,6 +6781,7 @@ function render(){
     };
   }catch(_e){}
   start();
+  }
 
 })();
 </script>
