@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r179-duplicate-result-not-checking based-on-latest-upload-20260504 -->
+  <!-- tasun-raci-r179-duplicate-effective-result based-on-latest-upload-20260504 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r179_duplicate_result_not_checking">
+  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r179_duplicate_effective_result">
     
 
 
@@ -4810,8 +4810,6 @@ body.searchOpen .panelHead,
   let cloudSyncing = false;
   let lastCloudSyncAt = 0;
   let watchStarted = false;
-  let duplicateReport = {groups:[], rows:[], count:0, duplicateCount:0, checkedAt:0, source:'boot'};
-  let selectedDuplicateRow = null;
 
   const $ = (id) => document.getElementById(id);
   const norm = (v) => (v == null ? '' : String(v)).trim();
@@ -5543,8 +5541,7 @@ body.searchOpen .panelHead,
       ['rows','db','data','items','records','list','payload','result','body','value'].forEach(k => { if(x[k] != null) walk(x[k], depth+1); });
     };
     walk(obj);
-    // raw cloud rows must remain un-deduped here so duplicate inspection sees the real cloud payload.
-    // The caller still dedupes separately before merge/render.
+    // r179: 這裡必須保留 raw 雲端資料，不可先去重；重複檢查與同步去重分流處理。
     return out.map(r => normalizeRow(r));
   }
 
@@ -5553,7 +5550,7 @@ body.searchOpen .panelHead,
     let out = [];
     for(const key of keys){
       try{
-        const res = await cloudPost('/api/tasun/read', {phase:'r133-cloud-download-before-render', resourceKey:key, resource:key});
+        const res = await cloudPost('/api/tasun/read', {phase:'r179-cloud-download-before-render-raw-first', resourceKey:key, resource:key});
         if(res && res.ok){
           const json = await res.clone().json().catch(() => ({}));
           out = out.concat(extractCloudRows(json));
@@ -5562,9 +5559,10 @@ body.searchOpen .panelHead,
         window.__TASUN_RACI_LAST_CLOUD_ERROR__ = {path:'/api/tasun/read', resourceKey:key, message:String(err && err.message || err), at:Date.now()};
       }
     }
-    window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ = out.map(r => normalizeRow(r));
-    try{ updateDuplicateStatusFromRows(out, 'cloud-read'); }catch(_e){}
-    return dedupeRows(out, true);
+    const rawRows = out.map(r => normalizeRow(r));
+    window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ = rawRows;
+    try{ updateDuplicateStatusFromRows(rawRows, 'cloud-read-raw-r179'); }catch(_e){}
+    return dedupeRows(rawRows, true);
   }
 
   async function mergeCloudRows(rows){
@@ -6194,19 +6192,20 @@ function render(){
     try{
       const cloudRaw = Array.isArray(rows) ? rows.map(r => normalizeRow(r)) : [];
       const localRaw = [].concat(db || [], parseRows(localStorage.getItem(CFG.DB_KEY) || '[]'), parseRows(localStorage.getItem(CFG.DELETED_KEY) || '[]')).map(r => normalizeRow(r));
-      const scanRows = cloudRaw.length ? cloudRaw.concat(localRaw) : localRaw;
-      const src = source || (cloudRaw.length ? 'cloud' : 'local');
+      // r179: 雲端重複檢查只檢查 raw 雲端有效資料；不可把本端同一筆資料併入後誤判為重複。
+      const scanRows = cloudRaw.length ? cloudRaw : localRaw;
+      const src = source || (cloudRaw.length ? 'cloud-raw' : 'local-effective');
       duplicateReport = buildDuplicateReport(scanRows, src);
       duplicateReport.checkedAt = duplicateReport.checkedAt || Date.now();
       duplicateReport.source = src;
       window.__TASUN_RACI_DUPLICATE_REPORT__ = duplicateReport;
       try{
         localStorage.setItem('tasunRACI_Simple_duplicate_status_v177', JSON.stringify({
-          count: duplicateReport.duplicateCount || 0,
-          groups: duplicateReport.groups.length,
-          checkedAt: duplicateReport.checkedAt,
-          source: duplicateReport.source,
-          result: (duplicateReport.duplicateCount || 0) > 0 ? '重複' : '無重複'
+          count:duplicateReport.duplicateCount || 0,
+          groups:duplicateReport.groups.length,
+          checkedAt:duplicateReport.checkedAt,
+          source:duplicateReport.source,
+          result:(duplicateReport.duplicateCount || 0) > 0 ? '重複' : '無重複'
         }));
       }catch(_e){}
       updateDuplicateControls();
@@ -6226,21 +6225,22 @@ function render(){
       const btn = $('btnDupReport');
       if(btn) btn.style.display = 'none';
       if(!admin){ if(badge) badge.style.display = 'none'; return; }
-
       const checked = !!(duplicateReport && duplicateReport.checkedAt);
       const dupCount = Number(duplicateReport && duplicateReport.duplicateCount || 0) || 0;
       const groupCount = Number(duplicateReport && duplicateReport.groups && duplicateReport.groups.length || 0) || 0;
-      const text = checked ? (dupCount > 0 ? '重複' : '無重複') : '檢查中';
-
-      if(badge){
-        badge.style.display = 'inline-flex';
-        badge.title = checked
-          ? (dupCount > 0 ? ('資料檢查結果：重複 ' + dupCount + ' 筆，' + groupCount + ' 組；定義：階段＋工作重點＋工程項目') : '資料檢查結果：無重複；定義：階段＋工作重點＋工程項目')
-          : '資料檢查尚未完成；正在判別雲端／本端是否有重複資料';
-      }
+      const hasDup = checked && dupCount > 0;
+      const text = checked ? (hasDup ? '重複' : '無重複') : '檢查中';
       setRaciBadge('duplicate', text);
+      if(badge){
+        // r179: 無重複時不顯示「重複」狀態列，避免 1 筆資料被誤判為重複。
+        badge.style.display = hasDup ? 'inline-flex' : 'none';
+        badge.classList.toggle('bad', hasDup);
+        badge.title = checked
+          ? (hasDup ? ('雲端重複資料：' + dupCount + ' 筆，' + groupCount + ' 組；定義：階段＋工作重點＋工程項目') : '雲端資料判別完成：無重複；定義：階段＋工作重點＋工程項目')
+          : '正在判別雲端是否有重複資料；定義：階段＋工作重點＋工程項目';
+      }
       if(btn){
-        btn.style.display = (checked && dupCount > 0) ? 'inline-flex' : 'none';
+        btn.style.display = hasDup ? 'inline-flex' : 'none';
         btn.title = '顯示重複資料報表（階段＋工作重點＋工程項目三欄相同）';
       }
     }catch(_e){}
@@ -7014,16 +7014,8 @@ function render(){
     closeSearchPanel();
     updateSearchPanelPosition();
     render();
-    updateDuplicateStatusFromRows([].concat(db || [], deletedRows || []), 'boot-local');
-    if(isAdmin()) setTimeout(() => {
-      try{
-        readCloudRows()
-          .then(rows => updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || rows || [], 'boot-cloud-admin'))
-          .catch(() => updateDuplicateStatusFromRows([].concat(db || [], deletedRows || []), 'boot-cloud-fallback-local'));
-      }catch(_e){
-        updateDuplicateStatusFromRows([].concat(db || [], deletedRows || []), 'boot-cloud-fallback-local');
-      }
-    }, 600);
+    updateDuplicateStatusFromRows([], 'boot-local');
+    if(isAdmin()) setTimeout(() => { try{ readCloudRows().then(rows => updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || rows, 'boot-cloud-admin')); }catch(_e){} }, 600);
     clearCurrentDisplayedDataR133().then(function(cleared){
       loadDB();
       render();
