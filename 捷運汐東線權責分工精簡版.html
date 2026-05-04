@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r156-cloudfirst-no-autoclear-stagefit based-on-latest-upload-20260504 -->
+  <!-- tasun-raci-r157-cloudfirst-clouddict-table-rescue based-on-latest-upload-20260504 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r156_cloudfirst_no_autoclear_stagefit">
+  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r157_cloudfirst_clouddict_table_rescue">
     
 
 <script id="tasun-github-pages-network-once-r135">
@@ -4047,6 +4047,9 @@ body.searchOpen .panelHead,
 }
 #raciTable[data-has-individual-id="true"][data-db-name="tasun_raci_sxdh_simple_db_v117"]{ --tasun-r156-table-db-ok:1; }
 
+/* tasun-raci-r157: 新增/編輯表單下拉選單來源固定為雲端資料優先；若本端表格 0 筆但雲端有資料，自動以雲端資料救援表格後再渲染。 */
+#raciTable[data-has-individual-id="true"]{ --tasun-r157-cloud-dict-source:1; }
+
 </style>
 
 
@@ -4643,7 +4646,7 @@ body.searchOpen .panelHead,
     RESOURCE_KEY: CFG.RESOURCE_KEY,
     DB_NAME: CFG.DB_NAME,
     DB_STORE: CFG.DB_STORE,
-    DATA_SYNC: { uid:true, rev:true, updatedAt:true, deleted:true, dedupe:true, source:'integrated-r134-projectcol-shrink1third-15char' },
+    DATA_SYNC: { uid:true, rev:true, updatedAt:true, deleted:true, dedupe:true, source:'integrated-r157-cloudfirst-clouddict-table-rescue' },
     MANAGE_PAGE: CFG.MANAGE_PAGE
   });
   window.__TASUN_PAGE_KEY__ = CFG.PAGE_KEY;
@@ -4720,6 +4723,9 @@ body.searchOpen .panelHead,
   let cloudSyncing = false;
   let lastCloudSyncAt = 0;
   let watchStarted = false;
+  let cloudOptionRows = [];
+  let cloudOptionRowsLoadedAt = 0;
+  let cloudOptionRowsLoading = null;
 
   const $ = (id) => document.getElementById(id);
   const norm = (v) => (v == null ? '' : String(v)).trim();
@@ -5443,6 +5449,44 @@ body.searchOpen .panelHead,
     return dedupeRows(out, true);
   }
 
+  async function ensureCloudOptionRows(reason){
+    if(cloudOptionRowsLoading) return cloudOptionRowsLoading;
+    cloudOptionRowsLoading = (async () => {
+      try{
+        const cloudRows = await readCloudRows();
+        const activeCloud = activeRows(cloudRows);
+        cloudOptionRows = activeCloud.slice();
+        cloudOptionRowsLoadedAt = Date.now();
+        window.__TASUN_RACI_CLOUD_OPTION_SOURCE__ = {
+          source:'cloud',
+          reason:String(reason || ''),
+          cloudRows:activeCloud.length,
+          localRows:Array.isArray(db) ? db.length : 0,
+          at:new Date().toISOString()
+        };
+        if(activeCloud.length && (!Array.isArray(db) || db.length === 0)){
+          cleanupLocalRowsR131('cloud-option-table-rescue-r157-' + String(reason || 'load'), activeCloud);
+          render();
+        }
+        return activeCloud;
+      }catch(err){
+        window.__TASUN_RACI_CLOUD_OPTION_SOURCE__ = {source:'cloud', reason:String(reason || ''), error:String(err && err.message || err), at:new Date().toISOString()};
+        return [];
+      }finally{
+        cloudOptionRowsLoading = null;
+      }
+    })();
+    return cloudOptionRowsLoading;
+  }
+
+  function scheduleCloudOptionReload(reason){
+    if(cloudOptionRowsLoading) return;
+    if(cloudOptionRowsLoadedAt && (Date.now() - cloudOptionRowsLoadedAt) < 12000) return;
+    ensureCloudOptionRows(reason).then(() => {
+      try{ refreshModalMenus(); rebuildFilterMenus(); updateRaciStatus(filteredRows().length, db.length); }catch(_e){}
+    });
+  }
+
   async function mergeCloudRows(rows){
     const all = dedupeRows(rows, true);
     if(!all.length) return false;
@@ -5668,9 +5712,10 @@ body.searchOpen .panelHead,
     }finally{ cloudSyncing = false; }
   }
 
-  function uniqueValues(field, rows=db){
+  function uniqueValues(field, rows){
+    const source = Array.isArray(rows) ? rows : dedupeRows([].concat(db || [], cloudOptionRows || []), false);
     const set = new Set();
-    rows.forEach(r => { const v = norm(r[field]); if(v) set.add(v); });
+    source.forEach(r => { const v = norm(r && r[field]); if(v) set.add(v); });
     return Array.from(set).sort((a,b) => a.localeCompare(b, 'zh-Hant'));
   }
 
@@ -5780,6 +5825,7 @@ body.searchOpen .panelHead,
     const input = $(inputId);
     const menu = $(inputId + 'Menu');
     if(!field || !input || !menu) return;
+    scheduleCloudOptionReload('modal-menu-' + field);
     const kw = norm(input.value).toLowerCase();
     const items = uniqueValues(field).filter(v => !kw || v.toLowerCase().includes(kw)).slice(0, 300);
     menu.innerHTML = items.length
@@ -6471,8 +6517,11 @@ function render(){
     closeSearchPanel();
     updateSearchPanelPosition();
     render();
-    // r156：開頁流程改為「先本端去重 → 雲端下載 → 合併 → 上傳確認 → 再下傳渲染」，不再呼叫舊版自動清空批次。
-    scheduleCloudSync('boot-cloudfirst-download-dedupe-upload-confirm-r156', 80);
+    ensureCloudOptionRows('boot-cloudfirst-option-and-table-rescue-r157').then(() => {
+      try{ render(); refreshModalMenus(); }catch(_e){}
+    });
+    // r157：開頁流程維持「先本端去重 → 雲端下載 → 合併 → 上傳確認 → 再下傳渲染」，並補強雲端來源選單/表格救援，不再呼叫舊版自動清空批次。
+    scheduleCloudSync('boot-cloudfirst-download-dedupe-upload-confirm-r157', 80);
     try{ if(window.__TASUN_RACI_RESYNC_STAGE__) window.__TASUN_RACI_RESYNC_STAGE__(); }catch(_e){}
   }
 
