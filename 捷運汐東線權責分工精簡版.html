@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r179-duplicate-effective-result based-on-latest-upload-20260504 -->
+  <!-- tasun-raci-r180-duplicate-hidden-result based-on-latest-upload-20260504 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r179_duplicate_effective_result">
+  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r180_duplicate_hidden_result">
     
 
 
@@ -4124,6 +4124,23 @@ body.searchOpen .panelHead,
   .dupTable{min-width:860px;}
 }
 
+
+/* tasun-raci-r180: duplicate status hidden unless confirmed duplicated */
+#dupStatusBadge[hidden],
+#btnDupReport[hidden]{
+  display:none !important;
+}
+#dupStatusBadge.tasunDupVisible{
+  display:inline-flex !important;
+}
+#btnDupReport.tasunDupVisible{
+  display:inline-flex !important;
+}
+#dupStatusBadge.tasunDupHidden,
+#btnDupReport.tasunDupHidden{
+  display:none !important;
+}
+
 </style>
 
 
@@ -4351,8 +4368,8 @@ body.searchOpen .panelHead,
         <span class="raciStatusCenter" id="raciStatusBadges">
           <span class="raciBadge" data-badge="count"><span class="k">筆數</span><span class="v">0 / 0</span></span>
           <span class="raciBadge" data-badge="cloud"><span class="k">雲端:</span><span class="v">同步檢查中</span></span>
-          <span class="raciBadge" data-badge="duplicate" id="dupStatusBadge" style="display:none;"><span class="k">重複</span><span class="v">檢查中</span></span>
-          <button class="btn ghost small" id="btnDupReport" type="button" style="display:none;">重複資料</button>
+          <span class="raciBadge tasunDupHidden" data-badge="duplicate" id="dupStatusBadge" style="display:none;" hidden aria-hidden="true"><span class="k">重複</span><span class="v">檢查中</span></span>
+          <button class="btn ghost small tasunDupHidden" id="btnDupReport" type="button" style="display:none;" hidden aria-hidden="true">重複資料</button>
           <span class="raciBadge" data-badge="last"><span class="k">最後</span><span class="v">—</span></span>
         </span>
         <span class="raciStatusRight" aria-hidden="true" style="display:none;"></span>
@@ -5541,7 +5558,7 @@ body.searchOpen .panelHead,
       ['rows','db','data','items','records','list','payload','result','body','value'].forEach(k => { if(x[k] != null) walk(x[k], depth+1); });
     };
     walk(obj);
-    // r179: 這裡必須保留 raw 雲端資料，不可先去重；重複檢查與同步去重分流處理。
+    // r180：保留 raw 雲端資料，不可在這裡先去重；重複判斷與同步去重分流。
     return out.map(r => normalizeRow(r));
   }
 
@@ -5550,7 +5567,7 @@ body.searchOpen .panelHead,
     let out = [];
     for(const key of keys){
       try{
-        const res = await cloudPost('/api/tasun/read', {phase:'r179-cloud-download-before-render-raw-first', resourceKey:key, resource:key});
+        const res = await cloudPost('/api/tasun/read', {phase:'r180-cloud-download-before-render-raw-first', resourceKey:key, resource:key});
         if(res && res.ok){
           const json = await res.clone().json().catch(() => ({}));
           out = out.concat(extractCloudRows(json));
@@ -5561,7 +5578,7 @@ body.searchOpen .panelHead,
     }
     const rawRows = out.map(r => normalizeRow(r));
     window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ = rawRows;
-    try{ updateDuplicateStatusFromRows(rawRows, 'cloud-read-raw-r179'); }catch(_e){}
+    try{ updateDuplicateStatusFromRows(rawRows, 'cloud-read-raw-r180'); }catch(_e){}
     return dedupeRows(rawRows, true);
   }
 
@@ -6191,8 +6208,13 @@ function render(){
   function updateDuplicateStatusFromRows(rows, source){
     try{
       const cloudRaw = Array.isArray(rows) ? rows.map(r => normalizeRow(r)) : [];
-      const localRaw = [].concat(db || [], parseRows(localStorage.getItem(CFG.DB_KEY) || '[]'), parseRows(localStorage.getItem(CFG.DELETED_KEY) || '[]')).map(r => normalizeRow(r));
-      // r179: 雲端重複檢查只檢查 raw 雲端有效資料；不可把本端同一筆資料併入後誤判為重複。
+      const localRaw = dedupeRows([].concat(
+        db || [],
+        parseRows(localStorage.getItem(CFG.DB_KEY) || '[]'),
+        parseRows(localStorage.getItem(CFG.DELETED_KEY) || '[]')
+      ).map(r => normalizeRow(r)), true);
+      // r180：重複檢查只檢查「單一來源的有效資料」。
+      // 有 raw 雲端資料時只用 raw 雲端；雲端尚無資料時才用本端有效資料，避免雲端＋本端同一筆被誤判。
       const scanRows = cloudRaw.length ? cloudRaw : localRaw;
       const src = source || (cloudRaw.length ? 'cloud-raw' : 'local-effective');
       duplicateReport = buildDuplicateReport(scanRows, src);
@@ -6223,24 +6245,50 @@ function render(){
       const admin = isAdmin();
       const badge = $('dupStatusBadge') || document.querySelector('[data-badge="duplicate"]');
       const btn = $('btnDupReport');
-      if(btn) btn.style.display = 'none';
-      if(!admin){ if(badge) badge.style.display = 'none'; return; }
       const checked = !!(duplicateReport && duplicateReport.checkedAt);
       const dupCount = Number(duplicateReport && duplicateReport.duplicateCount || 0) || 0;
       const groupCount = Number(duplicateReport && duplicateReport.groups && duplicateReport.groups.length || 0) || 0;
-      const hasDup = checked && dupCount > 0;
-      const text = checked ? (hasDup ? '重複' : '無重複') : '檢查中';
-      setRaciBadge('duplicate', text);
+      const hasDup = !!(admin && checked && dupCount > 0);
+
+      function hideDup(el){
+        if(!el) return;
+        el.classList.remove('tasunDupVisible');
+        el.classList.add('tasunDupHidden');
+        el.setAttribute('hidden','');
+        el.setAttribute('aria-hidden','true');
+        try{ el.style.setProperty('display','none','important'); }catch(_e){ el.style.display = 'none'; }
+      }
+      function showDup(el){
+        if(!el) return;
+        el.classList.remove('tasunDupHidden');
+        el.classList.add('tasunDupVisible');
+        el.removeAttribute('hidden');
+        el.setAttribute('aria-hidden','false');
+        try{ el.style.setProperty('display','inline-flex','important'); }catch(_e){ el.style.display = 'inline-flex'; }
+      }
+
+      // r180：無重複或尚未完成判斷時，不顯示「重複」狀態列與按鍵。
+      if(!hasDup){
+        setRaciBadge('duplicate', checked ? '無重複' : '檢查中');
+        hideDup(badge);
+        hideDup(btn);
+        if(badge){
+          badge.classList.remove('bad');
+          badge.title = checked
+            ? '雲端資料判別完成：無重複；定義：階段＋工作重點＋工程項目'
+            : '等待雲端重複資料判別完成；定義：階段＋工作重點＋工程項目';
+        }
+        return;
+      }
+
+      setRaciBadge('duplicate', '重複');
+      showDup(badge);
+      showDup(btn);
       if(badge){
-        // r179: 無重複時不顯示「重複」狀態列，避免 1 筆資料被誤判為重複。
-        badge.style.display = hasDup ? 'inline-flex' : 'none';
-        badge.classList.toggle('bad', hasDup);
-        badge.title = checked
-          ? (hasDup ? ('雲端重複資料：' + dupCount + ' 筆，' + groupCount + ' 組；定義：階段＋工作重點＋工程項目') : '雲端資料判別完成：無重複；定義：階段＋工作重點＋工程項目')
-          : '正在判別雲端是否有重複資料；定義：階段＋工作重點＋工程項目';
+        badge.classList.add('bad');
+        badge.title = '雲端重複資料：' + dupCount + ' 筆，' + groupCount + ' 組；定義：階段＋工作重點＋工程項目';
       }
       if(btn){
-        btn.style.display = hasDup ? 'inline-flex' : 'none';
         btn.title = '顯示重複資料報表（階段＋工作重點＋工程項目三欄相同）';
       }
     }catch(_e){}
