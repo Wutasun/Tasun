@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r203-no-spin-cloud-sync-guard based-on-latest-upload-20260505 -->
+  <!-- tasun-raci-r204-startup-sync-hard-timeout based-on-latest-upload-20260505 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260505_tasun_v5_raci_r203_no_spin_cloud_sync_guard">
+  <meta name="tasun-build-stamp" content="20260505_tasun_v5_raci_r204_startup_sync_hard_timeout">
     
 
 
@@ -81,10 +81,11 @@
       RELOAD_LOCK_MS: 45000,
       MAX_REFRESH_ATTEMPTS: 2,
       FETCH_TIMEOUT_MS: 6000,
-      CLOUD_REQUEST_TIMEOUT_MS: 3500,
-      CLOUD_SYNC_TIMEOUT_MS: 12000,
-      CLOUD_BOOT_AWAIT_MS: 6500,
-      CLOUD_STARTUP_COOLDOWN_MS: 20000
+      CLOUD_REQUEST_TIMEOUT_MS: 2800,
+      CLOUD_SYNC_TIMEOUT_MS: 9000,
+      CLOUD_BOOT_AWAIT_MS: 4500,
+      CLOUD_STARTUP_COOLDOWN_MS: 20000,
+      CLOUD_IDB_TIMEOUT_MS: 1200
     });
   })();
   </script>
@@ -4507,15 +4508,8 @@ body.searchOpen .panelHead,
     }else{
       setCloudStatusFromActual(false, null, '等待主同步流程確認雲端狀態');
     }
-    // r203：主程式 start() 已負責開頁同步；此處只更新狀態，不再重複觸發同步，避免開頁多重同步卡在「同步中」。
-    try{
-      if(window.__TASUN_RACI_SYNC_NOW__ && !window.__TASUN_RACI_MAIN_BOOT_STARTED__ && !window.__TASUN_RACI_ROUTE_SAFE_SYNC_DELAYED__){
-        window.__TASUN_RACI_ROUTE_SAFE_SYNC_DELAYED__ = true;
-        setTimeout(function(){
-          try{ if(!window.__TASUN_RACI_MAIN_BOOT_STARTED__) window.__TASUN_RACI_SYNC_NOW__('route-safe-delayed-r203'); }catch(__e){}
-        }, 1800);
-      }
-    }catch(_e){}
+    // r204：主程式 start() 是唯一開頁同步入口；此處只更新狀態與表格身分，禁止再補觸發同步。
+    try{ window.__TASUN_RACI_ROUTE_SAFE_SYNC_DELAYED__ = true; }catch(_e){}
   }
   protectIndexRoutes();
   document.addEventListener('DOMContentLoaded', function(){ protectIndexRoutes(); ensureTableIdentity(); verifyCloudActual(); }, { once:true });
@@ -5039,6 +5033,7 @@ body.searchOpen .panelHead,
     CLOUD_SYNC_TIMEOUT_MS: Number(TASUN_GLOBALS.CLOUD_SYNC_TIMEOUT_MS || 12000) || 12000,
     CLOUD_BOOT_AWAIT_MS: Number(TASUN_GLOBALS.CLOUD_BOOT_AWAIT_MS || 6500) || 6500,
     CLOUD_STARTUP_COOLDOWN_MS: Number(TASUN_GLOBALS.CLOUD_STARTUP_COOLDOWN_MS || 20000) || 20000,
+    CLOUD_IDB_TIMEOUT_MS: Number(TASUN_GLOBALS.CLOUD_IDB_TIMEOUT_MS || 1200) || 1200,
     MANAGE_PAGE: TASUN_GLOBALS.MANAGE_PAGE || '汐東工程管理表.html'
   });
   window.__TASUN_GLOBALS__ = Object.assign(window.__TASUN_GLOBALS__ || {}, {
@@ -5051,7 +5046,8 @@ body.searchOpen .panelHead,
     CLOUD_SYNC_TIMEOUT_MS: CFG.CLOUD_SYNC_TIMEOUT_MS,
     CLOUD_BOOT_AWAIT_MS: CFG.CLOUD_BOOT_AWAIT_MS,
     CLOUD_STARTUP_COOLDOWN_MS: CFG.CLOUD_STARTUP_COOLDOWN_MS,
-    DATA_SYNC: { uid:true, rev:true, updatedAt:true, deleted:true, dedupe:true, source:'integrated-r203-no-spin-cloud-sync-guard' },
+    CLOUD_IDB_TIMEOUT_MS: CFG.CLOUD_IDB_TIMEOUT_MS,
+    DATA_SYNC: { uid:true, rev:true, updatedAt:true, deleted:true, dedupe:true, source:'integrated-r204-startup-sync-hard-timeout' },
     MANAGE_PAGE: CFG.MANAGE_PAGE
   });
   window.__TASUN_PAGE_KEY__ = CFG.PAGE_KEY;
@@ -5125,6 +5121,7 @@ body.searchOpen .panelHead,
   let idb = null;
   let idbOpening = null;
   let cloudSyncTimer = 0;
+  let cloudTransientTimer = 0;
   let cloudSyncing = false;
   let lastCloudSyncAt = 0;
   let lastCloudSyncStartAt = 0;
@@ -5697,7 +5694,10 @@ body.searchOpen .panelHead,
     if(idbOpening) return idbOpening;
     idbOpening = new Promise((resolve) => {
       let req;
-      try{ req = indexedDB.open(CFG.DB_NAME, 1); }catch(_e){ resolve(null); return; }
+      let settled = false;
+      const done = (value) => { if(settled) return; settled = true; try{ clearTimeout(tm); }catch(_e){} resolve(value || null); };
+      const tm = setTimeout(() => done(null), Number(CFG.CLOUD_IDB_TIMEOUT_MS || 1200) || 1200);
+      try{ req = indexedDB.open(CFG.DB_NAME, 1); }catch(_e){ done(null); return; }
       req.onupgradeneeded = (ev) => {
         const database = ev.target.result;
         if(!database.objectStoreNames.contains(CFG.DB_STORE)){
@@ -5708,8 +5708,9 @@ body.searchOpen .panelHead,
         }
         if(!database.objectStoreNames.contains('meta')) database.createObjectStore('meta', { keyPath:'key' });
       };
-      req.onsuccess = () => { idb = req.result; resolve(idb); };
-      req.onerror = () => resolve(null);
+      req.onsuccess = () => { idb = req.result; done(idb); };
+      req.onerror = () => done(null);
+      req.onblocked = () => done(null);
     });
     return idbOpening;
   }
@@ -5718,12 +5719,16 @@ body.searchOpen .panelHead,
     const database = await openLocalDatabase();
     if(!database || !database.objectStoreNames.contains(CFG.DB_STORE)) return [];
     return new Promise((resolve) => {
+      let settled = false;
+      const done = (rows) => { if(settled) return; settled = true; try{ clearTimeout(tm); }catch(_e){} resolve(dedupeRows(rows || [], true)); };
+      const tm = setTimeout(() => done([]), Number(CFG.CLOUD_IDB_TIMEOUT_MS || 1200) || 1200);
       try{
         const tx = database.transaction(CFG.DB_STORE, 'readonly');
         const req = tx.objectStore(CFG.DB_STORE).getAll();
-        req.onsuccess = () => resolve(dedupeRows(req.result || [], true));
-        req.onerror = () => resolve([]);
-      }catch(_e){ resolve([]); }
+        req.onsuccess = () => done(req.result || []);
+        req.onerror = () => done([]);
+        tx.onabort = () => done([]);
+      }catch(_e){ done([]); }
     });
   }
 
@@ -5843,13 +5848,17 @@ body.searchOpen .panelHead,
     const p = findLocalLoginPassword();
     if(!u || !p) return '';
     try{
+      const ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      const timeoutMs = Math.max(800, Math.min(Number(CFG.CLOUD_REQUEST_TIMEOUT_MS || 2800) || 2800, cloudRemainingMs(CFG.CLOUD_REQUEST_TIMEOUT_MS)));
+      const tm = setTimeout(() => { try{ if(ctl) ctl.abort(); }catch(_e){} }, timeoutMs);
       const res = await fetch(CFG.API_BASE + '/api/tasun/login', {
         method:'POST',
         cache:'no-store',
         credentials:'omit',
         headers:{'content-type':'application/json','accept':'application/json'},
-        body:JSON.stringify({username:u, user:u, password:p, pass:p, pageKey:CFG.PAGE_KEY, pageFile:CFG.PAGE_FILE, resourceKey:CFG.RESOURCE_KEY, reason:'r118-worker-login-token'})
-      });
+        body:JSON.stringify({username:u, user:u, password:p, pass:p, pageKey:CFG.PAGE_KEY, pageFile:CFG.PAGE_FILE, resourceKey:CFG.RESOURCE_KEY, reason:'r204-worker-login-token-timeout'}),
+        signal: ctl ? ctl.signal : undefined
+      }).finally(() => { try{ clearTimeout(tm); }catch(_e){} });
       window.__TASUN_RACI_LAST_LOGIN_STATUS__ = res ? res.status : 0;
       if(!res || !res.ok) return '';
       const j = await res.clone().json().catch(() => ({}));
@@ -6119,6 +6128,29 @@ body.searchOpen .panelHead,
     cloudSyncTimer = setTimeout(() => syncCloud(reason), delay);
   }
 
+  function armCloudTransientGuard(payload){
+    try{ clearTimeout(cloudTransientTimer); }catch(_e){}
+    const ageLimit = Math.max(2500, Math.min(5200, Number(CFG.CLOUD_BOOT_AWAIT_MS || 4500) || 4500));
+    cloudTransientTimer = setTimeout(() => {
+      try{
+        const st = window.__TASUN_RACI_CLOUD_STATUS__ || {};
+        const shown = String(st.displayStatus || st.status || '');
+        const age = Date.now() - Number(st.at || 0);
+        if(age >= ageLimit && /同步中|同步檢查中|檢查中/.test(shown)){
+          cloudSyncing = false;
+          const actual = window.__TASUN_CLOUD_LAST_ACTUAL_STATUS__;
+          setCloudSyncStatus((actual && actual.ok) ? '同步' : (navigator.onLine ? '待同步' : '離線待同步'), 'transient-status-hard-stop-r204', {
+            previousStatus:shown,
+            previousReason:st.reason || (payload && payload.reason) || '',
+            timeout:true,
+            timeoutMs:ageLimit,
+            stableBy:'transient-status-hard-stop-r204'
+          });
+        }
+      }catch(_e){}
+    }, ageLimit + 150);
+  }
+
   function setCloudSyncStatus(status, reason, extra){
     let raw = norm(status) || '同步';
     const actual = window.__TASUN_CLOUD_LAST_ACTUAL_STATUS__ || null;
@@ -6126,11 +6158,14 @@ body.searchOpen .panelHead,
       raw = '同步';
       extra = Object.assign({}, extra || {}, {confirmedByActualStatus:true, actualDetail:actual.detail || '', actualRows:actual.rows});
     }
-    const display = (raw === '同步' || raw === '已同步' || raw === '上傳完成' || raw === '下載完成') ? '已同步' : raw;
+    const transientRaw = /同步中|同步檢查中|檢查中/.test(raw);
+    const display = (raw === '同步' || raw === '已同步' || raw === '上傳完成' || raw === '下載完成') ? '已同步' : (transientRaw ? '同步檢查中' : raw);
     const payload = Object.assign({status:raw, displayStatus:display, reason:String(reason||''), at:Date.now(), count:db.length}, extra || {});
     window.__TASUN_RACI_CLOUD_STATUS__ = payload;
-    const transient = /同步中|同步檢查中/.test(display) || /同步中|同步檢查中/.test(raw);
-    if(!transient){
+    const transient = /同步中|同步檢查中|檢查中/.test(display) || transientRaw;
+    if(transient) armCloudTransientGuard(payload);
+    else{
+      try{ clearTimeout(cloudTransientTimer); }catch(_e){}
       try{ localStorage.setItem('tasunRACI_Simple_cloud_status_v118', JSON.stringify(payload)); }catch(_){ }
       try{ localStorage.setItem('tasunRACI_Simple_cloud_status_v143', JSON.stringify(payload)); }catch(_){ }
       try{ localStorage.setItem('tasunRACI_Simple_cloud_status_v151', JSON.stringify(payload)); }catch(_){ }
@@ -6197,7 +6232,7 @@ body.searchOpen .panelHead,
         }
       }catch(_e){}
     }, CFG.CLOUD_SYNC_TIMEOUT_MS + 800);
-    setCloudSyncStatus('同步中', reasonText);
+    setCloudSyncStatus(isStartupSyncReason(reasonText) ? '同步檢查中' : '同步中', reasonText, {transient:true, startup:isStartupSyncReason(reasonText), stableBy:'r204-transient-guard'});
     try{
       const localAll = cleanupLocalRowsR131('sync-start-clean-local', [].concat(
         db,
@@ -7489,18 +7524,26 @@ function render(){
     if($('fResponsibility')) $('fResponsibility').value = '';
     closeSearchPanel();
     updateSearchPanelPosition();
-    setCloudSyncStatus('同步中', 'boot-pre-download-before-render-r203');
-    try{
-      const bootSync = syncCloud('boot-pre-download-before-render-r203');
-      const completed = await awaitWithTimeout(bootSync, CFG.CLOUD_BOOT_AWAIT_MS);
-      if(!completed && !(window.__TASUN_CLOUD_LAST_ACTUAL_STATUS__ && window.__TASUN_CLOUD_LAST_ACTUAL_STATUS__.ok)){
-        setCloudSyncStatus(navigator.onLine ? '待同步' : '離線待同步', 'boot-render-local-timeout-r203', {timeout:true, timeoutMs:CFG.CLOUD_BOOT_AWAIT_MS, stableBy:'boot-timeout-render-local-r203'});
-      }
-    }catch(_e){}
     render();
-    updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || [], 'boot-local-r203');
+    updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || [], 'boot-local-before-cloud-r204');
+    setCloudSyncStatus('同步檢查中', 'boot-background-download-r204', {transient:true, stableBy:'boot-nonblocking-r204'});
+    try{
+      const bootSync = syncCloud('boot-background-download-r204');
+      awaitWithTimeout(bootSync, CFG.CLOUD_BOOT_AWAIT_MS).then((completed) => {
+        try{
+          if(!completed && !(window.__TASUN_CLOUD_LAST_ACTUAL_STATUS__ && window.__TASUN_CLOUD_LAST_ACTUAL_STATUS__.ok)){
+            cloudSyncing = false;
+            setCloudSyncStatus(navigator.onLine ? '待同步' : '離線待同步', 'boot-background-timeout-r204', {timeout:true, timeoutMs:CFG.CLOUD_BOOT_AWAIT_MS, stableBy:'boot-nonblocking-timeout-r204'});
+          }
+          render();
+          updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || [], 'boot-after-background-cloud-r204');
+        }catch(_e){}
+      }).catch(() => {});
+    }catch(_e){
+      setCloudSyncStatus(navigator.onLine ? '待同步' : '離線待同步', 'boot-background-start-error-r204', {stableBy:'boot-start-error-r204'});
+    }
     setTimeout(() => { try{ if(window.__TASUN_RACI_RESYNC_STAGE__) window.__TASUN_RACI_RESYNC_STAGE__(); }catch(_e){} }, 500);
-    setTimeout(() => { try{ syncCloud('boot-confirm-r203'); }catch(_e){} }, CFG.CLOUD_STARTUP_COOLDOWN_MS);
+    setTimeout(() => { try{ syncCloud('boot-confirm-r204'); }catch(_e){} }, CFG.CLOUD_STARTUP_COOLDOWN_MS);
   }
 
   bindUI();
@@ -7856,7 +7899,7 @@ function render(){
 </script>
 
 
-<!-- tasun-raci-r203-final-verification: table UID/PK/database metadata retained, boot cloud sync no-spin guard enforced, desktop 0.5cm responsive stage retained, group headers follow visible member columns. -->
+<!-- tasun-raci-r204-final-verification: table UID/PK/database metadata retained, boot cloud sync hard-timeout guard enforced, desktop 0.5cm responsive stage retained, group headers follow visible member columns. -->
 
 <!-- tasun-raci-r168-cloud-actual-status-finalizer: cloud badge follows verified/successful cloud status, not stale pending localStorage. -->
 <script id="tasun-raci-r168-cloud-actual-status-finalizer">
@@ -8222,6 +8265,45 @@ function render(){
   window.__TASUN_RACI_APPLY_DUPLICATE_STATUS__ = applyDuplicateStatus;
 })();
 </script>
+
+<script id="tasun-raci-r204-transient-status-hard-finalizer">
+(function(){
+  'use strict';
+  if(window.__TASUN_RACI_R204_TRANSIENT_STATUS_HARD_FINALIZER__) return;
+  window.__TASUN_RACI_R204_TRANSIENT_STATUS_HARD_FINALIZER__ = true;
+  function norm(v){ return String(v == null ? '' : v).trim(); }
+  function setBadge(text){
+    try{
+      var badge = document.querySelector('[data-badge="cloud"]');
+      if(!badge) return;
+      var v = badge.querySelector('.v') || badge;
+      v.textContent = text;
+      badge.classList.toggle('bad', /待|離線|失敗|錯誤|error|fail/i.test(text));
+    }catch(_e){}
+  }
+  function run(){
+    try{
+      var st = window.__TASUN_RACI_CLOUD_STATUS__ || {};
+      var shown = norm(st.displayStatus || st.status || '');
+      var age = Date.now() - Number(st.at || 0);
+      if(/同步中|同步檢查中|檢查中/.test(shown) && age > 5200){
+        var actual = window.__TASUN_CLOUD_LAST_ACTUAL_STATUS__;
+        if(actual && actual.ok){
+          window.__TASUN_RACI_CLOUD_STATUS__ = {status:'同步', displayStatus:'已同步', reason:'r204-hard-finalizer-actual-ok', at:Date.now(), cloudCount:actual.rows};
+          setBadge('已同步');
+        }else{
+          window.__TASUN_RACI_CLOUD_STATUS__ = {status:'待同步', displayStatus:'待同步', reason:'r204-hard-finalizer-timeout', at:Date.now(), previousStatus:shown, previousAge:age};
+          setBadge('待同步');
+        }
+      }
+    }catch(_e){}
+  }
+  document.addEventListener('DOMContentLoaded', function(){ setTimeout(run, 5600); setTimeout(run, 9000); }, {once:true});
+  window.addEventListener('pageshow', function(){ setTimeout(run, 5600); }, {passive:true});
+  setInterval(run, 6000);
+})();
+</script>
+
 </body>
 </html>
 
