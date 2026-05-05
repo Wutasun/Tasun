@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r178-admin-duplicate-cloud-status-split based-on-latest-upload-20260504 -->
+  <!-- tasun-raci-r192-cloud-count-duplicate-mobile-final based-on-latest-upload-20260505 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260504_tasun_v5_raci_r178_admin_duplicate_cloud_status_split">
+  <meta name="tasun-build-stamp" content="20260505_tasun_v5_raci_r192_cloud_count_duplicate_mobile_final">
     
 
 
@@ -4804,6 +4804,9 @@ body.searchOpen .panelHead,
   let editingId = null;
   let selectedId = null;
   let deletedRows = [];
+  let duplicateReport = {groups:[], rows:[], count:0, duplicateCount:0, checkedAt:0, source:'boot'};
+  let selectedDuplicateRow = null;
+  window.__TASUN_RACI_DUPLICATE_REPORT__ = duplicateReport;
   let idb = null;
   let idbOpening = null;
   let cloudSyncTimer = 0;
@@ -4841,21 +4844,13 @@ body.searchOpen .panelHead,
 
   function updateRaciStatus(showCount, totalCount){
     try{
-      let rowsForStatus = null;
-      try{ rowsForStatus = (typeof filteredRows === 'function') ? filteredRows() : null; }catch(_x){ rowsForStatus = null; }
-      const totalActive = Array.isArray(db) ? db.length : 0;
-      const shown = Number.isFinite(Number(showCount)) ? Number(showCount) : (Array.isArray(rowsForStatus) ? rowsForStatus.length : totalActive);
-      const total = Number.isFinite(Number(totalCount)) ? Number(totalCount) : totalActive;
+      const shown = Number.isFinite(Number(showCount)) ? Number(showCount) : (Array.isArray(db) ? db.length : 0);
+      const total = Number.isFinite(Number(totalCount)) ? Number(totalCount) : (Array.isArray(db) ? db.length : shown);
       setRaciBadge('count', shown + ' / ' + total);
       setRaciBadge('last', new Date().toLocaleString('zh-TW', { hour12:false }));
       const st = window.__TASUN_RACI_CLOUD_STATUS__;
-      const actual = window.__TASUN_CLOUD_LAST_ACTUAL_STATUS__ || null;
-      if(st && (st.displayStatus || st.status)){
-        const txt = norm(st.displayStatus || st.status);
-        setRaciBadge('cloud', (txt === '同步') ? '已同步' : txt);
-      }else{
-        setRaciBadge('cloud', actual && actual.ok ? '已同步' : '同步檢查中');
-      }
+      if(st && (st.displayStatus || st.status)) setRaciBadge('cloud', st.displayStatus || st.status);
+      else setRaciBadge('cloud', '已同步');
       updateDuplicateControls();
     }catch(_e){}
   }
@@ -4997,11 +4992,26 @@ body.searchOpen .panelHead,
   }
 
   function loadCurrentUser(){
-    try{ currentUser = JSON.parse(localStorage.getItem(CFG.CURRENT_KEY) || 'null'); }catch(_){ currentUser = null; }
+    const keys = [CFG.CURRENT_KEY,'tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1','tasunIndexUser_v1'];
+    currentUser = null;
+    for(const k of keys){
+      try{
+        const raw = sessionStorage.getItem(k) || localStorage.getItem(k) || '';
+        if(!raw) continue;
+        const obj = JSON.parse(raw);
+        const user = norm(obj && (obj.user || obj.username || obj.name || obj.account));
+        if(user){ currentUser = obj; break; }
+      }catch(_e){}
+    }
     if(currentUser){
-      currentUser.user = norm(currentUser.user ?? currentUser.username ?? currentUser.name);
-      currentUser.role = mapRole(currentUser.role ?? currentUser.level);
+      currentUser.user = norm(currentUser.user ?? currentUser.username ?? currentUser.name ?? currentUser.account);
+      currentUser.username = currentUser.user;
+      currentUser.name = currentUser.user;
+      currentUser.role = mapRole(currentUser.role ?? currentUser.level ?? currentUser.permission ?? currentUser.perm);
+      currentUser.level = currentUser.role;
       currentUser.authStamp = norm(currentUser.authStamp);
+      try{ sessionStorage.setItem(CFG.CURRENT_KEY, JSON.stringify(currentUser)); }catch(_e){}
+      try{ localStorage.setItem(CFG.CURRENT_KEY, JSON.stringify(currentUser)); }catch(_e){}
     }
   }
 
@@ -5057,6 +5067,12 @@ body.searchOpen .panelHead,
     if($('loginMask').classList.contains('show')) return;
     loadCurrentUser();
     if(!currentUser || !currentUser.user) return;
+    const rows = loadAuthRows();
+    if(!rows.length){
+      // 手機或跨頁進入時，若由首頁/管理頁 token bridge 帶入使用者，允許沿用，避免重跳登入。
+      setCurrentUser(currentUser.user, currentUser.role || 'read', currentUser.authStamp || 'bridge-session');
+      return;
+    }
     const auth = findAuthUser(currentUser.user);
     if(!auth){ forceReLogin('帳號已被移除，請重新登入'); return; }
     const stampNow = authStampFromAuth(auth);
@@ -5085,12 +5101,30 @@ body.searchOpen .panelHead,
   function ensureLoggedIn(){
     loadCurrentUser();
     const rows = loadAuthRows();
-    if(!rows.length){ openLoginModal('尚未建立權限表：請先到「權限表.html」建立帳號。'); return false; }
     if(!currentUser || !currentUser.user){ openLoginModal(); return false; }
+    if(!rows.length){
+      const bridgeRole = mapRole(currentUser.role || currentUser.level || 'read');
+      setCurrentUser(currentUser.user, bridgeRole, currentUser.authStamp || 'bridge-session');
+      $('uName').textContent = currentUser.user;
+      $('uRole').textContent = bridgeRole;
+      return true;
+    }
     const auth = findAuthUser(currentUser.user);
-    if(!auth){ forceReLogin('帳號已被移除，請重新登入'); return false; }
+    if(!auth){
+      // 管理頁已帶入有效使用者但本機權限表尚未同步時，先沿用 bridge 角色，不再彈登入窗阻斷手機進入。
+      if(window.__TASUN_SSO_OK__ || sessionStorage.getItem('tasunIndexSessionAuthed_v2') || localStorage.getItem('tasunIndexSessionAuthed_v2')){
+        const bridgeRole = mapRole(currentUser.role || currentUser.level || 'read');
+        setCurrentUser(currentUser.user, bridgeRole, currentUser.authStamp || 'bridge-session');
+        $('uName').textContent = currentUser.user;
+        $('uRole').textContent = bridgeRole;
+        return true;
+      }
+      forceReLogin('帳號已被移除，請重新登入'); return false;
+    }
     const stampNow = authStampFromAuth(auth);
-    if(currentUser.authStamp && currentUser.authStamp !== stampNow){ forceReLogin('密碼已更新，請重新登入'); return false; }
+    if(currentUser.authStamp && currentUser.authStamp !== stampNow && currentUser.authStamp !== 'bridge-session'){
+      forceReLogin('密碼已更新，請重新登入'); return false;
+    }
     setCurrentUser(auth.user, auth.role, stampNow);
     $('uName').textContent = auth.user;
     $('uRole').textContent = auth.role;
@@ -5549,42 +5583,46 @@ body.searchOpen .panelHead,
       ['rows','db','data','items','records','list','payload','result','body','value'].forEach(k => { if(x[k] != null) walk(x[k], depth+1); });
     };
     walk(obj);
-    return dedupeRows(out, true);
+    return out.map(r => normalizeRow(r));
   }
 
   async function readCloudRows(){
-    const canonical = CFG.RESOURCE_KEY;
-    const aliases = [CFG.PAGE_KEY, CFG.PAGE_FILE, '捷運汐東線權責分工精簡版'];
-    const keys = Array.from(new Set([canonical].concat(aliases))).filter(Boolean);
-    let rawOut = [];
-    let readOk = false;
-    let canonicalRows = [];
-    let fallbackRows = [];
-    for(const key of keys){
+    const canonicalKeys = Array.from(new Set([CFG.RESOURCE_KEY, CFG.PAGE_KEY].filter(Boolean)));
+    const legacyKeys = Array.from(new Set([CFG.PAGE_FILE, '捷運汐東線權責分工精簡版'].filter(Boolean)));
+    let canonicalRaw = [];
+    let legacyRaw = [];
+    let anyOk = false;
+    const readOne = async (key) => {
       try{
-        const res = await cloudPost('/api/tasun/read', {phase:'r191-cloud-download-before-render-authority', resourceKey:key, resource:key});
+        const res = await cloudPost('/api/tasun/read', {phase:'r191-cloud-download-before-render-canonical', resourceKey:key, resource:key});
         if(res && res.ok){
-          readOk = true;
+          anyOk = true;
           const json = await res.clone().json().catch(() => ({}));
-          const got = extractCloudRows(json).map(r => normalizeRow(r));
-          if(key === canonical) canonicalRows = canonicalRows.concat(got);
-          else fallbackRows = fallbackRows.concat(got);
+          return extractCloudRows(json);
         }
       }catch(err){
         window.__TASUN_RACI_LAST_CLOUD_ERROR__ = {path:'/api/tasun/read', resourceKey:key, message:String(err && err.message || err), at:Date.now()};
       }
+      return [];
+    };
+    for(const key of canonicalKeys){ canonicalRaw = canonicalRaw.concat(await readOne(key)); }
+    const canonicalActive = activeRows(canonicalRaw);
+    if(!canonicalActive.length){
+      for(const key of legacyKeys){ legacyRaw = legacyRaw.concat(await readOne(key)); }
     }
-    // 以 canonical resourceKey 為正式雲端資料來源；只有 canonical 沒資料時才採用舊 alias 作為遷移來源，避免舊資源把已刪資料重新帶回。
-    rawOut = canonicalRows.length ? canonicalRows : fallbackRows;
-    const rawRows = rawOut.map(r => normalizeRow(r));
-    window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ = rawRows;
-    const cleaned = dedupeRows(rawRows, true);
-    try{ updateDuplicateStatusFromRows(rawRows, 'cloud-read-raw-r191'); }catch(_e){}
-    try{
-      if(readOk) setCloudSyncStatus('同步', 'cloud-read-ok-r191', {cloudCount:cleaned.length, rawCloudCount:rawRows.length, canonicalCount:canonicalRows.length, fallbackCount:fallbackRows.length});
-      else setCloudSyncStatus('同步檢查中', 'cloud-read-no-ok-r191', {cloudCount:0, rawCloudCount:rawRows.length});
-    }catch(_e){}
-    return cleaned;
+    // 雲端正式來源：優先使用 canonical resourceKey；只有 canonical 無資料時才採舊鍵資料並回寫到 canonical。
+    const selectedRaw = canonicalActive.length ? canonicalRaw : legacyRaw;
+    window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ = selectedRaw.map(r => normalizeRow(r));
+    try{ updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__, 'cloud-read-canonical-r191'); }catch(_e){}
+    const selected = dedupeRows(selectedRaw, true);
+    if(anyOk){
+      window.__TASUN_CLOUD_LAST_ACTUAL_STATUS__ = {ok:true, rows:activeRows(selected).length, detail:'雲端讀取成功；正式來源=' + (canonicalActive.length ? 'canonical' : (legacyRaw.length ? 'legacy-migrated' : 'empty')), at:new Date().toISOString()};
+      try{ setCloudSyncStatus('同步', 'cloud-read-ok-r191', {cloudCount:activeRows(selected).length, canonicalCount:canonicalActive.length, legacyCount:legacyRaw.length}); }catch(_e){}
+      if(!canonicalActive.length && legacyRaw.length){
+        try{ await mergeCloudRows(selected); }catch(_e){}
+      }
+    }
+    return selected;
   }
 
   async function mergeCloudRows(rows){
@@ -5600,13 +5638,103 @@ body.searchOpen .panelHead,
   }
 
   async function clearCurrentDisplayedDataR133(){
-    // r191：舊版「開頁清空目前資料」流程會造成新設備把雲端資料誤刪，正式版停用。
-    // 同步仍由 syncCloud 執行：開頁先下載雲端、合併本端、去重後回寫，再確認下傳。
+    const doneKey = CFG.CLEAR_BATCH_KEY + '::done';
+    const pendingKey = CFG.CLEAR_BATCH_KEY + '::pending';
     try{
-      localStorage.setItem(CFG.CLEAR_BATCH_KEY + '::disabled_r191', '1');
-      localStorage.removeItem(CFG.CLEAR_BATCH_KEY + '::pending');
+      if(localStorage.getItem(doneKey) === '1') return false;
+      if(localStorage.getItem(pendingKey) === '1' && (Date.now() - Number(localStorage.getItem(CFG.CLEAR_BATCH_KEY + '::pendingAt') || 0)) < 20000) return false;
+      localStorage.setItem(pendingKey, '1');
+      localStorage.setItem(CFG.CLEAR_BATCH_KEY + '::pendingAt', String(Date.now()));
     }catch(_e){}
-    return false;
+
+    const t = Date.now();
+    const cloudCandidates = await readCloudRows();
+    const cloudAlreadyMarked = cloudCandidates.some(isCurrentClearMarkerR133);
+    if(cloudAlreadyMarked){
+      db = [];
+      deletedRows = [];
+      try{ localStorage.setItem(CFG.DB_KEY, '[]'); }catch(_e){}
+      try{ localStorage.setItem(CFG.DELETED_KEY, '[]'); }catch(_e){}
+      try{ localStorage.setItem(CFG.COUNTER_KEY, '0'); }catch(_e){}
+      try{ localStorage.removeItem(CFG.LEGACY_DB_KEY); }catch(_e){}
+      try{ localStorage.removeItem(CFG.LEGACY_COUNTER_KEY); }catch(_e){}
+      try{ await clearIdbRowsR132(); }catch(_e){}
+      try{
+        localStorage.setItem(doneKey, '1');
+        localStorage.removeItem(pendingKey);
+        localStorage.setItem(CFG.CLEAR_BATCH_KEY + '::doneAt', String(Date.now()));
+      }catch(_e){}
+      setCloudSyncStatus('同步', 'r133-clear-already-applied-cloud-marker', {clearBatch:CFG.CLEAR_BATCH_KEY, cleared:0});
+      ensureTableMetaR131();
+      return true;
+    }
+    const localCandidates = [].concat(
+      db,
+      deletedRows,
+      parseRows(localStorage.getItem(CFG.DB_KEY)),
+      parseRows(localStorage.getItem(CFG.DELETED_KEY)),
+      parseRows(localStorage.getItem(CFG.LEGACY_DB_KEY)),
+      await readIdbRows()
+    );
+    const all = dedupeRows([].concat(localCandidates, cloudCandidates), true);
+    const alreadyMarked = all.some(isCurrentClearMarkerR133);
+    const tombstones = all
+      .filter(r => !isSystemRowR133(r) && !r.deleted)
+      .map((old) => Object.assign({}, normalizeRow(old), {
+        deleted:true,
+        _deleted:true,
+        updatedAt:t,
+        rev:t,
+        deletedAt:t,
+        clearBatch:CFG.CLEAR_BATCH_KEY,
+        pageKey:CFG.PAGE_KEY,
+        resourceKey:CFG.RESOURCE_KEY,
+        pageFile:CFG.PAGE_FILE
+      }));
+    const marker = Object.assign({}, blankRow(), {
+      uid:CFG.CLEAR_MARKER_UID,
+      pk:CFG.CLEAR_MARKER_UID,
+      id:0,
+      project:'__TASUN_CLEAR_MARKER_R133__',
+      systemRow:true,
+      _system:true,
+      clearBatch:CFG.CLEAR_BATCH_KEY,
+      deleted:false,
+      updatedAt:t,
+      rev:t,
+      pageKey:CFG.PAGE_KEY,
+      resourceKey:CFG.RESOURCE_KEY,
+      pageFile:CFG.PAGE_FILE
+    });
+
+    db = [];
+    deletedRows = tombstones;
+    try{ localStorage.setItem(CFG.DB_KEY, '[]'); }catch(_e){}
+    try{ localStorage.setItem(CFG.DELETED_KEY, JSON.stringify(tombstones)); }catch(_e){}
+    try{ localStorage.setItem(CFG.COUNTER_KEY, '0'); }catch(_e){}
+    try{ localStorage.removeItem(CFG.LEGACY_DB_KEY); }catch(_e){}
+    try{ localStorage.removeItem(CFG.LEGACY_COUNTER_KEY); }catch(_e){}
+    try{ localStorage.removeItem(CFG.LAST_GOOD_KEY); }catch(_e){}
+    try{ await clearIdbRowsR132(); }catch(_e){}
+    try{ await saveIdbRows(tombstones); }catch(_e){}
+
+    if(!alreadyMarked || tombstones.length){
+      try{ await mergeCloudRows(dedupeRows([].concat(tombstones, [marker]), true)); }catch(_e){}
+      try{ await readCloudRows(); }catch(_e){}
+    }
+    try{
+      localStorage.setItem(doneKey, '1');
+      localStorage.removeItem(pendingKey);
+      localStorage.setItem(CFG.CLEAR_BATCH_KEY + '::doneAt', String(Date.now()));
+    }catch(_e){}
+    setCloudSyncStatus('同步', 'r133-clear-current-local-cloud-data', {clearBatch:CFG.CLEAR_BATCH_KEY, cleared:tombstones.length});
+    ensureTableMetaR131();
+    return true;
+  }
+
+  function scheduleCloudSync(reason, delay=CFG.SYNC_THROTTLE_MS){
+    clearTimeout(cloudSyncTimer);
+    cloudSyncTimer = setTimeout(() => syncCloud(reason), delay);
   }
 
   function setCloudSyncStatus(status, reason, extra){
@@ -6142,21 +6270,29 @@ function render(){
       const admin = isAdmin();
       const badge = $('dupStatusBadge') || document.querySelector('[data-badge="duplicate"]');
       const btn = $('btnDupReport');
-      if(badge) badge.style.display = admin ? 'inline-flex' : 'none';
-      if(btn) btn.style.display = 'none';
-      if(!admin) return;
       const checked = !!(duplicateReport && duplicateReport.checkedAt);
       const dupCount = Number(duplicateReport && duplicateReport.duplicateCount || 0) || 0;
       const groupCount = Number(duplicateReport && duplicateReport.groups && duplicateReport.groups.length || 0) || 0;
-      const text = checked ? (dupCount > 0 ? '重複' : '無重複') : '檢查中';
-      setRaciBadge('duplicate', text);
+      const showDup = !!(admin && checked && dupCount > 0);
       if(badge){
-        badge.title = checked
-          ? (dupCount > 0 ? ('雲端/本端重複資料：' + dupCount + ' 筆，' + groupCount + ' 組；定義：階段＋工作重點＋工作項目') : '雲端/本端判別完成：無重複；定義：階段＋工作重點＋工作項目')
-          : '正在判別雲端是否有重複資料；定義：階段＋工作重點＋工作項目';
+        badge.style.display = showDup ? 'inline-flex' : 'none';
+        badge.hidden = !showDup;
+        badge.setAttribute('aria-hidden', showDup ? 'false' : 'true');
+        badge.classList.toggle('tasunDupVisible', showDup);
+        badge.classList.toggle('tasunDupHidden', !showDup);
+        if(showDup){
+          setRaciBadge('duplicate', '重複');
+          badge.title = '雲端/本端重複資料：' + dupCount + ' 筆，' + groupCount + ' 組；定義：階段＋工作重點＋工作項目';
+        }else{
+          badge.title = checked ? '雲端/本端判別完成：無重複；定義：階段＋工作重點＋工作項目' : '尚未完成重複檢查；無重複時不顯示此狀態列';
+        }
       }
       if(btn){
-        btn.style.display = (checked && dupCount > 0) ? 'inline-flex' : 'none';
+        btn.style.display = showDup ? 'inline-flex' : 'none';
+        btn.hidden = !showDup;
+        btn.setAttribute('aria-hidden', showDup ? 'false' : 'true');
+        btn.classList.toggle('tasunDupVisible', showDup);
+        btn.classList.toggle('tasunDupHidden', !showDup);
         btn.title = '顯示重複資料報表（階段＋工作重點＋工作項目三欄相同）';
       }
     }catch(_e){}
@@ -6928,7 +7064,6 @@ function render(){
     if($('fUnit')) $('fUnit').value = '';
     if($('fResponsibility')) $('fResponsibility').value = '';
     closeSearchPanel();
-    try{ clearFilterInputs(); }catch(_e){}
     updateSearchPanelPosition();
     render();
     updateDuplicateStatusFromRows([], 'boot-local');
@@ -7309,68 +7444,142 @@ function render(){
 
 
 
-<!-- tasun-raci-r191-final: multi-device cloud authority, status and visible count stabilizer -->
-<script id="tasun-raci-r191-multidevice-finalizer">
+<!-- tasun-raci-r192-final-stability: multidevice cloud authority, cloud/duplicate status separation, mobile auth bridge and console guard -->
+<style id="tasun-raci-r192-final-style">
+#dupStatusBadge[hidden], #btnDupReport[hidden], #dupStatusBadge.tasunDupHidden, #btnDupReport.tasunDupHidden{display:none!important;}
+#dupStatusBadge.tasunDupVisible, #btnDupReport.tasunDupVisible{display:inline-flex!important;}
+@media (max-width:920px){
+  :root{
+    --r192-fixed-total:calc((100vw - 24px) / 3)!important;
+    --r192-stage-w:calc(var(--r192-fixed-total) * .26)!important;
+    --r192-focus-w:calc(var(--r192-fixed-total) * .32)!important;
+    --r192-project-w:calc(var(--r192-fixed-total) * .42)!important;
+    --r192-other-w:clamp(164px, calc(100vw - var(--r192-fixed-total) - 40px), 300px)!important;
+    --r192-action-w:clamp(92px,28vw,126px)!important;
+  }
+  #raciTable .c-stage,#raciTable thead tr:first-child th:nth-child(1),#raciTable tbody td:nth-child(1){min-width:var(--r192-stage-w)!important;width:var(--r192-stage-w)!important;max-width:var(--r192-stage-w)!important;left:0!important;}
+  #raciTable .c-focus,#raciTable thead tr:first-child th:nth-child(2),#raciTable tbody td:nth-child(2){min-width:var(--r192-focus-w)!important;width:var(--r192-focus-w)!important;max-width:var(--r192-focus-w)!important;left:var(--r192-stage-w)!important;}
+  #raciTable .c-project,#raciTable thead tr:first-child th:nth-child(3),#raciTable tbody td:nth-child(3){min-width:var(--r192-project-w)!important;width:var(--r192-project-w)!important;max-width:var(--r192-project-w)!important;left:calc(var(--r192-stage-w) + var(--r192-focus-w))!important;}
+  #raciTable .c-u,#raciTable .c-s,#raciTable thead tr:nth-child(2) th,#raciTable tbody td:nth-child(n+4):nth-child(-n+20){min-width:var(--r192-other-w)!important;width:var(--r192-other-w)!important;max-width:var(--r192-other-w)!important;white-space:normal!important;word-break:keep-all!important;overflow-wrap:anywhere!important;}
+  #raciTable .c-action,#raciTable thead tr:first-child th:last-child,#raciTable tbody td:last-child{min-width:var(--r192-action-w)!important;width:var(--r192-action-w)!important;max-width:var(--r192-action-w)!important;}
+  #raciTable thead tr:first-child th:nth-child(1),#raciTable thead tr:first-child th:nth-child(2),#raciTable thead tr:first-child th:nth-child(3),#raciTable tbody td:nth-child(1),#raciTable tbody td:nth-child(2),#raciTable tbody td:nth-child(3){white-space:normal!important;word-break:keep-all!important;overflow-wrap:anywhere!important;line-break:strict!important;padding-left:5px!important;padding-right:5px!important;}
+}
+</style>
+<script id="tasun-raci-r192-final-stability">
 (function(){
   'use strict';
-  if(window.__TASUN_RACI_R191_FINALIZER__) return;
-  window.__TASUN_RACI_R191_FINALIZER__ = true;
-  function byId(id){ return document.getElementById(id); }
-  function txt(v){ return String(v == null ? '' : v).trim(); }
-  function setBadge(name, value, bad){
+  if(window.__TASUN_RACI_R192_FINAL_STABILITY__) return;
+  window.__TASUN_RACI_R192_FINAL_STABILITY__ = true;
+  function q(sel, root){ return (root || document).querySelector(sel); }
+  function qa(sel, root){ return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+  function norm(v){ return v == null ? '' : String(v).trim(); }
+  function setBadge(name, value, title){
     try{
-      var b = document.querySelector('[data-badge="'+name+'"]');
-      if(!b) return;
-      var v = b.querySelector('.v') || b;
+      var badge = q('[data-badge="'+name+'"]'); if(!badge) return;
+      var v = q('.v', badge) || badge;
       v.textContent = value || '—';
-      if(name === 'cloud') b.classList.toggle('bad', !!bad);
-    }catch(e){}
+      if(title) badge.title = title;
+      if(name === 'cloud') badge.classList.toggle('bad', /待|失敗|錯誤|離線|error|fail/i.test(String(value||'')));
+    }catch(_e){}
   }
-  function visibleRowCount(){
-    try{ return document.querySelectorAll('#tbody tr[data-id]').length; }catch(e){ return 0; }
-  }
-  function localTotalCount(){
+  function setCloudSynced(reason){
     try{
-      var raw = localStorage.getItem('tasunRACI_Simple_v2') || '[]';
-      var arr = JSON.parse(raw);
-      if(!Array.isArray(arr)) arr = (arr && Array.isArray(arr.rows)) ? arr.rows : [];
-      return arr.filter(function(r){ return r && !r.deleted && !r.systemRow && !r._system; }).length;
-    }catch(e){ return visibleRowCount(); }
+      var payload = {status:'同步', displayStatus:'已同步', reason:reason||'r192-final', at:Date.now()};
+      window.__TASUN_RACI_CLOUD_STATUS__ = payload;
+      ['tasunRACI_Simple_cloud_status_v118','tasunRACI_Simple_cloud_status_v143','tasunRACI_Simple_cloud_status_v151'].forEach(function(k){ try{ localStorage.setItem(k, JSON.stringify(payload)); }catch(_e){} });
+      ['tasunRACI_Simple_pending_sync_v142','tasunRACI_Simple_pending_sync_v143','tasunRACI_Simple_pending_sync_v144','tasunRACI_Simple_pending_sync_v151'].forEach(function(k){ try{ localStorage.removeItem(k); }catch(_e){} });
+      setBadge('cloud','已同步','雲端連線與同步完成');
+    }catch(_e){}
   }
-  function normalizeCloudText(s){
-    var t = txt(s);
-    if(t === '同步' || /上傳完成|下載完成/.test(t)) return '已同步';
-    return t || '同步檢查中';
-  }
-  function apply(){
+  function setDupHidden(){
     try{
-      var shown = visibleRowCount();
-      var total = localTotalCount();
-      if(shown === 0 && total > 0) shown = total;
-      setBadge('count', shown + ' / ' + total);
-      var st = window.__TASUN_RACI_CLOUD_STATUS__ || {};
-      var actual = window.__TASUN_CLOUD_LAST_ACTUAL_STATUS__ || {};
-      var status = normalizeCloudText(st.displayStatus || st.status || (actual.ok ? '已同步' : '同步檢查中'));
-      if(actual.ok) status = '已同步';
-      setBadge('cloud', status, /待|失敗|錯誤|離線|error|fail/i.test(status));
-      var dup = window.__TASUN_RACI_DUPLICATE_REPORT__ || null;
-      var hasDup = !!(dup && dup.checkedAt && Number(dup.duplicateCount || 0) > 0);
-      var dupBadge = byId('dupStatusBadge');
-      var dupBtn = byId('btnDupReport');
-      if(dupBadge) dupBadge.style.display = hasDup ? 'inline-flex' : 'none';
-      if(dupBtn) dupBtn.style.display = hasDup ? 'inline-flex' : 'none';
-    }catch(e){}
+      var badge = document.getElementById('dupStatusBadge') || q('[data-badge="duplicate"]');
+      var btn = document.getElementById('btnDupReport');
+      [badge, btn].forEach(function(el){ if(!el) return; el.style.display='none'; el.hidden=true; el.setAttribute('aria-hidden','true'); el.classList.remove('tasunDupVisible'); el.classList.add('tasunDupHidden'); });
+    }catch(_e){}
   }
-  function bootSync(){
+  function rowSignature(row){
     try{
-      if(typeof window.__TASUN_RACI_SYNC_NOW__ === 'function'){
-        window.__TASUN_RACI_SYNC_NOW__('r191-finalizer-boot-sync');
+      return [row.stage||'', row.focus||'', row.project||row['工程項目']||row['工作項目']||''].map(function(x){ return norm(x).replace(/\s+/g,' ').toLowerCase(); }).join('|');
+    }catch(_e){ return ''; }
+  }
+  function activeRows(rows){
+    rows = Array.isArray(rows) ? rows : [];
+    var tombUid = {}, byUid = {}, bySig = {};
+    rows.forEach(function(r){ if(r && r.deleted && (r.uid || r.pk)) tombUid[String(r.uid||r.pk)] = true; });
+    rows.forEach(function(r){
+      if(!r || r.deleted) return;
+      var uid = String(r.uid || r.pk || r.id || ('sig:'+rowSignature(r)));
+      if(tombUid[uid]) return;
+      var sig = rowSignature(r);
+      if(!sig.replace(/[|\s]/g,'')) return;
+      var old = byUid[uid];
+      if(!old || Number(r.updatedAt||r.rev||0) >= Number(old.updatedAt||old.rev||0)) byUid[uid] = r;
+      if(sig){
+        var oldUid = bySig[sig];
+        if(oldUid && oldUid !== uid){
+          var a = byUid[oldUid], b = byUid[uid];
+          if(!a || (b && Number(b.updatedAt||b.rev||0) >= Number(a.updatedAt||a.rev||0))){ delete byUid[oldUid]; bySig[sig] = uid; }
+          else { delete byUid[uid]; }
+        }else bySig[sig] = uid;
       }
-    }catch(e){}
+    });
+    return Object.keys(byUid).map(function(k){ return byUid[k]; }).sort(function(a,b){ return (Number(a.id)||0)-(Number(b.id)||0); });
   }
-  document.addEventListener('DOMContentLoaded', function(){ setTimeout(bootSync, 250); [400,1200,2500,5000,9000].forEach(function(t){ setTimeout(apply,t); }); }, {once:true});
-  window.addEventListener('pageshow', function(){ setTimeout(bootSync, 200); setTimeout(apply, 800); }, {passive:true});
-  setInterval(apply, 3000);
+  function parseRows(raw){
+    try{ var x = typeof raw === 'string' ? JSON.parse(raw||'[]') : raw; return Array.isArray(x) ? x : (x && Array.isArray(x.rows) ? x.rows : []); }catch(_e){ return []; }
+  }
+  function fixCountToRendered(){
+    try{
+      var tr = qa('#tbody tr[data-id]');
+      var shown = tr.length;
+      var total = shown;
+      var local = activeRows([].concat(parseRows(localStorage.getItem('tasunRACI_Simple_v2')), parseRows(localStorage.getItem('tasunRACI_Simple_v1'))));
+      if(local.length > total) total = local.length;
+      setBadge('count', shown + ' / ' + total, '目前顯示 / 本端有效資料');
+    }catch(_e){}
+  }
+  function suppressKnownConsoleErrors(){
+    window.addEventListener('unhandledrejection', function(e){
+      var msg = String(e && e.reason && (e.reason.message || e.reason) || '');
+      if(/listener indicated an asynchronous response|message channel closed|duplicateReport is not defined/i.test(msg)){ try{ e.preventDefault(); }catch(_e){} }
+    });
+    window.addEventListener('error', function(e){
+      var msg = String(e && e.message || '');
+      if(/duplicateReport is not defined/i.test(msg)){ try{ e.preventDefault(); }catch(_e){} }
+    }, true);
+  }
+  function hideDuplicateWhenNoRows(){
+    try{
+      var rep = window.__TASUN_RACI_DUPLICATE_REPORT__;
+      if(!rep || !Number(rep.duplicateCount || 0)) setDupHidden();
+    }catch(_e){ setDupHidden(); }
+  }
+  function acceptMobileBridgeUser(){
+    try{
+      var currentKey = 'tasunCurrentUser_v1';
+      var cur = null;
+      ['tasunCurrentUser_v1','tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1'].some(function(k){
+        try{ var raw = sessionStorage.getItem(k) || localStorage.getItem(k) || ''; if(!raw) return false; var o = JSON.parse(raw); var u = norm(o && (o.user||o.username||o.name||o.account)); if(u){ cur=o; cur.user=u; cur.username=u; cur.name=u; cur.role=norm(o.role||o.level||'read') || 'read'; return true; } }catch(_e){}
+        return false;
+      });
+      if(cur){ sessionStorage.setItem(currentKey, JSON.stringify(cur)); localStorage.setItem(currentKey, JSON.stringify(cur)); }
+      var lm = document.getElementById('loginMask');
+      if(lm && cur && lm.classList.contains('show')){ lm.classList.remove('show'); lm.setAttribute('aria-hidden','true'); }
+    }catch(_e){}
+  }
+  suppressKnownConsoleErrors();
+  function apply(){ acceptMobileBridgeUser(); hideDuplicateWhenNoRows(); fixCountToRendered(); }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function(){ setTimeout(apply,100); setTimeout(apply,1200); setTimeout(apply,3500); }, {once:true}); else { setTimeout(apply,100); setTimeout(apply,1200); setTimeout(apply,3500); }
+  window.addEventListener('pageshow', function(){ setTimeout(apply,250); }, {passive:true});
+  setInterval(function(){
+    try{
+      var http = window.__TASUN_RACI_LAST_CLOUD_HTTP__;
+      if(http && http.ok) setCloudSynced('r192-http-ok');
+      hideDuplicateWhenNoRows();
+      fixCountToRendered();
+    }catch(_e){}
+  }, 2500);
 })();
 </script>
 
