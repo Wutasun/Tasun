@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r198-edit-save-cloud-roundtrip-final based-on-latest-upload-20260506 -->
+  <!-- tasun-raci-r199-all-form-save-cloud-roundtrip-final based-on-latest-version-20260506 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260506_tasun_v5_raci_r198_edit_save_cloud_roundtrip_final">
+  <meta name="tasun-build-stamp" content="20260506_tasun_v5_raci_r199_all_form_save_cloud_roundtrip_final">
     
 
 
@@ -4811,6 +4811,7 @@ body.searchOpen .panelHead,
   let idbOpening = null;
   let cloudSyncTimer = 0;
   let cloudSyncing = false;
+  let saveInProgress = false;
   let lastCloudSyncAt = 0;
   let watchStarted = false;
 
@@ -6473,15 +6474,32 @@ function render(){
     return list;
   }
 
-  function saveDuplicateReport(){
+  async function saveDuplicateReport(){
     if(!isAdmin()){ toast('僅 admin 可儲存重複資料處理結果'); return false; }
     const list = duplicateRowsToAutoDelete();
     if(!list.length){ toast('沒有重複資料需要儲存'); closeDuplicateReport(); return true; }
     let deleted = 0;
-    list.forEach((row) => { if(performDeleteDuplicateRowObject(row, 'duplicate-report-auto-save', {silent:true})) deleted += 1; });
-    updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || [], 'duplicate-report-auto-save-local');
+    list.forEach((row) => { if(performDeleteDuplicateRowObject(row, 'duplicate-report-auto-save-r199', {silent:true})) deleted += 1; });
+    updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || [], 'duplicate-report-auto-save-local-r199');
     renderDuplicateReport();
-    toast('已儲存去重結果，正在同步雲端：' + deleted + ' 筆');
+    render();
+    closeDuplicateReport();
+    setCloudSyncStatus('同步中', 'duplicate-report-save-roundtrip-r199', {deleted:deleted});
+    toast('已儲存去重結果並即刻更新畫面，正在同步雲端：' + deleted + ' 筆');
+    try{
+      clearTimeout(cloudSyncTimer);
+      await waitCloudSyncIdle(6500);
+      await syncCloud('duplicate-report-save-roundtrip-r199');
+      await waitCloudSyncIdle(6500);
+      loadDB();
+      render();
+      updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || [], 'duplicate-report-save-confirmed-r199');
+      toast('重複資料處理已雲端確認並下傳完成');
+    }catch(err){
+      console.error(err);
+      scheduleCloudSync('duplicate-report-save-roundtrip-r199-retry', 650);
+      toast('去重結果已本端更新，雲端同步排程重試');
+    }
     return true;
   }
 
@@ -6676,7 +6694,7 @@ function render(){
     }
     if(MODAL_STATE.mode === 'edit' && modalIsDirty()){
       showUnsavedConfirm(function(){
-        return saveItem({ closeAfterSave:true });
+        return saveItem({ closeAfterSave:true, byButton:true, forceCloudRoundtrip:true });
       }, function(){
         hardCloseModal();
       });
@@ -6700,78 +6718,104 @@ function render(){
       return false;
     }
     const opts = options || {};
-    const isNewRow = (editingId == null);
-    const row = getModalRow();
-    if(!row.project){
-      toast('請至少輸入工程項目');
-      const projectEl = $('mProject');
-      if(projectEl) projectEl.focus();
+    if(saveInProgress){
+      toast('資料正在儲存與同步，請稍候');
       return false;
     }
-
-    if(editingId != null){
-      row.id = Number(editingId) || Number(row.id) || null;
-    }
-    if(row.id == null) row.id = nextCounter();
-    if(!row.uid) row.uid = createUid(row);
-    row.pk = row.uid;
-    row.pageKey = CFG.PAGE_KEY;
-    row.resourceKey = CFG.RESOURCE_KEY;
-    row.pageFile = CFG.PAGE_FILE;
-    row.deleted = false;
-    row.updatedAt = Date.now();
-    row.rev = row.updatedAt;
-
-    const nextDb = db.map((item) => normalizeRow(item));
-    const sameIdIndex = nextDb.findIndex((item) => Number(item.id) === Number(row.id));
-    if(sameIdIndex >= 0) nextDb[sameIdIndex] = row;
-    else nextDb.push(row);
-
-    const preserved = [];
-    const seen = new Set();
-    nextDb.forEach((item) => {
-      const normalized = normalizeRow(item);
-      const sig = getRowSignature(normalized);
-      if(!sig) return;
-      if(Number(normalized.id) === Number(row.id)){
-        preserved.push(normalized);
-        seen.add(sig);
-        return;
-      }
-      if(seen.has(sig)) return;
-      seen.add(sig);
-      preserved.push(normalized);
-    });
-
-    db = preserved.sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
-    saveDB();
-    loadDB();
-    selectedId = Number(row.id) || null;
-    editingId = Number(row.id) || null;
-    render();
-    captureModalSnapshot();
-    if(opts.closeAfterSave !== false) hardCloseModal();
-
-    const reason = isNewRow ? 'add-save-confirm-roundtrip-r198' : 'edit-save-confirm-roundtrip-r198';
-    toast(isNewRow ? '新增資料已寫入，正在上傳雲端確認…' : '編輯資料已寫入，正在上傳雲端確認…');
+    const saveBtn = $('btnSave');
+    saveInProgress = true;
+    if(saveBtn) saveBtn.disabled = true;
     try{
-      clearTimeout(cloudSyncTimer);
-      await waitCloudSyncIdle(6500);
-      await syncCloud(reason);
-      await waitCloudSyncIdle(6500);
+      const isNewRow = (editingId == null);
+      const row = getModalRow();
+      if(!row.project){
+        toast('請至少輸入工程項目');
+        const projectEl = $('mProject');
+        if(projectEl) projectEl.focus();
+        return false;
+      }
+
+      const nextDb = db.map((item) => normalizeRow(item));
+      let sameIdIndex = -1;
+      let existingRow = null;
+      if(editingId != null){
+        row.id = Number(editingId) || Number(row.id) || null;
+        sameIdIndex = nextDb.findIndex((item) => Number(item.id) === Number(row.id));
+        existingRow = sameIdIndex >= 0 ? normalizeRow(nextDb[sameIdIndex]) : null;
+      }
+      if(row.id == null) row.id = nextCounter();
+
+      /* r199：編輯既有資料時必須保留原 uid/pk，否則雲端會把舊 uid 當成另一筆資料下傳，造成畫面看似未儲存或重複資料。 */
+      if(existingRow && (existingRow.uid || existingRow.pk)){
+        row.uid = norm(existingRow.uid || existingRow.pk);
+        row.pk = row.uid;
+        if(existingRow.createdAt && !row.createdAt) row.createdAt = existingRow.createdAt;
+      }
+      if(!row.uid) row.uid = createUid(row);
+      row.pk = row.uid;
+      row.pageKey = CFG.PAGE_KEY;
+      row.resourceKey = CFG.RESOURCE_KEY;
+      row.pageFile = CFG.PAGE_FILE;
+      row.deleted = false;
+      row.updatedAt = Date.now();
+      row.rev = row.updatedAt;
+
+      if(sameIdIndex < 0) sameIdIndex = nextDb.findIndex((item) => norm(item.uid || item.pk) === norm(row.uid));
+      if(sameIdIndex >= 0) nextDb[sameIdIndex] = row;
+      else nextDb.push(row);
+
+      const preserved = [];
+      const seen = new Set();
+      nextDb.forEach((item) => {
+        const normalized = normalizeRow(item);
+        const sig = getRowSignature(normalized);
+        if(!sig) return;
+        if(Number(normalized.id) === Number(row.id) || norm(normalized.uid || normalized.pk) === norm(row.uid)){
+          preserved.push(normalized);
+          seen.add(sig);
+          return;
+        }
+        if(seen.has(sig)) return;
+        seen.add(sig);
+        preserved.push(normalized);
+      });
+
+      db = preserved.sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
+      saveDB();
+      try{ await saveIdbRows([].concat(db, deletedRows)); }catch(_e){}
       loadDB();
+      selectedId = Number(row.id) || null;
+      editingId = Number(row.id) || null;
       render();
       updateRaciStatus();
-      try{ if(window.__TASUN_RACI_RESYNC_STAGE__) window.__TASUN_RACI_RESYNC_STAGE__(); }catch(_e){}
-      toast(isNewRow ? '已新增、雲端確認並下傳完成' : '已儲存、雲端確認並下傳完成');
-    }catch(err){
-      console.error(err);
-      scheduleCloudSync(reason + '-retry', 650);
-      toast(isNewRow ? '已新增，本端已更新，雲端同步排程重試' : '已儲存，本端已更新，雲端同步排程重試');
-    }
-    return true;
-  }
+      captureModalSnapshot();
+      if(opts.closeAfterSave !== false) hardCloseModal();
 
+      const reason = isNewRow ? 'add-save-confirm-roundtrip-r199' : 'edit-save-confirm-roundtrip-r199';
+      setCloudSyncStatus('同步中', reason, {localSaved:true, savedId:row.id, savedUid:row.uid});
+      toast(isNewRow ? '新增資料已即刻顯示，正在上傳雲端確認…' : '編輯資料已即刻顯示，正在上傳雲端確認…');
+      try{
+        clearTimeout(cloudSyncTimer);
+        await waitCloudSyncIdle(6500);
+        await syncCloud(reason);
+        await waitCloudSyncIdle(6500);
+        loadDB();
+        render();
+        updateRaciStatus();
+        try{ if(window.__TASUN_RACI_RESYNC_STAGE__) window.__TASUN_RACI_RESYNC_STAGE__(); }catch(_e){}
+        toast(isNewRow ? '已新增、雲端確認並下傳完成' : '已儲存、雲端確認並下傳完成');
+      }catch(err){
+        console.error(err);
+        try{ localStorage.setItem('tasunRACI_Simple_pending_sync_v199', JSON.stringify({reason:reason, at:Date.now(), savedId:row.id, savedUid:row.uid})); }catch(_e){}
+        scheduleCloudSync(reason + '-retry', 650);
+        toast(isNewRow ? '已新增，本端已更新，雲端同步排程重試' : '已儲存，本端已更新，雲端同步排程重試');
+      }
+      return true;
+    }finally{
+      saveInProgress = false;
+      if(saveBtn) saveBtn.disabled = false;
+    }
+  }
 
   function deleteItem(){
     validateSession();
@@ -7001,7 +7045,7 @@ function render(){
     if($('dupClose')) $('dupClose').onclick = closeDuplicateReport;
     if($('dupCancel')) $('dupCancel').onclick = closeDuplicateReport;
     if($('dupDelete')) $('dupDelete').onclick = confirmDeleteDuplicateRow;
-    if($('dupSave')) $('dupSave').onclick = saveDuplicateReport;
+    if($('dupSave')) $('dupSave').onclick = function(e){ e.preventDefault(); e.stopPropagation(); Promise.resolve(saveDuplicateReport()).catch(function(err){ console.error(err); toast('儲存失敗：請稍後再試'); }); };
     if($('dupMask')) $('dupMask').addEventListener('click', (e) => { if(e.target === $('dupMask')) closeDuplicateReport(); });
     if($('dupTbody')) $('dupTbody').addEventListener('click', (e) => { const input = e.target.closest('.dupPick'); const tr = e.target.closest('tr[data-token]'); const token = input ? input.value : (tr ? tr.getAttribute('data-token') : ''); if(token && !(tr && tr.getAttribute('data-keep') === '1')) pickDuplicateByToken(token); });
 
