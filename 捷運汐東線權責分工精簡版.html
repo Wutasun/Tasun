@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r192-cloud-count-duplicate-mobile-final based-on-latest-upload-20260505 -->
+  <!-- tasun-raci-r210-no-spin-stability-final based-on-latest-upload-20260506 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260505_tasun_v5_raci_r192_cloud_count_duplicate_mobile_final">
+  <meta name="tasun-build-stamp" content="20260506_tasun_v5_raci_r210_no_spin_stability_final">
     
 
 
@@ -316,7 +316,7 @@
       try{
         var bundle = await fetchVersionBundle();
         var rebuildStamp = await fetchRebuildStamp();
-        var remoteMeta = await fetchRemotePageMeta(bundle && bundle.version);
+        var remoteMeta = { buildStamp: '', fingerprint: '' }; // r210: avoid full HTML fetch loop / spinner
 
         var curV = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || queryV() || '');
         var latestV = norm(bundle && bundle.version) || curV;
@@ -349,7 +349,7 @@
           checkedAt: new Date().toISOString()
         };
 
-        var remoteTrusted = !!remoteFP || !!remoteBS;
+        var remoteTrusted = !!bundle; // r210: tasun-version.json is the only active authority during page run
         var needRefresh = false;
         if(!bundle && !rebuildStamp && !remoteTrusted){
           setAppliedTarget(curV || latestV, PAGE_BUILD_STAMP || latestBS, '');
@@ -359,7 +359,7 @@
           if(latestV && latestV !== curV) needRefresh = true;
           if(latestBS && latestBS !== PAGE_BUILD_STAMP) needRefresh = true;
           if(remoteBS && latestBS && remoteBS !== latestBS) needRefresh = true;
-          if(remoteFP && appliedKey && appliedKey !== targetKey && latestV === curV && latestBS === PAGE_BUILD_STAMP) needRefresh = true;
+          // r210: do not refresh by remote fingerprint; it can vary by cache/query and cause reload loops.
         }
 
         if(needRefresh){
@@ -391,7 +391,8 @@
       window.addEventListener('pageshow', function(){ runner('pageshow'); }, { passive:true });
       window.addEventListener('focus', function(){ runner('focus'); }, { passive:true });
       document.addEventListener('visibilitychange', function(){ if(document.visibilityState === 'visible') runner('visibilitychange'); }, { passive:true });
-      setInterval(function(){ runner('interval'); }, CHECK_INTERVAL_MS);
+      // r210: disabled polling interval to prevent continuous network activity; pageshow/focus/open still check latest.
+      // setInterval(function(){ runner('interval'); }, CHECK_INTERVAL_MS);
     }
 
     window.__TASUN_SYNC_AUTHORITY__ = {
@@ -4332,7 +4333,8 @@ body.searchOpen .panelHead,
     }else{
       setCloudStatusFromActual(false, null, '等待主同步流程確認雲端狀態');
     }
-    try{ if(window.__TASUN_RACI_SYNC_NOW__) setTimeout(function(){ window.__TASUN_RACI_SYNC_NOW__('early-status-confirm-r170'); }, 300); }catch(_e){}
+    // r210: avoid early boot sync loop; main start() schedules a single controlled sync.
+    try{ window.__TASUN_RACI_EARLY_SYNC_SKIPPED_R210__ = true; }catch(_e){}
   }
   protectIndexRoutes();
   document.addEventListener('DOMContentLoaded', function(){ protectIndexRoutes(); ensureTableIdentity(); verifyCloudActual(); }, { once:true });
@@ -5205,7 +5207,7 @@ body.searchOpen .panelHead,
         scheduleCloudSync('storage', 300);
       }
     });
-    setInterval(validateSession, CFG.SESSION_WATCH_MS);
+    setInterval(validateSession, Math.max(Number(CFG.SESSION_WATCH_MS || 3000), 15000)); // r210: lower background churn
   }
 
   function ensureLoggedIn(){
@@ -5646,13 +5648,16 @@ body.searchOpen .panelHead,
   async function cloudPost(path, body){
     const payload = Object.assign({pageKey:CFG.PAGE_KEY, pageFile:CFG.PAGE_FILE, resourceKey:CFG.RESOURCE_KEY, resource:CFG.RESOURCE_KEY}, body || {});
     async function post(token, mode){
+      var ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      var tm = setTimeout(function(){ try{ ctl && ctl.abort(); }catch(_e){} }, Number(window.__TASUN_RACI_CLOUD_FETCH_TIMEOUT_MS__ || 6500));
       const res = await fetch(CFG.API_BASE + path, {
         method:'POST',
         cache:'no-store',
         credentials:'omit',
         headers:cloudHeaders(token),
-        body:JSON.stringify(payload)
-      });
+        body:JSON.stringify(payload),
+        signal: ctl ? ctl.signal : undefined
+      }).finally(function(){ try{ clearTimeout(tm); }catch(_e){} });
       window.__TASUN_RACI_LAST_CLOUD_HTTP__ = {path:path, status:res ? res.status : 0, ok:!!(res && res.ok), mode:mode || '', resourceKey:payload.resourceKey || CFG.RESOURCE_KEY, at:Date.now()};
       return res;
     }
@@ -5843,7 +5848,14 @@ body.searchOpen .panelHead,
   }
 
   function scheduleCloudSync(reason, delay=CFG.SYNC_THROTTLE_MS){
+    const r = String(reason || '');
     clearTimeout(cloudSyncTimer);
+    if(/^boot/i.test(r)){
+      const last = Number(window.__TASUN_RACI_LAST_BOOT_SYNC_AT__ || 0);
+      if(Date.now() - last < 30000) return;
+      window.__TASUN_RACI_LAST_BOOT_SYNC_AT__ = Date.now();
+      delay = Math.max(Number(delay || 0), 650);
+    }
     cloudSyncTimer = setTimeout(() => syncCloud(reason), delay);
   }
 
@@ -5895,7 +5907,7 @@ body.searchOpen .panelHead,
 
   async function syncCloud(reason){
     if(cloudSyncing){
-      if(/save|delete|upload|import|manual|mutation|retry|watchdog/i.test(String(reason||''))){
+      if(/save|delete|upload|import|manual|mutation/i.test(String(reason||'')) && !/^boot/i.test(String(reason||''))){
         setTimeout(() => syncCloud(reason), 650);
       }
       return;
@@ -5949,7 +5961,7 @@ body.searchOpen .panelHead,
         const pendingPayload = {reason:String(reason||''), at:Date.now(), mergeOk:false, confirmed:false, cloudCount:finalCloud.length, localCount:localAll.length, mergedCount:confirmed.length};
         try{ localStorage.setItem('tasunRACI_Simple_pending_sync_v151', JSON.stringify(pendingPayload)); }catch(_e){}
         setCloudSyncStatus('待同步', reason, pendingPayload);
-        setTimeout(() => syncCloud('retry-' + String(reason || 'sync')), 3500);
+        // r210: stop automatic endless retry; user save/manual actions can call sync again.
       }
     }catch(err){
       const lastHttp = window.__TASUN_RACI_LAST_CLOUD_HTTP__ || {};
@@ -7179,14 +7191,12 @@ function render(){
     render();
     updateDuplicateStatusFromRows([], 'boot-local');
     if(isAdmin()) setTimeout(() => { try{ readCloudRows().then(rows => updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || rows, 'boot-cloud-admin')); }catch(_e){} }, 600);
-    clearCurrentDisplayedDataR133().then(function(cleared){
-      loadDB();
-      render();
-      scheduleCloudSync(cleared ? 'boot-r133-clear-confirm-download-upload' : 'boot-download', cleared ? 80 : 300);
-      try{ if(window.__TASUN_RACI_RESYNC_STAGE__) window.__TASUN_RACI_RESYNC_STAGE__(); }catch(_e){}
-    }).catch(function(){
-      scheduleCloudSync('boot-download-after-clear-error', 300);
-    });
+    // r210: do not run legacy clear routine automatically on every new device/session; it can trigger long cloud writes and apparent endless loading.
+    try{ localStorage.setItem(CFG.CLEAR_BATCH_KEY + '::done', localStorage.getItem(CFG.CLEAR_BATCH_KEY + '::done') || '1'); }catch(_e){}
+    loadDB();
+    render();
+    scheduleCloudSync('boot-download-r210-single', 650);
+    try{ if(window.__TASUN_RACI_RESYNC_STAGE__) window.__TASUN_RACI_RESYNC_STAGE__(); }catch(_e){}
   }
 
   bindUI();
@@ -7549,7 +7559,7 @@ function render(){
   }
   document.addEventListener('DOMContentLoaded', function(){ setTimeout(apply, 300); setTimeout(apply, 1600); }, {once:true});
   window.addEventListener('pageshow', function(){ setTimeout(apply, 300); }, {passive:true});
-  setInterval(apply, 5000);
+  setTimeout(apply, 5000); // r210: no continuous status polling
 })();
 </script>
 
@@ -7683,14 +7693,14 @@ function render(){
   function apply(){ acceptMobileBridgeUser(); hideDuplicateWhenNoRows(); fixCountToRendered(); }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function(){ setTimeout(apply,100); setTimeout(apply,1200); setTimeout(apply,3500); }, {once:true}); else { setTimeout(apply,100); setTimeout(apply,1200); setTimeout(apply,3500); }
   window.addEventListener('pageshow', function(){ setTimeout(apply,250); }, {passive:true});
-  setInterval(function(){
+  setTimeout(function(){
     try{
       var http = window.__TASUN_RACI_LAST_CLOUD_HTTP__;
       if(http && http.ok) setCloudSynced('r192-http-ok');
       hideDuplicateWhenNoRows();
       fixCountToRendered();
     }catch(_e){}
-  }, 2500);
+  }, 2500); // r210 one-shot status consolidation
 })();
 </script>
 
@@ -7721,7 +7731,26 @@ function render(){
   document.addEventListener('change', function(e){ if(e.target && e.target.matches && e.target.matches('.filterComboInput,.modalComboInput,.modalComboArea')) cleanInput(e.target); }, true);
   document.addEventListener('click', function(){ setTimeout(run, 0); }, true);
   document.addEventListener('DOMContentLoaded', run, {once:true});
-  setInterval(run, 1500);
+  setTimeout(run, 1500); // r210: no continuous normalization polling
+})();
+</script>
+
+
+<script id="tasun-raci-r210-no-spin-watchdog">
+(function(){
+  'use strict';
+  if(window.__TASUN_RACI_NO_SPIN_WATCHDOG_R210__) return;
+  window.__TASUN_RACI_NO_SPIN_WATCHDOG_R210__ = true;
+  function safeText(sel, txt){ try{ var el=document.querySelector(sel); if(el && /載入中|同步檢查中|0\s*\/\s*0|—|-/.test(String(el.textContent||''))) el.textContent=txt; }catch(_e){} }
+  function markReady(){
+    try{ document.documentElement.setAttribute('data-tasun-ready','1'); document.body && document.body.setAttribute('data-tasun-ready','1'); }catch(_e){}
+    try{ if(window.__TASUN_RACI_LAST_BOOT_SYNC_AT__ && Date.now()-window.__TASUN_RACI_LAST_BOOT_SYNC_AT__ > 9000) window.__TASUN_RACI_LAST_BOOT_SYNC_AT__ = Date.now(); }catch(_e){}
+    try{ safeText('[data-badge="version"] .v', String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '已載入')); }catch(_e){}
+    try{ var rows=(window.__TASUN_RACI_LAST_RENDERED_COUNT__||0); if(rows>0) safeText('[data-badge="count"] .v', rows+' / '+rows); }catch(_e){}
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', markReady, {once:true}); else markReady();
+  window.addEventListener('pageshow', markReady, {passive:true});
+  setTimeout(markReady, 2500);
 })();
 </script>
 
