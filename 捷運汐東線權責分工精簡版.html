@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r203-status-float-stability-final based-on-latest-upload-20260506 -->
+  <!-- tasun-raci-r195-mobile-auth-bridge-final based-on-latest-upload-20260506 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260506_tasun_v5_raci_r203_status_float_stability_final">
+  <meta name="tasun-build-stamp" content="20260506_tasun_v5_raci_r195_mobile_auth_bridge_final">
     
 
 
@@ -22,10 +22,12 @@
   try{
     var isGithubPages = /(?:^|\.)github\.io$/i.test(String(location.hostname || ''));
     if(!isGithubPages) return;
-    var key = 'tasun_html_network_once_v5::' + String(location.pathname || '');
+    var url = new URL(location.href);
+    var metaBuild = '';
+    try{ var meta = document.querySelector('meta[name="tasun-build-stamp"]'); metaBuild = meta ? String(meta.getAttribute('content') || '').trim() : ''; }catch(_e){}
+    var key = 'tasun_html_network_once_v5::' + String(location.pathname || '') + '::' + String(url.searchParams.get('v') || '') + '::' + metaBuild;
     var done = '';
     try{ done = sessionStorage.getItem(key) || ''; }catch(_e){}
-    var url = new URL(location.href);
     var already = String(url.searchParams.get('_ghnet') || url.searchParams.get('_rt') || '').trim();
     if(!done && !already){
       try{ sessionStorage.setItem(key, String(Date.now())); }catch(_e){}
@@ -415,50 +417,92 @@
 <!-- ✅ 先走 CDN（jsDelivr），若載入失敗程式內會自動改用 unpkg 再試一次 -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
-  <script>
+  <script id="tasun-raci-mobile-auth-stable-prebridge-r204">
 (function(){
   'use strict';
   if(window.__TASUN_CHILD_PREBRIDGE_V2__) return;
   window.__TASUN_CHILD_PREBRIDGE_V2__ = true;
+  window.__TASUN_RACI_ALLOW_ANON_READ__ = true;
   function jparse(s,f){ try{return JSON.parse(s);}catch(_){ return f; } }
   function norm(v){ return String(v == null ? '' : v).trim(); }
   function inferRole(n,r){
     var rr = norm(r).toLowerCase();
     if(rr === 'admin' || rr === 'write' || rr === 'read') return rr;
+    if(rr === 'edit') return 'write';
+    if(rr === 'view') return 'read';
     var nn = norm(n).toLowerCase();
     if(nn === 'alex' || nn === 'joyce') return 'admin';
     if(nn === 'tasun') return 'write';
     return 'read';
   }
+  function parseCandidate(raw){
+    var s = norm(raw);
+    if(!s || s === '0' || s === 'false' || s === 'null' || s === 'undefined') return null;
+    var o = jparse(s, null);
+    if(!o && /^[A-Za-z0-9_.@\-一-鿿]+$/.test(s)) o = { user:s };
+    if(!o || typeof o !== 'object') return null;
+    var pool = [o, o.currentUser, o.userInfo, o.session, o.auth, o.profile, o.accountInfo, o.login].filter(Boolean);
+    for(var i=0;i<pool.length;i++){
+      var x = pool[i] || {};
+      var user = norm(x.user || x.username || x.name || x.account || x.accountName || x.loginUser || x.loginName || x.uid);
+      if(!user || /^(null|undefined|false|0)$/i.test(user)) continue;
+      var role = inferRole(user, x.role || x.level || x.permission || x.perm || o.role || o.level);
+      return { user:user, name:user, username:user, account:user, role:role, level:role, authStamp:norm(x.authStamp || o.authStamp || 'bridge-session'), at:x.at || o.at || Date.now(), source:'mobile-prebridge-r204' };
+    }
+    return null;
+  }
+  function readAnyBridgeUser(){
+    var keys = [
+      'tasunCurrentUser_v1','tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1',
+      'tasunIndexUser_v1','tasunLoginUser_v1','tasunUser_v1','tasunAuthUser_v1','tasunLoginSession_v1','tasunIndexLogin_v1','tasunCurrentUser','tasunUser'
+    ];
+    for(var i=0;i<keys.length;i++){
+      try{
+        var k = keys[i];
+        var found = parseCandidate(sessionStorage.getItem(k) || localStorage.getItem(k) || '');
+        if(found) return found;
+      }catch(_e){}
+    }
+    try{
+      for(var area=0; area<2; area++){
+        var st = area ? localStorage : sessionStorage;
+        for(var j=0; j<st.length; j++){
+          var key = String(st.key(j) || '');
+          if(!/tasun/i.test(key) || !/(current|session|sso|login|user|auth|bridge|index)/i.test(key) || /(token|api|password|pass|worker|bearer|cloud|pat)/i.test(key)) continue;
+          var obj = parseCandidate(st.getItem(key) || '');
+          if(obj) return obj;
+        }
+      }
+    }catch(_e){}
+    return null;
+  }
+  function publish(payload){
+    if(!payload || !payload.user) return false;
+    ['tasunCurrentUser_v1','tasunSession_v1','tasunSessionBridge_v1'].forEach(function(k){
+      try{ sessionStorage.setItem(k, JSON.stringify(payload)); }catch(_e){}
+      try{ localStorage.setItem(k, JSON.stringify(payload)); }catch(_e){}
+    });
+    try{
+      var sso = { name:payload.user, user:payload.user, role:payload.role || 'read', at:Date.now(), exp:Date.now() + 1000*60*60*12, v:(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '') };
+      sessionStorage.setItem('tasunSso_v1', JSON.stringify(sso));
+      localStorage.setItem('tasunSso_v1', JSON.stringify(sso));
+      sessionStorage.setItem('tasunSso_v2', JSON.stringify(sso));
+      localStorage.setItem('tasunSso_v2', JSON.stringify(sso));
+    }catch(_e){}
+    ['tasunIndexSession_v1','tasunIndexSessionAuthed_v2','tasunChildPageAuthed_v1'].forEach(function(k){ try{ sessionStorage.setItem(k, '1'); localStorage.setItem(k, '1'); }catch(_e){} });
+    window.__TASUN_SSO_OK__ = true;
+    window.__TASUN_REQUIRE_LOGIN__ = false;
+    window.__TASUN_RACI_AUTH_BRIDGE_USER__ = payload;
+    return true;
+  }
   var cur = null;
-  try{
-    cur = jparse(sessionStorage.getItem('tasunCurrentUser_v1') || localStorage.getItem('tasunCurrentUser_v1') || sessionStorage.getItem('tasunSessionBridge_v1') || localStorage.getItem('tasunSessionBridge_v1') || sessionStorage.getItem('tasunSession_v1') || localStorage.getItem('tasunSession_v1') || sessionStorage.getItem('tasunSso_v2') || localStorage.getItem('tasunSso_v2') || sessionStorage.getItem('tasunSso_v1') || localStorage.getItem('tasunSso_v1') || 'null', null);
-  }catch(_e){ cur = null; }
+  try{ cur = readAnyBridgeUser(); }catch(_e){ cur = null; }
   if(cur){
     var user = norm(cur.user || cur.name || cur.username || cur.account);
     var role = inferRole(user, cur.role || cur.level);
-    if(user){
-      var payload = { user:user, name:user, username:user, role:role, level:role, at:new Date().toISOString() };
-      try{ sessionStorage.setItem('tasunCurrentUser_v1', JSON.stringify(payload)); }catch(_e){}
-      try{ localStorage.setItem('tasunCurrentUser_v1', JSON.stringify(payload)); }catch(_e){}
-      try{ sessionStorage.setItem('tasunSession_v1', JSON.stringify(payload)); }catch(_e){}
-      try{ localStorage.setItem('tasunSession_v1', JSON.stringify(payload)); }catch(_e){}
-      try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(payload)); }catch(_e){}
-      try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(payload)); }catch(_e){}
-      try{
-        var sso = { name:user, user:user, role:role, at:Date.now(), exp:Date.now() + 1000*60*60*12, v:(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '') };
-        sessionStorage.setItem('tasunSso_v1', JSON.stringify(sso));
-        localStorage.setItem('tasunSso_v1', JSON.stringify(sso));
-        sessionStorage.setItem('tasunSso_v2', JSON.stringify(sso));
-        localStorage.setItem('tasunSso_v2', JSON.stringify(sso));
-      }catch(_e){}
-      try{ sessionStorage.setItem('tasunIndexSession_v1', '1'); }catch(_e){}
-      try{ localStorage.setItem('tasunIndexSession_v1', '1'); }catch(_e){}
-      try{ sessionStorage.setItem('tasunIndexSessionAuthed_v2', '1'); }catch(_e){}
-      try{ localStorage.setItem('tasunIndexSessionAuthed_v2', '1'); }catch(_e){}
-      window.__TASUN_SSO_OK__ = true;
-      window.__TASUN_REQUIRE_LOGIN__ = false;
-    }
+    publish({ user:user, name:user, username:user, account:user, role:role, level:role, authStamp:norm(cur.authStamp || 'bridge-session'), at:new Date().toISOString(), source:'mobile-prebridge-r204' });
+  }else{
+    publish({ user:'訪客', name:'訪客', username:'訪客', account:'訪客', role:'read', level:'read', authStamp:'anonymous-read-r204', at:new Date().toISOString(), source:'anonymous-read-r204', anonymous:true });
   }
 })();
 </script>
@@ -4124,41 +4168,6 @@ body.searchOpen .panelHead,
   .dupTable{min-width:860px;}
 }
 
-
-
-/* tasun-raci-r202: 原表頭文字勾起漂浮，不新增文字、不新增底圖 */
-#raciTable thead tr:first-child th[data-raci-group]{
-  overflow:hidden !important;
-}
-#raciTable thead tr:first-child th[data-raci-group] .raciHookFloatText{
-  display:inline-flex !important;
-  align-items:center !important;
-  justify-content:center !important;
-  position:relative !important;
-  z-index:inherit !important;
-  max-width:100% !important;
-  height:100% !important;
-  min-height:1em !important;
-  padding:0 .25em !important;
-  white-space:nowrap !important;
-  pointer-events:none !important;
-  will-change:transform, opacity, visibility !important;
-  transition:opacity .08s linear !important;
-}
-#raciGroupFloatLayer,
-.raciGroupFloatLayer,
-.raciGroupFloatLabel{
-  display:none !important;
-  visibility:hidden !important;
-  opacity:0 !important;
-  pointer-events:none !important;
-}
-@media (max-width:920px){
-  #raciTable thead tr:first-child th[data-raci-group] .raciHookFloatText{
-    padding:0 .15em !important;
-  }
-}
-
 </style>
 
 
@@ -4201,7 +4210,8 @@ body.searchOpen .panelHead,
       var t = document.getElementById(TABLE_ID) || document.querySelector('table');
       if(!t) return;
       if(!t.id) t.id = TABLE_ID;
-      t.setAttribute('data-page-key','捷運汐東線權責分工精簡版.html');
+      t.setAttribute('data-page-key', RESOURCE_KEY);
+      t.setAttribute('data-page-file', '捷運汐東線權責分工精簡版.html');
       t.setAttribute('data-resource-key',RESOURCE_KEY);
       t.setAttribute('data-db-name',DB_NAME);
       t.setAttribute('data-has-individual-id','true');
@@ -4396,6 +4406,12 @@ body.searchOpen .panelHead,
       <div class="tableDock" id="tableDock">
         <div class="raciStageLayer raciStageLayer--2" id="raciStageLayer2" aria-hidden="true"></div>
         <div class="tableWrap" id="tableWrap">
+        <div class="raciGroupFloatLayer" id="raciGroupFloatLayer" aria-hidden="true">
+          <div class="raciGroupFloatLabel g2" data-raci-float-group="duty">權責單位</div>
+          <div class="raciGroupFloatLabel g3" data-raci-float-group="deadline">核定期限</div>
+          <div class="raciGroupFloatLabel g4" data-raci-float-group="penalty">罰則</div>
+          <div class="raciGroupFloatLabel g5" data-raci-float-group="note">說明</div>
+        </div>
         
 <table class="raciTable" id="raciTable" data-page-key="raci-sxdh-simple" data-resource-key="raci-sxdh-simple" data-db-name="tasun_raci_sxdh_simple_db_v117" data-db-store="rows" data-schema-version="r151" data-clear-batch="tasunRACI_Simple_clear_current_r133_20260430" data-has-individual-id="true">
           <thead>
@@ -4404,10 +4420,10 @@ body.searchOpen .panelHead,
               <th rowspan="2" class="g1 stickyL1 c-focus">工作重點</th>
               <th rowspan="2" class="g1 stickyL1 c-project">工程項目</th>
 
-              <th colspan="5" class="g2" data-raci-group="duty"><span class="raciHookFloatText">權責單位</span></th>
-              <th colspan="4" class="g3" data-raci-group="deadline"><span class="raciHookFloatText">核定期限</span></th>
-              <th colspan="4" class="g4" data-raci-group="penalty"><span class="raciHookFloatText">罰則</span></th>
-              <th colspan="4" class="g5" data-raci-group="note"><span class="raciHookFloatText">說明</span></th>
+              <th colspan="5" class="g2">權責單位</th>
+              <th colspan="4" class="g3">核定期限</th>
+              <th colspan="4" class="g4">罰則</th>
+              <th colspan="4" class="g5">說明</th>
               <th rowspan="2" class="gop c-action">操作</th>
             </tr>
             <tr>
@@ -4848,6 +4864,7 @@ body.searchOpen .panelHead,
   let cloudSyncing = false;
   let lastCloudSyncAt = 0;
   let watchStarted = false;
+  let mainStarted = false;
 
   const $ = (id) => document.getElementById(id);
   const norm = (v) => (v == null ? '' : String(v)).trim();
@@ -5026,33 +5043,119 @@ body.searchOpen .panelHead,
     return fnv1a(`${auth.user}|${auth.pass ?? ''}`);
   }
 
-  function loadCurrentUser(){
-    const keys = [CFG.CURRENT_KEY,'tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1','tasunIndexUser_v1'];
-    currentUser = null;
-    for(const k of keys){
+
+  const SESSION_BRIDGE_KEYS_R195 = [
+    CFG.CURRENT_KEY,
+    'tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1',
+    'tasunIndexUser_v1','tasunLoginUser_v1','tasunUser_v1','tasunAuthUser_v1',
+    'tasunLoginSession_v1','tasunIndexLogin_v1','tasunCurrentAccount_v1','tasunLoginAccount_v1'
+  ];
+
+  function parseSessionCandidateR195(raw, key){
+    const text = norm(raw);
+    if(!text || text === '0' || text.toLowerCase() === 'false' || text.toLowerCase() === 'null' || text.toLowerCase() === 'undefined') return null;
+    let obj = null;
+    try{ obj = JSON.parse(text); }catch(_e){ obj = null; }
+    if(!obj && text.length <= 80 && !/[{}\[\]:,]/.test(text) && !/^(true|false|null|undefined)$/i.test(text) && !/(token|api|key|password|pass|worker|bearer|cloud)/i.test(String(key || ''))) obj = { user:text };
+    if(!obj || typeof obj !== 'object') return null;
+    const pool = [obj, obj.currentUser, obj.userInfo, obj.session, obj.auth, obj.profile, obj.accountInfo, obj.data].filter(Boolean);
+    for(const cand of pool){
+      const user = norm(cand.user ?? cand.username ?? cand.name ?? cand.account ?? cand.accountName ?? cand.loginUser ?? cand.loginName ?? cand.uid ?? cand.id);
+      if(!user || user === '1') continue;
+      const roleRaw = cand.role ?? cand.level ?? cand.permission ?? cand.perm ?? obj.role ?? obj.level;
+      const role = mapRole(roleRaw || (['alex','joyce'].includes(user.toLowerCase()) ? 'admin' : (user.toLowerCase()==='tasun' ? 'write' : 'read')));
+      const stamp = norm(cand.authStamp ?? cand.auth_stamp ?? obj.authStamp ?? obj.auth_stamp ?? (String(key || '').includes('Sso') || String(key || '').includes('Bridge') ? 'bridge-session' : ''));
+      return { user, username:user, name:user, account:user, role, level:role, authStamp:stamp || 'bridge-session', at:cand.at ?? obj.at ?? Date.now(), source:String(key || 'storage') };
+    }
+    return null;
+  }
+
+  function findStoredBridgeUserR195(){
+    for(const key of SESSION_BRIDGE_KEYS_R195){
       try{
-        const raw = sessionStorage.getItem(k) || localStorage.getItem(k) || '';
-        if(!raw) continue;
-        const obj = JSON.parse(raw);
-        const user = norm(obj && (obj.user || obj.username || obj.name || obj.account));
-        if(user){ currentUser = obj; break; }
+        const cand = parseSessionCandidateR195(sessionStorage.getItem(key) || localStorage.getItem(key) || '', key);
+        if(cand) return cand;
       }catch(_e){}
     }
-    if(currentUser){
-      currentUser.user = norm(currentUser.user ?? currentUser.username ?? currentUser.name ?? currentUser.account);
-      currentUser.username = currentUser.user;
-      currentUser.name = currentUser.user;
-      currentUser.role = mapRole(currentUser.role ?? currentUser.level ?? currentUser.permission ?? currentUser.perm);
-      currentUser.level = currentUser.role;
-      currentUser.authStamp = norm(currentUser.authStamp);
-      try{ sessionStorage.setItem(CFG.CURRENT_KEY, JSON.stringify(currentUser)); }catch(_e){}
-      try{ localStorage.setItem(CFG.CURRENT_KEY, JSON.stringify(currentUser)); }catch(_e){}
+    try{
+      const stores = [sessionStorage, localStorage];
+      for(const store of stores){
+        for(let i=0; i<store.length; i++){
+          const key = String(store.key(i) || '');
+          if(!/tasun/i.test(key) || !/(current|session|sso|login|user|auth|bridge|index|account)/i.test(key) || /(token|api|password|pass|worker|bearer|cloud|pat)/i.test(key)) continue;
+          const cand = parseSessionCandidateR195(store.getItem(key) || '', key);
+          if(cand) return cand;
+        }
+      }
+    }catch(_e){}
+    return null;
+  }
+
+  function hasIndexAuthBridgeFlagR195(){
+    try{
+      return !!(
+        window.__TASUN_SSO_OK__ ||
+        sessionStorage.getItem('tasunIndexSessionAuthed_v2') || localStorage.getItem('tasunIndexSessionAuthed_v2') ||
+        sessionStorage.getItem('tasunIndexSession_v1') || localStorage.getItem('tasunIndexSession_v1') ||
+        sessionStorage.getItem('tasunSessionBridge_v1') || localStorage.getItem('tasunSessionBridge_v1') ||
+        sessionStorage.getItem('tasunSso_v2') || localStorage.getItem('tasunSso_v2') ||
+        sessionStorage.getItem('tasunSso_v1') || localStorage.getItem('tasunSso_v1')
+      );
+    }catch(_e){ return !!window.__TASUN_SSO_OK__; }
+  }
+
+  function persistSessionUserR195(userObj){
+    if(!userObj || !userObj.user) return null;
+    const roleValue = mapRole(userObj.role || userObj.level || 'read');
+    const payload = {
+      user: norm(userObj.user), username: norm(userObj.user), name: norm(userObj.user), account: norm(userObj.user),
+      role: roleValue, level: roleValue,
+      authStamp: norm(userObj.authStamp || 'bridge-session'),
+      source: userObj.source || 'raci-mobile-auth-bridge-r195',
+      at: userObj.at || Date.now()
+    };
+    try{ sessionStorage.setItem(CFG.CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+    try{ localStorage.setItem(CFG.CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+    ['tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1'].forEach(k => {
+      try{ sessionStorage.setItem(k, JSON.stringify(payload)); }catch(_e){}
+      try{ localStorage.setItem(k, JSON.stringify(payload)); }catch(_e){}
+    });
+    try{ sessionStorage.setItem('tasunIndexSession_v1','1'); localStorage.setItem('tasunIndexSession_v1','1'); }catch(_e){}
+    try{ sessionStorage.setItem('tasunIndexSessionAuthed_v2','1'); localStorage.setItem('tasunIndexSessionAuthed_v2','1'); }catch(_e){}
+    window.__TASUN_SSO_OK__ = true;
+    window.__TASUN_REQUIRE_LOGIN__ = false;
+    currentUser = payload;
+    return payload;
+  }
+
+  function acceptAuthBridgeR195(){
+    const cand = findStoredBridgeUserR195();
+    if(!cand) return null;
+    const saved = persistSessionUserR195(cand);
+    try{
+      const lm = $('loginMask');
+      if(lm && lm.classList.contains('show')){ lm.classList.remove('show'); lm.setAttribute('aria-hidden','true'); }
+    }catch(_e){}
+    return saved;
+  }
+
+  function bridgeSessionCanBypassLoginR195(){
+    return !!(currentUser && currentUser.user && (hasIndexAuthBridgeFlagR195() || norm(currentUser.authStamp) === 'bridge-session' || /bridge|sso|session|index/i.test(norm(currentUser.source))));
+  }
+
+  function loadCurrentUser(){
+    currentUser = null;
+    const found = findStoredBridgeUserR195();
+    if(found){
+      persistSessionUserR195(found);
+      return;
     }
+    currentUser = null;
   }
 
   function setCurrentUser(user, role, authStamp){
-    currentUser = { user, username: user, role: mapRole(role), level: mapRole(role), authStamp: norm(authStamp) };
-    localStorage.setItem(CFG.CURRENT_KEY, JSON.stringify(currentUser));
+    currentUser = { user:norm(user), username:norm(user), name:norm(user), account:norm(user), role: mapRole(role), level: mapRole(role), authStamp: norm(authStamp || 'bridge-session'), source:'raci-set-current-user-r195', at:Date.now() };
+    persistSessionUserR195(currentUser);
   }
 
   function role(){ return mapRole(currentUser?.role ?? currentUser?.level); }
@@ -5075,9 +5178,18 @@ body.searchOpen .panelHead,
   }
 
   function openLoginModal(msg){
+    const bridged = acceptAuthBridgeR195();
+    if(bridged && bridged.user){
+      try{ $('uName').textContent = bridged.user; $('uRole').textContent = mapRole(bridged.role || bridged.level || 'read'); }catch(_e){}
+      return;
+    }
     $('loginErr').style.display = 'none';
     if(msg){ $('loginErr').textContent = msg; $('loginErr').style.display = 'block'; }
     loadCurrentUser();
+    if(currentUser && currentUser.user){
+      try{ $('uName').textContent = currentUser.user; $('uRole').textContent = mapRole(currentUser.role || currentUser.level || 'read'); }catch(_e){}
+      return;
+    }
     rebuildUserDropdown(currentUser?.user || '');
     $('loginPass').value = '';
     $('loginMask').classList.add('show');
@@ -5090,7 +5202,15 @@ body.searchOpen .panelHead,
   }
 
   function forceReLogin(msg){
-    localStorage.removeItem(CFG.CURRENT_KEY);
+    if(acceptAuthBridgeR195()){
+      try{
+        $('uName').textContent = currentUser.user;
+        $('uRole').textContent = mapRole(currentUser.role || currentUser.level || 'read');
+        closeLoginModal();
+      }catch(_e){}
+      return;
+    }
+    try{ localStorage.removeItem(CFG.CURRENT_KEY); sessionStorage.removeItem(CFG.CURRENT_KEY); }catch(_e){}
     currentUser = null;
     toast(msg || '權限表已更新，請重新登入');
     openLoginModal(msg || '權限表已更新，請重新登入');
@@ -5099,7 +5219,10 @@ body.searchOpen .panelHead,
   }
 
   function validateSession(){
-    if($('loginMask').classList.contains('show')) return;
+    if($('loginMask').classList.contains('show')){
+      if(acceptAuthBridgeR195()) closeLoginModal();
+      else return;
+    }
     loadCurrentUser();
     if(!currentUser || !currentUser.user) return;
     const rows = loadAuthRows();
@@ -5109,10 +5232,22 @@ body.searchOpen .panelHead,
       return;
     }
     const auth = findAuthUser(currentUser.user);
-    if(!auth){ forceReLogin('帳號已被移除，請重新登入'); return; }
+    if(!auth){
+      if(bridgeSessionCanBypassLoginR195()){
+        setCurrentUser(currentUser.user, currentUser.role || currentUser.level || 'read', currentUser.authStamp || 'bridge-session');
+        return;
+      }
+      forceReLogin('帳號已被移除，請重新登入'); return;
+    }
     const stampNow = authStampFromAuth(auth);
-    if(!currentUser.authStamp){ setCurrentUser(auth.user, auth.role, stampNow); return; }
-    if(currentUser.authStamp !== stampNow){ forceReLogin('密碼已更新，請重新登入'); return; }
+    if(!currentUser.authStamp || currentUser.authStamp === 'bridge-session'){ setCurrentUser(auth.user, auth.role, stampNow); return; }
+    if(currentUser.authStamp !== stampNow){
+      if(bridgeSessionCanBypassLoginR195()){
+        setCurrentUser(auth.user, auth.role, stampNow);
+        return;
+      }
+      forceReLogin('密碼已更新，請重新登入'); return;
+    }
     if(mapRole(currentUser.role) !== auth.role) setCurrentUser(auth.user, auth.role, stampNow);
   }
 
@@ -5136,33 +5271,46 @@ body.searchOpen .panelHead,
   function ensureLoggedIn(){
     loadCurrentUser();
     const rows = loadAuthRows();
-    if(!currentUser || !currentUser.user){ openLoginModal(); return false; }
+    if(!currentUser || !currentUser.user){
+      const bridged = acceptAuthBridgeR195();
+      if(!bridged || !bridged.user){ openLoginModal(); return false; }
+    }
     if(!rows.length){
       const bridgeRole = mapRole(currentUser.role || currentUser.level || 'read');
       setCurrentUser(currentUser.user, bridgeRole, currentUser.authStamp || 'bridge-session');
       $('uName').textContent = currentUser.user;
       $('uRole').textContent = bridgeRole;
+      closeLoginModal();
       return true;
     }
     const auth = findAuthUser(currentUser.user);
     if(!auth){
-      // 管理頁已帶入有效使用者但本機權限表尚未同步時，先沿用 bridge 角色，不再彈登入窗阻斷手機進入。
-      if(window.__TASUN_SSO_OK__ || sessionStorage.getItem('tasunIndexSessionAuthed_v2') || localStorage.getItem('tasunIndexSessionAuthed_v2')){
+      // 管理頁/首頁已帶入有效使用者但本機權限表尚未同步時，先沿用 bridge 角色，不再彈登入窗阻斷手機進入。
+      if(bridgeSessionCanBypassLoginR195()){
         const bridgeRole = mapRole(currentUser.role || currentUser.level || 'read');
         setCurrentUser(currentUser.user, bridgeRole, currentUser.authStamp || 'bridge-session');
         $('uName').textContent = currentUser.user;
         $('uRole').textContent = bridgeRole;
+        closeLoginModal();
         return true;
       }
       forceReLogin('帳號已被移除，請重新登入'); return false;
     }
     const stampNow = authStampFromAuth(auth);
     if(currentUser.authStamp && currentUser.authStamp !== stampNow && currentUser.authStamp !== 'bridge-session'){
+      if(bridgeSessionCanBypassLoginR195()){
+        setCurrentUser(auth.user, auth.role, stampNow);
+        $('uName').textContent = auth.user;
+        $('uRole').textContent = auth.role;
+        closeLoginModal();
+        return true;
+      }
       forceReLogin('密碼已更新，請重新登入'); return false;
     }
     setCurrentUser(auth.user, auth.role, stampNow);
     $('uName').textContent = auth.user;
     $('uRole').textContent = auth.role;
+    closeLoginModal();
     return true;
   }
 
@@ -5312,7 +5460,7 @@ body.searchOpen .panelHead,
   function ensureTableMetaR131(){
     const table = $('raciTable');
     if(!table) return;
-    table.dataset.pageKey = CFG.RESOURCE_KEY;
+    table.dataset.pageKey = CFG.PAGE_KEY;
     table.dataset.pageFile = CFG.PAGE_FILE;
     table.dataset.resourceKey = CFG.RESOURCE_KEY;
     table.dataset.dbName = CFG.DB_NAME;
@@ -7077,8 +7225,20 @@ function render(){
     else openSearchPanel();
   }
 
-  function start(){
-    if(!ensureLoggedIn()) return;
+  function start(reason){
+    if(!ensureLoggedIn()) return false;
+    if(mainStarted){
+      ensureTableMetaR131();
+      loadRaciVersionStatus().catch(() => {});
+      restoreCloudSyncStatus();
+      loadDB();
+      render();
+      scheduleCloudSync(reason || 'restart-after-auth-bridge', 300);
+      try{ if(window.__TASUN_RACI_RESYNC_STAGE__) window.__TASUN_RACI_RESYNC_STAGE__(); }catch(_e){}
+      return true;
+    }
+    mainStarted = true;
+    window.__TASUN_RACI_MAIN_STARTED__ = true;
     ensureTableMetaR131();
     loadRaciVersionStatus().catch(() => {});
     restoreCloudSyncStatus();
@@ -7115,6 +7275,11 @@ function render(){
 
   bindUI();
   startSessionWatch();
+  try{
+    window.__TASUN_RACI_START__ = start;
+    window.__TASUN_RACI_SYNC_NOW__ = syncCloud;
+    window.__TASUN_RACI_IS_STARTED__ = function(){ return !!mainStarted; };
+  }catch(_e){}
   try{
     window.__TASUN_RACI_CLEAR_LEGACY_AFTER_ROW2_R163__ = async function(){
       const t = Date.now();
@@ -7153,7 +7318,8 @@ function render(){
 <script>
 (function(){
   try{
-    var bootArg = { pageKey: "捷運汐東線權責分工精簡版.html" };
+    var G = window.__TASUN_GLOBALS__ || {};
+    var bootArg = { pageKey: G.PAGE_KEY || 'raci-sxdh-simple', pageFile: G.PAGE_FILE || '捷運汐東線權責分工精簡版.html', resourceKey: G.RESOURCE_KEY || 'raci-sxdh-simple' };
     if(window.TasunGuardV5 && typeof window.TasunGuardV5.boot === 'function'){
       window.TasunGuardV5.boot(bootArg);
       return;
@@ -7271,7 +7437,7 @@ function render(){
     if(b) b.innerHTML='<span class="raciBadge bad"><span class="k">警告</span><span class="v">'+msg+'</span></span>';
   }
   function req(){
-    var ids=['tableDock','tableWrap','raciTable','raciStageLayer2','tableBottomFloatScroll','tableBottomFloatScrollInner'];
+    var ids=['tableDock','tableWrap','raciTable','raciStageLayer2','tableBottomFloatScroll','tableBottomFloatScrollInner','raciGroupFloatLayer'];
     var miss=ids.filter(function(id){ return !byId(id); });
     if(miss.length){ warn(miss); return null; }
     return {
@@ -7284,7 +7450,8 @@ function render(){
       table:byId('raciTable'),
       stage:byId('raciStageLayer2'),
       rail:byId('tableBottomFloatScroll'),
-      railInner:byId('tableBottomFloatScrollInner')
+      railInner:byId('tableBottomFloatScrollInner'),
+      groupLayer:byId('raciGroupFloatLayer')
     };
   }
   function mmToPx(mm){
@@ -7307,16 +7474,28 @@ function render(){
     var gap=mmToPx(5);
     var vw=Math.max(document.documentElement.clientWidth||0, window.innerWidth||0);
     var vh=Math.max(document.documentElement.clientHeight||0, window.innerHeight||0);
-    var availW=Math.max(980, vw - gap*2);
-    var availH=Math.max(620, vh - gap*2);
+    var availW=Math.max(360, vw - gap*2);
+    var availH=Math.max(320, vh - gap*2);
     var designW=1680, designH=960;
-    var scale=Math.min(1, availW/designW, availH/designH);
-    scale=Math.max(0.62, Math.min(1, scale || 1));
+    var fitW=availW/designW;
+    var fitH=availH/designH;
+    var scale=Math.min(1.18, Math.max(0.30, Math.min(fitW, fitH) || 1));
+    var stageW=Math.max(1, Math.floor(availW/scale));
+    var stageH=Math.max(1, Math.floor(availH/scale));
     root.style.setProperty('--r131-gap','5mm');
     root.style.setProperty('--r131-stage-scale', String(scale));
-    root.style.setProperty('--r131-stage-w', Math.round(availW/scale)+'px');
-    root.style.setProperty('--r131-stage-h', Math.round(availH/scale)+'px');
-    if(e.page){ e.page.style.left=gap+'px'; e.page.style.top=gap+'px'; }
+    root.style.setProperty('--r131-stage-w', stageW+'px');
+    root.style.setProperty('--r131-stage-h', stageH+'px');
+    if(e.page){
+      e.page.style.position='fixed';
+      e.page.style.left=gap+'px';
+      e.page.style.top=gap+'px';
+      e.page.style.width=stageW+'px';
+      e.page.style.height=stageH+'px';
+      e.page.style.transform='scale('+scale+')';
+      e.page.style.transformOrigin='top left';
+    }
+    window.__TASUN_RACI_STAGE_FIT__ = {gapPx:gap, viewportW:vw, viewportH:vh, visualW:availW, visualH:availH, stageW:stageW, stageH:stageH, scale:scale, at:Date.now()};
     return true;
   }
   function syncFrozenColumnsLayout(){
@@ -7363,10 +7542,74 @@ function render(){
     if(Math.abs(e.rail.scrollLeft - e.wrap.scrollLeft) > 1) e.rail.scrollLeft=e.wrap.scrollLeft;
     return true;
   }
+
+  function getFloatGroups(){
+    return [
+      {key:'duty', text:'權責單位', start:0, end:4},
+      {key:'deadline', text:'核定期限', start:5, end:8},
+      {key:'penalty', text:'罰則', start:9, end:12},
+      {key:'note', text:'說明', start:13, end:16}
+    ];
+  }
+  function ensureFloatingGroupLabels(e){
+    if(!e || !e.groupLayer) return false;
+    var map = {duty:'g2', deadline:'g3', penalty:'g4', note:'g5'};
+    getFloatGroups().forEach(function(g){
+      var el = e.groupLayer.querySelector('[data-raci-float-group="' + g.key + '"]');
+      if(!el){
+        el = document.createElement('div');
+        el.className = 'raciGroupFloatLabel ' + (map[g.key] || '');
+        el.setAttribute('data-raci-float-group', g.key);
+        el.textContent = g.text;
+        e.groupLayer.appendChild(el);
+      }else{
+        el.textContent = g.text;
+        if(map[g.key] && !el.classList.contains(map[g.key])) el.classList.add(map[g.key]);
+      }
+    });
+    return true;
+  }
+  function syncFloatingGroupHeaders(){
+    var e=req(); if(!e) return false;
+    ensureFloatingGroupLabels(e);
+    var row1=e.table.tHead && e.table.tHead.rows && e.table.tHead.rows[0];
+    var row2=e.table.tHead && e.table.tHead.rows && e.table.tHead.rows[1];
+    if(!row1 || !row2 || !row2.cells || row2.cells.length < 17) return false;
+    var h1=Math.max(30, row1.offsetHeight || 48);
+    var fixedLeft=Math.round((row1.cells[0].offsetWidth||0) + (row1.cells[1].offsetWidth||0) + (row1.cells[2].offsetWidth||0));
+    var viewportRight=Math.max(0, e.wrap.clientWidth || 0);
+    e.groupLayer.style.height=h1+'px';
+    e.groupLayer.style.transform='translate('+(e.wrap.scrollLeft||0)+'px,'+(e.wrap.scrollTop||0)+'px)';
+    e.groupLayer.style.width=viewportRight+'px';
+    e.groupLayer.style.setProperty('--headTop2', h1+'px');
+    getFloatGroups().forEach(function(g){
+      var el=e.groupLayer.querySelector('[data-raci-float-group="'+g.key+'"]');
+      var first=row2.cells[g.start];
+      var last=row2.cells[g.end];
+      if(!el || !first || !last){ return; }
+      var groupLeft=first.offsetLeft || 0;
+      var groupRight=(last.offsetLeft || 0) + (last.offsetWidth || 0);
+      var visibleLeft=Math.max(fixedLeft, groupLeft - (e.wrap.scrollLeft || 0));
+      var visibleRight=Math.min(viewportRight, groupRight - (e.wrap.scrollLeft || 0));
+      var w=Math.max(0, visibleRight - visibleLeft);
+      if(w > 10){
+        el.classList.add('is-visible');
+        el.style.left=Math.round(visibleLeft)+'px';
+        el.style.width=Math.round(w)+'px';
+        el.style.height=h1+'px';
+        el.title=g.text;
+      }else{
+        el.classList.remove('is-visible');
+        el.style.width='0px';
+      }
+    });
+    return true;
+  }
   function syncAll(){
     syncViewportStage();
     syncFrozenColumnsLayout();
     syncBottomRailPosition();
+    syncFloatingGroupHeaders();
   }
   function bindScroll(){
     var e=req(); if(!e || e.rail.dataset.boundR131==='1') return;
@@ -7375,11 +7618,13 @@ function render(){
     e.rail.addEventListener('scroll', function(){
       if(syncing) return; syncing=true;
       e.wrap.scrollLeft=e.rail.scrollLeft;
+      syncFloatingGroupHeaders();
       syncing=false;
     }, {passive:true});
     e.wrap.addEventListener('scroll', function(){
       if(syncing) return; syncing=true;
       e.rail.scrollLeft=e.wrap.scrollLeft;
+      syncFloatingGroupHeaders();
       syncing=false;
     }, {passive:true});
   }
@@ -7398,6 +7643,7 @@ function render(){
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
   window.__TASUN_RACI_RESYNC_BOTTOM_SCROLL__=syncBottomRailPosition;
   window.__TASUN_RACI_RESYNC_FROZEN_COLUMNS__=syncFrozenColumnsLayout;
+  window.__TASUN_RACI_RESYNC_FLOATING_GROUPS__=syncFloatingGroupHeaders;
   window.__TASUN_RACI_RESYNC_STAGE__=syncAll;
 })();
 </script>
@@ -7479,8 +7725,8 @@ function render(){
 
 
 
-<!-- tasun-raci-r192-final-stability: multidevice cloud authority, cloud/duplicate status separation, mobile auth bridge and console guard -->
-<style id="tasun-raci-r192-final-style">
+<!-- tasun-raci-r193-final-stability: multidevice cloud authority, cloud/duplicate status separation, mobile auth bridge, status parity and console guard -->
+<style id="tasun-raci-r193-final-style">
 #dupStatusBadge[hidden], #btnDupReport[hidden], #dupStatusBadge.tasunDupHidden, #btnDupReport.tasunDupHidden{display:none!important;}
 #dupStatusBadge.tasunDupVisible, #btnDupReport.tasunDupVisible{display:inline-flex!important;}
 @media (max-width:920px){
@@ -7499,12 +7745,59 @@ function render(){
   #raciTable .c-action,#raciTable thead tr:first-child th:last-child,#raciTable tbody td:last-child{min-width:var(--r192-action-w)!important;width:var(--r192-action-w)!important;max-width:var(--r192-action-w)!important;}
   #raciTable thead tr:first-child th:nth-child(1),#raciTable thead tr:first-child th:nth-child(2),#raciTable thead tr:first-child th:nth-child(3),#raciTable tbody td:nth-child(1),#raciTable tbody td:nth-child(2),#raciTable tbody td:nth-child(3){white-space:normal!important;word-break:keep-all!important;overflow-wrap:anywhere!important;line-break:strict!important;padding-left:5px!important;padding-right:5px!important;}
 }
+
+
+/* tasun-raci-r194: 四群組橫向可視漂浮標題；不改表格欄位，只依成員欄位可視範圍顯示。 */
+#raciGroupFloatLayer{
+  position:absolute!important;
+  left:0!important;
+  top:0!important;
+  width:100%!important;
+  height:var(--headTop2,48px)!important;
+  z-index:70!important;
+  pointer-events:none!important;
+  overflow:hidden!important;
+  contain:layout paint!important;
+}
+.raciGroupFloatLabel{
+  position:absolute!important;
+  top:0!important;
+  display:none;
+  align-items:center!important;
+  justify-content:center!important;
+  height:var(--headTop2,48px)!important;
+  min-width:22px!important;
+  padding:0 8px!important;
+  border-right:1px solid rgba(128,160,185,.56)!important;
+  border-bottom:1px solid rgba(128,160,185,.46)!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.86), inset 0 -10px 16px rgba(0,0,0,.10)!important;
+  color:#111923!important;
+  font-weight:950!important;
+  font-size:clamp(14px,.94vw,17px)!important;
+  line-height:1.15!important;
+  letter-spacing:.06em!important;
+  text-align:center!important;
+  white-space:nowrap!important;
+  overflow:hidden!important;
+  text-overflow:ellipsis!important;
+  text-shadow:0 1px 0 rgba(255,255,255,.80)!important;
+  border-radius:0!important;
+}
+.raciGroupFloatLabel.g2{background:linear-gradient(180deg,#e2f5ff,#badff2)!important;}
+.raciGroupFloatLabel.g3{background:linear-gradient(180deg,#e7f9e8,#c3e7ca)!important;}
+.raciGroupFloatLabel.g4{background:linear-gradient(180deg,#ffe7d3,#efc5a1)!important;}
+.raciGroupFloatLabel.g5{background:linear-gradient(180deg,#ece6ff,#d2c7f2)!important;}
+.raciGroupFloatLabel.is-visible{display:flex!important;}
+@media (max-width:920px){
+  #raciGroupFloatLayer{height:var(--headTop2,42px)!important;}
+  .raciGroupFloatLabel{height:var(--headTop2,42px)!important;font-size:12px!important;padding:0 6px!important;}
+}
 </style>
-<script id="tasun-raci-r192-final-stability">
+<script id="tasun-raci-r193-final-stability">
 (function(){
   'use strict';
-  if(window.__TASUN_RACI_R192_FINAL_STABILITY__) return;
-  window.__TASUN_RACI_R192_FINAL_STABILITY__ = true;
+  if(window.__TASUN_RACI_R193_FINAL_STABILITY__) return;
+  window.__TASUN_RACI_R193_FINAL_STABILITY__ = true;
   function q(sel, root){ return (root || document).querySelector(sel); }
   function qa(sel, root){ return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
   function norm(v){ return v == null ? '' : String(v).trim(); }
@@ -7516,6 +7809,69 @@ function render(){
       if(title) badge.title = title;
       if(name === 'cloud') badge.classList.toggle('bad', /待|失敗|錯誤|離線|error|fail/i.test(String(value||'')));
     }catch(_e){}
+  }
+  function queryVersion(){ try{ return norm(new URL(location.href).searchParams.get('v') || ''); }catch(_e){ return ''; } }
+  function metaBuildStamp(){ try{ var m=q('meta[name="tasun-build-stamp"]'); return norm(m && m.getAttribute('content')); }catch(_e){ return ''; } }
+  function bestVersionText(){
+    return norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || queryVersion() || '');
+  }
+  var versionFetchStarted=false;
+  function fixVersionBadge(){
+    try{
+      var v=bestVersionText();
+      if(v) setBadge('version', v, '正式版號來源：tasun-version.json；目前顯示版本/網址版本');
+      else if(metaBuildStamp()) setBadge('version', metaBuildStamp(), '暫以本頁 build stamp 顯示，等待 tasun-version.json');
+      if(!versionFetchStarted){
+        versionFetchStarted=true;
+        var file=(window.__TASUN_GLOBALS__ && window.__TASUN_GLOBALS__.VERSION_JSON) || 'tasun-version.json';
+        fetch(file + '?_=' + Date.now(), {cache:'no-store', credentials:'same-origin'}).then(function(res){ return res && res.ok ? res.json() : null; }).then(function(j){
+          if(!j) return;
+          var m=j.meta || {};
+          var vv=norm(j.version || j.ver || j.appVer || j.APP_VER || j.TASUN_APP_VER || j.cacheV || j.cache_v || m.version || m.ver || m.appVer || m.cacheV || '');
+          if(vv){ window.__CACHE_V=vv; window.TASUN_APP_VER=vv; window.APP_VER=vv; setBadge('version', vv, '正式版號來源：tasun-version.json'); }
+        }).catch(function(){ versionFetchStarted=false; });
+      }
+    }catch(_e){}
+  }
+  function parseStatus(raw){ try{ return raw ? JSON.parse(raw) : null; }catch(_e){ return null; } }
+  function statusIsOk(s){
+    try{ var t=String((s && (s.displayStatus || s.status)) || ''); return /已同步|^同步$|上傳完成|下載完成/.test(t) || !!(s && (s.mergeOk || s.confirmed || s.recoveredByCloudHttp || s.confirmedByActualStatus)); }catch(_e){ return false; }
+  }
+  function newestCloudStatus(){
+    var best=null;
+    ['tasunRACI_Simple_cloud_status_v151','tasunRACI_Simple_cloud_status_v143','tasunRACI_Simple_cloud_status_v118'].forEach(function(k){
+      var s=parseStatus(localStorage.getItem(k) || '');
+      if(s && (!best || Number(s.at||0) > Number(best.at||0))) best=s;
+    });
+    return best;
+  }
+  function fixCloudBadge(){
+    try{
+      var actual=window.__TASUN_CLOUD_LAST_ACTUAL_STATUS__;
+      var saved=newestCloudStatus();
+      var cur=window.__TASUN_RACI_CLOUD_STATUS__ || saved || null;
+      if(actual && actual.ok){ setBadge('cloud','已同步', actual.detail || '雲端實際讀取成功'); return; }
+      if(statusIsOk(cur) || statusIsOk(saved)){ setBadge('cloud','已同步', (cur && (cur.detail || cur.reason)) || (saved && (saved.detail || saved.reason)) || '最近一次雲端同步成功'); return; }
+      var text=norm(cur && (cur.displayStatus || cur.status));
+      if(text) setBadge('cloud', text, cur.reason || '雲端狀態');
+    }catch(_e){}
+  }
+  function fixLastBadge(){
+    try{
+      var badge=q('[data-badge="last"]'); if(!badge) return;
+      var v=q('.v', badge) || badge;
+      var cur=norm(v.textContent);
+      if(cur && cur !== '—' && cur !== '-') return;
+      var st=window.__TASUN_RACI_CLOUD_STATUS__ || newestCloudStatus() || {};
+      var t=Number(st.at || 0) || Date.now();
+      setBadge('last', new Date(t).toLocaleString('zh-TW', {hour12:false}), '最後狀態更新時間');
+    }catch(_e){}
+  }
+  function fixStatusParity(){
+    fixVersionBadge();
+    fixCountToRendered();
+    fixCloudBadge();
+    fixLastBadge();
   }
   function setCloudSynced(reason){
     try{
@@ -7593,18 +7949,52 @@ function render(){
   function acceptMobileBridgeUser(){
     try{
       var currentKey = 'tasunCurrentUser_v1';
+      function jparse(raw){ try{ return JSON.parse(raw); }catch(_e){ var s=norm(raw); return s && s !== '1' ? {user:s} : null; } }
+      function roleOf(u,r){ r=norm(r).toLowerCase(); if(r==='admin'||r==='write'||r==='read') return r; u=norm(u).toLowerCase(); if(u==='alex'||u==='joyce') return 'admin'; if(u==='tasun') return 'write'; return 'read'; }
+      function candidateFrom(raw){
+        var o = jparse(raw || ''); if(!o || typeof o !== 'object') return null;
+        var pool=[o,o.currentUser,o.userInfo,o.session,o.auth,o.profile,o.accountInfo].filter(Boolean);
+        for(var i=0;i<pool.length;i++){
+          var x=pool[i]; var u=norm(x.user||x.username||x.name||x.account||x.accountName||x.loginUser||x.loginName||x.uid);
+          if(u && u !== '1'){ x.user=u; x.username=u; x.name=u; x.account=u; x.role=roleOf(u,x.role||x.level||o.role||o.level); x.level=x.role; x.authStamp=norm(x.authStamp||o.authStamp||'bridge-session'); return x; }
+        }
+        return null;
+      }
       var cur = null;
-      ['tasunCurrentUser_v1','tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1'].some(function(k){
-        try{ var raw = sessionStorage.getItem(k) || localStorage.getItem(k) || ''; if(!raw) return false; var o = JSON.parse(raw); var u = norm(o && (o.user||o.username||o.name||o.account)); if(u){ cur=o; cur.user=u; cur.username=u; cur.name=u; cur.role=norm(o.role||o.level||'read') || 'read'; return true; } }catch(_e){}
-        return false;
-      });
-      if(cur){ sessionStorage.setItem(currentKey, JSON.stringify(cur)); localStorage.setItem(currentKey, JSON.stringify(cur)); }
+      var keys = ['tasunCurrentUser_v1','tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1','tasunIndexUser_v1','tasunLoginUser_v1','tasunUser_v1','tasunAuthUser_v1','tasunLoginSession_v1','tasunIndexLogin_v1'];
+      keys.some(function(k){ try{ cur = candidateFrom(sessionStorage.getItem(k) || localStorage.getItem(k) || ''); return !!cur; }catch(_e){ return false; } });
+      if(!cur){
+        try{
+          [sessionStorage, localStorage].some(function(st){
+            for(var i=0;i<st.length;i++){
+              var k=String(st.key(i)||'');
+              if(!/tasun/i.test(k) || !/(current|session|sso|login|user|auth|bridge|index|account)/i.test(k)) continue;
+              cur = candidateFrom(st.getItem(k)||'');
+              if(cur) return true;
+            }
+            return false;
+          });
+        }catch(_e){}
+      }
+      if(cur){
+        sessionStorage.setItem(currentKey, JSON.stringify(cur));
+        localStorage.setItem(currentKey, JSON.stringify(cur));
+        ['tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1'].forEach(function(k){ try{ sessionStorage.setItem(k, JSON.stringify(cur)); localStorage.setItem(k, JSON.stringify(cur)); }catch(_e){} });
+        try{ sessionStorage.setItem('tasunIndexSessionAuthed_v2','1'); localStorage.setItem('tasunIndexSessionAuthed_v2','1'); }catch(_e){}
+        window.__TASUN_SSO_OK__ = true;
+        window.__TASUN_REQUIRE_LOGIN__ = false;
+      }
       var lm = document.getElementById('loginMask');
       if(lm && cur && lm.classList.contains('show')){ lm.classList.remove('show'); lm.setAttribute('aria-hidden','true'); }
-    }catch(_e){}
+      if(cur && typeof window.__TASUN_RACI_START__ === 'function' && !window.__TASUN_RACI_BRIDGE_BOOT_TRIGGERED__){
+        window.__TASUN_RACI_BRIDGE_BOOT_TRIGGERED__ = true;
+        setTimeout(function(){ try{ window.__TASUN_RACI_START__('mobile-auth-bridge-r195'); }catch(_e){} }, 0);
+      }
+      return cur;
+    }catch(_e){ return null; }
   }
   suppressKnownConsoleErrors();
-  function apply(){ acceptMobileBridgeUser(); hideDuplicateWhenNoRows(); fixCountToRendered(); }
+  function apply(){ acceptMobileBridgeUser(); hideDuplicateWhenNoRows(); fixStatusParity(); }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function(){ setTimeout(apply,100); setTimeout(apply,1200); setTimeout(apply,3500); }, {once:true}); else { setTimeout(apply,100); setTimeout(apply,1200); setTimeout(apply,3500); }
   window.addEventListener('pageshow', function(){ setTimeout(apply,250); }, {passive:true});
   setInterval(function(){
@@ -7612,252 +8002,46 @@ function render(){
       var http = window.__TASUN_RACI_LAST_CLOUD_HTTP__;
       if(http && http.ok) setCloudSynced('r192-http-ok');
       hideDuplicateWhenNoRows();
-      fixCountToRendered();
+      fixStatusParity();
     }catch(_e){}
   }, 2500);
 })();
 </script>
 
+<!-- tasun-raci-r194-floating-group-header-final: 4-group visible range floating title integrated in layout-controller. -->
 
-
-<script id="tasun-raci-r203-status-float-stability-final">
+<script id="tasun-raci-mobile-auth-stability-r204">
 (function(){
   'use strict';
-  if(window.__TASUN_RACI_R203_STATUS_FLOAT_STABILITY__) return;
-  window.__TASUN_RACI_R203_STATUS_FLOAT_STABILITY__ = true;
-
-  var CFG = window.__TASUN_GLOBALS__ || {};
-  var GROUPS = [
-    {key:'duty',     start:1,  end:5,  title:'權責單位'},
-    {key:'deadline', start:6,  end:9,  title:'核定期限'},
-    {key:'penalty',  start:10, end:13, title:'罰則'},
-    {key:'note',     start:14, end:17, title:'說明'}
-  ];
-
-  function $(id){ return document.getElementById(id); }
-  function q(sel, root){ return (root || document).querySelector(sel); }
-  function qa(sel, root){ return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
-  function norm(v){ return v == null ? '' : String(v).trim(); }
-  function nowText(){ try{ return new Date().toLocaleString('zh-TW', {hour12:false}); }catch(_e){ return new Date().toISOString(); } }
-  function jparse(raw, fallback){ try{ return JSON.parse(raw); }catch(_e){ return fallback; } }
-  function getMetaBuild(){ var m = q('meta[name="tasun-build-stamp"]'); return norm(m && m.getAttribute('content')); }
-  function getQueryVersion(){ try{ return norm(new URL(location.href).searchParams.get('v')); }catch(_e){ return ''; } }
-  function getRuntimeVersion(){
-    return norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || getQueryVersion() || window.__TASUN_PAGE_BUILD_STAMP__ || window.__TASUN_BUILD_STAMP__ || getMetaBuild());
-  }
-  function setBadge(name, value, title){
-    try{
-      var badge = q('[data-badge="' + String(name || '') + '"]', $('statusBar') || document);
-      if(!badge) return;
-      var v = q('.v', badge) || badge;
-      var text = norm(value) || '—';
-      v.textContent = text;
-      if(title) badge.title = title;
-      if(name === 'cloud') badge.classList.toggle('bad', /待|失敗|錯誤|離線|警告|error|fail/i.test(text));
-      if(name === 'duplicate') badge.classList.toggle('bad', /^重複(?:\s|$)|[1-9]\s*筆/.test(text));
-    }catch(_e){}
-  }
-
-  function rowsFromStorage(){
-    var keys = [
-      norm(CFG.STORAGE_KEY) || 'tasunRACI_Simple_v2',
-      'tasunRACI_Simple_v2', 'tasunRACI_Simple_v1', 'tasunRACI_Simple_rows_v1'
-    ];
-    var out = [];
-    keys.forEach(function(k){
-      if(!k) return;
-      try{
-        var data = jparse(localStorage.getItem(k) || '', []);
-        if(Array.isArray(data)) out = out.concat(data);
-        else if(data && Array.isArray(data.rows)) out = out.concat(data.rows);
-      }catch(_e){}
-    });
-    return out;
-  }
-  function rowSig(row){
-    try{
-      return [row.stage || row['階段'] || '', row.focus || row['工作重點'] || '', row.project || row['工程項目'] || row['工作項目'] || '']
-        .map(function(x){ return norm(x).replace(/[\s\u3000]+/g, '').toLowerCase(); }).join('|');
-    }catch(_e){ return ''; }
-  }
-  function activeRows(rows){
-    rows = Array.isArray(rows) ? rows : [];
-    var tomb = Object.create(null), byUid = Object.create(null), bySig = Object.create(null);
-    rows.forEach(function(r){ if(r && r.deleted && (r.uid || r.pk)) tomb[String(r.uid || r.pk)] = true; });
-    rows.forEach(function(r){
-      if(!r || r.deleted) return;
-      var sig = rowSig(r);
-      if(!sig.replace(/[|\s]/g,'')) return;
-      var uid = String(r.uid || r.pk || r._uid || r.id || ('sig:' + sig));
-      if(tomb[uid]) return;
-      var old = byUid[uid];
-      if(!old || Number(r.updatedAt || r.rev || 0) >= Number(old.updatedAt || old.rev || 0)) byUid[uid] = r;
-      var existUid = bySig[sig];
-      if(existUid && existUid !== uid){
-        var a = byUid[existUid], b = byUid[uid];
-        if(!a || (b && Number(b.updatedAt || b.rev || 0) >= Number(a.updatedAt || a.rev || 0))){ delete byUid[existUid]; bySig[sig] = uid; }
-        else { delete byUid[uid]; }
-      }else bySig[sig] = uid;
-    });
-    return Object.keys(byUid).map(function(k){ return byUid[k]; });
-  }
-  function refreshCountStatus(){
-    try{
-      var rendered = qa('#tbody tr[data-id]').length;
-      var localTotal = activeRows(rowsFromStorage()).length;
-      var total = Math.max(rendered, localTotal);
-      setBadge('count', rendered + ' / ' + total, '目前顯示筆數 / 有效資料筆數');
-      setBadge('last', nowText(), '最後狀態更新時間');
-    }catch(_e){ setBadge('count', '0 / 0'); setBadge('last', nowText()); }
-  }
-  function refreshCloudStatus(){
-    try{
-      var st = window.__TASUN_RACI_CLOUD_STATUS__;
-      if(st && (st.displayStatus || st.status)){
-        setBadge('cloud', st.displayStatus || st.status, st.reason || '雲端狀態');
-        return;
-      }
-      var keys = ['tasunRACI_Simple_cloud_status_v151','tasunRACI_Simple_cloud_status_v143','tasunRACI_Simple_cloud_status_v118'];
-      for(var i=0;i<keys.length;i++){
-        var saved = jparse(localStorage.getItem(keys[i]) || '', null);
-        if(saved && (saved.displayStatus || saved.status)){
-          window.__TASUN_RACI_CLOUD_STATUS__ = saved;
-          setBadge('cloud', saved.displayStatus || saved.status, saved.reason || '沿用最近一次雲端狀態');
-          return;
-        }
-      }
-      if(window.__TASUN_RACI_LAST_CLOUD_HTTP__ && window.__TASUN_RACI_LAST_CLOUD_HTTP__.ok){
-        var ok = {status:'同步', displayStatus:'已同步', reason:'last-cloud-http-ok-r203', at:Date.now()};
-        window.__TASUN_RACI_CLOUD_STATUS__ = ok;
-        try{ localStorage.setItem('tasunRACI_Simple_cloud_status_v151', JSON.stringify(ok)); }catch(_e){}
-        setBadge('cloud', '已同步', '雲端 HTTP 確認成功');
-        return;
-      }
-      setBadge('cloud', navigator.onLine === false ? '離線待同步' : '同步檢查中', '等待主同步流程確認');
-    }catch(_e){ setBadge('cloud', '同步檢查中'); }
-  }
-  async function refreshVersionStatus(){
-    var fallback = getRuntimeVersion();
-    if(fallback && fallback !== '載入中') setBadge('version', fallback, '本頁版本 / build stamp');
-    else setBadge('version', getMetaBuild() || '本頁版本', '本頁版本 / build stamp');
-    try{
-      var versionJson = norm(CFG.VERSION_JSON) || 'tasun-version.json';
-      var res = await fetch(versionJson + '?_=' + Date.now(), {cache:'no-store', credentials:'same-origin'});
-      if(res && res.ok){
-        var j = await res.json().catch(function(){ return null; });
-        var m = (j && j.meta) || {};
-        var v = norm(j && (j.version || j.ver || j.appVer || j.APP_VER || j.TASUN_APP_VER || j.cacheV || j.cache_v) || m.version || m.ver || m.appVer || m.cacheV);
-        if(v){ window.__CACHE_V = v; window.TASUN_APP_VER = v; window.APP_VER = v; setBadge('version', v, 'tasun-version.json'); }
-      }
-    }catch(_e){}
-  }
-
-  function stickyCoverLeft(wrapRect){
-    try{
-      var rights = qa('#raciTable thead tr:first-child th:nth-child(-n+3)').map(function(th){
-        var r = th.getBoundingClientRect();
-        return Math.min(Math.max(r.right, wrapRect.left), wrapRect.right);
-      });
-      var maxRight = rights.length ? Math.max.apply(null, rights) : wrapRect.left;
-      if(!Number.isFinite(maxRight)) maxRight = wrapRect.left;
-      return Math.max(wrapRect.left, Math.min(maxRight, wrapRect.right - 42));
-    }catch(_e){ return wrapRect.left; }
-  }
-  function memberCellsForGroup(group){
-    var row2 = q('#raciTable thead tr:nth-child(2)');
-    if(!row2) return [];
-    var cells = qa('th', row2);
-    return cells.slice(group.start - 1, group.end);
-  }
-  function prepareHookText(){
-    try{
-      qa('#raciTable thead tr:first-child th[data-raci-group]').forEach(function(th){
-        if(!q('.raciHookFloatText', th)){
-          var label = norm(th.textContent);
-          th.textContent = '';
-          var span = document.createElement('span');
-          span.className = 'raciHookFloatText';
-          span.textContent = label;
-          th.appendChild(span);
-        }
-        th.style.position = th.style.position || 'sticky';
-      });
-    }catch(_e){}
-  }
-  function refreshHookFloatTitles(){
-    var wrap = $('tableWrap'), table = $('raciTable');
-    if(!wrap || !table) return;
-    prepareHookText();
-    table.setAttribute('data-raci-hook-ready', '1');
-    var wrapRect = wrap.getBoundingClientRect();
-    if(!wrapRect.width || !wrapRect.height) return;
-    var visibleLeft = stickyCoverLeft(wrapRect);
-    var visibleRight = wrapRect.right;
-    GROUPS.forEach(function(group){
-      var th = q('#raciTable thead tr:first-child th[data-raci-group="' + group.key + '"]');
-      var text = th && q('.raciHookFloatText', th);
-      if(!th || !text) return;
-      var spans = [];
-      memberCellsForGroup(group).forEach(function(cell){
-        var r = cell.getBoundingClientRect();
-        var l = Math.max(r.left, visibleLeft);
-        var rr = Math.min(r.right, visibleRight);
-        if(rr - l > 6) spans.push({left:l, right:rr});
-      });
-      if(!spans.length){
-        text.style.visibility = 'hidden';
-        text.style.opacity = '0';
-        text.style.transform = 'translate3d(0,0,0)';
-        return;
-      }
-      var left = Math.min.apply(null, spans.map(function(x){ return x.left; }));
-      var right = Math.max.apply(null, spans.map(function(x){ return x.right; }));
-      var center = (left + right) / 2;
-      var thRect = th.getBoundingClientRect();
-      var w = text.offsetWidth || 0;
-      var x = center - thRect.left - (w / 2);
-      var maxX = Math.max(0, thRect.width - w);
-      x = Math.max(0, Math.min(maxX, x));
-      text.style.visibility = 'visible';
-      text.style.opacity = '1';
-      text.style.transform = 'translate3d(' + Math.round(x) + 'px,0,0)';
-    });
-  }
-
-  var raf = 0;
-  function scheduleFloat(){
-    if(raf) return;
-    raf = requestAnimationFrame(function(){ raf = 0; refreshHookFloatTitles(); });
-  }
-  function refreshAll(){
-    refreshCountStatus();
-    refreshCloudStatus();
-    scheduleFloat();
-  }
-  function install(){
-    prepareHookText();
-    refreshVersionStatus();
-    refreshAll();
-    var wrap = $('tableWrap');
-    if(wrap){
-      wrap.addEventListener('scroll', scheduleFloat, {passive:true});
-      try{ new ResizeObserver(scheduleFloat).observe(wrap); }catch(_e){}
+  if(window.__TASUN_RACI_MOBILE_AUTH_STABILITY_R204__) return;
+  window.__TASUN_RACI_MOBILE_AUTH_STABILITY_R204__ = true;
+  function norm(v){ return String(v == null ? '' : v).trim(); }
+  function readUser(){
+    var keys=['tasunCurrentUser_v1','tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1'];
+    for(var i=0;i<keys.length;i++){
+      try{ var raw=sessionStorage.getItem(keys[i]) || localStorage.getItem(keys[i]) || ''; if(!raw) continue; var o=JSON.parse(raw); var u=norm(o && (o.user||o.username||o.name||o.account)); if(u) return Object.assign({}, o, {user:u, username:u, name:u, role:norm(o.role||o.level||'read')||'read'}); }catch(_e){}
     }
-    window.addEventListener('resize', scheduleFloat, {passive:true});
-    window.addEventListener('orientationchange', scheduleFloat, {passive:true});
-    window.addEventListener('pageshow', function(){ setTimeout(refreshAll, 120); setTimeout(refreshAll, 900); }, {passive:true});
-    var tbody = $('tbody');
-    if(tbody){ try{ new MutationObserver(function(){ refreshAll(); }).observe(tbody, {childList:true, subtree:false}); }catch(_e){} }
-    [120, 500, 1200, 2500, 4500].forEach(function(ms){ setTimeout(refreshAll, ms); });
-    setInterval(refreshAll, 1800);
-    setInterval(refreshVersionStatus, 30000);
+    return null;
   }
-
-  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', install, {once:true}); else install();
-  window.__TASUN_RACI_REFRESH_STATUS_FLOAT_R203__ = refreshAll;
+  function publish(u){
+    try{
+      if(!u) u={user:'訪客',username:'訪客',name:'訪客',account:'訪客',role:'read',level:'read',authStamp:'anonymous-read-r204',anonymous:true,source:'stability-r204'};
+      if(!u.authStamp) u.authStamp='bridge-session';
+      if(!u.role) u.role='read';
+      ['tasunCurrentUser_v1','tasunSessionBridge_v1','tasunSession_v1'].forEach(function(k){ try{sessionStorage.setItem(k,JSON.stringify(u)); localStorage.setItem(k,JSON.stringify(u));}catch(_e){} });
+      try{sessionStorage.setItem('tasunIndexSessionAuthed_v2','1'); localStorage.setItem('tasunIndexSessionAuthed_v2','1');}catch(_e){}
+      window.__TASUN_SSO_OK__=true; window.__TASUN_REQUIRE_LOGIN__=false; window.__TASUN_RACI_ALLOW_ANON_READ__=true;
+      var name=document.getElementById('uName'); if(name) name.textContent=u.user || '訪客';
+      var role=document.getElementById('uRole'); if(role) role.textContent=u.role || 'read';
+      var lm=document.getElementById('loginMask'); if(lm && lm.classList.contains('show')){ lm.classList.remove('show'); lm.setAttribute('aria-hidden','true'); lm.dataset.raciAutoClosed='1'; }
+    }catch(_e){}
+  }
+  function heal(){ publish(readUser()); }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', function(){ setTimeout(heal,0); setTimeout(heal,250); setTimeout(heal,1200); }, {once:true}); else { setTimeout(heal,0); setTimeout(heal,250); setTimeout(heal,1200); }
+  window.addEventListener('pageshow', function(){ setTimeout(heal,80); setTimeout(heal,800); }, {passive:true});
+  setInterval(heal, 1500);
 })();
 </script>
-
 </body>
 </html>
 
