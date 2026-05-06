@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r194-floating-group-header-final based-on-latest-upload-20260505 -->
+  <!-- tasun-raci-r195-mobile-auth-bridge-final based-on-latest-upload-20260506 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260505_tasun_v5_raci_r194_floating_group_header_final">
+  <meta name="tasun-build-stamp" content="20260506_tasun_v5_raci_r195_mobile_auth_bridge_final">
     
 
 
@@ -432,15 +432,51 @@
     if(nn === 'tasun') return 'write';
     return 'read';
   }
+  function parseCandidate(raw){
+    var s = norm(raw);
+    if(!s || s === '0' || s === 'false' || s === 'null' || s === 'undefined') return null;
+    var o = jparse(s, null);
+    if(!o && /^[A-Za-z0-9_.@\-一-鿿]+$/.test(s)) o = { user:s };
+    if(!o || typeof o !== 'object') return null;
+    var pool = [o, o.currentUser, o.userInfo, o.session, o.auth, o.profile, o.accountInfo].filter(Boolean);
+    for(var i=0;i<pool.length;i++){
+      var x = pool[i] || {};
+      var user = norm(x.user || x.username || x.name || x.account || x.accountName || x.loginUser || x.loginName || x.uid);
+      if(!user) continue;
+      var role = inferRole(user, x.role || x.level || x.permission || x.perm || o.role || o.level);
+      return { user:user, name:user, username:user, account:user, role:role, level:role, authStamp:norm(x.authStamp || o.authStamp || 'bridge-session'), at:x.at || o.at || Date.now() };
+    }
+    return null;
+  }
+  function readAnyBridgeUser(){
+    var keys = ['tasunCurrentUser_v1','tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1','tasunIndexUser_v1','tasunLoginUser_v1','tasunUser_v1','tasunAuthUser_v1','tasunLoginSession_v1','tasunIndexLogin_v1'];
+    for(var i=0;i<keys.length;i++){
+      try{
+        var k = keys[i];
+        var found = parseCandidate(sessionStorage.getItem(k) || localStorage.getItem(k) || '');
+        if(found) return found;
+      }catch(_e){}
+    }
+    try{
+      for(var area=0; area<2; area++){
+        var st = area ? localStorage : sessionStorage;
+        for(var j=0; j<st.length; j++){
+          var key = String(st.key(j) || '');
+          if(!/tasun/i.test(key) || !/(current|session|sso|login|user|auth|bridge|index)/i.test(key) || /(token|api|password|pass|worker|bearer|cloud|pat)/i.test(key)) continue;
+          var obj = parseCandidate(st.getItem(key) || '');
+          if(obj) return obj;
+        }
+      }
+    }catch(_e){}
+    return null;
+  }
   var cur = null;
-  try{
-    cur = jparse(sessionStorage.getItem('tasunCurrentUser_v1') || localStorage.getItem('tasunCurrentUser_v1') || sessionStorage.getItem('tasunSessionBridge_v1') || localStorage.getItem('tasunSessionBridge_v1') || sessionStorage.getItem('tasunSession_v1') || localStorage.getItem('tasunSession_v1') || sessionStorage.getItem('tasunSso_v2') || localStorage.getItem('tasunSso_v2') || sessionStorage.getItem('tasunSso_v1') || localStorage.getItem('tasunSso_v1') || 'null', null);
-  }catch(_e){ cur = null; }
+  try{ cur = readAnyBridgeUser(); }catch(_e){ cur = null; }
   if(cur){
     var user = norm(cur.user || cur.name || cur.username || cur.account);
     var role = inferRole(user, cur.role || cur.level);
     if(user){
-      var payload = { user:user, name:user, username:user, role:role, level:role, at:new Date().toISOString() };
+      var payload = { user:user, name:user, username:user, account:user, role:role, level:role, authStamp:norm(cur.authStamp || 'bridge-session'), at:new Date().toISOString(), source:'child-prebridge-r195' };
       try{ sessionStorage.setItem('tasunCurrentUser_v1', JSON.stringify(payload)); }catch(_e){}
       try{ localStorage.setItem('tasunCurrentUser_v1', JSON.stringify(payload)); }catch(_e){}
       try{ sessionStorage.setItem('tasunSession_v1', JSON.stringify(payload)); }catch(_e){}
@@ -5001,33 +5037,119 @@ body.searchOpen .panelHead,
     return fnv1a(`${auth.user}|${auth.pass ?? ''}`);
   }
 
-  function loadCurrentUser(){
-    const keys = [CFG.CURRENT_KEY,'tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1','tasunIndexUser_v1'];
-    currentUser = null;
-    for(const k of keys){
+
+  const SESSION_BRIDGE_KEYS_R195 = [
+    CFG.CURRENT_KEY,
+    'tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1',
+    'tasunIndexUser_v1','tasunLoginUser_v1','tasunUser_v1','tasunAuthUser_v1',
+    'tasunLoginSession_v1','tasunIndexLogin_v1','tasunCurrentAccount_v1','tasunLoginAccount_v1'
+  ];
+
+  function parseSessionCandidateR195(raw, key){
+    const text = norm(raw);
+    if(!text || text === '0' || text.toLowerCase() === 'false' || text.toLowerCase() === 'null' || text.toLowerCase() === 'undefined') return null;
+    let obj = null;
+    try{ obj = JSON.parse(text); }catch(_e){ obj = null; }
+    if(!obj && text.length <= 80 && !/[{}\[\]:,]/.test(text) && !/^(true|false|null|undefined)$/i.test(text) && !/(token|api|key|password|pass|worker|bearer|cloud)/i.test(String(key || ''))) obj = { user:text };
+    if(!obj || typeof obj !== 'object') return null;
+    const pool = [obj, obj.currentUser, obj.userInfo, obj.session, obj.auth, obj.profile, obj.accountInfo, obj.data].filter(Boolean);
+    for(const cand of pool){
+      const user = norm(cand.user ?? cand.username ?? cand.name ?? cand.account ?? cand.accountName ?? cand.loginUser ?? cand.loginName ?? cand.uid ?? cand.id);
+      if(!user || user === '1') continue;
+      const roleRaw = cand.role ?? cand.level ?? cand.permission ?? cand.perm ?? obj.role ?? obj.level;
+      const role = mapRole(roleRaw || (['alex','joyce'].includes(user.toLowerCase()) ? 'admin' : (user.toLowerCase()==='tasun' ? 'write' : 'read')));
+      const stamp = norm(cand.authStamp ?? cand.auth_stamp ?? obj.authStamp ?? obj.auth_stamp ?? (String(key || '').includes('Sso') || String(key || '').includes('Bridge') ? 'bridge-session' : ''));
+      return { user, username:user, name:user, account:user, role, level:role, authStamp:stamp || 'bridge-session', at:cand.at ?? obj.at ?? Date.now(), source:String(key || 'storage') };
+    }
+    return null;
+  }
+
+  function findStoredBridgeUserR195(){
+    for(const key of SESSION_BRIDGE_KEYS_R195){
       try{
-        const raw = sessionStorage.getItem(k) || localStorage.getItem(k) || '';
-        if(!raw) continue;
-        const obj = JSON.parse(raw);
-        const user = norm(obj && (obj.user || obj.username || obj.name || obj.account));
-        if(user){ currentUser = obj; break; }
+        const cand = parseSessionCandidateR195(sessionStorage.getItem(key) || localStorage.getItem(key) || '', key);
+        if(cand) return cand;
       }catch(_e){}
     }
-    if(currentUser){
-      currentUser.user = norm(currentUser.user ?? currentUser.username ?? currentUser.name ?? currentUser.account);
-      currentUser.username = currentUser.user;
-      currentUser.name = currentUser.user;
-      currentUser.role = mapRole(currentUser.role ?? currentUser.level ?? currentUser.permission ?? currentUser.perm);
-      currentUser.level = currentUser.role;
-      currentUser.authStamp = norm(currentUser.authStamp);
-      try{ sessionStorage.setItem(CFG.CURRENT_KEY, JSON.stringify(currentUser)); }catch(_e){}
-      try{ localStorage.setItem(CFG.CURRENT_KEY, JSON.stringify(currentUser)); }catch(_e){}
+    try{
+      const stores = [sessionStorage, localStorage];
+      for(const store of stores){
+        for(let i=0; i<store.length; i++){
+          const key = String(store.key(i) || '');
+          if(!/tasun/i.test(key) || !/(current|session|sso|login|user|auth|bridge|index|account)/i.test(key) || /(token|api|password|pass|worker|bearer|cloud|pat)/i.test(key)) continue;
+          const cand = parseSessionCandidateR195(store.getItem(key) || '', key);
+          if(cand) return cand;
+        }
+      }
+    }catch(_e){}
+    return null;
+  }
+
+  function hasIndexAuthBridgeFlagR195(){
+    try{
+      return !!(
+        window.__TASUN_SSO_OK__ ||
+        sessionStorage.getItem('tasunIndexSessionAuthed_v2') || localStorage.getItem('tasunIndexSessionAuthed_v2') ||
+        sessionStorage.getItem('tasunIndexSession_v1') || localStorage.getItem('tasunIndexSession_v1') ||
+        sessionStorage.getItem('tasunSessionBridge_v1') || localStorage.getItem('tasunSessionBridge_v1') ||
+        sessionStorage.getItem('tasunSso_v2') || localStorage.getItem('tasunSso_v2') ||
+        sessionStorage.getItem('tasunSso_v1') || localStorage.getItem('tasunSso_v1')
+      );
+    }catch(_e){ return !!window.__TASUN_SSO_OK__; }
+  }
+
+  function persistSessionUserR195(userObj){
+    if(!userObj || !userObj.user) return null;
+    const roleValue = mapRole(userObj.role || userObj.level || 'read');
+    const payload = {
+      user: norm(userObj.user), username: norm(userObj.user), name: norm(userObj.user), account: norm(userObj.user),
+      role: roleValue, level: roleValue,
+      authStamp: norm(userObj.authStamp || 'bridge-session'),
+      source: userObj.source || 'raci-mobile-auth-bridge-r195',
+      at: userObj.at || Date.now()
+    };
+    try{ sessionStorage.setItem(CFG.CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+    try{ localStorage.setItem(CFG.CURRENT_KEY, JSON.stringify(payload)); }catch(_e){}
+    ['tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1'].forEach(k => {
+      try{ sessionStorage.setItem(k, JSON.stringify(payload)); }catch(_e){}
+      try{ localStorage.setItem(k, JSON.stringify(payload)); }catch(_e){}
+    });
+    try{ sessionStorage.setItem('tasunIndexSession_v1','1'); localStorage.setItem('tasunIndexSession_v1','1'); }catch(_e){}
+    try{ sessionStorage.setItem('tasunIndexSessionAuthed_v2','1'); localStorage.setItem('tasunIndexSessionAuthed_v2','1'); }catch(_e){}
+    window.__TASUN_SSO_OK__ = true;
+    window.__TASUN_REQUIRE_LOGIN__ = false;
+    currentUser = payload;
+    return payload;
+  }
+
+  function acceptAuthBridgeR195(){
+    const cand = findStoredBridgeUserR195();
+    if(!cand) return null;
+    const saved = persistSessionUserR195(cand);
+    try{
+      const lm = $('loginMask');
+      if(lm && lm.classList.contains('show')){ lm.classList.remove('show'); lm.setAttribute('aria-hidden','true'); }
+    }catch(_e){}
+    return saved;
+  }
+
+  function bridgeSessionCanBypassLoginR195(){
+    return !!(currentUser && currentUser.user && (hasIndexAuthBridgeFlagR195() || norm(currentUser.authStamp) === 'bridge-session' || /bridge|sso|session|index/i.test(norm(currentUser.source))));
+  }
+
+  function loadCurrentUser(){
+    currentUser = null;
+    const found = findStoredBridgeUserR195();
+    if(found){
+      persistSessionUserR195(found);
+      return;
     }
+    currentUser = null;
   }
 
   function setCurrentUser(user, role, authStamp){
-    currentUser = { user, username: user, role: mapRole(role), level: mapRole(role), authStamp: norm(authStamp) };
-    localStorage.setItem(CFG.CURRENT_KEY, JSON.stringify(currentUser));
+    currentUser = { user:norm(user), username:norm(user), name:norm(user), account:norm(user), role: mapRole(role), level: mapRole(role), authStamp: norm(authStamp || 'bridge-session'), source:'raci-set-current-user-r195', at:Date.now() };
+    persistSessionUserR195(currentUser);
   }
 
   function role(){ return mapRole(currentUser?.role ?? currentUser?.level); }
@@ -5050,9 +5172,18 @@ body.searchOpen .panelHead,
   }
 
   function openLoginModal(msg){
+    const bridged = acceptAuthBridgeR195();
+    if(bridged && bridged.user){
+      try{ $('uName').textContent = bridged.user; $('uRole').textContent = mapRole(bridged.role || bridged.level || 'read'); }catch(_e){}
+      return;
+    }
     $('loginErr').style.display = 'none';
     if(msg){ $('loginErr').textContent = msg; $('loginErr').style.display = 'block'; }
     loadCurrentUser();
+    if(currentUser && currentUser.user){
+      try{ $('uName').textContent = currentUser.user; $('uRole').textContent = mapRole(currentUser.role || currentUser.level || 'read'); }catch(_e){}
+      return;
+    }
     rebuildUserDropdown(currentUser?.user || '');
     $('loginPass').value = '';
     $('loginMask').classList.add('show');
@@ -5065,7 +5196,15 @@ body.searchOpen .panelHead,
   }
 
   function forceReLogin(msg){
-    localStorage.removeItem(CFG.CURRENT_KEY);
+    if(acceptAuthBridgeR195()){
+      try{
+        $('uName').textContent = currentUser.user;
+        $('uRole').textContent = mapRole(currentUser.role || currentUser.level || 'read');
+        closeLoginModal();
+      }catch(_e){}
+      return;
+    }
+    try{ localStorage.removeItem(CFG.CURRENT_KEY); sessionStorage.removeItem(CFG.CURRENT_KEY); }catch(_e){}
     currentUser = null;
     toast(msg || '權限表已更新，請重新登入');
     openLoginModal(msg || '權限表已更新，請重新登入');
@@ -5074,7 +5213,10 @@ body.searchOpen .panelHead,
   }
 
   function validateSession(){
-    if($('loginMask').classList.contains('show')) return;
+    if($('loginMask').classList.contains('show')){
+      if(acceptAuthBridgeR195()) closeLoginModal();
+      else return;
+    }
     loadCurrentUser();
     if(!currentUser || !currentUser.user) return;
     const rows = loadAuthRows();
@@ -5084,10 +5226,22 @@ body.searchOpen .panelHead,
       return;
     }
     const auth = findAuthUser(currentUser.user);
-    if(!auth){ forceReLogin('帳號已被移除，請重新登入'); return; }
+    if(!auth){
+      if(bridgeSessionCanBypassLoginR195()){
+        setCurrentUser(currentUser.user, currentUser.role || currentUser.level || 'read', currentUser.authStamp || 'bridge-session');
+        return;
+      }
+      forceReLogin('帳號已被移除，請重新登入'); return;
+    }
     const stampNow = authStampFromAuth(auth);
-    if(!currentUser.authStamp){ setCurrentUser(auth.user, auth.role, stampNow); return; }
-    if(currentUser.authStamp !== stampNow){ forceReLogin('密碼已更新，請重新登入'); return; }
+    if(!currentUser.authStamp || currentUser.authStamp === 'bridge-session'){ setCurrentUser(auth.user, auth.role, stampNow); return; }
+    if(currentUser.authStamp !== stampNow){
+      if(bridgeSessionCanBypassLoginR195()){
+        setCurrentUser(auth.user, auth.role, stampNow);
+        return;
+      }
+      forceReLogin('密碼已更新，請重新登入'); return;
+    }
     if(mapRole(currentUser.role) !== auth.role) setCurrentUser(auth.user, auth.role, stampNow);
   }
 
@@ -5111,33 +5265,46 @@ body.searchOpen .panelHead,
   function ensureLoggedIn(){
     loadCurrentUser();
     const rows = loadAuthRows();
-    if(!currentUser || !currentUser.user){ openLoginModal(); return false; }
+    if(!currentUser || !currentUser.user){
+      const bridged = acceptAuthBridgeR195();
+      if(!bridged || !bridged.user){ openLoginModal(); return false; }
+    }
     if(!rows.length){
       const bridgeRole = mapRole(currentUser.role || currentUser.level || 'read');
       setCurrentUser(currentUser.user, bridgeRole, currentUser.authStamp || 'bridge-session');
       $('uName').textContent = currentUser.user;
       $('uRole').textContent = bridgeRole;
+      closeLoginModal();
       return true;
     }
     const auth = findAuthUser(currentUser.user);
     if(!auth){
-      // 管理頁已帶入有效使用者但本機權限表尚未同步時，先沿用 bridge 角色，不再彈登入窗阻斷手機進入。
-      if(window.__TASUN_SSO_OK__ || sessionStorage.getItem('tasunIndexSessionAuthed_v2') || localStorage.getItem('tasunIndexSessionAuthed_v2')){
+      // 管理頁/首頁已帶入有效使用者但本機權限表尚未同步時，先沿用 bridge 角色，不再彈登入窗阻斷手機進入。
+      if(bridgeSessionCanBypassLoginR195()){
         const bridgeRole = mapRole(currentUser.role || currentUser.level || 'read');
         setCurrentUser(currentUser.user, bridgeRole, currentUser.authStamp || 'bridge-session');
         $('uName').textContent = currentUser.user;
         $('uRole').textContent = bridgeRole;
+        closeLoginModal();
         return true;
       }
       forceReLogin('帳號已被移除，請重新登入'); return false;
     }
     const stampNow = authStampFromAuth(auth);
     if(currentUser.authStamp && currentUser.authStamp !== stampNow && currentUser.authStamp !== 'bridge-session'){
+      if(bridgeSessionCanBypassLoginR195()){
+        setCurrentUser(auth.user, auth.role, stampNow);
+        $('uName').textContent = auth.user;
+        $('uRole').textContent = auth.role;
+        closeLoginModal();
+        return true;
+      }
       forceReLogin('密碼已更新，請重新登入'); return false;
     }
     setCurrentUser(auth.user, auth.role, stampNow);
     $('uName').textContent = auth.user;
     $('uRole').textContent = auth.role;
+    closeLoginModal();
     return true;
   }
 
@@ -7776,14 +7943,38 @@ function render(){
   function acceptMobileBridgeUser(){
     try{
       var currentKey = 'tasunCurrentUser_v1';
+      function jparse(raw){ try{ return JSON.parse(raw); }catch(_e){ var s=norm(raw); return s && s !== '1' ? {user:s} : null; } }
+      function roleOf(u,r){ r=norm(r).toLowerCase(); if(r==='admin'||r==='write'||r==='read') return r; u=norm(u).toLowerCase(); if(u==='alex'||u==='joyce') return 'admin'; if(u==='tasun') return 'write'; return 'read'; }
+      function candidateFrom(raw){
+        var o = jparse(raw || ''); if(!o || typeof o !== 'object') return null;
+        var pool=[o,o.currentUser,o.userInfo,o.session,o.auth,o.profile,o.accountInfo].filter(Boolean);
+        for(var i=0;i<pool.length;i++){
+          var x=pool[i]; var u=norm(x.user||x.username||x.name||x.account||x.accountName||x.loginUser||x.loginName||x.uid);
+          if(u && u !== '1'){ x.user=u; x.username=u; x.name=u; x.account=u; x.role=roleOf(u,x.role||x.level||o.role||o.level); x.level=x.role; x.authStamp=norm(x.authStamp||o.authStamp||'bridge-session'); return x; }
+        }
+        return null;
+      }
       var cur = null;
-      ['tasunCurrentUser_v1','tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1'].some(function(k){
-        try{ var raw = sessionStorage.getItem(k) || localStorage.getItem(k) || ''; if(!raw) return false; var o = JSON.parse(raw); var u = norm(o && (o.user||o.username||o.name||o.account)); if(u){ cur=o; cur.user=u; cur.username=u; cur.name=u; cur.role=norm(o.role||o.level||'read') || 'read'; return true; } }catch(_e){}
-        return false;
-      });
+      var keys = ['tasunCurrentUser_v1','tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1','tasunIndexUser_v1','tasunLoginUser_v1','tasunUser_v1','tasunAuthUser_v1','tasunLoginSession_v1','tasunIndexLogin_v1'];
+      keys.some(function(k){ try{ cur = candidateFrom(sessionStorage.getItem(k) || localStorage.getItem(k) || ''); return !!cur; }catch(_e){ return false; } });
+      if(!cur){
+        try{
+          [sessionStorage, localStorage].some(function(st){
+            for(var i=0;i<st.length;i++){
+              var k=String(st.key(i)||'');
+              if(!/tasun/i.test(k) || !/(current|session|sso|login|user|auth|bridge|index|account)/i.test(k)) continue;
+              cur = candidateFrom(st.getItem(k)||'');
+              if(cur) return true;
+            }
+            return false;
+          });
+        }catch(_e){}
+      }
       if(cur){
         sessionStorage.setItem(currentKey, JSON.stringify(cur));
         localStorage.setItem(currentKey, JSON.stringify(cur));
+        ['tasunSessionBridge_v1','tasunSession_v1','tasunSso_v2','tasunSso_v1'].forEach(function(k){ try{ sessionStorage.setItem(k, JSON.stringify(cur)); localStorage.setItem(k, JSON.stringify(cur)); }catch(_e){} });
+        try{ sessionStorage.setItem('tasunIndexSessionAuthed_v2','1'); localStorage.setItem('tasunIndexSessionAuthed_v2','1'); }catch(_e){}
         window.__TASUN_SSO_OK__ = true;
         window.__TASUN_REQUIRE_LOGIN__ = false;
       }
@@ -7791,7 +7982,7 @@ function render(){
       if(lm && cur && lm.classList.contains('show')){ lm.classList.remove('show'); lm.setAttribute('aria-hidden','true'); }
       if(cur && typeof window.__TASUN_RACI_START__ === 'function' && !window.__TASUN_RACI_BRIDGE_BOOT_TRIGGERED__){
         window.__TASUN_RACI_BRIDGE_BOOT_TRIGGERED__ = true;
-        setTimeout(function(){ try{ window.__TASUN_RACI_START__('mobile-auth-bridge-r193'); }catch(_e){} }, 0);
+        setTimeout(function(){ try{ window.__TASUN_RACI_START__('mobile-auth-bridge-r195'); }catch(_e){} }, 0);
       }
       return cur;
     }catch(_e){ return null; }
