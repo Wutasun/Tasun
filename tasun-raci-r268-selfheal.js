@@ -1,8 +1,9 @@
 /*
   Tasun RACI R268 統一修補模組（正式引入版）
   適用檔案：捷運汐東線權責分工精簡版.html
-  基準：Tasun v5 全站固定口令總版 + TasunSelfHealV5 + R268 統一自我修復標準
-  原則：不得分散補丁到 btnClose / btnCancel / btnDelete / btnSave；所有修復由統一核心 check / repair / verify 控制。
+  目的：把本次需求納入 Tasun v5 + TasunSelfHealV5 + R268 統一自我修復檢查基準。
+  使用方式：併入既有 TasunSelfHealV5 統一核心，或置於頁面主程式最後、</body> 前。
+  原則：不分散補丁到 btnClose / btnCancel / btnDelete / btnSave；所有修復由統一核心 check / repair / verify 控制。
 */
 (function(){
   'use strict';
@@ -10,61 +11,371 @@
   window.__TASUN_RACI_R268_SELFHEAL_BASELINE__ = true;
 
   var G = window.__TASUN_GLOBALS__ = Object.assign({
-    PAGE_KEY:'raci-sxdh-simple', PAGE_FILE:'捷運汐東線權責分工精簡版.html', TABLE_ID:'raciTable',
-    DB_NAME:'tasun_raci_sxdh_simple_db_v117', RESOURCE_KEY:'raci-sxdh-simple', STORAGE_KEY:'tasunRACI_Simple_v2',
-    VERSION_JSON:'tasun-version.json', FETCH_TIMEOUT_MS:6000, SELFHEAL_COOLDOWN_MS:1200, SELFHEAL_MAX_RETRY:3
+    PAGE_KEY: 'raci-sxdh-simple',
+    PAGE_FILE: '捷運汐東線權責分工精簡版.html',
+    TABLE_ID: 'raciTable',
+    DB_NAME: 'tasun_raci_sxdh_simple_db_v117',
+    RESOURCE_KEY: 'raci-sxdh-simple',
+    STORAGE_KEY: 'tasunRACI_Simple_v2',
+    VERSION_JSON: 'tasun-version.json',
+    FETCH_TIMEOUT_MS: 6000,
+    SELFHEAL_COOLDOWN_MS: 1200,
+    SELFHEAL_MAX_RETRY: 3
   }, window.__TASUN_GLOBALS__ || {});
 
-  var state = {running:false,lastRun:0,retry:Object.create(null),timers:Object.create(null),aborters:Object.create(null),cloudRoundtripRunning:false,firstCloudReadDone:false,lastCloudRows:null,lastCloudAt:0,warningShown:false};
-  function $(id){return document.getElementById(id);} function q(s,r){return (r||document).querySelector(s);} function qa(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s));}
-  function text(el){return el ? String(el.textContent || el.value || '').trim() : '';} function now(){return Date.now();} function norm(v){return String(v == null ? '' : v).trim();}
-  function warn(msg){try{console.warn('[TasunSelfHealV5][RACI-R268]',msg);}catch(_e){} try{if(typeof window.toast==='function') window.toast('自我修復警告：'+msg);}catch(_e){}}
-  function debounce(key,fn,delay){clearTimeout(state.timers[key]);state.timers[key]=setTimeout(fn,delay||120);} function abortKey(key){try{if(state.aborters[key])state.aborters[key].abort();}catch(_e){} state.aborters[key]=typeof AbortController!=='undefined'?new AbortController():null;return state.aborters[key];}
-  function bindOnce(el,ev,fn,key,opts){if(!el||!ev||!fn)return;var mark='__tasunBindOnce_'+ev+'_'+(key||fn.name||'handler');if(el[mark])return;el[mark]=true;el.addEventListener(ev,fn,opts||false);}
+  var state = {
+    running:false,
+    lastRun:0,
+    retry:Object.create(null),
+    timers:Object.create(null),
+    aborters:Object.create(null),
+    cloudRoundtripRunning:false,
+    firstCloudReadDone:false,
+    lastCloudRows:null,
+    lastCloudAt:0,
+    warningShown:false
+  };
 
-  function tightCjkText(v){return norm(v).replace(/[\t\r\n\u3000]+/g,' ').replace(/([\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g,'$1').replace(/\s{2,}/g,' ').trim();}
-  function normalizeRowText(row){if(!row||typeof row!=='object')return row;Object.keys(row).forEach(function(k){if(typeof row[k]==='string')row[k]=tightCjkText(row[k]);});return row;}
-  function normalizeVisibleTextInputs(){qa('input[type="text"], input:not([type]), textarea').forEach(function(el){var old=String(el.value||''), next=tightCjkText(old); if(old!==next)el.value=next;});qa('select option').forEach(function(opt){var t=tightCjkText(opt.textContent||''),v=tightCjkText(opt.value||'');if(opt.textContent!==t)opt.textContent=t;if(opt.value!==v)opt.value=v;});}
+  function $(id){ return document.getElementById(id); }
+  function q(sel, root){ return (root || document).querySelector(sel); }
+  function qa(sel, root){ return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+  function text(el){ return el ? String(el.textContent || el.value || '').trim() : ''; }
+  function now(){ return Date.now(); }
+  function norm(v){ return String(v == null ? '' : v).trim(); }
+  function warn(msg){
+    try{ console.warn('[TasunSelfHealV5][RACI-R268]', msg); }catch(_e){}
+    try{ if(typeof window.toast === 'function') window.toast('自我修復警告：' + msg); }catch(_e){}
+  }
+  function debounce(key, fn, delay){
+    clearTimeout(state.timers[key]);
+    state.timers[key] = setTimeout(fn, delay || 120);
+  }
+  function abortKey(key){
+    try{ if(state.aborters[key]) state.aborters[key].abort(); }catch(_e){}
+    state.aborters[key] = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    return state.aborters[key];
+  }
+  function bindOnce(el, ev, fn, key, opts){
+    if(!el || !ev || !fn) return;
+    var mark = '__tasunBindOnce_' + ev + '_' + (key || fn.name || 'handler');
+    if(el[mark]) return;
+    el[mark] = true;
+    el.addEventListener(ev, fn, opts || false);
+  }
 
-  function ensureTableIdentity(){var t=$(G.TABLE_ID)||q('table[data-resource-key="'+G.RESOURCE_KEY+'"]')||q('table'); if(!t)return false; t.id=G.TABLE_ID; t.setAttribute('data-page-key',G.PAGE_KEY);t.setAttribute('data-page-file',G.PAGE_FILE);t.setAttribute('data-table-id',G.TABLE_ID);t.setAttribute('data-resource-key',G.RESOURCE_KEY);t.setAttribute('data-db-name',G.DB_NAME);t.setAttribute('data-storage-key',G.STORAGE_KEY);t.setAttribute('data-has-individual-id','true');window.__TASUN_PAGE_KEY__=G.PAGE_KEY;window.__TASUN_PAGE_FILE__=G.PAGE_FILE;window.__TASUN_TABLE_ID__=G.TABLE_ID;window.__TASUN_DB_NAME__=G.DB_NAME;window.__TASUN_RESOURCE_KEY__=G.RESOURCE_KEY;window.__TASUN_STORAGE_KEY__=G.STORAGE_KEY;return true;}
-  function requiredDomOk(){var missing=[];if(!$(G.TABLE_ID)&&!q('table[data-resource-key="'+G.RESOURCE_KEY+'"]'))missing.push('table#'+G.TABLE_ID);if(!q('#'+G.TABLE_ID+' tbody')&&!$('tbody'))missing.push('tbody');if(!$('tableWrap')&&!q('.tableWrap')&&!q('.table-wrap'))missing.push('tableWrap');if(missing.length){if(!state.warningShown){state.warningShown=true;warn('必要 DOM 缺失，已中止相關綁定：'+missing.join('、'));}return false;}return true;}
+  /* 中文段落中間多餘空白清除：只清 CJK 文字段落內空格，不破壞英文、IV&V、日期、網址。 */
+  function tightCjkText(v){
+    return norm(v)
+      .replace(/[\t\r\n\u3000]+/g, ' ')
+      .replace(/([\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g, '$1')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
+  function normalizeRowText(row){
+    if(!row || typeof row !== 'object') return row;
+    Object.keys(row).forEach(function(k){
+      if(typeof row[k] === 'string') row[k] = tightCjkText(row[k]);
+    });
+    return row;
+  }
+  function normalizeVisibleTextInputs(){
+    qa('input[type="text"], input:not([type]), textarea').forEach(function(el){
+      var old = String(el.value || '');
+      var next = tightCjkText(old);
+      if(old !== next) el.value = next;
+    });
+    qa('select option').forEach(function(opt){
+      var t = tightCjkText(opt.textContent || '');
+      var v = tightCjkText(opt.value || '');
+      if(opt.textContent !== t) opt.textContent = t;
+      if(opt.value !== v) opt.value = v;
+    });
+  }
 
-  function parseRows(raw){try{var x=JSON.parse(raw||'[]'); if(Array.isArray(x))return x; if(x&&Array.isArray(x.rows))return x.rows; if(x&&Array.isArray(x.db))return x.db; if(x&&Array.isArray(x.items))return x.items;}catch(_e){} return [];}
-  function rowsFromLocal(){var rows=[];[G.STORAGE_KEY,'tasunRACI_Simple_v2','tasunRACI_Simple_v1','tasunRACI_Simple_last_good_v117'].forEach(function(k){try{rows=rows.concat(parseRows(localStorage.getItem(k)||sessionStorage.getItem(k)||''));}catch(_e){}});try{if(Array.isArray(window.db))rows=rows.concat(window.db);}catch(_e){}try{if(Array.isArray(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__))rows=rows.concat(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__);}catch(_e){} return dedupeRows(rows).filter(function(r){return r&&!r.deleted&&!r._deleted;});}
-  function rowKey(r){return norm(r&&(r.uid||r.pk||r._uid||r.id||[r.stage,r.focus,r.project].join('|')));} function rowRev(r){var v=r&&(r.rev||r.updatedAt||r.deletedAt||0);var n=Number(v);return isFinite(n)?n:Date.parse(v)||0;}
-  function dedupeRows(rows){var map=Object.create(null);(rows||[]).forEach(function(raw){var r=normalizeRowText(Object.assign({},raw||{}));var key=rowKey(r);if(!key)return;if(!r.uid)r.uid=key;if(!r.pk)r.pk=r.uid;if(r.rev==null)r.rev=0;if(!r.updatedAt)r.updatedAt=new Date().toISOString();if(r.deleted==null)r.deleted=false;var old=map[key];if(!old||rowRev(r)>=rowRev(old))map[key]=r;});return Object.keys(map).map(function(k){return map[k];});}
-  function saveLocalRows(rows){rows=dedupeRows(rows||[]);try{localStorage.setItem(G.STORAGE_KEY,JSON.stringify(rows));}catch(_e){}try{sessionStorage.setItem(G.STORAGE_KEY,JSON.stringify(rows));}catch(_e){}try{if(Array.isArray(window.db)){window.db.splice(0,window.db.length);Array.prototype.push.apply(window.db,rows.filter(function(r){return !r.deleted&&!r._deleted;}));}}catch(_e){}try{if(typeof window.saveDB==='function')window.saveDB();}catch(_e){}try{if(typeof window.render==='function')window.render();}catch(_e){}return rows;}
+  function ensureTableIdentity(){
+    var table = $(G.TABLE_ID) || q('table[data-resource-key="' + G.RESOURCE_KEY + '"]') || q('table');
+    if(!table) return false;
+    if(!table.id) table.id = G.TABLE_ID;
+    table.setAttribute('data-page-key', G.PAGE_KEY);
+    table.setAttribute('data-page-file', G.PAGE_FILE);
+    table.setAttribute('data-table-id', G.TABLE_ID);
+    table.setAttribute('data-resource-key', G.RESOURCE_KEY);
+    table.setAttribute('data-db-name', G.DB_NAME);
+    table.setAttribute('data-storage-key', G.STORAGE_KEY);
+    table.setAttribute('data-has-individual-id', 'true');
+    window.__TASUN_PAGE_KEY__ = G.PAGE_KEY;
+    window.__TASUN_PAGE_FILE__ = G.PAGE_FILE;
+    window.__TASUN_TABLE_ID__ = G.TABLE_ID;
+    window.__TASUN_DB_NAME__ = G.DB_NAME;
+    window.__TASUN_RESOURCE_KEY__ = G.RESOURCE_KEY;
+    window.__TASUN_STORAGE_KEY__ = G.STORAGE_KEY;
+    return true;
+  }
 
-  function setBadge(name,value){qa('.raciBadge[data-badge="'+name+'"] .v,[data-badge="'+name+'"] .v').forEach(function(el){el.textContent=value;});qa('.raciBadge[data-badge="'+name+'"],[data-badge="'+name+'"]').forEach(function(el){el.setAttribute('data-r268-status',value);if(name==='cloud')el.classList.toggle('bad',/異常|失敗|錯誤|離線|待下載/i.test(value));});}
-  function findStatusNodes(label){var out=[];qa('span,div,b,em,small').forEach(function(el){var s=text(el);if(s.indexOf(label)>=0||(el.id&&el.id.toLowerCase().indexOf(label.toLowerCase())>=0))out.push(el);});return out;}
-  function setStatusText(label,value){value=norm(value);var map={'版本':'version','筆數':'count','雲端':'cloud','最後':'last'};if(map[label])setBadge(map[label],value);var byId={'版本':['appVer','versionText','statusVersion','verStatus'],'筆數':['rowCount','rowsCount','statusRows','dataCount'],'雲端':['cloudStatus','syncStatus','statusCloud'],'最後':['lastSync','lastStatus','statusLast']}[label]||[];byId.some(function(id){var el=$(id);if(el){el.textContent=value;return true;}return false;});findStatusNodes(label).forEach(function(el){if(el.children&&el.children.length)return;var s=text(el);if(s===label||s.indexOf(label+'：')===0||s.indexOf(label+':')===0)el.textContent=label+'：'+value;});}
-  function cloudCountFromStoredStatus(){var keys=['tasunRACI_Simple_cloud_status_v151','tasunRACI_Simple_cloud_status_v143','tasunRACI_Simple_cloud_status_v118'];for(var i=0;i<keys.length;i++){try{var raw=localStorage.getItem(keys[i])||'';if(!raw)continue;var row=JSON.parse(raw);var n=Number(row&&(row.cloudCount!=null?row.cloudCount:(row.count!=null?row.count:row.actualRows)));if(isFinite(n)&&n>0)return n;}catch(_e){}}return 0;}
-  function repairStatusBar(){var local=rowsFromLocal();var cloud=state.lastCloudRows||[];var actual=Math.max(local.length,cloud.filter(function(r){return r&&!r.deleted&&!r._deleted;}).length,cloudCountFromStoredStatus());var ver=norm(window.__CACHE_V||window.TASUN_APP_VER||window.APP_VER||'');var build=norm(window.__TASUN_PAGE_BUILD_STAMP__||(G.PAGE_BUILD_STAMP||''));setStatusText('版本',ver||build||'待版本檔');setStatusText('筆數',String(actual)+'/'+String(actual));if(!state.firstCloudReadDone&&actual===0){setStatusText('雲端','同步檢查中');setStatusText('最後','等待雲端資料');}else if(actual===0){setStatusText('雲端','雲端無資料');setStatusText('最後',new Date().toLocaleString('zh-TW'));}else{setStatusText('雲端','已同步');setStatusText('最後',state.lastCloudAt?new Date(state.lastCloudAt).toLocaleString('zh-TW'):new Date().toLocaleString('zh-TW'));}}
+  function requiredDomOk(){
+    var missing = [];
+    if(!$(G.TABLE_ID) && !q('table[data-resource-key="' + G.RESOURCE_KEY + '"]')) missing.push('table#' + G.TABLE_ID);
+    if(!$('tbody') && !q('#' + G.TABLE_ID + ' tbody')) missing.push('tbody');
+    if(!$('tableWrap') && !q('.tableWrap') && !q('.table-wrap')) missing.push('tableWrap');
+    if(missing.length){
+      if(!state.warningShown){
+        state.warningShown = true;
+        warn('必要 DOM 缺失，已中止相關綁定：' + missing.join('、'));
+      }
+      return false;
+    }
+    return true;
+  }
 
-  async function readCloudAuthority(){var ctl=abortKey('cloudRead');try{if(typeof window.readCloudRows==='function'){var rows=await window.readCloudRows({signal:ctl&&ctl.signal,reason:'r268-authority-read'});if(Array.isArray(rows)){state.firstCloudReadDone=true;state.lastCloudRows=dedupeRows(rows);state.lastCloudAt=now();document.dispatchEvent(new CustomEvent('tasun:raci:cloud-read-done',{detail:{rows:state.lastCloudRows.length}}));return state.lastCloudRows;}}}catch(_e){}return null;}
-  async function cloudRoundtripDedupe(reason){if(state.cloudRoundtripRunning)return false;state.cloudRoundtripRunning=true;try{setStatusText('雲端','同步檢查中');var local=dedupeRows(rowsFromLocal());var cloud=await readCloudAuthority();var merged=dedupeRows([].concat(cloud||[],local));saveLocalRows(merged);if(typeof window.mergeCloudRows==='function'&&merged.length)await window.mergeCloudRows(merged,{reason:reason||'r268-roundtrip-dedupe'});var finalCloud=await readCloudAuthority();if(finalCloud&&finalCloud.length)saveLocalRows(finalCloud);repairStatusBar();setStatusText('雲端','已同步');return true;}catch(_e){setStatusText('雲端','同步異常');return false;}finally{state.cloudRoundtripRunning=false;}}
-  function wrapScheduleCloudSync(){if(window.__TASUN_RACI_R268_SCHEDULE_WRAPPED__)return;if(typeof window.scheduleCloudSync!=='function')return;window.__TASUN_RACI_R268_SCHEDULE_WRAPPED__=true;var old=window.scheduleCloudSync;window.scheduleCloudSync=function(reason,delay){var args=arguments;debounce('cloudRoundtrip:'+(reason||'sync'),function(){cloudRoundtripDedupe(reason||'scheduleCloudSync');},Math.max(50,Number(delay||80)));try{return old.apply(this,args);}catch(_e){return undefined;}};}
+  function rowsFromLocal(){
+    var rows = [];
+    try{
+      var raw = localStorage.getItem(G.STORAGE_KEY) || sessionStorage.getItem(G.STORAGE_KEY) || '[]';
+      var parsed = JSON.parse(raw);
+      if(Array.isArray(parsed)) rows = parsed;
+      else if(parsed && Array.isArray(parsed.rows)) rows = parsed.rows;
+    }catch(_e){}
+    try{
+      if(Array.isArray(window.db) && window.db.length > rows.length) rows = window.db;
+    }catch(_e){}
+    return rows.filter(function(r){ return r && !r.deleted && !r._deleted; });
+  }
+  function rowKey(r){
+    return norm(r && (r.uid || r.pk || r._uid || r.id || [r.stage,r.focus,r.project].join('|')));
+  }
+  function rowRev(r){
+    return Number(r && (r.rev || r.updatedAt || r.deletedAt || 0)) || 0;
+  }
+  function dedupeRows(rows){
+    var map = Object.create(null);
+    (rows || []).forEach(function(raw){
+      var r = normalizeRowText(Object.assign({}, raw || {}));
+      var key = rowKey(r);
+      if(!key) return;
+      var old = map[key];
+      if(!old || rowRev(r) >= rowRev(old)) map[key] = r;
+    });
+    return Object.keys(map).map(function(k){ return map[k]; });
+  }
+  function saveLocalRows(rows){
+    rows = dedupeRows(rows || []);
+    try{ localStorage.setItem(G.STORAGE_KEY, JSON.stringify(rows)); }catch(_e){}
+    try{ sessionStorage.setItem(G.STORAGE_KEY, JSON.stringify(rows)); }catch(_e){}
+    try{ if(Array.isArray(window.db)){ window.db.splice(0, window.db.length); Array.prototype.push.apply(window.db, rows.filter(function(r){ return !r.deleted && !r._deleted; })); } }catch(_e){}
+    try{ if(typeof window.saveDB === 'function') window.saveDB(); }catch(_e){}
+    try{ if(typeof window.render === 'function') window.render(); }catch(_e){}
+    return rows;
+  }
 
-  function installDesktopStageStyle(){if($('tasun-raci-r268-stage-style'))return true;var s=document.createElement('style');s.id='tasun-raci-r268-stage-style';s.textContent='@media (min-width:821px){:root{--stageSide:0.5cm}.wrap{width:calc(100vw - 1cm)!important;max-width:none!important;margin-left:auto!important;margin-right:auto!important}.topbar{margin-top:-12px!important;padding-top:8px!important;padding-bottom:10px!important}.topbar .brand{transform:translateY(-14px)}.topbar .title{margin-top:0!important}.topbar .brand .btn,.topbar .brand button,.topbar .brand .toolbar button{transform:translateY(-8px)}}@media (max-width:820px){.topbar .brand{transform:none!important}}';document.head.appendChild(s);return true;}
-  function protectAdminPublish(){var role='';try{role=norm(JSON.parse(sessionStorage.getItem('tasunCurrentUser_v1')||localStorage.getItem('tasunCurrentUser_v1')||'{}').role).toLowerCase();}catch(_e){}qa('button,a').forEach(function(el){var s=text(el);if(s.indexOf('發布')<0&&s.indexOf('發佈')<0&&!/publish/i.test(el.id||''))return;if(role!=='admin'){el.setAttribute('aria-disabled','true');el.classList.add('tasun-nonadmin-disabled');bindOnce(el,'click',function(ev){ev.preventDefault();ev.stopPropagation();warn('非 admin 不可發布正式版');},'adminPublishGuard',true);}});}
+  async function readCloudAuthority(){
+    var ctl = abortKey('cloudRead');
+    try{
+      if(typeof window.readCloudRows === 'function'){
+        var rows = await window.readCloudRows({ signal: ctl && ctl.signal, reason:'r268-authority-read' });
+        if(Array.isArray(rows)){
+          state.firstCloudReadDone = true;
+          state.lastCloudRows = dedupeRows(rows);
+          state.lastCloudAt = now();
+          document.dispatchEvent(new CustomEvent('tasun:raci:cloud-read-done', { detail:{ rows: state.lastCloudRows.length } }));
+          return state.lastCloudRows;
+        }
+      }
+    }catch(_e){}
+    return null;
+  }
+  async function cloudRoundtripDedupe(reason){
+    if(state.cloudRoundtripRunning) return false;
+    state.cloudRoundtripRunning = true;
+    try{
+      setStatusText('雲端', '同步檢查中');
+      var local = dedupeRows(rowsFromLocal());
+      var cloud = await readCloudAuthority();
+      var merged = dedupeRows([].concat(cloud || [], local));
+      if(cloud && cloud.length && !local.length) saveLocalRows(merged);
+      else saveLocalRows(merged);
+      if(typeof window.mergeCloudRows === 'function' && merged.length){
+        await window.mergeCloudRows(merged, { reason: reason || 'r268-roundtrip-dedupe' });
+      }
+      var finalCloud = await readCloudAuthority();
+      if(finalCloud && finalCloud.length) saveLocalRows(finalCloud);
+      repairStatusBar();
+      setStatusText('雲端', '已同步');
+      return true;
+    }catch(_e){
+      setStatusText('雲端', '同步異常');
+      return false;
+    }finally{
+      state.cloudRoundtripRunning = false;
+    }
+  }
+  function wrapScheduleCloudSync(){
+    if(window.__TASUN_RACI_R268_SCHEDULE_WRAPPED__) return;
+    if(typeof window.scheduleCloudSync !== 'function') return;
+    window.__TASUN_RACI_R268_SCHEDULE_WRAPPED__ = true;
+    var old = window.scheduleCloudSync;
+    window.scheduleCloudSync = function(reason, delay){
+      var args = arguments;
+      debounce('cloudRoundtrip:' + (reason || 'sync'), function(){ cloudRoundtripDedupe(reason || 'scheduleCloudSync'); }, Math.max(50, Number(delay || 80)));
+      try{ return old.apply(this, args); }catch(_e){ return undefined; }
+    };
+  }
 
-  var FEATURES=[
-    {id:'raci.githubPagesHtmlNetworkOnce',check:function(){return !!$('tasun-github-pages-html-network-once-v5');},repair:function(){return true;},verify:function(){return true;}},
-    {id:'raci.domBeforeBind',check:requiredDomOk,repair:ensureTableIdentity,verify:requiredDomOk},
-    {id:'raci.tableIdentityAndDb',check:function(){var t=$(G.TABLE_ID);return !!(t&&t.getAttribute('data-db-name')&&t.getAttribute('data-resource-key'));},repair:ensureTableIdentity,verify:function(){var t=$(G.TABLE_ID);return !!(t&&t.getAttribute('data-db-name')===G.DB_NAME);}},
-    {id:'raci.desktopStageAutoScale',check:function(){return !!$('tasun-raci-r268-stage-style');},repair:installDesktopStageStyle,verify:function(){return !!$('tasun-raci-r268-stage-style');}},
-    {id:'raci.mobileStatusActualRows',check:function(){return true;},repair:repairStatusBar,verify:function(){return true;}},
-    {id:'raci.cloudRoundtripDedupe',check:function(){return true;},repair:function(){wrapScheduleCloudSync();cloudRoundtripDedupe('selfheal-r268');return true;},verify:function(){return true;}},
-    {id:'raci.textChineseWhitespaceTight',check:function(){return true;},repair:normalizeVisibleTextInputs,verify:function(){return true;}},
-    {id:'raci.adminPublishGuard',check:function(){return true;},repair:protectAdminPublish,verify:function(){return true;}}
+  function findStatusNodes(label){
+    var nodes = [];
+    qa('span,div,b,em,small').forEach(function(el){
+      var s = text(el);
+      if(s.indexOf(label) >= 0 || (el.id && el.id.toLowerCase().indexOf(label.toLowerCase()) >= 0)) nodes.push(el);
+    });
+    return nodes;
+  }
+  function setStatusText(label, value){
+    value = norm(value);
+    var badgeMap = { '版本':'version', '筆數':'count', '雲端':'cloud', '最後':'last' };
+    var badgeName = badgeMap[label] || '';
+    if(badgeName){
+      qa('.raciBadge[data-badge="' + badgeName + '"] .v, [data-badge="' + badgeName + '"] .v').forEach(function(el){ el.textContent = value; });
+      qa('.raciBadge[data-badge="' + badgeName + '"], [data-badge="' + badgeName + '"]').forEach(function(el){
+        el.setAttribute('data-r268-status', value);
+        if(label === '雲端') el.classList.toggle('bad', /異常|失敗|錯誤|離線|待下載/i.test(value));
+      });
+    }
+    var byId = {
+      '版本':['appVer','versionText','statusVersion','verStatus'],
+      '筆數':['rowCount','rowsCount','statusRows','dataCount'],
+      '雲端':['cloudStatus','syncStatus','statusCloud'],
+      '最後':['lastSync','lastStatus','statusLast']
+    }[label] || [];
+    byId.some(function(id){ var el=$(id); if(el){ el.textContent = value; return true; } return false; });
+    findStatusNodes(label).forEach(function(el){
+      if(el.children && el.children.length) return;
+      var s = text(el);
+      if(s === label || s.indexOf(label + '：') === 0 || s.indexOf(label + ':') === 0){ el.textContent = label + '：' + value; }
+    });
+  }
+  function cloudCountFromStoredStatus(){
+    var keys = ['tasunRACI_Simple_cloud_status_v151','tasunRACI_Simple_cloud_status_v143','tasunRACI_Simple_cloud_status_v118'];
+    for(var i=0;i<keys.length;i++){
+      try{
+        var raw = localStorage.getItem(keys[i]) || '';
+        if(!raw) continue;
+        var row = JSON.parse(raw);
+        var n = Number(row && (row.cloudCount != null ? row.cloudCount : (row.count != null ? row.count : row.actualRows)));
+        if(isFinite(n) && n > 0) return n;
+      }catch(_e){}
+    }
+    return 0;
+  }
+  function repairStatusBar(){
+    var localRows = rowsFromLocal();
+    var cloudRows = state.lastCloudRows || [];
+    var actual = Math.max(localRows.length, cloudRows.filter(function(r){ return r && !r.deleted && !r._deleted; }).length, cloudCountFromStoredStatus());
+    var appVer = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '');
+    var build = norm(window.__TASUN_PAGE_BUILD_STAMP__ || (G.PAGE_BUILD_STAMP || ''));
+    if(appVer || build) setStatusText('版本', appVer || build);
+    else setStatusText('版本', '待版本檔');
+    setStatusText('筆數', String(actual) + '/' + String(actual));
+    if(!state.firstCloudReadDone && actual === 0){
+      setStatusText('雲端', '同步檢查中');
+      setStatusText('最後', '等待雲端資料');
+    }else if(actual === 0){
+      setStatusText('雲端', '雲端無資料');
+      setStatusText('最後', new Date().toLocaleString('zh-TW'));
+    }else{
+      setStatusText('雲端', '已同步');
+      setStatusText('最後', state.lastCloudAt ? new Date(state.lastCloudAt).toLocaleString('zh-TW') : new Date().toLocaleString('zh-TW'));
+    }
+  }
+
+  function installDesktopStageStyle(){
+    if($('tasun-raci-r268-stage-style')) return true;
+    var css = [
+      '@media (min-width:821px){',
+      '  :root{--stageSide:0.5cm;}',
+      '  .wrap{width:calc(100vw - 1cm)!important;max-width:none!important;margin-left:auto!important;margin-right:auto!important;}',
+      '  .topbar{margin-top:-12px!important;padding-top:8px!important;padding-bottom:10px!important;}',
+      '  .topbar .brand{transform:translateY(-14px);}',
+      '  .topbar .title{margin-top:0!important;}',
+      '  .topbar .brand .btn,.topbar .brand button,.topbar .brand .toolbar button{transform:translateY(-8px);}',
+      '}',
+      '@media (max-width:820px){',
+      '  .topbar .brand{transform:none!important;}',
+      '}'
+    ].join('\n');
+    var s = document.createElement('style');
+    s.id = 'tasun-raci-r268-stage-style';
+    s.textContent = css;
+    document.head.appendChild(s);
+    return true;
+  }
+
+  function protectAdminPublish(){
+    var role = '';
+    try{ role = norm(JSON.parse(sessionStorage.getItem('tasunCurrentUser_v1') || localStorage.getItem('tasunCurrentUser_v1') || '{}').role).toLowerCase(); }catch(_e){}
+    qa('button,a').forEach(function(el){
+      var s = text(el);
+      if(s.indexOf('發布') < 0 && s.indexOf('發佈') < 0) return;
+      if(role !== 'admin'){
+        el.setAttribute('aria-disabled', 'true');
+        el.classList.add('tasun-nonadmin-disabled');
+        bindOnce(el, 'click', function(ev){ ev.preventDefault(); ev.stopPropagation(); warn('非 admin 不可發布正式版'); }, 'adminPublishGuard', true);
+      }
+    });
+  }
+
+  var FEATURES = [
+    { id:'raci.githubPagesHtmlNetworkOnce', check:function(){ return !!$('tasun-github-pages-html-network-once-v5'); }, repair:function(){ return true; }, verify:function(){ return true; } },
+    { id:'raci.domBeforeBind', check:requiredDomOk, repair:ensureTableIdentity, verify:requiredDomOk },
+    { id:'raci.tableIdentityAndDb', check:function(){ var t=$(G.TABLE_ID); return !!(t && t.getAttribute('data-db-name') && t.getAttribute('data-resource-key')); }, repair:ensureTableIdentity, verify:function(){ var t=$(G.TABLE_ID); return !!(t && t.getAttribute('data-db-name') === G.DB_NAME); } },
+    { id:'raci.desktopStageAutoScale', check:function(){ return !!$('tasun-raci-r268-stage-style'); }, repair:installDesktopStageStyle, verify:function(){ return !!$('tasun-raci-r268-stage-style'); } },
+    { id:'raci.mobileStatusActualRows', check:function(){ return true; }, repair:repairStatusBar, verify:function(){ return true; } },
+    { id:'raci.cloudRoundtripDedupe', check:function(){ return true; }, repair:function(){ wrapScheduleCloudSync(); cloudRoundtripDedupe('selfheal-r268'); return true; }, verify:function(){ return true; } },
+    { id:'raci.textChineseWhitespaceTight', check:function(){ return true; }, repair:normalizeVisibleTextInputs, verify:function(){ return true; } },
+    { id:'raci.adminPublishGuard', check:function(){ return true; }, repair:protectAdminPublish, verify:function(){ return true; } }
   ];
-  function runFeature(f){var count=state.retry[f.id]||0;if(count>=Number(G.SELFHEAL_MAX_RETRY||3))return;try{if(f.check&&f.check())return;state.retry[f.id]=count+1;if(f.repair)f.repair();if(f.verify&&!f.verify())warn(f.id+' verify 未通過');}catch(e){state.retry[f.id]=count+1;warn(f.id+' 修復例外：'+(e&&e.message?e.message:e));}}
-  function runSelfHeal(reason){var t=now();if(state.running||(t-state.lastRun)<Number(G.SELFHEAL_COOLDOWN_MS||1200))return;state.running=true;state.lastRun=t;try{ensureTableIdentity();normalizeVisibleTextInputs();wrapScheduleCloudSync();FEATURES.forEach(runFeature);repairStatusBar();window.__TASUN_RACI_R268_LAST_RUN__={reason:reason||'manual',at:new Date().toISOString(),features:FEATURES.map(function(f){return f.id;})};}finally{state.running=false;}}
 
-  window.__TASUN_SELFHEAL_V5_FEATURES__=dedupeRows([].concat(window.__TASUN_SELFHEAL_V5_FEATURES__||[],FEATURES.map(function(f){return {uid:f.id,id:f.id,updatedAt:Date.now(),rev:Date.now(),deleted:false};})));
-  window.__TASUN_RACI_CLOUD_ROUNDTRIP_DEDUPE__=cloudRoundtripDedupe; window.__TASUN_RACI_R268_RUN_SELFHEAL__=runSelfHeal;
-  if(window.TasunSelfHealV5&&typeof window.TasunSelfHealV5.register==='function'){FEATURES.forEach(function(f){try{window.TasunSelfHealV5.register(f);}catch(_e){}});} 
-  bindOnce(document,'input',function(){debounce('inputNormalize',normalizeVisibleTextInputs,180);},'r268Normalize',true);bindOnce(document,'change',function(){debounce('changeNormalize',normalizeVisibleTextInputs,80);},'r268Normalize',true);
-  ['DOMContentLoaded','pageshow','resize','orientationchange','visibilitychange'].forEach(function(ev){bindOnce(ev==='DOMContentLoaded'?document:window,ev,function(){debounce('selfheal:'+ev,function(){runSelfHeal(ev);},160);},'r268SelfHeal',true);});
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){runSelfHeal('boot');},{once:true,passive:true});else runSelfHeal('boot-now');
+  function runFeature(f){
+    var count = state.retry[f.id] || 0;
+    if(count >= Number(G.SELFHEAL_MAX_RETRY || 3)) return;
+    try{
+      if(f.check && f.check()) return;
+      state.retry[f.id] = count + 1;
+      if(f.repair) f.repair();
+      if(f.verify && !f.verify()) warn(f.id + ' verify 未通過');
+    }catch(e){
+      state.retry[f.id] = count + 1;
+      warn(f.id + ' 修復例外：' + (e && e.message ? e.message : e));
+    }
+  }
+  function runSelfHeal(reason){
+    var t = now();
+    if(state.running || (t - state.lastRun) < Number(G.SELFHEAL_COOLDOWN_MS || 1200)) return;
+    state.running = true;
+    state.lastRun = t;
+    try{
+      ensureTableIdentity();
+      normalizeVisibleTextInputs();
+      wrapScheduleCloudSync();
+      FEATURES.forEach(runFeature);
+      repairStatusBar();
+      window.__TASUN_RACI_R268_LAST_RUN__ = { reason: reason || 'manual', at: new Date().toISOString(), features: FEATURES.map(function(f){ return f.id; }) };
+    }finally{
+      state.running = false;
+    }
+  }
+
+  window.__TASUN_SELFHEAL_V5_FEATURES__ = dedupeRows([].concat(window.__TASUN_SELFHEAL_V5_FEATURES__ || [], FEATURES.map(function(f){ return { uid:f.id, id:f.id, updatedAt:Date.now(), rev:Date.now(), deleted:false }; })));
+  window.__TASUN_RACI_CLOUD_ROUNDTRIP_DEDUPE__ = cloudRoundtripDedupe;
+  window.__TASUN_RACI_R268_RUN_SELFHEAL__ = runSelfHeal;
+
+  if(window.TasunSelfHealV5 && typeof window.TasunSelfHealV5.register === 'function'){
+    FEATURES.forEach(function(f){ try{ window.TasunSelfHealV5.register(f); }catch(_e){} });
+  }
+
+  bindOnce(document, 'input', function(){ debounce('inputNormalize', normalizeVisibleTextInputs, 180); }, 'r268Normalize', true);
+  bindOnce(document, 'change', function(){ debounce('changeNormalize', normalizeVisibleTextInputs, 80); }, 'r268Normalize', true);
+  ['DOMContentLoaded','pageshow','resize','orientationchange','visibilitychange'].forEach(function(ev){
+    bindOnce(ev === 'DOMContentLoaded' ? document : window, ev, function(){ debounce('selfheal:' + ev, function(){ runSelfHeal(ev); }, 160); }, 'r268SelfHeal', true);
+  });
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function(){ runSelfHeal('boot'); }, { once:true, passive:true });
+  else runSelfHeal('boot-now');
 })();
