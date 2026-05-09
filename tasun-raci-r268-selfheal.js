@@ -1,321 +1,59 @@
+/* Tasun RACI R268+R269 unified self-heal. 2026-05-09 */
 (function(){
   'use strict';
-  if(window.__TASUN_RACI_R269_STATUS_SINGLE_AUTHORITY__) return;
+  if(window.__TASUN_RACI_R268_R269_UNIFIED__) return;
+  window.__TASUN_RACI_R268_R269_UNIFIED__ = true;
+  window.__TASUN_RACI_R268_SELFHEAL_BASELINE__ = true;
   window.__TASUN_RACI_R269_STATUS_SINGLE_AUTHORITY__ = true;
 
-  var G = window.__TASUN_GLOBALS__ || {};
-  var STATE = {
-    running:false,
-    last:0,
-    timers:Object.create(null),
-    observer:null,
-    cooldown:180,
-    cloudChecked:false
-  };
+  var G = window.__TASUN_GLOBALS__ = Object.assign({
+    PAGE_KEY:'raci-sxdh-simple',PAGE_FILE:'捷運汐東線權責分工精簡版.html',TABLE_ID:'raciTable',
+    DB_NAME:'tasun_raci_sxdh_simple_db_v117',RESOURCE_KEY:'raci-sxdh-simple',STORAGE_KEY:'tasunRACI_Simple_v2',
+    FETCH_TIMEOUT_MS:6000,SELFHEAL_COOLDOWN_MS:900,SELFHEAL_MAX_RETRY:4
+  }, window.__TASUN_GLOBALS__ || {});
 
-  function norm(v){ return String(v == null ? '' : v).trim(); }
-  function q(sel, root){ return (root || document).querySelector(sel); }
-  function qa(sel, root){ return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
-  function debounce(key, fn, delay){
-    clearTimeout(STATE.timers[key]);
-    STATE.timers[key] = setTimeout(fn, delay || 120);
-  }
-  function safeJSON(raw){ try{ return JSON.parse(raw); }catch(_e){ return null; } }
+  var S={running:false,last:0,timers:Object.create(null),observer:null,cloudRunning:false,cloudDone:false,cloudRows:null,lastCloudAt:0,booted:false};
+  function n(v){return String(v==null?'':v).trim();}
+  function q(s,r){return (r||document).querySelector(s);}
+  function qa(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s));}
+  function debounce(k,fn,d){clearTimeout(S.timers[k]);S.timers[k]=setTimeout(fn,d||120);}
+  function json(raw){try{return JSON.parse(raw);}catch(_e){return null;}}
+  function warn(m){try{console.warn('[TasunSelfHealV5][RACI R268+R269]',m);}catch(_e){}}
+  function bindOnce(el,ev,fn,k,opt){if(!el)return;var m='__tasunR268R269_'+ev+'_'+(k||fn.name||'h');if(el[m])return;el[m]=1;el.addEventListener(ev,fn,opt||false);}
+  function cjk(v){return n(v).replace(/[\t\r\n\u3000]+/g,' ').replace(/([\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g,'$1').replace(/\s{2,}/g,' ').trim();}
 
-  function parseRows(raw){
-    var x = safeJSON(raw || '');
-    if(Array.isArray(x)) return x;
-    if(x && Array.isArray(x.rows)) return x.rows;
-    if(x && Array.isArray(x.db)) return x.db;
-    if(x && Array.isArray(x.items)) return x.items;
-    return [];
-  }
-  function rowKey(r){
-    return norm(r && (r.uid || r.pk || r._uid || r.id || [r.stage,r.focus,r.project].join('|')));
-  }
-  function rowRev(r){
-    var v = r && (r.rev || r.updatedAt || r.deletedAt || 0);
-    var n = Number(v);
-    return isFinite(n) ? n : (Date.parse(v) || 0);
-  }
-  function dedupeRows(rows){
-    var map = Object.create(null);
-    (rows || []).forEach(function(raw){
-      if(!raw || typeof raw !== 'object') return;
-      var r = Object.assign({}, raw);
-      var key = rowKey(r);
-      if(!key) return;
-      if(!r.uid) r.uid = key;
-      if(!r.pk) r.pk = r.uid;
-      if(r.rev == null) r.rev = 0;
-      if(!r.updatedAt) r.updatedAt = new Date().toISOString();
-      if(r.deleted == null) r.deleted = false;
-      var old = map[key];
-      if(!old || rowRev(r) >= rowRev(old)) map[key] = r;
-    });
-    return Object.keys(map).map(function(k){ return map[k]; });
-  }
-  function localRows(){
-    var storageKey = norm(G.STORAGE_KEY || 'tasunRACI_Simple_v2');
-    var keys = [storageKey, 'tasunRACI_Simple_v2', 'tasunRACI_Simple_v1', 'tasunRACI_Simple_last_good_v117'];
-    var rows = [];
-    keys.forEach(function(k){
-      try{ rows = rows.concat(parseRows(localStorage.getItem(k) || sessionStorage.getItem(k) || '')); }catch(_e){}
-    });
-    try{ if(Array.isArray(window.db)) rows = rows.concat(window.db); }catch(_e){}
-    try{ if(Array.isArray(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__)) rows = rows.concat(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__); }catch(_e){}
-    return dedupeRows(rows).filter(function(r){ return r && !r.deleted && !r._deleted && !r.systemRow && !r._system; });
-  }
-  function renderedCount(){
-    var tableId = norm(G.TABLE_ID || 'raciTable');
-    var tbody = q('#' + tableId + ' tbody') || q('tbody');
-    if(!tbody) return 0;
-    return qa('tr', tbody).filter(function(tr){
-      var s = norm(tr.textContent).replace(/[\s\-—]/g,'');
-      return !!s;
-    }).length;
-  }
-  function storedCloudCount(){
-    var keys = ['tasunRACI_Simple_cloud_status_v151','tasunRACI_Simple_cloud_status_v143','tasunRACI_Simple_cloud_status_v118'];
-    for(var i=0;i<keys.length;i++){
-      try{
-        var row = safeJSON(localStorage.getItem(keys[i]) || '');
-        var n = Number(row && (row.cloudCount != null ? row.cloudCount : (row.actualRows != null ? row.actualRows : row.count)));
-        if(isFinite(n) && n > 0) return n;
-      }catch(_e){}
-    }
-    return 0;
-  }
-  function actualCount(){
-    return Math.max(
-      localRows().length,
-      renderedCount(),
-      Number(window.__TASUN_RACI_LAST_RENDERED_COUNT__ || 0) || 0,
-      storedCloudCount()
-    );
-  }
+  function parseRows(raw){var x=json(raw||'');if(Array.isArray(x))return x;if(x&&Array.isArray(x.rows))return x.rows;if(x&&Array.isArray(x.db))return x.db;if(x&&Array.isArray(x.items))return x.items;return [];}
+  function rowKey(r){return n(r&&(r.uid||r.pk||r._uid||r.id||[r.stage,r.focus,r.project].join('|')));}
+  function rowRev(r){var v=r&&(r.rev||r.updatedAt||r.deletedAt||0),x=Number(v);return isFinite(x)?x:(Date.parse(v)||0);}
+  function normRow(raw){var r=Object.assign({},raw||{});Object.keys(r).forEach(function(k){if(typeof r[k]==='string')r[k]=cjk(r[k]);});var key=rowKey(r);if(key&&!r.uid)r.uid=key;if(r.uid&&!r.pk)r.pk=r.uid;if(r.rev==null)r.rev=0;if(!r.updatedAt)r.updatedAt=new Date().toISOString();if(r.deleted==null)r.deleted=false;return r;}
+  function dedupe(rows){var map=Object.create(null);(rows||[]).forEach(function(raw){if(!raw||typeof raw!=='object')return;var r=normRow(raw),key=rowKey(r);if(!key)return;var old=map[key];if(!old||rowRev(r)>=rowRev(old))map[key]=r;});return Object.keys(map).map(function(k){return map[k];});}
+  function active(rows){return dedupe(rows).filter(function(r){return r&&!r.deleted&&!r._deleted&&!r.systemRow&&!r._system;});}
+  function localRows(){var rows=[],keys=[G.STORAGE_KEY,'tasunRACI_Simple_v2','tasunRACI_Simple_v1','tasunRACI_Simple_last_good_v117'];keys.forEach(function(k){try{rows=rows.concat(parseRows(localStorage.getItem(k)||sessionStorage.getItem(k)||''));}catch(_e){}});try{if(Array.isArray(window.db))rows=rows.concat(window.db);}catch(_e){}try{if(Array.isArray(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__))rows=rows.concat(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__);}catch(_e){}return active(rows);}
+  function saveLocal(rows){rows=dedupe(rows||[]);try{localStorage.setItem(G.STORAGE_KEY,JSON.stringify(rows));sessionStorage.setItem(G.STORAGE_KEY,JSON.stringify(rows));}catch(_e){}try{if(Array.isArray(window.db)){window.db.splice(0,window.db.length);Array.prototype.push.apply(window.db,active(rows));}}catch(_e){}try{if(typeof window.saveDB==='function')window.saveDB();}catch(_e){}try{if(typeof window.render==='function')window.render();else if(typeof window.renderRows==='function')window.renderRows(active(rows));else if(typeof window.renderTable==='function')window.renderTable(active(rows));}catch(_e){}return rows;}
+  function renderedCount(){var tb=q('#'+G.TABLE_ID+' tbody')||q('tbody');if(!tb)return 0;return qa('tr',tb).filter(function(tr){return !!n(tr.textContent).replace(/[\s\-—]/g,'');}).length;}
+  function storedCloudCount(){var ks=['tasunRACI_Simple_cloud_status_v151','tasunRACI_Simple_cloud_status_v143','tasunRACI_Simple_cloud_status_v118'];for(var i=0;i<ks.length;i++){try{var r=json(localStorage.getItem(ks[i])||'');var x=Number(r&&(r.cloudCount!=null?r.cloudCount:(r.actualRows!=null?r.actualRows:r.count)));if(isFinite(x)&&x>0)return x;}catch(_e){}}return 0;}
+  function actualCount(){return Math.max(localRows().length,active(S.cloudRows||[]).length,renderedCount(),Number(window.__TASUN_RACI_LAST_RENDERED_COUNT__||0)||0,storedCloudCount());}
 
-  function labelOf(name){
-    return ({version:'版本', count:'筆數', cloud:'雲端', last:'最後', duplicate:'重複'})[name] || name;
-  }
-  function cleanRepeated(value, type){
-    var s = norm(value).replace(/\s+/g,' ');
-    if(type === 'count'){
-      var m = s.match(/(\d+)\s*\/\s*(\d+)/);
-      return m ? (m[1] + ' / ' + m[2]) : s;
-    }
-    if(type === 'cloud'){
-      if(/同步異常|待同步|失敗|錯誤|離線/.test(s)) return s.match(/同步異常|待同步|失敗|錯誤|離線/)[0];
-      if(/已同步/.test(s) && actualCount() > 0) return '已同步';
-      if(/雲端無資料/.test(s)) return '雲端無資料';
-      return '同步檢查中';
-    }
-    if(type === 'last'){
-      if(/等待雲端資料/.test(s)) return '等待雲端資料';
-      var m2 = s.match(/\d{4}\/\d{1,2}\/\d{1,2}\s+\d{1,2}:\d{2}:\d{2}/);
-      if(m2) return m2[0];
-      return s || '等待雲端資料';
-    }
-    return s;
-  }
-  function canonicalValue(name, oldValue){
-    var count = actualCount();
-    if(name === 'version'){
-      return norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || window.__TASUN_PAGE_BUILD_STAMP__ || (G && G.PAGE_BUILD_STAMP) || oldValue || '待版本檔');
-    }
-    if(name === 'count') return String(count) + ' / ' + String(count);
-    if(name === 'cloud'){
-      if(count > 0) return '已同步';
-      return cleanRepeated(oldValue, 'cloud') === '雲端無資料' ? '雲端無資料' : '同步檢查中';
-    }
-    if(name === 'last'){
-      if(count > 0) return new Date().toLocaleString('zh-TW', {hour12:false});
-      return '等待雲端資料';
-    }
-    return cleanRepeated(oldValue, name);
-  }
-  function normalizeBadge(badge, name){
-    if(!badge) return;
-    var oldV = '';
-    var oldNode = badge.querySelector('.v');
-    oldV = oldNode ? oldNode.textContent : badge.textContent;
-    var value = canonicalValue(name, oldV);
-    var label = labelOf(name);
-    var labelText = label + (name === 'cloud' ? '：' : '');
-    var curK = badge.querySelector('.k');
-    var curV = badge.querySelector('.v');
+  function ensureTable(){var t=document.getElementById(G.TABLE_ID)||q('table[data-resource-key="'+G.RESOURCE_KEY+'"]')||q('table');if(!t)return false;t.id=G.TABLE_ID;t.setAttribute('data-page-key',G.PAGE_KEY);t.setAttribute('data-page-file',G.PAGE_FILE);t.setAttribute('data-resource-key',G.RESOURCE_KEY);t.setAttribute('data-db-name',G.DB_NAME);t.setAttribute('data-storage-key',G.STORAGE_KEY);t.setAttribute('data-has-individual-id','true');window.__TASUN_PAGE_KEY__=G.PAGE_KEY;window.__TASUN_PAGE_FILE__=G.PAGE_FILE;window.__TASUN_TABLE_ID__=G.TABLE_ID;window.__TASUN_DB_NAME__=G.DB_NAME;window.__TASUN_RESOURCE_KEY__=G.RESOURCE_KEY;window.__TASUN_STORAGE_KEY__=G.STORAGE_KEY;return true;}
+  function normalizeInputs(){qa('input[type="text"],input:not([type]),textarea').forEach(function(el){var o=String(el.value||''),x=cjk(o);if(o!==x)el.value=x;});qa('select option').forEach(function(opt){var t=cjk(opt.textContent||''),v=cjk(opt.value||'');if(opt.textContent!==t)opt.textContent=t;if(opt.value!==v)opt.value=v;});}
 
-    if(!curK || !curV || norm(badge.childNodes.length) === '0'){
-      badge.innerHTML = '<span class="k"></span><span class="v"></span>';
-      curK = badge.querySelector('.k');
-      curV = badge.querySelector('.v');
-    }
+  function labelOf(name){return ({version:'版本',count:'筆數',cloud:'雲端',last:'最後',duplicate:'重複'})[name]||name;}
+  function cleanValue(v,type){var s=n(v).replace(/\s+/g,' ');if(type==='count'){var m=s.match(/(\d+)\s*\/\s*(\d+)/);return m?(m[1]+' / '+m[2]):s;}if(type==='cloud'){if(/同步異常|待同步|失敗|錯誤|離線/.test(s))return s.match(/同步異常|待同步|失敗|錯誤|離線/)[0];if(/雲端無資料/.test(s))return '雲端無資料';if(/已同步/.test(s)&&actualCount()>0)return '已同步';return '同步檢查中';}if(type==='last'){if(/等待雲端資料/.test(s))return '等待雲端資料';var m2=s.match(/\d{4}\/\d{1,2}\/\d{1,2}\s+\d{1,2}:\d{2}:\d{2}/);return m2?m2[0]:(s||'等待雲端資料');}return s;}
+  function statusValue(name,old){var c=actualCount();if(name==='version')return n(window.__CACHE_V||window.TASUN_APP_VER||window.APP_VER||window.__TASUN_PAGE_BUILD_STAMP__||G.PAGE_BUILD_STAMP||old||'待版本檔');if(name==='count')return String(c)+' / '+String(c);if(name==='cloud'){if(c>0)return '已同步';return S.cloudDone?'雲端無資料':'同步檢查中';}if(name==='last'){if(c>0)return S.lastCloudAt?new Date(S.lastCloudAt).toLocaleString('zh-TW',{hour12:false}):new Date().toLocaleString('zh-TW',{hour12:false});return S.cloudDone?'等待雲端資料':'等待雲端資料';}return cleanValue(old,name);}
+  function normalizeBadge(badge,name){if(!badge||!name)return;var oldV=(badge.querySelector('.v')||badge).textContent||'';var value=statusValue(name,oldV);var k=badge.querySelector('.k'),v=badge.querySelector('.v');if(!k||!v){badge.innerHTML='<span class="k"></span><span class="v"></span>';k=badge.querySelector('.k');v=badge.querySelector('.v');}k.textContent=labelOf(name)+(name==='cloud'?'：':'');v.textContent=value;Array.prototype.slice.call(badge.childNodes).forEach(function(nd){if(nd.nodeType===3&&n(nd.textContent))nd.textContent='';});badge.setAttribute('data-r268-r269-single-status','1');if(name==='cloud')badge.classList.toggle('bad',/異常|待同步|失敗|錯誤|離線/.test(value));}
+  function canonicalStatus(){if(S.running)return;S.running=true;try{var bars=qa('#statusBar,.raciStatusBar');var first=bars[0];bars.forEach(function(bar,i){if(i>0&&bar!==first)bar.style.display='none';});if(!first)return;first.setAttribute('data-r268-r269-single-authority','1');var keep=Object.create(null);qa('[data-badge]',first).forEach(function(b){var name=n(b.getAttribute('data-badge'));if(keep[name]){b.style.display='none';b.setAttribute('data-r268-r269-hidden','1');return;}keep[name]=b;b.removeAttribute('data-r268-r269-hidden');if(name==='duplicate'){if(n(b.style.display)==='')b.style.display='none';return;}normalizeBadge(b,name);});qa('#btnDupReport',first).forEach(function(btn){if(n(btn.style.display)==='')btn.style.display='none';});}finally{S.running=false;}}
 
-    if(curK.textContent !== labelText) curK.textContent = labelText;
-    if(curV.textContent !== value) curV.textContent = value;
+  function patchWriters(){if(window.__TASUN_RACI_R268_R269_WRITERS_PATCHED__)return;window.__TASUN_RACI_R268_R269_WRITERS_PATCHED__=true;['setRaciBadge','updateRaciStatus','setCloudSyncStatus','setCloudStatusFromActual'].forEach(function(fn){if(typeof window[fn]!=='function')return;var old=window[fn];window[fn]=function(){var r=old.apply(this,arguments);setTimeout(canonicalStatus,0);setTimeout(canonicalStatus,80);setTimeout(canonicalStatus,240);return r;};});}
+  function observeStatus(){if(S.observer)return;var bar=q('#statusBar')||q('.raciStatusBar');if(!bar||typeof MutationObserver==='undefined')return;S.observer=new MutationObserver(function(){debounce('status',canonicalStatus,40);});S.observer.observe(bar,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['style','class','data-badge']});}
+  function desktopLift(){if(document.getElementById('tasun-raci-r268-r269-desktop-lift-style'))return;var st=document.createElement('style');st.id='tasun-raci-r268-r269-desktop-lift-style';st.textContent='@media (min-width:821px){.topbar{padding-top:2px!important;padding-bottom:6px!important}.topbar .brand{position:relative!important;top:-22px!important;transform:translateY(-22px)!important}.topbar .title{margin-top:-8px!important}#btnSearch,#btnShowAll,#editMenuWrap{position:relative!important;top:-18px!important;transform:translateY(-18px)!important}.right{align-items:flex-start!important;padding-top:0!important}}';document.head.appendChild(st);}
+  function protectAdminPublish(){var role='';try{role=n(JSON.parse(sessionStorage.getItem('tasunCurrentUser_v1')||localStorage.getItem('tasunCurrentUser_v1')||'{}').role).toLowerCase();}catch(_e){}qa('button,a').forEach(function(el){var s=n(el.textContent||el.value||el.id||'');if(!/發布|發佈|publish/i.test(s))return;if(role!=='admin'){el.setAttribute('aria-disabled','true');el.classList.add('tasun-nonadmin-disabled');bindOnce(el,'click',function(ev){ev.preventDefault();ev.stopPropagation();warn('非 admin 不可發布正式版');},'adminPublishGuard',true);}});}
 
-    Array.prototype.slice.call(badge.childNodes).forEach(function(n){
-      if(n.nodeType === 3 && norm(n.textContent)) n.textContent = '';
-    });
+  async function readCloud(){try{if(typeof window.readCloudRows==='function'){var rows=await window.readCloudRows({reason:'r268-r269-authority-read'});if(Array.isArray(rows)){S.cloudRows=dedupe(rows);S.cloudDone=true;S.lastCloudAt=Date.now();window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__=S.cloudRows.slice();if(S.cloudRows.length)saveLocal(S.cloudRows);return S.cloudRows;}}}catch(e){warn('readCloud: '+(e&&e.message||e));}return null;}
+  async function cloudRoundtrip(reason){if(S.cloudRunning)return false;S.cloudRunning=true;try{canonicalStatus();var local=dedupe(localRows());var cloud=await readCloud();var merged=dedupe([].concat(cloud||[],local));if(merged.length)saveLocal(merged);if(typeof window.mergeCloudRows==='function'&&merged.length)await window.mergeCloudRows(merged,{reason:reason||'r268-r269-roundtrip'});else if(typeof window.syncCloud==='function')await window.syncCloud(reason||'r268-r269-roundtrip');else if(typeof window.scheduleCloudSync==='function')window.scheduleCloudSync(reason||'r268-r269-roundtrip',80);var finalRows=await readCloud();if(finalRows&&finalRows.length)saveLocal(finalRows);S.cloudDone=true;canonicalStatus();return true;}catch(e){warn('cloudRoundtrip: '+(e&&e.message||e));S.cloudDone=true;canonicalStatus();return false;}finally{S.cloudRunning=false;}}
 
-    badge.setAttribute('data-r269-single-status','1');
-    if(name === 'cloud') badge.classList.toggle('bad', /異常|待同步|失敗|錯誤|離線/.test(value));
-  }
-  function canonicalizeStatusBar(){
-    if(STATE.running) return;
-    STATE.running = true;
-    try{
-      var bars = qa('#statusBar, .raciStatusBar');
-      var first = bars[0];
-      bars.forEach(function(bar, idx){
-        if(idx > 0 && bar !== first) bar.style.display = 'none';
-      });
-      if(!first){ STATE.running = false; return; }
-      first.setAttribute('data-r269-single-authority','1');
-
-      var keep = Object.create(null);
-      qa('[data-badge]', first).forEach(function(badge){
-        var name = norm(badge.getAttribute('data-badge'));
-        if(keep[name]){
-          badge.setAttribute('data-r269-hidden','1');
-          badge.style.display = 'none';
-          return;
-        }
-        keep[name] = badge;
-        badge.removeAttribute('data-r269-hidden');
-        if(name === 'duplicate'){
-          if(norm(badge.style.display) === '') badge.style.display = 'none';
-          return;
-        }
-        normalizeBadge(badge, name);
-      });
-
-      qa('#btnDupReport', first).forEach(function(btn){
-        if(norm(btn.style.display) === '') btn.style.display = 'none';
-      });
-    }finally{
-      STATE.running = false;
-    }
-  }
-
-  function patchStatusWriters(){
-    if(window.__TASUN_RACI_R269_STATUS_WRITERS_PATCHED__) return;
-    window.__TASUN_RACI_R269_STATUS_WRITERS_PATCHED__ = true;
-    ['setRaciBadge','updateRaciStatus','setCloudSyncStatus','setCloudStatusFromActual'].forEach(function(fn){
-      if(typeof window[fn] !== 'function') return;
-      var old = window[fn];
-      window[fn] = function(){
-        var ret = old.apply(this, arguments);
-        setTimeout(canonicalizeStatusBar, 0);
-        setTimeout(canonicalizeStatusBar, 120);
-        return ret;
-      };
-    });
-  }
-  function installObserver(){
-    if(STATE.observer) return;
-    var bar = document.getElementById('statusBar') || document.querySelector('.raciStatusBar');
-    if(!bar || typeof MutationObserver === 'undefined') return;
-    STATE.observer = new MutationObserver(function(){
-      debounce('statusMutation', canonicalizeStatusBar, 60);
-    });
-    STATE.observer.observe(bar, {childList:true, subtree:true, characterData:true, attributes:true, attributeFilter:['style','class','data-badge']});
-  }
-  function installDesktopLift(){
-    if(document.getElementById('tasun-raci-r269-desktop-lift-style')) return;
-    var st = document.createElement('style');
-    st.id = 'tasun-raci-r269-desktop-lift-style';
-    st.textContent = [
-      '@media (min-width:821px){',
-      '.topbar{padding-top:6px!important;padding-bottom:8px!important;}',
-      '.topbar .brand{transform:translateY(-16px)!important;}',
-      '.topbar .title{margin-top:-4px!important;}',
-      '#btnSearch,#btnShowAll,#editMenuWrap{transform:translateY(-12px)!important;}',
-      '}'
-    ].join('\n');
-    document.head.appendChild(st);
-  }
-  function ensureTableIdentity(){
-    var table = document.getElementById((G && G.TABLE_ID) || 'raciTable') || document.querySelector('table');
-    if(!table) return;
-    table.id = (G && G.TABLE_ID) || 'raciTable';
-    table.setAttribute('data-page-key', (G && G.PAGE_KEY) || 'raci-sxdh-simple');
-    table.setAttribute('data-resource-key', (G && G.RESOURCE_KEY) || 'raci-sxdh-simple');
-    table.setAttribute('data-db-name', (G && G.DB_NAME) || 'tasun_raci_sxdh_simple_db_v117');
-    table.setAttribute('data-storage-key', (G && G.STORAGE_KEY) || 'tasunRACI_Simple_v2');
-    table.setAttribute('data-has-individual-id','true');
-  }
-  function tightenTextControls(){
-    qa('input[type="text"], input:not([type]), textarea').forEach(function(el){
-      var old = String(el.value || '');
-      var next = old.replace(/[\t\r\n\u3000]+/g,' ').replace(/([\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g,'$1').replace(/\s{2,}/g,' ').trim();
-      if(old !== next) el.value = next;
-    });
-    qa('select option').forEach(function(opt){
-      var t = norm(opt.textContent).replace(/([\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g,'$1').replace(/\s{2,}/g,' ');
-      var v = norm(opt.value).replace(/([\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g,'$1').replace(/\s{2,}/g,' ');
-      if(opt.textContent !== t) opt.textContent = t;
-      if(opt.value !== v) opt.value = v;
-    });
-  }
-  function registerSelfHeal(){
-    try{
-      var core = window.TasunSelfHealV5 = window.TasunSelfHealV5 || {features:{},register:function(k,f){this.features[k]=f||{};}};
-      if(typeof core.register === 'function'){
-        core.register('raciStatusSingleAuthorityR269',{
-          check:function(){ return true; },
-          repair:function(){ canonicalizeStatusBar(); return true; },
-          verify:function(){ return true; },
-          coolDownMs:900,
-          maxRetry:6
-        });
-        core.register('raciDesktopTitleButtonsLiftR269',{
-          check:function(){ return !!document.getElementById('tasun-raci-r269-desktop-lift-style'); },
-          repair:function(){ installDesktopLift(); return true; },
-          verify:function(){ return !!document.getElementById('tasun-raci-r269-desktop-lift-style'); },
-          coolDownMs:900,
-          maxRetry:6
-        });
-      }
-    }catch(_e){}
-  }
-  function controlledCloudKick(){
-    if(window.__TASUN_RACI_R269_CLOUD_KICK_DONE__) return;
-    window.__TASUN_RACI_R269_CLOUD_KICK_DONE__ = true;
-    try{
-      if(typeof window.__TASUN_RACI_CLOUD_ROUNDTRIP_DEDUPE__ === 'function'){
-        window.__TASUN_RACI_CLOUD_ROUNDTRIP_DEDUPE__('r269-status-repair');
-      }else if(typeof window.syncCloud === 'function'){
-        window.syncCloud('r269-status-repair');
-      }else if(typeof window.scheduleCloudSync === 'function'){
-        window.scheduleCloudSync('r269-status-repair', 120);
-      }
-    }catch(_e){}
-  }
-  function run(reason){
-    var t = Date.now();
-    if((t - STATE.last) < STATE.cooldown && reason !== 'force') return;
-    STATE.last = t;
-    ensureTableIdentity();
-    tightenTextControls();
-    patchStatusWriters();
-    installDesktopLift();
-    registerSelfHeal();
-    canonicalizeStatusBar();
-    installObserver();
-    window.__TASUN_RACI_R269_LAST_RUN__ = {reason:reason || 'manual', at:new Date().toISOString()};
-  }
-
-  function boot(){
-    run('boot');
-    controlledCloudKick();
-    [150,500,1000,1800,3000,5000,8000,12000].forEach(function(ms){
-      setTimeout(function(){ run('boot-'+ms); }, ms);
-    });
-  }
-  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, {once:true, passive:true});
-  else boot();
-  ['pageshow','resize','orientationchange','focus','visibilitychange'].forEach(function(ev){
-    window.addEventListener(ev, function(){ debounce('run-'+ev, function(){ run(ev); }, 160); }, {passive:true});
-  });
+  function registerSelfHeal(){try{var core=window.TasunSelfHealV5=window.TasunSelfHealV5||{features:{},register:function(k,f){this.features[k]=f||{};}};if(typeof core.register==='function'){core.register('raciR268R269StatusSingleAuthority',{check:function(){return true;},repair:function(){canonicalStatus();return true;},verify:function(){return true;},coolDownMs:900,maxRetry:6});core.register('raciR268R269DesktopLift',{check:function(){return !!document.getElementById('tasun-raci-r268-r269-desktop-lift-style');},repair:function(){desktopLift();return true;},verify:function(){return !!document.getElementById('tasun-raci-r268-r269-desktop-lift-style');},coolDownMs:900,maxRetry:6});core.register('raciR268R269CloudRoundtrip',{check:function(){return true;},repair:function(){cloudRoundtrip('selfheal');return true;},verify:function(){return true;},coolDownMs:1800,maxRetry:3});}}catch(_e){}}
+  function run(reason){var t=Date.now();if(t-S.last<Number(G.SELFHEAL_COOLDOWN_MS||900)&&reason!=='force')return;S.last=t;ensureTable();normalizeInputs();patchWriters();desktopLift();protectAdminPublish();registerSelfHeal();canonicalStatus();observeStatus();window.__TASUN_RACI_R268_R269_LAST_RUN__={reason:reason||'manual',at:new Date().toISOString()};}
+  window.__TASUN_RACI_CLOUD_ROUNDTRIP_DEDUPE__=cloudRoundtrip;window.__TASUN_RACI_R268_RUN_SELFHEAL__=run;window.__TASUN_RACI_R269_STATUS_SINGLE_AUTHORITY_RUN__=canonicalStatus;
+  function boot(){run('boot');cloudRoundtrip('boot');[150,500,1000,1800,3000,5000,8000,12000].forEach(function(ms){setTimeout(function(){run('boot-'+ms);canonicalStatus();},ms);});}
+  bindOnce(document,'input',function(){debounce('input',normalizeInputs,160);},'input',true);bindOnce(document,'change',function(){debounce('change',normalizeInputs,80);},'change',true);['pageshow','resize','orientationchange','focus','visibilitychange'].forEach(function(ev){bindOnce(window,ev,function(){debounce(ev,function(){run(ev);},160);},ev,true);});if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true,passive:true});else boot();
 })();
