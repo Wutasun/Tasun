@@ -1,6 +1,7 @@
 /* Tasun Version Loader v6 core-chain aligned
  * 正式版號唯一來源：tasun-version.json -> version
  * 核心收斂：version + rebuild stamp + 遠端實頁 比對統一由本檔處理
+ * R268：權責分工頁載入獨立 tasun-raci-r268-selfheal.js 模組
  */
 (function(){
   "use strict";
@@ -163,6 +164,38 @@
     return false;
   }
 
+  function isRaciR268Page(){
+    var G = getGlobals();
+    var file = norm(G.PAGE_FILE || decodeURIComponent(location.pathname.split('/').pop() || ''));
+    var key = norm(G.PAGE_KEY || window.__TASUN_PAGE_KEY__ || '');
+    return key === 'raci-sxdh-simple' || file === '捷運汐東線權責分工精簡版.html';
+  }
+
+  function loadR268SelfHeal(){
+    try{
+      if(!isRaciR268Page()) return false;
+      if(window.__TASUN_RACI_R268_SELFHEAL_BASELINE__ || document.getElementById('tasun-raci-r268-selfheal-js')) return true;
+      var s = document.createElement('script');
+      s.id = 'tasun-raci-r268-selfheal-js';
+      s.src = addVer('tasun-raci-r268-selfheal.js', window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || currentUrlVersion() || '');
+      s.async = false;
+      s.defer = true;
+      s.setAttribute('data-tasun-selfheal', 'r268');
+      s.onerror = function(){ try{ console.warn('[Tasun Version Loader] R268 self-heal module load failed'); }catch(_e){} };
+      (document.head || document.documentElement).appendChild(s);
+      return true;
+    }catch(_e){ return false; }
+  }
+
+  function scheduleR268SelfHealLoad(){
+    if(document.readyState === 'loading'){
+      document.addEventListener('DOMContentLoaded', loadR268SelfHeal, { once:true, passive:true });
+    }else{
+      loadR268SelfHeal();
+    }
+    window.addEventListener('pageshow', loadR268SelfHeal, { passive:true });
+  }
+
   (async function(){
     try{
       var cached = readCache();
@@ -179,6 +212,7 @@
 
       setGlobals(ver, cfg);
       saveCache(ver, stamp);
+      scheduleR268SelfHealLoad();
       var redirected = await maybeRedirect(ver, stamp);
       if(redirected) return;
       READY_RESOLVE(true);
@@ -186,6 +220,7 @@
       var cached = readCache();
       var fallback = norm(currentUrlVersion() || (cached && cached.ver) || NON_FORMAL_FALLBACK);
       setGlobals(fallback, null);
+      scheduleR268SelfHealLoad();
       READY_RESOLVE(true);
     }
   })();
