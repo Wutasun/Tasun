@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r269-status-single-authority based-on-latest-upload-20260509 -->
+  <!-- tasun-raci-r270-cloud-authority-inside-core based-on-latest-upload-20260509 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260509_tasun_v5_raci_r269_status_single_authority">
+  <meta name="tasun-build-stamp" content="20260509_tasun_v5_raci_r270_cloud_authority_inside_core">
     
 
 
@@ -4509,6 +4509,19 @@ body.searchOpen #searchPanel .filterComboItem.active,
 .raciStatusBar[data-r269-single-authority="1"] .raciBadge[data-r269-hidden="1"]{
   display:none!important;
 }
+</style>
+
+
+<style id="tasun-raci-r270-cloud-authority-style">
+@media (min-width:821px){
+  .topbar{padding-top:2px!important;padding-bottom:6px!important;}
+  .topbar .brand{position:relative!important;top:-22px!important;transform:translateY(-22px)!important;}
+  .topbar .title{margin-top:-8px!important;}
+  #btnSearch,#btnShowAll,#editMenuWrap{position:relative!important;top:-18px!important;transform:translateY(-18px)!important;}
+  .right{align-items:flex-start!important;padding-top:0!important;}
+}
+.raciStatusBar[data-r268-r269-single-authority="1"] .raciBadge[data-r268-r269-hidden="1"]{display:none!important;}
+.raciStatusBar .raciBadge .v{white-space:nowrap!important;}
 </style>
 
 </head>
@@ -9131,10 +9144,93 @@ body.searchOpen #searchPanel #btnCloseSearch{
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
   ['resize','orientationchange','pageshow','focus'].forEach(function(ev){ window.addEventListener(ev, function(){ schedule(ev); }, {passive:true}); });
+
+  /* r270：雲端權威資料必須在原核心閉包內修復，避免外部 JS 讀不到 db / render / syncCloud 造成手機 0/0 */
+  async function repairCloudAuthorityR270(reason){
+    if(window.__TASUN_RACI_R270_REPAIRING__) return false;
+    window.__TASUN_RACI_R270_REPAIRING__ = true;
+    try{
+      try{ setRaciBadge('cloud', '同步檢查中'); }catch(_e){}
+      const cloudRows = await readCloudRows().catch(function(){ return []; });
+      const localRows = [].concat(
+        db || [],
+        deletedRows || [],
+        parseRows(localStorage.getItem(CFG.DB_KEY)),
+        parseRows(localStorage.getItem(CFG.DELETED_KEY)),
+        parseRows(localStorage.getItem(CFG.LEGACY_DB_KEY)),
+        await readIdbRows().catch(function(){ return []; })
+      );
+      const merged = cleanupLocalRowsR131('r270-cloud-authority-inside-core', [].concat(cloudRows || [], localRows || []));
+      db = activeRows(merged).sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
+      deletedRows = dedupeRows(merged.filter(r => r && r.deleted && !isSystemRowR133(r)), true);
+      saveDB();
+      render();
+
+      const uploadRows = dedupeRows(merged, true);
+      if(uploadRows.length){
+        try{ await mergeCloudRows(uploadRows); }catch(_e){}
+      }
+      const finalCloud = await readCloudRows().catch(function(){ return []; });
+      const finalMerged = cleanupLocalRowsR131('r270-cloud-authority-final-download', [].concat(finalCloud || [], merged || []));
+      db = activeRows(finalMerged).sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
+      deletedRows = dedupeRows(finalMerged.filter(r => r && r.deleted && !isSystemRowR133(r)), true);
+      saveDB();
+      render();
+
+      const count = Array.isArray(db) ? db.length : 0;
+      if(count > 0){
+        setCloudSyncStatus('同步', reason || 'r270-cloud-authority-inside-core', { cloudCount:count, actualRows:count, r270:true });
+        updateRaciStatus(count, count);
+        window.__TASUN_RACI_LAST_RENDERED_COUNT__ = count;
+      }else{
+        setRaciBadge('count', '0 / 0');
+        setRaciBadge('cloud', '雲端無資料');
+        setRaciBadge('last', '等待雲端資料');
+      }
+      window.__TASUN_RACI_R270_LAST_REPAIR__ = { reason:String(reason||''), rows:count, at:new Date().toISOString() };
+      return true;
+    }catch(err){
+      window.__TASUN_RACI_R270_LAST_ERROR__ = { message:String(err && err.message || err), at:new Date().toISOString() };
+      try{ setCloudSyncStatus('同步異常', 'r270-cloud-authority-error'); }catch(_e){}
+      return false;
+    }finally{
+      window.__TASUN_RACI_R270_REPAIRING__ = false;
+    }
+  }
+
+  window.__TASUN_RACI_INTERNAL__ = Object.assign(window.__TASUN_RACI_INTERNAL__ || {}, {
+    repairCloudAuthorityR270: repairCloudAuthorityR270,
+    syncCloud: syncCloud,
+    readCloudRows: readCloudRows,
+    mergeCloudRows: mergeCloudRows,
+    render: render,
+    updateRaciStatus: updateRaciStatus,
+    setRaciBadge: setRaciBadge
+  });
+  window.__TASUN_RACI_FORCE_AUTHORITY_SYNC__ = repairCloudAuthorityR270;
+
+  try{
+    if(window.TasunSelfHealV5 && typeof window.TasunSelfHealV5.register === 'function'){
+      window.TasunSelfHealV5.register('raciCloudAuthorityInsideCoreR270', {
+        check:function(){ return true; },
+        repair:function(){ repairCloudAuthorityR270('selfheal-r270'); return true; },
+        verify:function(){ return true; },
+        coolDownMs:1800,
+        maxRetry:4
+      });
+    }
+  }catch(_e){}
+
+  setTimeout(function(){ repairCloudAuthorityR270('boot-r270-800'); }, 800);
+  setTimeout(function(){ repairCloudAuthorityR270('boot-r270-2200'); }, 2200);
+  setTimeout(function(){ repairCloudAuthorityR270('boot-r270-5200'); }, 5200);
+  window.addEventListener('pageshow', function(){ setTimeout(function(){ repairCloudAuthorityR270('pageshow-r270'); }, 500); }, { passive:true });
+  document.addEventListener('visibilitychange', function(){
+    if(document.visibilityState === 'visible') setTimeout(function(){ repairCloudAuthorityR270('visible-r270'); }, 500);
+  }, { passive:true });
+
 })();
 </script>
-
-
 <script id="tasun-raci-r268-selfheal-explicit-loader">
 (function(){
   'use strict';
