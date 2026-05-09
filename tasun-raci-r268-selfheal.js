@@ -1,381 +1,321 @@
-/*
-  Tasun RACI R268 統一修補模組（正式引入版）
-  適用檔案：捷運汐東線權責分工精簡版.html
-  目的：把本次需求納入 Tasun v5 + TasunSelfHealV5 + R268 統一自我修復檢查基準。
-  使用方式：併入既有 TasunSelfHealV5 統一核心，或置於頁面主程式最後、</body> 前。
-  原則：不分散補丁到 btnClose / btnCancel / btnDelete / btnSave；所有修復由統一核心 check / repair / verify 控制。
-*/
 (function(){
   'use strict';
-  if(window.__TASUN_RACI_R268_SELFHEAL_BASELINE__) return;
-  window.__TASUN_RACI_R268_SELFHEAL_BASELINE__ = true;
+  if(window.__TASUN_RACI_R269_STATUS_SINGLE_AUTHORITY__) return;
+  window.__TASUN_RACI_R269_STATUS_SINGLE_AUTHORITY__ = true;
 
-  var G = window.__TASUN_GLOBALS__ = Object.assign({
-    PAGE_KEY: 'raci-sxdh-simple',
-    PAGE_FILE: '捷運汐東線權責分工精簡版.html',
-    TABLE_ID: 'raciTable',
-    DB_NAME: 'tasun_raci_sxdh_simple_db_v117',
-    RESOURCE_KEY: 'raci-sxdh-simple',
-    STORAGE_KEY: 'tasunRACI_Simple_v2',
-    VERSION_JSON: 'tasun-version.json',
-    FETCH_TIMEOUT_MS: 6000,
-    SELFHEAL_COOLDOWN_MS: 1200,
-    SELFHEAL_MAX_RETRY: 3
-  }, window.__TASUN_GLOBALS__ || {});
-
-  var state = {
+  var G = window.__TASUN_GLOBALS__ || {};
+  var STATE = {
     running:false,
-    lastRun:0,
-    retry:Object.create(null),
+    last:0,
     timers:Object.create(null),
-    aborters:Object.create(null),
-    cloudRoundtripRunning:false,
-    firstCloudReadDone:false,
-    lastCloudRows:null,
-    lastCloudAt:0,
-    warningShown:false
+    observer:null,
+    cooldown:180,
+    cloudChecked:false
   };
 
-  function $(id){ return document.getElementById(id); }
+  function norm(v){ return String(v == null ? '' : v).trim(); }
   function q(sel, root){ return (root || document).querySelector(sel); }
   function qa(sel, root){ return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
-  function text(el){ return el ? String(el.textContent || el.value || '').trim() : ''; }
-  function now(){ return Date.now(); }
-  function norm(v){ return String(v == null ? '' : v).trim(); }
-  function warn(msg){
-    try{ console.warn('[TasunSelfHealV5][RACI-R268]', msg); }catch(_e){}
-    try{ if(typeof window.toast === 'function') window.toast('自我修復警告：' + msg); }catch(_e){}
-  }
   function debounce(key, fn, delay){
-    clearTimeout(state.timers[key]);
-    state.timers[key] = setTimeout(fn, delay || 120);
+    clearTimeout(STATE.timers[key]);
+    STATE.timers[key] = setTimeout(fn, delay || 120);
   }
-  function abortKey(key){
-    try{ if(state.aborters[key]) state.aborters[key].abort(); }catch(_e){}
-    state.aborters[key] = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-    return state.aborters[key];
-  }
-  function bindOnce(el, ev, fn, key, opts){
-    if(!el || !ev || !fn) return;
-    var mark = '__tasunBindOnce_' + ev + '_' + (key || fn.name || 'handler');
-    if(el[mark]) return;
-    el[mark] = true;
-    el.addEventListener(ev, fn, opts || false);
-  }
+  function safeJSON(raw){ try{ return JSON.parse(raw); }catch(_e){ return null; } }
 
-  /* 中文段落中間多餘空白清除：只清 CJK 文字段落內空格，不破壞英文、IV&V、日期、網址。 */
-  function tightCjkText(v){
-    return norm(v)
-      .replace(/[\t\r\n\u3000]+/g, ' ')
-      .replace(/([\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g, '$1')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
-  }
-  function normalizeRowText(row){
-    if(!row || typeof row !== 'object') return row;
-    Object.keys(row).forEach(function(k){
-      if(typeof row[k] === 'string') row[k] = tightCjkText(row[k]);
-    });
-    return row;
-  }
-  function normalizeVisibleTextInputs(){
-    qa('input[type="text"], input:not([type]), textarea').forEach(function(el){
-      var old = String(el.value || '');
-      var next = tightCjkText(old);
-      if(old !== next) el.value = next;
-    });
-    qa('select option').forEach(function(opt){
-      var t = tightCjkText(opt.textContent || '');
-      var v = tightCjkText(opt.value || '');
-      if(opt.textContent !== t) opt.textContent = t;
-      if(opt.value !== v) opt.value = v;
-    });
-  }
-
-  function ensureTableIdentity(){
-    var table = $(G.TABLE_ID) || q('table[data-resource-key="' + G.RESOURCE_KEY + '"]') || q('table');
-    if(!table) return false;
-    if(!table.id) table.id = G.TABLE_ID;
-    table.setAttribute('data-page-key', G.PAGE_KEY);
-    table.setAttribute('data-page-file', G.PAGE_FILE);
-    table.setAttribute('data-table-id', G.TABLE_ID);
-    table.setAttribute('data-resource-key', G.RESOURCE_KEY);
-    table.setAttribute('data-db-name', G.DB_NAME);
-    table.setAttribute('data-storage-key', G.STORAGE_KEY);
-    table.setAttribute('data-has-individual-id', 'true');
-    window.__TASUN_PAGE_KEY__ = G.PAGE_KEY;
-    window.__TASUN_PAGE_FILE__ = G.PAGE_FILE;
-    window.__TASUN_TABLE_ID__ = G.TABLE_ID;
-    window.__TASUN_DB_NAME__ = G.DB_NAME;
-    window.__TASUN_RESOURCE_KEY__ = G.RESOURCE_KEY;
-    window.__TASUN_STORAGE_KEY__ = G.STORAGE_KEY;
-    return true;
-  }
-
-  function requiredDomOk(){
-    var missing = [];
-    if(!$(G.TABLE_ID) && !q('table[data-resource-key="' + G.RESOURCE_KEY + '"]')) missing.push('table#' + G.TABLE_ID);
-    if(!$('tbody') && !q('#' + G.TABLE_ID + ' tbody')) missing.push('tbody');
-    if(!$('tableWrap') && !q('.tableWrap') && !q('.table-wrap')) missing.push('tableWrap');
-    if(missing.length){
-      if(!state.warningShown){
-        state.warningShown = true;
-        warn('必要 DOM 缺失，已中止相關綁定：' + missing.join('、'));
-      }
-      return false;
-    }
-    return true;
-  }
-
-  function rowsFromLocal(){
-    var rows = [];
-    try{
-      var raw = localStorage.getItem(G.STORAGE_KEY) || sessionStorage.getItem(G.STORAGE_KEY) || '[]';
-      var parsed = JSON.parse(raw);
-      if(Array.isArray(parsed)) rows = parsed;
-      else if(parsed && Array.isArray(parsed.rows)) rows = parsed.rows;
-    }catch(_e){}
-    try{
-      if(Array.isArray(window.db) && window.db.length > rows.length) rows = window.db;
-    }catch(_e){}
-    return rows.filter(function(r){ return r && !r.deleted && !r._deleted; });
+  function parseRows(raw){
+    var x = safeJSON(raw || '');
+    if(Array.isArray(x)) return x;
+    if(x && Array.isArray(x.rows)) return x.rows;
+    if(x && Array.isArray(x.db)) return x.db;
+    if(x && Array.isArray(x.items)) return x.items;
+    return [];
   }
   function rowKey(r){
     return norm(r && (r.uid || r.pk || r._uid || r.id || [r.stage,r.focus,r.project].join('|')));
   }
   function rowRev(r){
-    return Number(r && (r.rev || r.updatedAt || r.deletedAt || 0)) || 0;
+    var v = r && (r.rev || r.updatedAt || r.deletedAt || 0);
+    var n = Number(v);
+    return isFinite(n) ? n : (Date.parse(v) || 0);
   }
   function dedupeRows(rows){
     var map = Object.create(null);
     (rows || []).forEach(function(raw){
-      var r = normalizeRowText(Object.assign({}, raw || {}));
+      if(!raw || typeof raw !== 'object') return;
+      var r = Object.assign({}, raw);
       var key = rowKey(r);
       if(!key) return;
+      if(!r.uid) r.uid = key;
+      if(!r.pk) r.pk = r.uid;
+      if(r.rev == null) r.rev = 0;
+      if(!r.updatedAt) r.updatedAt = new Date().toISOString();
+      if(r.deleted == null) r.deleted = false;
       var old = map[key];
       if(!old || rowRev(r) >= rowRev(old)) map[key] = r;
     });
     return Object.keys(map).map(function(k){ return map[k]; });
   }
-  function saveLocalRows(rows){
-    rows = dedupeRows(rows || []);
-    try{ localStorage.setItem(G.STORAGE_KEY, JSON.stringify(rows)); }catch(_e){}
-    try{ sessionStorage.setItem(G.STORAGE_KEY, JSON.stringify(rows)); }catch(_e){}
-    try{ if(Array.isArray(window.db)){ window.db.splice(0, window.db.length); Array.prototype.push.apply(window.db, rows.filter(function(r){ return !r.deleted && !r._deleted; })); } }catch(_e){}
-    try{ if(typeof window.saveDB === 'function') window.saveDB(); }catch(_e){}
-    try{ if(typeof window.render === 'function') window.render(); }catch(_e){}
-    return rows;
-  }
-
-  async function readCloudAuthority(){
-    var ctl = abortKey('cloudRead');
-    try{
-      if(typeof window.readCloudRows === 'function'){
-        var rows = await window.readCloudRows({ signal: ctl && ctl.signal, reason:'r268-authority-read' });
-        if(Array.isArray(rows)){
-          state.firstCloudReadDone = true;
-          state.lastCloudRows = dedupeRows(rows);
-          state.lastCloudAt = now();
-          document.dispatchEvent(new CustomEvent('tasun:raci:cloud-read-done', { detail:{ rows: state.lastCloudRows.length } }));
-          return state.lastCloudRows;
-        }
-      }
-    }catch(_e){}
-    return null;
-  }
-  async function cloudRoundtripDedupe(reason){
-    if(state.cloudRoundtripRunning) return false;
-    state.cloudRoundtripRunning = true;
-    try{
-      setStatusText('雲端', '同步檢查中');
-      var local = dedupeRows(rowsFromLocal());
-      var cloud = await readCloudAuthority();
-      var merged = dedupeRows([].concat(cloud || [], local));
-      if(cloud && cloud.length && !local.length) saveLocalRows(merged);
-      else saveLocalRows(merged);
-      if(typeof window.mergeCloudRows === 'function' && merged.length){
-        await window.mergeCloudRows(merged, { reason: reason || 'r268-roundtrip-dedupe' });
-      }
-      var finalCloud = await readCloudAuthority();
-      if(finalCloud && finalCloud.length) saveLocalRows(finalCloud);
-      repairStatusBar();
-      setStatusText('雲端', '已同步');
-      return true;
-    }catch(_e){
-      setStatusText('雲端', '同步異常');
-      return false;
-    }finally{
-      state.cloudRoundtripRunning = false;
-    }
-  }
-  function wrapScheduleCloudSync(){
-    if(window.__TASUN_RACI_R268_SCHEDULE_WRAPPED__) return;
-    if(typeof window.scheduleCloudSync !== 'function') return;
-    window.__TASUN_RACI_R268_SCHEDULE_WRAPPED__ = true;
-    var old = window.scheduleCloudSync;
-    window.scheduleCloudSync = function(reason, delay){
-      var args = arguments;
-      debounce('cloudRoundtrip:' + (reason || 'sync'), function(){ cloudRoundtripDedupe(reason || 'scheduleCloudSync'); }, Math.max(50, Number(delay || 80)));
-      try{ return old.apply(this, args); }catch(_e){ return undefined; }
-    };
-  }
-
-  function findStatusNodes(label){
-    var nodes = [];
-    qa('span,div,b,em,small').forEach(function(el){
-      var s = text(el);
-      if(s.indexOf(label) >= 0 || (el.id && el.id.toLowerCase().indexOf(label.toLowerCase()) >= 0)) nodes.push(el);
+  function localRows(){
+    var storageKey = norm(G.STORAGE_KEY || 'tasunRACI_Simple_v2');
+    var keys = [storageKey, 'tasunRACI_Simple_v2', 'tasunRACI_Simple_v1', 'tasunRACI_Simple_last_good_v117'];
+    var rows = [];
+    keys.forEach(function(k){
+      try{ rows = rows.concat(parseRows(localStorage.getItem(k) || sessionStorage.getItem(k) || '')); }catch(_e){}
     });
-    return nodes;
+    try{ if(Array.isArray(window.db)) rows = rows.concat(window.db); }catch(_e){}
+    try{ if(Array.isArray(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__)) rows = rows.concat(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__); }catch(_e){}
+    return dedupeRows(rows).filter(function(r){ return r && !r.deleted && !r._deleted && !r.systemRow && !r._system; });
   }
-  function setStatusText(label, value){
-    value = norm(value);
-    var badgeMap = { '版本':'version', '筆數':'count', '雲端':'cloud', '最後':'last' };
-    var badgeName = badgeMap[label] || '';
-    if(badgeName){
-      qa('.raciBadge[data-badge="' + badgeName + '"] .v, [data-badge="' + badgeName + '"] .v').forEach(function(el){ el.textContent = value; });
-      qa('.raciBadge[data-badge="' + badgeName + '"], [data-badge="' + badgeName + '"]').forEach(function(el){
-        el.setAttribute('data-r268-status', value);
-        if(label === '雲端') el.classList.toggle('bad', /異常|失敗|錯誤|離線|待下載/i.test(value));
-      });
-    }
-    var byId = {
-      '版本':['appVer','versionText','statusVersion','verStatus'],
-      '筆數':['rowCount','rowsCount','statusRows','dataCount'],
-      '雲端':['cloudStatus','syncStatus','statusCloud'],
-      '最後':['lastSync','lastStatus','statusLast']
-    }[label] || [];
-    byId.some(function(id){ var el=$(id); if(el){ el.textContent = value; return true; } return false; });
-    findStatusNodes(label).forEach(function(el){
-      if(el.children && el.children.length) return;
-      var s = text(el);
-      if(s === label || s.indexOf(label + '：') === 0 || s.indexOf(label + ':') === 0){ el.textContent = label + '：' + value; }
-    });
+  function renderedCount(){
+    var tableId = norm(G.TABLE_ID || 'raciTable');
+    var tbody = q('#' + tableId + ' tbody') || q('tbody');
+    if(!tbody) return 0;
+    return qa('tr', tbody).filter(function(tr){
+      var s = norm(tr.textContent).replace(/[\s\-—]/g,'');
+      return !!s;
+    }).length;
   }
-  function cloudCountFromStoredStatus(){
+  function storedCloudCount(){
     var keys = ['tasunRACI_Simple_cloud_status_v151','tasunRACI_Simple_cloud_status_v143','tasunRACI_Simple_cloud_status_v118'];
     for(var i=0;i<keys.length;i++){
       try{
-        var raw = localStorage.getItem(keys[i]) || '';
-        if(!raw) continue;
-        var row = JSON.parse(raw);
-        var n = Number(row && (row.cloudCount != null ? row.cloudCount : (row.count != null ? row.count : row.actualRows)));
+        var row = safeJSON(localStorage.getItem(keys[i]) || '');
+        var n = Number(row && (row.cloudCount != null ? row.cloudCount : (row.actualRows != null ? row.actualRows : row.count)));
         if(isFinite(n) && n > 0) return n;
       }catch(_e){}
     }
     return 0;
   }
-  function repairStatusBar(){
-    var localRows = rowsFromLocal();
-    var cloudRows = state.lastCloudRows || [];
-    var actual = Math.max(localRows.length, cloudRows.filter(function(r){ return r && !r.deleted && !r._deleted; }).length, cloudCountFromStoredStatus());
-    var appVer = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || '');
-    var build = norm(window.__TASUN_PAGE_BUILD_STAMP__ || (G.PAGE_BUILD_STAMP || ''));
-    if(appVer || build) setStatusText('版本', appVer || build);
-    else setStatusText('版本', '待版本檔');
-    setStatusText('筆數', String(actual) + '/' + String(actual));
-    if(!state.firstCloudReadDone && actual === 0){
-      setStatusText('雲端', '同步檢查中');
-      setStatusText('最後', '等待雲端資料');
-    }else if(actual === 0){
-      setStatusText('雲端', '雲端無資料');
-      setStatusText('最後', new Date().toLocaleString('zh-TW'));
-    }else{
-      setStatusText('雲端', '已同步');
-      setStatusText('最後', state.lastCloudAt ? new Date(state.lastCloudAt).toLocaleString('zh-TW') : new Date().toLocaleString('zh-TW'));
+  function actualCount(){
+    return Math.max(
+      localRows().length,
+      renderedCount(),
+      Number(window.__TASUN_RACI_LAST_RENDERED_COUNT__ || 0) || 0,
+      storedCloudCount()
+    );
+  }
+
+  function labelOf(name){
+    return ({version:'版本', count:'筆數', cloud:'雲端', last:'最後', duplicate:'重複'})[name] || name;
+  }
+  function cleanRepeated(value, type){
+    var s = norm(value).replace(/\s+/g,' ');
+    if(type === 'count'){
+      var m = s.match(/(\d+)\s*\/\s*(\d+)/);
+      return m ? (m[1] + ' / ' + m[2]) : s;
+    }
+    if(type === 'cloud'){
+      if(/同步異常|待同步|失敗|錯誤|離線/.test(s)) return s.match(/同步異常|待同步|失敗|錯誤|離線/)[0];
+      if(/已同步/.test(s) && actualCount() > 0) return '已同步';
+      if(/雲端無資料/.test(s)) return '雲端無資料';
+      return '同步檢查中';
+    }
+    if(type === 'last'){
+      if(/等待雲端資料/.test(s)) return '等待雲端資料';
+      var m2 = s.match(/\d{4}\/\d{1,2}\/\d{1,2}\s+\d{1,2}:\d{2}:\d{2}/);
+      if(m2) return m2[0];
+      return s || '等待雲端資料';
+    }
+    return s;
+  }
+  function canonicalValue(name, oldValue){
+    var count = actualCount();
+    if(name === 'version'){
+      return norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || window.__TASUN_PAGE_BUILD_STAMP__ || (G && G.PAGE_BUILD_STAMP) || oldValue || '待版本檔');
+    }
+    if(name === 'count') return String(count) + ' / ' + String(count);
+    if(name === 'cloud'){
+      if(count > 0) return '已同步';
+      return cleanRepeated(oldValue, 'cloud') === '雲端無資料' ? '雲端無資料' : '同步檢查中';
+    }
+    if(name === 'last'){
+      if(count > 0) return new Date().toLocaleString('zh-TW', {hour12:false});
+      return '等待雲端資料';
+    }
+    return cleanRepeated(oldValue, name);
+  }
+  function normalizeBadge(badge, name){
+    if(!badge) return;
+    var oldV = '';
+    var oldNode = badge.querySelector('.v');
+    oldV = oldNode ? oldNode.textContent : badge.textContent;
+    var value = canonicalValue(name, oldV);
+    var label = labelOf(name);
+    var labelText = label + (name === 'cloud' ? '：' : '');
+    var curK = badge.querySelector('.k');
+    var curV = badge.querySelector('.v');
+
+    if(!curK || !curV || norm(badge.childNodes.length) === '0'){
+      badge.innerHTML = '<span class="k"></span><span class="v"></span>';
+      curK = badge.querySelector('.k');
+      curV = badge.querySelector('.v');
+    }
+
+    if(curK.textContent !== labelText) curK.textContent = labelText;
+    if(curV.textContent !== value) curV.textContent = value;
+
+    Array.prototype.slice.call(badge.childNodes).forEach(function(n){
+      if(n.nodeType === 3 && norm(n.textContent)) n.textContent = '';
+    });
+
+    badge.setAttribute('data-r269-single-status','1');
+    if(name === 'cloud') badge.classList.toggle('bad', /異常|待同步|失敗|錯誤|離線/.test(value));
+  }
+  function canonicalizeStatusBar(){
+    if(STATE.running) return;
+    STATE.running = true;
+    try{
+      var bars = qa('#statusBar, .raciStatusBar');
+      var first = bars[0];
+      bars.forEach(function(bar, idx){
+        if(idx > 0 && bar !== first) bar.style.display = 'none';
+      });
+      if(!first){ STATE.running = false; return; }
+      first.setAttribute('data-r269-single-authority','1');
+
+      var keep = Object.create(null);
+      qa('[data-badge]', first).forEach(function(badge){
+        var name = norm(badge.getAttribute('data-badge'));
+        if(keep[name]){
+          badge.setAttribute('data-r269-hidden','1');
+          badge.style.display = 'none';
+          return;
+        }
+        keep[name] = badge;
+        badge.removeAttribute('data-r269-hidden');
+        if(name === 'duplicate'){
+          if(norm(badge.style.display) === '') badge.style.display = 'none';
+          return;
+        }
+        normalizeBadge(badge, name);
+      });
+
+      qa('#btnDupReport', first).forEach(function(btn){
+        if(norm(btn.style.display) === '') btn.style.display = 'none';
+      });
+    }finally{
+      STATE.running = false;
     }
   }
 
-  function installDesktopStageStyle(){
-    if($('tasun-raci-r268-stage-style')) return true;
-    var css = [
-      '@media (min-width:821px){',
-      '  :root{--stageSide:0.5cm;}',
-      '  .wrap{width:calc(100vw - 1cm)!important;max-width:none!important;margin-left:auto!important;margin-right:auto!important;}',
-      '  .topbar{margin-top:-12px!important;padding-top:8px!important;padding-bottom:10px!important;}',
-      '  .topbar .brand{transform:translateY(-14px);}',
-      '  .topbar .title{margin-top:0!important;}',
-      '  .topbar .brand .btn,.topbar .brand button,.topbar .brand .toolbar button{transform:translateY(-8px);}',
-      '}',
-      '@media (max-width:820px){',
-      '  .topbar .brand{transform:none!important;}',
-      '}'
-    ].join('\n');
-    var s = document.createElement('style');
-    s.id = 'tasun-raci-r268-stage-style';
-    s.textContent = css;
-    document.head.appendChild(s);
-    return true;
-  }
-
-  function protectAdminPublish(){
-    var role = '';
-    try{ role = norm(JSON.parse(sessionStorage.getItem('tasunCurrentUser_v1') || localStorage.getItem('tasunCurrentUser_v1') || '{}').role).toLowerCase(); }catch(_e){}
-    qa('button,a').forEach(function(el){
-      var s = text(el);
-      if(s.indexOf('發布') < 0 && s.indexOf('發佈') < 0) return;
-      if(role !== 'admin'){
-        el.setAttribute('aria-disabled', 'true');
-        el.classList.add('tasun-nonadmin-disabled');
-        bindOnce(el, 'click', function(ev){ ev.preventDefault(); ev.stopPropagation(); warn('非 admin 不可發布正式版'); }, 'adminPublishGuard', true);
-      }
+  function patchStatusWriters(){
+    if(window.__TASUN_RACI_R269_STATUS_WRITERS_PATCHED__) return;
+    window.__TASUN_RACI_R269_STATUS_WRITERS_PATCHED__ = true;
+    ['setRaciBadge','updateRaciStatus','setCloudSyncStatus','setCloudStatusFromActual'].forEach(function(fn){
+      if(typeof window[fn] !== 'function') return;
+      var old = window[fn];
+      window[fn] = function(){
+        var ret = old.apply(this, arguments);
+        setTimeout(canonicalizeStatusBar, 0);
+        setTimeout(canonicalizeStatusBar, 120);
+        return ret;
+      };
     });
   }
-
-  var FEATURES = [
-    { id:'raci.githubPagesHtmlNetworkOnce', check:function(){ return !!$('tasun-github-pages-html-network-once-v5'); }, repair:function(){ return true; }, verify:function(){ return true; } },
-    { id:'raci.domBeforeBind', check:requiredDomOk, repair:ensureTableIdentity, verify:requiredDomOk },
-    { id:'raci.tableIdentityAndDb', check:function(){ var t=$(G.TABLE_ID); return !!(t && t.getAttribute('data-db-name') && t.getAttribute('data-resource-key')); }, repair:ensureTableIdentity, verify:function(){ var t=$(G.TABLE_ID); return !!(t && t.getAttribute('data-db-name') === G.DB_NAME); } },
-    { id:'raci.desktopStageAutoScale', check:function(){ return !!$('tasun-raci-r268-stage-style'); }, repair:installDesktopStageStyle, verify:function(){ return !!$('tasun-raci-r268-stage-style'); } },
-    { id:'raci.mobileStatusActualRows', check:function(){ return true; }, repair:repairStatusBar, verify:function(){ return true; } },
-    { id:'raci.cloudRoundtripDedupe', check:function(){ return true; }, repair:function(){ wrapScheduleCloudSync(); cloudRoundtripDedupe('selfheal-r268'); return true; }, verify:function(){ return true; } },
-    { id:'raci.textChineseWhitespaceTight', check:function(){ return true; }, repair:normalizeVisibleTextInputs, verify:function(){ return true; } },
-    { id:'raci.adminPublishGuard', check:function(){ return true; }, repair:protectAdminPublish, verify:function(){ return true; } }
-  ];
-
-  function runFeature(f){
-    var count = state.retry[f.id] || 0;
-    if(count >= Number(G.SELFHEAL_MAX_RETRY || 3)) return;
+  function installObserver(){
+    if(STATE.observer) return;
+    var bar = document.getElementById('statusBar') || document.querySelector('.raciStatusBar');
+    if(!bar || typeof MutationObserver === 'undefined') return;
+    STATE.observer = new MutationObserver(function(){
+      debounce('statusMutation', canonicalizeStatusBar, 60);
+    });
+    STATE.observer.observe(bar, {childList:true, subtree:true, characterData:true, attributes:true, attributeFilter:['style','class','data-badge']});
+  }
+  function installDesktopLift(){
+    if(document.getElementById('tasun-raci-r269-desktop-lift-style')) return;
+    var st = document.createElement('style');
+    st.id = 'tasun-raci-r269-desktop-lift-style';
+    st.textContent = [
+      '@media (min-width:821px){',
+      '.topbar{padding-top:6px!important;padding-bottom:8px!important;}',
+      '.topbar .brand{transform:translateY(-16px)!important;}',
+      '.topbar .title{margin-top:-4px!important;}',
+      '#btnSearch,#btnShowAll,#editMenuWrap{transform:translateY(-12px)!important;}',
+      '}'
+    ].join('\n');
+    document.head.appendChild(st);
+  }
+  function ensureTableIdentity(){
+    var table = document.getElementById((G && G.TABLE_ID) || 'raciTable') || document.querySelector('table');
+    if(!table) return;
+    table.id = (G && G.TABLE_ID) || 'raciTable';
+    table.setAttribute('data-page-key', (G && G.PAGE_KEY) || 'raci-sxdh-simple');
+    table.setAttribute('data-resource-key', (G && G.RESOURCE_KEY) || 'raci-sxdh-simple');
+    table.setAttribute('data-db-name', (G && G.DB_NAME) || 'tasun_raci_sxdh_simple_db_v117');
+    table.setAttribute('data-storage-key', (G && G.STORAGE_KEY) || 'tasunRACI_Simple_v2');
+    table.setAttribute('data-has-individual-id','true');
+  }
+  function tightenTextControls(){
+    qa('input[type="text"], input:not([type]), textarea').forEach(function(el){
+      var old = String(el.value || '');
+      var next = old.replace(/[\t\r\n\u3000]+/g,' ').replace(/([\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g,'$1').replace(/\s{2,}/g,' ').trim();
+      if(old !== next) el.value = next;
+    });
+    qa('select option').forEach(function(opt){
+      var t = norm(opt.textContent).replace(/([\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g,'$1').replace(/\s{2,}/g,' ');
+      var v = norm(opt.value).replace(/([\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g,'$1').replace(/\s{2,}/g,' ');
+      if(opt.textContent !== t) opt.textContent = t;
+      if(opt.value !== v) opt.value = v;
+    });
+  }
+  function registerSelfHeal(){
     try{
-      if(f.check && f.check()) return;
-      state.retry[f.id] = count + 1;
-      if(f.repair) f.repair();
-      if(f.verify && !f.verify()) warn(f.id + ' verify 未通過');
-    }catch(e){
-      state.retry[f.id] = count + 1;
-      warn(f.id + ' 修復例外：' + (e && e.message ? e.message : e));
-    }
+      var core = window.TasunSelfHealV5 = window.TasunSelfHealV5 || {features:{},register:function(k,f){this.features[k]=f||{};}};
+      if(typeof core.register === 'function'){
+        core.register('raciStatusSingleAuthorityR269',{
+          check:function(){ return true; },
+          repair:function(){ canonicalizeStatusBar(); return true; },
+          verify:function(){ return true; },
+          coolDownMs:900,
+          maxRetry:6
+        });
+        core.register('raciDesktopTitleButtonsLiftR269',{
+          check:function(){ return !!document.getElementById('tasun-raci-r269-desktop-lift-style'); },
+          repair:function(){ installDesktopLift(); return true; },
+          verify:function(){ return !!document.getElementById('tasun-raci-r269-desktop-lift-style'); },
+          coolDownMs:900,
+          maxRetry:6
+        });
+      }
+    }catch(_e){}
   }
-  function runSelfHeal(reason){
-    var t = now();
-    if(state.running || (t - state.lastRun) < Number(G.SELFHEAL_COOLDOWN_MS || 1200)) return;
-    state.running = true;
-    state.lastRun = t;
+  function controlledCloudKick(){
+    if(window.__TASUN_RACI_R269_CLOUD_KICK_DONE__) return;
+    window.__TASUN_RACI_R269_CLOUD_KICK_DONE__ = true;
     try{
-      ensureTableIdentity();
-      normalizeVisibleTextInputs();
-      wrapScheduleCloudSync();
-      FEATURES.forEach(runFeature);
-      repairStatusBar();
-      window.__TASUN_RACI_R268_LAST_RUN__ = { reason: reason || 'manual', at: new Date().toISOString(), features: FEATURES.map(function(f){ return f.id; }) };
-    }finally{
-      state.running = false;
-    }
+      if(typeof window.__TASUN_RACI_CLOUD_ROUNDTRIP_DEDUPE__ === 'function'){
+        window.__TASUN_RACI_CLOUD_ROUNDTRIP_DEDUPE__('r269-status-repair');
+      }else if(typeof window.syncCloud === 'function'){
+        window.syncCloud('r269-status-repair');
+      }else if(typeof window.scheduleCloudSync === 'function'){
+        window.scheduleCloudSync('r269-status-repair', 120);
+      }
+    }catch(_e){}
+  }
+  function run(reason){
+    var t = Date.now();
+    if((t - STATE.last) < STATE.cooldown && reason !== 'force') return;
+    STATE.last = t;
+    ensureTableIdentity();
+    tightenTextControls();
+    patchStatusWriters();
+    installDesktopLift();
+    registerSelfHeal();
+    canonicalizeStatusBar();
+    installObserver();
+    window.__TASUN_RACI_R269_LAST_RUN__ = {reason:reason || 'manual', at:new Date().toISOString()};
   }
 
-  window.__TASUN_SELFHEAL_V5_FEATURES__ = dedupeRows([].concat(window.__TASUN_SELFHEAL_V5_FEATURES__ || [], FEATURES.map(function(f){ return { uid:f.id, id:f.id, updatedAt:Date.now(), rev:Date.now(), deleted:false }; })));
-  window.__TASUN_RACI_CLOUD_ROUNDTRIP_DEDUPE__ = cloudRoundtripDedupe;
-  window.__TASUN_RACI_R268_RUN_SELFHEAL__ = runSelfHeal;
-
-  if(window.TasunSelfHealV5 && typeof window.TasunSelfHealV5.register === 'function'){
-    FEATURES.forEach(function(f){ try{ window.TasunSelfHealV5.register(f); }catch(_e){} });
+  function boot(){
+    run('boot');
+    controlledCloudKick();
+    [150,500,1000,1800,3000,5000,8000,12000].forEach(function(ms){
+      setTimeout(function(){ run('boot-'+ms); }, ms);
+    });
   }
-
-  bindOnce(document, 'input', function(){ debounce('inputNormalize', normalizeVisibleTextInputs, 180); }, 'r268Normalize', true);
-  bindOnce(document, 'change', function(){ debounce('changeNormalize', normalizeVisibleTextInputs, 80); }, 'r268Normalize', true);
-  ['DOMContentLoaded','pageshow','resize','orientationchange','visibilitychange'].forEach(function(ev){
-    bindOnce(ev === 'DOMContentLoaded' ? document : window, ev, function(){ debounce('selfheal:' + ev, function(){ runSelfHeal(ev); }, 160); }, 'r268SelfHeal', true);
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, {once:true, passive:true});
+  else boot();
+  ['pageshow','resize','orientationchange','focus','visibilitychange'].forEach(function(ev){
+    window.addEventListener(ev, function(){ debounce('run-'+ev, function(){ run(ev); }, 160); }, {passive:true});
   });
-  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function(){ runSelfHeal('boot'); }, { once:true, passive:true });
-  else runSelfHeal('boot-now');
 })();
