@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <!-- tasun-raci-r272-cloud-authority-in-main-core based-on-latest-upload-20260509 -->
+  <!-- tasun-raci-r294-cloud-authority-purge-local based-on-latest-upload-20260512 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260512_tasun_v5_raci_r292_editor_modal_viewport_fit">
+  <meta name="tasun-build-stamp" content="20260512_tasun_v5_raci_r294_cloud_authority_purge_local">
     
 
 
@@ -79,6 +79,8 @@
   window.__TASUN_RACI_R268_R269_UNIFIED_R2__ = true;
   window.__TASUN_RACI_R272_IN_CORE_AUTHORITY__ = true;
   window.__TASUN_RACI_R292_EDITOR_MODAL_VIEWPORT_FIT__ = true;
+  window.__TASUN_RACI_R293_SAVE_RENDER_CLOUD_CONFIRM__ = true;
+  window.__TASUN_RACI_R294_CLOUD_AUTHORITY_PURGE_LOCAL__ = true;
 })();
 </script>
 
@@ -5798,6 +5800,70 @@ body.searchOpen #searchPanel .filterComboItem.active,
     }catch(_e){}
   }
 
+
+  /* R294：雲端權威後清除本端舊資料庫。完成雲端確認與下傳後，只以雲端資料重建畫面；
+     本端 localStorage / IndexedDB 舊快取全部清除，避免多人多設備把舊資料、已刪除資料或重複資料覆蓋回雲端。 */
+  const R294_LOCAL_DATA_KEYS = [];
+  function localDataKeysR294(){
+    try{
+      return Array.from(new Set([
+        CFG.DB_KEY, CFG.LEGACY_DB_KEY, CFG.DELETED_KEY, CFG.LAST_GOOD_KEY,
+        'tasunRACI_Simple_pending_sync_v118','tasunRACI_Simple_pending_sync_v142','tasunRACI_Simple_pending_sync_v143','tasunRACI_Simple_pending_sync_v144','tasunRACI_Simple_pending_sync_v151'
+      ].filter(Boolean)));
+    }catch(_e){ return []; }
+  }
+  function purgeLocalStorageRowsR294(reason){
+    const removed = [];
+    try{
+      localDataKeysR294().forEach(function(k){
+        try{ localStorage.removeItem(k); removed.push(k); }catch(_e){}
+        try{ sessionStorage.removeItem(k); }catch(_e){}
+      });
+      try{ localStorage.setItem('tasunRACI_Simple_last_authority_purge_r294', JSON.stringify({reason:String(reason||''), at:Date.now(), removed:removed})); }catch(_e){}
+    }catch(_e){}
+    return removed;
+  }
+  function maxCloudIdR294(rows){
+    try{
+      return (Array.isArray(rows) ? rows : []).reduce(function(max, raw){
+        const r = normalizeRow(raw || {});
+        const id = Number(r.id) || 0;
+        return id > max ? id : max;
+      }, 0);
+    }catch(_e){ return 0; }
+  }
+  async function applyCloudAuthorityRowsR294(rows, reason, opts){
+    const options = opts || {};
+    const authorityAll = cleanupLocalRowsR131(String(reason || 'r294-cloud-authority-apply'), rows || []);
+    db = activeRows(authorityAll).sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
+    deletedRows = dedupeRows(authorityAll.filter(function(r){ return r && r.deleted && !isSystemRowR133(r); }), true);
+    const maxId = maxCloudIdR294(authorityAll);
+    purgeLocalStorageRowsR294(reason);
+    await clearIdbRowsR132().catch(function(){});
+    if(maxId){ try{ localStorage.setItem(CFG.COUNTER_KEY, String(maxId)); }catch(_e){} }
+    window.__TASUN_RACI_R294_LAST_AUTHORITY_APPLY__ = {
+      reason:String(reason || ''),
+      cloudRows:(Array.isArray(rows) ? rows.length : 0),
+      activeRows:db.length,
+      deletedRows:deletedRows.length,
+      localDbPurged:true,
+      savedToLocal:false,
+      at:new Date().toISOString()
+    };
+    if(!options.noRender){
+      try{ render(); }catch(_e){}
+      try{ updateRaciStatus(db.length, db.length); }catch(_e){}
+    }
+    return authorityAll;
+  }
+  function hasExplicitLocalPendingR294(reason){
+    const text = String(reason || '').toLowerCase();
+    if(/save|add|edit|delete|pending|retry|upload/.test(text)) return true;
+    try{
+      return ['tasunRACI_Simple_pending_sync_v118','tasunRACI_Simple_pending_sync_v142','tasunRACI_Simple_pending_sync_v143','tasunRACI_Simple_pending_sync_v144','tasunRACI_Simple_pending_sync_v151'].some(function(k){ return !!localStorage.getItem(k); });
+    }catch(_e){ return false; }
+  }
+
   function extractTokenValue(v){
     let s = norm(v).replace(/^Bearer\s+/i,'');
     if(!s || /^(undefined|null)$/i.test(s)) return '';
@@ -6197,7 +6263,7 @@ body.searchOpen #searchPanel .filterComboItem.active,
     cloudSyncPromise = (async function(){
       setCloudSyncStatus('同步中', reason);
       try{
-        const localAll = cleanupLocalRowsR131('sync-start-clean-local-r267', [].concat(
+        const localAll = cleanupLocalRowsR131('sync-start-clean-local-r294', [].concat(
           db,
           deletedRows,
           parseRows(localStorage.getItem(CFG.DB_KEY)),
@@ -6212,39 +6278,40 @@ body.searchOpen #searchPanel .filterComboItem.active,
           cloudAll = dedupeRows([].concat(cloudAll, cloudLegacyTombs), true);
           try{ await mergeCloudRows(cloudLegacyTombs); }catch(_e){}
         }
-        const merged = cleanupLocalRowsR131('after-cloud-download-dedupe-local-r267', [].concat(cloudAll, localAll));
-        db = activeRows(merged).sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
-        deletedRows = dedupeRows(merged.filter(r => r.deleted && !isSystemRowR133(r)), true);
-        saveDB();
-        render();
 
-        const uploadRows = dedupeRows(merged, true);
-        const mergeOk = uploadRows.length ? await mergeCloudRows(uploadRows) : true;
-        const finalCloud = await readCloudRows();
-        const confirmed = cleanupLocalRowsR131('after-cloud-upload-confirm-download-r267', [].concat(finalCloud, merged));
-        db = activeRows(confirmed).sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
-        deletedRows = dedupeRows(confirmed.filter(r => r.deleted), true);
-        saveDB();
-        updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || finalCloud, 'duplicate-sync-confirm-download-r267');
-        render();
-
-        const confirmedByCloud = hasCloudConfirmedRows(localAll, finalCloud) || (mergeOk && finalCloud.length === 0 && uploadRows.length === 0);
-        lastCloudSyncAt = Date.now();
-        if(mergeOk || confirmedByCloud){
-          setCloudSyncStatus('同步', reason, {
-            mergeOk:!!mergeOk,
-            confirmed:!!confirmedByCloud,
-            cloudCount:finalCloud.length,
-            localCount:localAll.length,
-            mergedCount:confirmed.length,
-            durationMs:Date.now() - startedAt,
-            stableBy: mergeOk ? 'merge-ok-r267' : 'read-confirmed-r267'
-          });
-        }else{
-          const pendingPayload = {reason:String(reason||''), at:Date.now(), mergeOk:false, confirmed:false, cloudCount:finalCloud.length, localCount:localAll.length, mergedCount:confirmed.length, durationMs:Date.now()-startedAt};
-          try{ localStorage.setItem('tasunRACI_Simple_pending_sync_v151', JSON.stringify(pendingPayload)); }catch(_e){}
-          setCloudSyncStatus('待同步', reason, pendingPayload);
+        const cloudHasAuthority = Array.isArray(cloudAll) && cloudAll.some(function(r){ return r && !isSystemRowR133(r); });
+        if(cloudHasAuthority){
+          await applyCloudAuthorityRowsR294(cloudAll, 'r294-sync-cloud-authority-purge-local');
+          updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || cloudAll, 'duplicate-sync-cloud-authority-r294');
+          lastCloudSyncAt = Date.now();
+          setCloudSyncStatus('同步', reason, {r294:true, cloudAuthority:true, cloudCount:cloudAll.length, activeCount:db.length, localDbPurged:true, durationMs:Date.now()-startedAt});
+          return true;
         }
+
+        /* 只有在明確的本端待同步情境才上傳本端資料；一般開頁/背景同步不可把舊本端資料覆蓋回空雲端。 */
+        if(localAll.length && hasExplicitLocalPendingR294(reason)){
+          const uploadRows = dedupeRows(localAll, true);
+          const mergeOk = await mergeCloudRows(uploadRows);
+          const finalCloud = await readCloudRows().catch(function(){ return []; });
+          if(finalCloud && finalCloud.length){
+            await applyCloudAuthorityRowsR294(finalCloud, 'r294-sync-after-explicit-upload-cloud-authority');
+            updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || finalCloud, 'duplicate-sync-confirm-download-r294');
+          }else{
+            db = activeRows(uploadRows).sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
+            deletedRows = dedupeRows(uploadRows.filter(r => r.deleted && !isSystemRowR133(r)), true);
+            render();
+          }
+          lastCloudSyncAt = Date.now();
+          setCloudSyncStatus(mergeOk ? '同步' : '待同步', reason, {r294:true, explicitPending:true, mergeOk:!!mergeOk, cloudCount:(finalCloud||[]).length, localCount:localAll.length, durationMs:Date.now()-startedAt});
+          return mergeOk;
+        }
+
+        /* 雲端確定空且無待同步：清除本端舊資料庫，避免舊資料復活。 */
+        await applyCloudAuthorityRowsR294([], 'r294-sync-cloud-empty-authority-purge-local');
+        updateDuplicateStatusFromRows([], 'duplicate-sync-cloud-empty-r294');
+        lastCloudSyncAt = Date.now();
+        setCloudSyncStatus('同步', reason, {r294:true, cloudAuthority:true, cloudCount:0, localDbPurged:true, durationMs:Date.now()-startedAt});
+        return true;
       }catch(err){
         const lastHttp = window.__TASUN_RACI_LAST_CLOUD_HTTP__ || {};
         const hasOkCloud = !!(lastHttp && lastHttp.ok && (lastHttp.status === 200 || lastHttp.status === 204));
@@ -7082,67 +7149,213 @@ function render(){
     return true;
   }
 
+  
+  function removeSavedRowConflictingTombsR293(row){
+    try{
+      const n = normalizeRow(row || {});
+      const uid = norm(n.uid || n.pk || '');
+      const sig = getRowSignature(n);
+      deletedRows = (Array.isArray(deletedRows) ? deletedRows : []).filter(function(raw){
+        const d = normalizeRow(raw || {});
+        if(uid && norm(d.uid || d.pk || '') === uid) return false;
+        if(sig && getRowSignature(d) === sig) return false;
+        return true;
+      });
+      saveDeletedRows(deletedRows);
+    }catch(_e){}
+  }
+
+  function upsertSavedRowLocalR293(row, reason){
+    const normalized = normalizeRow(row || {});
+    removeSavedRowConflictingTombsR293(normalized);
+    const src = [].concat(db || [], parseRows(localStorage.getItem(CFG.DB_KEY)), [normalized], deletedRows || []);
+    const deduped = dedupeRows(src, true);
+    db = activeRows(deduped).sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
+    deletedRows = dedupeRows(deduped.filter(r => r && r.deleted && !isSystemRowR133(r)), true);
+    try{ localStorage.setItem(CFG.DB_KEY, JSON.stringify(db)); }catch(_e){}
+    try{ localStorage.setItem(CFG.DELETED_KEY, JSON.stringify(deletedRows)); }catch(_e){}
+    try{ localStorage.setItem(CFG.LAST_GOOD_KEY, JSON.stringify({pageKey:CFG.PAGE_KEY, resourceKey:CFG.RESOURCE_KEY, rows:db, deletedRows:deletedRows, updatedAt:Date.now(), reason:String(reason||'r293-save-local-upsert')})); }catch(_e){}
+    try{ saveDB(); }catch(_e){}
+    try{ saveIdbRows([].concat(db, deletedRows)); }catch(_e){}
+    return normalized;
+  }
+
+  function clearFiltersIfSavedRowHiddenR293(row){
+    try{
+      const id = Number(row && row.id) || null;
+      const uid = norm(row && (row.uid || row.pk));
+      const visible = getFilterRows().some(function(r){ return (id && Number(r.id) === id) || (uid && norm(r.uid || r.pk) === uid); });
+      if(visible) return false;
+      ['fProject','fFocus','fStage'].forEach(function(id){ const el=$(id); if(el) el.value=''; });
+      return true;
+    }catch(_e){ return false; }
+  }
+
+  function scrollSavedRowIntoViewR293(row){
+    try{
+      const id = Number(row && row.id) || null;
+      const uid = norm(row && (row.uid || row.pk));
+      setTimeout(function(){
+        try{
+          let tr = null;
+          if(id) tr = document.querySelector('#tbody tr[data-id="' + String(id).replace(/"/g,'') + '"]');
+          if(!tr && uid) tr = document.querySelector('#tbody tr[data-uid="' + CSS.escape(uid) + '"]');
+          if(tr && typeof tr.scrollIntoView === 'function') tr.scrollIntoView({block:'nearest', inline:'nearest'});
+        }catch(_e){}
+      }, 80);
+    }catch(_e){}
+  }
+
+  function cloudRowsContainSavedRowR293(row, rows){
+    try{
+      const n = normalizeRow(row || {});
+      const uid = norm(n.uid || n.pk || '');
+      const sig = getRowSignature(n);
+      const rev = Number(n.rev || n.updatedAt || 0) || 0;
+      return (Array.isArray(rows) ? rows : []).some(function(raw){
+        const r = normalizeRow(raw || {});
+        if(r.deleted) return false;
+        if(uid && norm(r.uid || r.pk || '') === uid) return true;
+        return !!sig && getRowSignature(r) === sig && Number(r.rev || r.updatedAt || 0) >= rev;
+      });
+    }catch(_e){ return false; }
+  }
+
+  async function persistSavedRowToCloudAndRedownloadR293(row, reason){
+    const normalized = upsertSavedRowLocalR293(row, 'r294-before-cloud-confirm-local-temp');
+    const uid = norm(normalized.uid || normalized.pk || '');
+    const sig = getRowSignature(normalized);
+    let mergeOk = false;
+    let finalCloud = [];
+    try{
+      setCloudSyncStatus('同步中', reason || 'r294-save-confirm-cloud-authority');
+      /* R294：上傳只送本次儲存資料與既有刪除墓碑，不再夾帶本端舊 DB 全量，避免舊資料反向覆蓋雲端。 */
+      const safeTombs = dedupeRows(deletedRows || [], true).filter(function(raw){
+        const r = normalizeRow(raw || {});
+        if(!r.deleted) return false;
+        if(uid && norm(r.uid || r.pk || '') === uid) return false;
+        if(sig && getRowSignature(r) === sig) return false;
+        return true;
+      });
+      const uploadRows = dedupeRows([].concat(safeTombs, [normalized]), true);
+      mergeOk = await mergeCloudRows(uploadRows);
+      finalCloud = await readCloudRows().catch(function(){ return []; });
+      if(!cloudRowsContainSavedRowR293(normalized, finalCloud)){
+        await mergeCloudRows([normalized]);
+        finalCloud = await readCloudRows().catch(function(){ return []; });
+      }
+      const confirmed = cloudRowsContainSavedRowR293(normalized, finalCloud);
+      if(confirmed){
+        await applyCloudAuthorityRowsR294(finalCloud, 'r294-save-cloud-confirmed-redownload-purge-local');
+        selectedId = Number(normalized.id) || selectedId;
+        editingId = Number(normalized.id) || editingId;
+        clearFiltersIfSavedRowHiddenR293(normalized);
+        render();
+        scrollSavedRowIntoViewR293(normalized);
+        setCloudSyncStatus('同步', reason || 'r294-save-cloud-confirmed', {r294:true, mergeOk:!!mergeOk, confirmed:true, cloudCount:(finalCloud||[]).length, localDbPurged:true, savedUid:uid});
+        return true;
+      }
+      /* 無法從雲端讀回確認時，暫保留本端臨時畫面並標示待同步；不得清除本端暫存。 */
+      upsertSavedRowLocalR293(normalized, 'r294-cloud-not-yet-confirmed-keep-local-pending');
+      selectedId = Number(normalized.id) || selectedId;
+      editingId = Number(normalized.id) || editingId;
+      clearFiltersIfSavedRowHiddenR293(normalized);
+      render();
+      scrollSavedRowIntoViewR293(normalized);
+      setCloudSyncStatus('待同步', reason || 'r294-save-wait-cloud-confirm', {r294:true, mergeOk:!!mergeOk, confirmed:false, cloudCount:(finalCloud||[]).length, savedUid:uid});
+      scheduleCloudSync('r294-save-confirm-retry', 900);
+      return false;
+    }catch(err){
+      upsertSavedRowLocalR293(normalized, 'r294-cloud-error-keep-local-pending');
+      clearFiltersIfSavedRowHiddenR293(normalized);
+      render();
+      scrollSavedRowIntoViewR293(normalized);
+      setCloudSyncStatus('待同步', reason || 'r294-save-error', {r294:true, error:String(err && err.message || err), savedUid:uid});
+      scheduleCloudSync('r294-save-retry', 900);
+      return false;
+    }
+  }
+
+
   function saveItem(options){
     validateSession();
     if(!canWrite()){
       toast('目前帳號不可儲存');
       return false;
     }
-    const opts = options || {};
-    const isNewRow = (editingId == null);
-    const row = getModalRow();
-    if(!row.project){
-      toast('請至少輸入工程項目');
-      const projectEl = $('mProject');
-      if(projectEl) projectEl.focus();
-      return false;
+    const saveBtn = $('btnSave');
+    if(saveBtn && saveBtn.dataset.saving === '1') return false;
+    const oldSaveText = saveBtn ? saveBtn.textContent : '';
+    if(saveBtn){
+      saveBtn.dataset.saving = '1';
+      saveBtn.disabled = true;
+      saveBtn.textContent = '儲存同步中...';
     }
-
-    if(editingId != null){
-      row.id = Number(editingId) || Number(row.id) || null;
-    }
-    if(row.id == null) row.id = nextCounter();
-    if(!row.uid) row.uid = createUid(row);
-    row.pk = row.uid;
-    row.pageKey = CFG.PAGE_KEY;
-    row.resourceKey = CFG.RESOURCE_KEY;
-    row.pageFile = CFG.PAGE_FILE;
-    row.deleted = false;
-    row.updatedAt = Date.now();
-    row.rev = row.updatedAt;
-
-    const nextDb = db.map((item) => normalizeRow(item));
-    const sameIdIndex = nextDb.findIndex((item) => Number(item.id) === Number(row.id));
-    if(sameIdIndex >= 0) nextDb[sameIdIndex] = row;
-    else nextDb.push(row);
-
-    const preserved = [];
-    const seen = new Set();
-    nextDb.forEach((item) => {
-      const normalized = normalizeRow(item);
-      const sig = getRowSignature(normalized);
-      if(!sig) return;
-      if(Number(normalized.id) === Number(row.id)){
-        preserved.push(normalized);
-        seen.add(sig);
-        return;
+    let row = null;
+    let isNewRow = false;
+    try{
+      isNewRow = (editingId == null);
+      row = getModalRow();
+      if(!row.project){
+        toast('請至少輸入工程項目');
+        const projectEl = $('mProject');
+        if(projectEl) projectEl.focus();
+        return false;
       }
-      if(seen.has(sig)) return;
-      seen.add(sig);
-      preserved.push(normalized);
-    });
 
-    db = preserved.sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
-    saveDB();
-    loadDB();
-    selectedId = Number(row.id) || null;
-    editingId = Number(row.id) || null;
-    render();
-    captureModalSnapshot();
-    hardCloseModal();
-    toast(isNewRow ? '已新增並同步雲端' : '已儲存並同步雲端');
-    scheduleCloudSync(isNewRow ? 'add-save' : 'edit-save', 50);
-    return true;
+      if(editingId != null){
+        row.id = Number(editingId) || Number(row.id) || null;
+      }
+      if(row.id == null) row.id = nextCounter();
+      if(!row.uid) row.uid = createUid(row);
+      row.pk = row.uid;
+      row.pageKey = CFG.PAGE_KEY;
+      row.resourceKey = CFG.RESOURCE_KEY;
+      row.pageFile = CFG.PAGE_FILE;
+      row.deleted = false;
+      row.updatedAt = Date.now();
+      row.rev = row.updatedAt;
+
+      row = upsertSavedRowLocalR293(row, isNewRow ? 'r293-add-local-render' : 'r293-edit-local-render');
+      selectedId = Number(row.id) || null;
+      editingId = Number(row.id) || null;
+      clearFiltersIfSavedRowHiddenR293(row);
+      render();
+      captureModalSnapshot();
+      hardCloseModal();
+      scrollSavedRowIntoViewR293(row);
+
+      toast('已寫入本端畫面，正在上傳雲端並下傳校正...');
+      persistSavedRowToCloudAndRedownloadR293(row, isNewRow ? 'add-save-r293-render-upload-confirm-download' : 'edit-save-r293-render-upload-confirm-download')
+        .then(function(confirmed){
+          selectedId = Number(row.id) || selectedId;
+          clearFiltersIfSavedRowHiddenR293(row);
+          if(!confirmed){ render(); }
+          scrollSavedRowIntoViewR293(row);
+          toast(confirmed ? (isNewRow ? '已新增：雲端已確認、已清除本端舊資料庫並下傳校正' : '已儲存：雲端已確認、已清除本端舊資料庫並下傳校正') : '已顯示本端，雲端待同步');
+        })
+        .catch(function(err){
+          try{ console.error(err); }catch(_e){}
+          upsertSavedRowLocalR293(row, 'r294-save-confirm-error-keep-local-pending');
+          selectedId = Number(row.id) || selectedId;
+          render();
+          scrollSavedRowIntoViewR293(row);
+          toast('已顯示本端，雲端待同步');
+          scheduleCloudSync('r294-save-confirm-retry', 900);
+        });
+      return true;
+    }catch(err){
+      console.error(err);
+      toast('儲存失敗，請稍後再試');
+      try{ render(); }catch(_e){}
+      return false;
+    }finally{
+      if(saveBtn){
+        saveBtn.dataset.saving = '0';
+        saveBtn.disabled = false;
+        saveBtn.textContent = oldSaveText || '儲存';
+      }
+    }
   }
 
 
@@ -7663,7 +7876,11 @@ function render(){
     mergeCloudRows: mergeCloudRows,
     render: render,
     updateRaciStatus: updateRaciStatus,
-    setRaciBadge: setRaciBadge
+    setRaciBadge: setRaciBadge,
+    saveItem: saveItem,
+    persistSavedRowToCloudAndRedownloadR293: persistSavedRowToCloudAndRedownloadR293,
+    applyCloudAuthorityRowsR294: applyCloudAuthorityRowsR294,
+    purgeLocalStorageRowsR294: purgeLocalStorageRowsR294
   });
   window.__TASUN_RACI_FORCE_AUTHORITY_SYNC__ = repairCloudAuthorityR272;
 
@@ -7675,6 +7892,42 @@ function render(){
         verify:function(){ return true; },
         coolDownMs:1800,
         maxRetry:5
+      });
+    }
+  }catch(_e){}
+
+
+  try{
+    if(window.TasunSelfHealV5 && typeof window.TasunSelfHealV5.register === 'function'){
+      window.TasunSelfHealV5.register('raciR293SaveRenderCloudConfirm', {
+        check:function(){ return typeof saveItem === 'function' && typeof persistSavedRowToCloudAndRedownloadR293 === 'function'; },
+        repair:function(){ render(); updateRaciStatus(); return true; },
+        verify:function(){ return true; },
+        coolDownMs:1600,
+        maxRetry:3
+      });
+    }
+  }catch(_e){}
+
+
+  try{
+    if(window.TasunSelfHealV5 && typeof window.TasunSelfHealV5.register === 'function'){
+      window.TasunSelfHealV5.register('raciR294CloudAuthorityPurgeLocal', {
+        check:function(){ return typeof applyCloudAuthorityRowsR294 === 'function' && typeof purgeLocalStorageRowsR294 === 'function' && typeof clearIdbRowsR132 === 'function'; },
+        repair:function(){
+          try{
+            if(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ && window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__.length){
+              applyCloudAuthorityRowsR294(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__, 'selfheal-r294-cloud-authority');
+            }else{
+              purgeLocalStorageRowsR294('selfheal-r294-no-cloud-cache');
+              clearIdbRowsR132();
+            }
+          }catch(_e){}
+          return true;
+        },
+        verify:function(){ return true; },
+        coolDownMs:1800,
+        maxRetry:4
       });
     }
   }catch(_e){}
