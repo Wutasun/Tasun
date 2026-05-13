@@ -1,279 +1,186 @@
 #!/usr/bin/env node
 /**
- * Tasun v5 自動改版號腳本（GitHub 可直接使用）
- *
- * 功能：
- * 1. 讀取 tasun-version.json
- * 2. 自動掃描專案中的 html/js/json/css/mjs 檔案
- * 3. 產生新版本號（日期 + 專案名 + 流程名 + v流水號）
- * 4. 回寫 tasun-version.json
- * 5. 輸出 GitHub Actions 可讀的 output
- *
- * 使用方式：
- *   node publish-version_tasun_project_autoscan.mjs
- *   node publish-version_tasun_project_autoscan.mjs --mode=release
- *   node publish-version_tasun_project_autoscan.mjs --write-manifest=false
+ * Tasun v5 自動版號發布器
+ * - 掃描 tasun-version.json 的 versionSources
+ * - 依內容雜湊產生穩定版號
+ * - 同步各 HTML 的 <meta name="tasun-build-stamp" content="...">
+ * - 回寫 tasun-version.json 與 TASUN_REBUILD_STAMP
+ * - 無外部套件，GitHub Actions / 本機 Node.js 皆可執行
  */
-
 import fs from 'node:fs';
 import path from 'node:path';
-import process from 'node:process';
 import crypto from 'node:crypto';
 
 const ROOT = process.cwd();
 const VERSION_FILE = path.join(ROOT, 'tasun-version.json');
-const TZ = 'Asia/Taipei';
-const EXCLUDE_DIRS = new Set([
-  '.git',
-  '.github',
-  'node_modules',
-  'dist',
-  'build',
-  '.next',
-  '.vercel',
-  '.idea',
-  '.vscode',
-  'coverage',
-  'tmp',
-  'temp'
-]);
-const ALLOW_EXTS = new Set(['.html', '.js', '.json', '.css', '.mjs']);
-const OUTPUTS = {};
+const REBUILD_FILE = path.join(ROOT, 'TASUN_REBUILD_STAMP');
+const GENERATED_BY = 'publish-version_tasun_project_autoscan.mjs';
 
-function parseArgs(argv) {
-  const args = {};
-  for (const raw of argv.slice(2)) {
-    if (!raw.startsWith('--')) continue;
-    const body = raw.slice(2);
-    const eq = body.indexOf('=');
-    if (eq === -1) args[body] = true;
-    else args[body.slice(0, eq)] = body.slice(eq + 1);
-  }
-  return args;
+function readText(file){
+  return fs.readFileSync(file, 'utf8');
 }
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
-}
-
-function writeJson(file, data) {
-  fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n', 'utf8');
-}
-
-function pad2(n) {
-  return String(n).padStart(2, '0');
-}
-
-function nowInTaipei() {
-  const now = new Date();
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false
-  }).formatToParts(now);
-  const map = Object.fromEntries(parts.map((p) => [p.type, p.value]));
-  return {
-    year: Number(map.year),
-    month: Number(map.month),
-    day: Number(map.day),
-    hour: Number(map.hour),
-    minute: Number(map.minute),
-    second: Number(map.second),
-    dateTag: `${map.year}${map.month}${map.day}`,
-    iso: `${map.year}-${map.month}-${map.day}T${map.hour}:${map.minute}:${map.second}+08:00`
-  };
-}
-
-function safeRel(file) {
-  return path.relative(ROOT, file).split(path.sep).join('/');
-}
-
-function isAllowedFile(file) {
-  const ext = path.extname(file).toLowerCase();
-  if (!ALLOW_EXTS.has(ext)) return false;
-  const rel = safeRel(file);
-  if (rel === 'tasun-version.json') return true;
-  if (rel.startsWith('.github/')) return false;
-  if (rel.includes('/backup/') || rel.includes('/bak/')) return false;
-  if (rel.endsWith('.min.js')) return true;
+function writeTextIfChanged(file, text){
+  const old = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  if(old === text) return false;
+  fs.mkdirSync(path.dirname(file), { recursive:true });
+  fs.writeFileSync(file, text, 'utf8');
   return true;
 }
-
-function walk(dir, out = []) {
-  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, ent.name);
-    if (ent.isDirectory()) {
-      if (EXCLUDE_DIRS.has(ent.name)) continue;
-      walk(full, out);
-      continue;
-    }
-    if (!ent.isFile()) continue;
-    if (!isAllowedFile(full)) continue;
-    out.push(full);
+function readJson(file){
+  return JSON.parse(readText(file));
+}
+function unique(arr){
+  const out=[]; const seen=new Set();
+  for(const raw of arr || []){
+    const v=String(raw || '').trim();
+    if(!v || seen.has(v)) continue;
+    seen.add(v); out.push(v);
   }
   return out;
 }
-
-function sha256(text) {
-  return crypto.createHash('sha256').update(text).digest('hex');
+function taipeiParts(date=new Date()){
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone:'Asia/Taipei', year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false
+  }).formatToParts(date).reduce((a,p)=>{ a[p.type]=p.value; return a; }, {});
+  return parts;
 }
-
-function fileHash(file) {
-  return sha256(fs.readFileSync(file));
+function taipeiStamp(date=new Date()){
+  const p=taipeiParts(date);
+  return `${p.year}${p.month}${p.day}_${p.hour}${p.minute}${p.second}`;
 }
-
-function loadCurrentVersionConfig() {
-  if (!fs.existsSync(VERSION_FILE)) {
-    throw new Error('找不到 tasun-version.json，請先把此檔放在 repo 根目錄');
+function taipeiIso(date=new Date()){
+  const p=taipeiParts(date);
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}+08:00`;
+}
+function normTextForHash(file, text){
+  let s = String(text || '').replace(/\r\n?/g, '\n');
+  const ext = path.extname(file).toLowerCase();
+  const base = path.basename(file);
+  // 避免自動回寫欄位造成無限改版。
+  if(ext === '.html' || ext === '.htm'){
+    s = s
+      .replace(/(<meta\b(?=[^>]*\bname\s*=\s*["']tasun-build-stamp["'])(?=[^>]*\bcontent\s*=\s*["'])([^>]*?\bcontent\s*=\s*["']))[^"']*(["'][^>]*>)/gi, '$1__TASUN_BUILD_STAMP__$3')
+      .replace(/(meta\s+name=["']tasun-build-stamp["']\s+content=["'])[^"']*(["'])/gi, '$1__TASUN_BUILD_STAMP__$2')
+      .replace(/(tasun-raci-r\d+[^\n<]*)/gi, '__TASUN_RACI_TAG__')
+      .replace(/([?&]v=)[^&"'<>\s]+/gi, '$1__V__')
+      .replace(/([?&]_=)[^&"'<>\s]+/gi, '$1__TS__')
+      .replace(/([?&]_bs=)[^&"'<>\s]+/gi, '$1__BS__');
   }
-  return readJson(VERSION_FILE);
+  if(base === 'tasun-version.json' || base === 'TASUN_REBUILD_STAMP') return '';
+  return s;
 }
-
-function buildVersionBase(config) {
-  const app = String(config.app || 'tasun').trim().toLowerCase();
-  return `${app}_v5_unified_final`;
-}
-
-function parsePreviousVersion(ver) {
-  const text = String(ver || '').trim();
-  const m = text.match(/^(\d{8})_(.+?)_v(\d+)$/i);
-  if (!m) return null;
-  return {
-    dateTag: m[1],
-    stem: m[2],
-    seq: Number(m[3] || '0')
-  };
-}
-
-function buildNextVersion(config, now) {
-  const current = String(config.version || config.ver || config.manualVersion || config.fallbackVersion || '').trim();
-  const parsed = parsePreviousVersion(current);
-  const stem = buildVersionBase(config);
-  let nextSeq = 1;
-  if (parsed && parsed.stem === stem) {
-    nextSeq = parsed.dateTag === now.dateTag ? parsed.seq + 1 : parsed.seq + 1;
-  } else if (parsed && parsed.dateTag === now.dateTag) {
-    nextSeq = parsed.seq + 1;
-  } else if (parsed) {
-    nextSeq = parsed.seq + 1;
-  }
-  return `${now.dateTag}_${stem}_v${nextSeq}`;
-}
-
-function getTrackedFiles(config, args) {
-  const writeManifest = String(args['write-manifest'] ?? 'true').toLowerCase() !== 'false';
-  const autoFiles = walk(ROOT)
-    .map(safeRel)
-    .filter((file) => file !== '.github/workflows/release-version.yml')
-    .filter((file) => file !== 'publish-version_tasun_project_autoscan.mjs')
-    .sort((a, b) => a.localeCompare(b, 'zh-Hant'));
-
-  const fixed = Array.isArray(config.versionSources) ? config.versionSources.map(String) : [];
-  const merged = Array.from(new Set([...fixed, ...autoFiles]))
-    .filter((file) => fs.existsSync(path.join(ROOT, file)))
-    .sort((a, b) => a.localeCompare(b, 'zh-Hant'));
-
-  if (writeManifest) {
-    config.versionSources = merged;
-  }
-  return merged;
-}
-
-function createManifest(files, version) {
-  const manifest = [];
-  for (const rel of files) {
-    const full = path.join(ROOT, rel);
-    const stat = fs.statSync(full);
-    manifest.push({
-      file: rel,
-      size: stat.size,
-      mtimeMs: stat.mtimeMs,
-      sha256: fileHash(full),
-      version
-    });
-  }
-  return manifest;
-}
-
-function writeOutputs(kv) {
-  const githubOutput = process.env.GITHUB_OUTPUT;
-  if (githubOutput) {
-    const lines = [];
-    for (const [k, v] of Object.entries(kv)) {
-      lines.push(`${k}=${String(v)}`);
+function hashSources(sources){
+  const h = crypto.createHash('sha256');
+  const scanned=[];
+  const missing=[];
+  for(const rel of sources){
+    if(!rel || rel === 'tasun-version.json' || rel === 'TASUN_REBUILD_STAMP') continue;
+    const file = path.join(ROOT, rel);
+    if(!fs.existsSync(file)){
+      missing.push(rel);
+      continue;
     }
-    fs.appendFileSync(githubOutput, lines.join('\n') + '\n', 'utf8');
+    const st = fs.statSync(file);
+    if(!st.isFile()) continue;
+    const raw = readText(file);
+    const normalized = normTextForHash(rel, raw);
+    h.update(`\n---FILE:${rel}---\n`);
+    h.update(normalized);
+    scanned.push({ file:rel, bytes:Buffer.byteLength(raw, 'utf8') });
   }
-  Object.assign(OUTPUTS, kv);
+  return { hash:h.digest('hex'), scanned, missing };
+}
+function patchHtmlBuildStamp(rel, buildStamp){
+  const file = path.join(ROOT, rel);
+  if(!fs.existsSync(file)) return false;
+  const ext = path.extname(file).toLowerCase();
+  if(ext !== '.html' && ext !== '.htm') return false;
+  let html = readText(file);
+  let next = html;
+  const metaRe = /<meta\b(?=[^>]*\bname\s*=\s*["']tasun-build-stamp["'])(?=[^>]*\bcontent\s*=\s*["'])([^>]*?\bcontent\s*=\s*["'])([^"']*)(["'][^>]*?)>/i;
+  if(metaRe.test(next)){
+    next = next.replace(metaRe, (m, a, old, b) => `<meta${a}${buildStamp}${b}>`);
+  }else if(/<head[^>]*>/i.test(next)){
+    next = next.replace(/<head[^>]*>/i, m => `${m}\n  <meta name="tasun-build-stamp" content="${buildStamp}" />`);
+  }
+  return writeTextIfChanged(file, next);
+}
+function setVersionFields(cfg, version, buildStamp, info){
+  cfg.app = cfg.app || 'Tasun';
+  cfg.versionMode = 'auto';
+  cfg.includeCurrentPage = true;
+  for(const k of ['manualVersion','fallbackVersion','ver','version','appVer','APP_VER','appVersion','cacheV','cache_v']) cfg[k] = version;
+  cfg.buildStamp = buildStamp;
+  cfg.build_stamp = buildStamp;
+  cfg.pageBuildStamp = buildStamp;
+  cfg.updatedAt = taipeiIso();
+  cfg.notes = `Tasun v5：自動版號 ${version}；依 versionSources 內容雜湊自動發布，並同步 HTML build stamp。`;
+  cfg.release = Object.assign({}, cfg.release || {}, {
+    mode:'github-actions',
+    branch:'main',
+    script:'publish-version_tasun_project_autoscan.mjs',
+    workflow:'.github/workflows/release-version.yml',
+    timezone:'Asia/Taipei',
+    autoCommit:true,
+    requiredPermission:'contents: write',
+    loopGuard:'sourceHash + bot actor skip + paths-ignore'
+  });
+  cfg.meta = Object.assign({}, cfg.meta || {}, {
+    version,
+    buildStamp,
+    autoVersion:true,
+    generatedBy:GENERATED_BY,
+    sourceHash:info.hash,
+    sourceShortHash:info.shortHash,
+    scannedCount:info.scanned.length,
+    missingCount:info.missing.length,
+    missingSources:info.missing,
+    htmlMetaSynced:true,
+    updatedAt:cfg.updatedAt
+  });
+  return cfg;
 }
 
-function main() {
-  const args = parseArgs(process.argv);
-  const now = nowInTaipei();
-  const config = loadCurrentVersionConfig();
+function main(){
+  if(!fs.existsSync(VERSION_FILE)){
+    console.error('找不到 tasun-version.json，停止。');
+    process.exit(1);
+  }
+  const cfg = readJson(VERSION_FILE);
+  let sources = unique(cfg.versionSources || []);
+  // 正式規則：版號檔本身不可列入內容雜湊，避免自我觸發。
+  sources = sources.filter(x => x !== 'tasun-version.json' && x !== 'TASUN_REBUILD_STAMP');
+  cfg.versionSources = sources;
 
-  const nextVersion = String(args.version || '').trim() || buildNextVersion(config, now);
-  const trackedFiles = getTrackedFiles(config, args);
-  const manifest = createManifest(trackedFiles, nextVersion);
-  const projectHash = sha256(JSON.stringify(manifest.map((m) => [m.file, m.sha256])));
+  const info = hashSources(sources);
+  info.shortHash = info.hash.slice(0, 10);
+  const oldHash = cfg.meta && cfg.meta.sourceHash ? String(cfg.meta.sourceHash) : '';
+  const currentVersion = String(cfg.version || cfg.ver || cfg.appVer || '').trim();
+  const currentBuild = String(cfg.buildStamp || cfg.pageBuildStamp || '').trim();
+  const sourceChanged = !oldHash || oldHash !== info.hash || !currentVersion || !currentBuild;
+  const nextVersion = sourceChanged ? `${taipeiStamp()}_tasun_v5_auto_${info.shortHash}` : currentVersion;
+  const nextBuildStamp = nextVersion;
 
-  config.versionMode = 'auto';
-  config.manualVersion = nextVersion;
-  config.fallbackVersion = nextVersion;
-  config.ver = nextVersion;
-  config.version = nextVersion;
-  config.appVer = nextVersion;
-  config.APP_VER = nextVersion;
-  config.appVersion = nextVersion;
-  config.updatedAt = now.iso;
-  config.notes = `Tasun v5 全站自動發布版：${nextVersion}`;
-  config.release = Object.assign({}, config.release || {}, {
-    mode: 'github-actions',
-    branch: process.env.GITHUB_REF_NAME || 'main',
-    script: 'publish-version_tasun_project_autoscan.mjs',
-    workflow: '.github/workflows/release-version.yml',
-    timezone: TZ,
-    fileCount: trackedFiles.length,
-    projectHash
-  });
-  config.build = {
-    generatedAt: now.iso,
-    generatedBy: 'publish-version_tasun_project_autoscan.mjs',
-    hash: projectHash,
-    fileCount: trackedFiles.length
-  };
+  let htmlChanged = false;
+  for(const rel of sources){
+    htmlChanged = patchHtmlBuildStamp(rel, nextBuildStamp) || htmlChanged;
+  }
 
-  writeJson(VERSION_FILE, config);
-
-  const manifestFile = path.join(ROOT, 'tasun-release-manifest.json');
-  fs.writeFileSync(manifestFile, JSON.stringify({ version: nextVersion, generatedAt: now.iso, files: manifest }, null, 2) + '\n', 'utf8');
-
-  writeOutputs({
-    version: nextVersion,
-    updated_at: now.iso,
-    file_count: trackedFiles.length,
-    manifest_file: 'tasun-release-manifest.json',
-    project_hash: projectHash
-  });
+  const nextCfg = setVersionFields(cfg, nextVersion, nextBuildStamp, info);
+  const jsonChanged = writeTextIfChanged(VERSION_FILE, JSON.stringify(nextCfg, null, 2) + '\n');
+  const rebuildChanged = writeTextIfChanged(REBUILD_FILE, `${nextBuildStamp}\n`);
 
   console.log(JSON.stringify({
-    ok: true,
-    version: nextVersion,
-    updatedAt: now.iso,
-    fileCount: trackedFiles.length,
-    manifestFile: 'tasun-release-manifest.json',
-    projectHash
+    ok:true,
+    sourceChanged,
+    version:nextVersion,
+    buildStamp:nextBuildStamp,
+    sourceHash:info.hash,
+    scanned:info.scanned.length,
+    missing:info.missing,
+    changed:{ html:htmlChanged, json:jsonChanged, rebuildStamp:rebuildChanged }
   }, null, 2));
 }
 
-try {
-  main();
-} catch (error) {
-  console.error('[publish-version] 失敗：', error && error.stack ? error.stack : error);
-  process.exit(1);
-}
+main();
