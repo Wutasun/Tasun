@@ -1,89 +1,51 @@
-name: release-version
+name: Tasun auto version release
 
 on:
-  workflow_dispatch:
-    inputs:
-      reason:
-        description: 觸發原因
-        required: false
-        default: admin-button
-      actor:
-        description: 操作者
-        required: false
-        default: github-actions
-      write_fallbacks:
-        description: 是否回寫 manifest / version
-        required: false
-        default: 'true'
   push:
     branches:
       - main
     paths-ignore:
-      - '.github/workflows/release-version.yml'
-      - 'README.md'
-      - '**/*.md'
+      - 'tasun-version.json'
+      - 'TASUN_REBUILD_STAMP'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: tasun-release-version-main
+  group: tasun-auto-version-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  publish-version:
+  update-version:
+    name: Update tasun-version.json automatically
     runs-on: ubuntu-latest
-    env:
-      TZ: Asia/Taipei
+    if: github.event_name == 'workflow_dispatch' || github.actor != 'github-actions[bot]'
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 2
+          persist-credentials: true
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Generate Tasun version from source hash
+        run: node publish-version_tasun_project_autoscan.mjs
 
-      - name: Generate next version
-        id: publish
+      - name: Commit updated version files
+        shell: bash
         run: |
-          node publish-version_tasun_project_autoscan.mjs --mode=release --write-manifest=${{ github.event.inputs.write_fallbacks || 'true' }}
-
-      - name: Show generated version
-        run: |
-          echo "VERSION=${{ steps.publish.outputs.version }}"
-          echo "UPDATED_AT=${{ steps.publish.outputs.updated_at }}"
-          echo "FILE_COUNT=${{ steps.publish.outputs.file_count }}"
-          echo "PROJECT_HASH=${{ steps.publish.outputs.project_hash }}"
-
-      - name: Commit changed files
-        run: |
-          git add tasun-version.json tasun-release-manifest.json
-          if git diff --cached --quiet; then
-            echo "No version file changes to commit."
+          if [[ -z "$(git status --porcelain)" ]]; then
+            echo "No version changes."
             exit 0
           fi
-          git commit -m "chore(release): ${{ steps.publish.outputs.version }}"
-
-      - name: Push back to main
-        run: |
-          if git rev-parse HEAD >/dev/null 2>&1; then
-            git push origin HEAD:main
-          fi
-
-      - name: Upload manifest artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: tasun-release-${{ steps.publish.outputs.version }}
-          path: |
-            tasun-version.json
-            tasun-release-manifest.json
-          if-no-files-found: error
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore(tasun): auto update version"
+          git push
