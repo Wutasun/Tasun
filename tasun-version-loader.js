@@ -1,38 +1,20 @@
-/* Tasun Version Loader v6 core-chain aligned
- * 正式版號唯一來源：tasun-version.json -> version
- * 核心收斂：version + rebuild stamp + 遠端實頁 比對統一由本檔處理
- * R268：權責分工頁載入獨立 tasun-raci-r268-selfheal.js 模組
+/* Tasun Version Loader v5.1 single-source auto-build final
+ * 正式版號唯一來源：tasun-version.json
+ * 讀取 version/cacheV + buildStamp/pageBuildStamp，提供 __withV 與全站自動刷新判斷基準。
  */
 (function(){
   "use strict";
 
   var VERSION_JSON_URL = "tasun-version.json";
-  var CACHE_KEY = "tasun_single_version_cache_v6";
-  var REDIRECT_GUARD_PREFIX = "tasun_single_ver_guard_v6__";
+  var CACHE_KEY = "tasun_single_version_cache_v5";
   var NON_FORMAL_FALLBACK = "tasun_v5_boot_fallback";
+
   var READY_RESOLVE = function(){};
   var READY = new Promise(function(resolve){ READY_RESOLVE = resolve; });
   window.__TASUN_VERSION_READY__ = READY;
 
   function norm(v){ return (v === undefined || v === null) ? "" : String(v).trim(); }
   function safeJSON(raw){ try{ return JSON.parse(raw); }catch(_e){ return null; } }
-
-  function getGlobals(){
-    var G = window.__TASUN_GLOBALS__ = window.__TASUN_GLOBALS__ || {};
-    G.PAGE_FILE = norm(G.PAGE_FILE || (location.pathname.split('/').pop() || 'index.html'));
-    G.VERSION_URL = norm(G.VERSION_URL || VERSION_JSON_URL);
-    G.REBUILD_STAMP_REGEX = G.REBUILD_STAMP_REGEX || /TASUN_REBUILD_STAMP:([^\n>]*)/i;
-    try{
-      if(!G.CURRENT_REBUILD_STAMP){
-        var html = String(document.documentElement && document.documentElement.outerHTML || "");
-        var m = html.match(G.REBUILD_STAMP_REGEX);
-        G.CURRENT_REBUILD_STAMP = m ? norm(m[1]) : "";
-      }
-    }catch(_e){
-      G.CURRENT_REBUILD_STAMP = G.CURRENT_REBUILD_STAMP || "";
-    }
-    return G;
-  }
 
   function addVer(url, ver){
     var vv = norm(ver);
@@ -49,19 +31,27 @@
     }
   }
 
-  function setGlobals(ver, cfg){
-    var G = getGlobals();
+  function setGlobals(ver, buildStamp, cfg){
     ver = norm(ver);
+    buildStamp = norm(buildStamp);
     if(ver){
       window.APP_VER = ver;
       window.TASUN_APP_VER = ver;
       window.__CACHE_V = ver;
       window.__withV = function(href){ return addVer(href, ver); };
     }
+    if(buildStamp){
+      window.__TASUN_BUILD_STAMP__ = buildStamp;
+      window.__TASUN_PAGE_BUILD_TARGET__ = buildStamp;
+      window.__TASUN_LATEST_BUILD_STAMP__ = buildStamp;
+    }
     if(cfg && typeof cfg === "object"){
-      G.VERSION_CONFIG = cfg;
-      G.LATEST_VERSION = norm(cfg.version || cfg.ver || cfg.appVer || cfg.cacheV || "");
-      G.BUILD_STAMP = norm(cfg.buildStamp || cfg.build_stamp || cfg.pageBuildStamp || (cfg.meta && cfg.meta.buildStamp) || "");
+      window.__TASUN_VERSION_CONFIG__ = cfg;
+      window.__TASUN_VERSION_MODE__ = norm(cfg.versionMode || "auto");
+      window.__TASUN_INCLUDE_CURRENT_PAGE__ = cfg.includeCurrentPage !== false;
+      window.__TASUN_AUTO_VERSION_ENABLED__ = window.__TASUN_VERSION_MODE__ === "auto";
+      window.__TASUN_RELEASE_SCRIPT__ = norm(cfg.release && cfg.release.script || "publish-version_tasun_project_autoscan.mjs");
+      window.__TASUN_RELEASE_WORKFLOW__ = norm(cfg.release && cfg.release.workflow || ".github/workflows/release-version.yml");
     }
   }
 
@@ -72,15 +62,20 @@
     return (row && typeof row === "object") ? row : null;
   }
 
-  function saveCache(ver, stamp){
-    var payload = JSON.stringify({ ver: norm(ver), stamp: norm(stamp), at: Date.now() });
+  function saveCache(ver, buildStamp, cfg){
+    var payload = JSON.stringify({
+      ver: norm(ver),
+      buildStamp: norm(buildStamp),
+      versionMode: norm(cfg && cfg.versionMode || "auto"),
+      includeCurrentPage: !(cfg && cfg.includeCurrentPage === false),
+      at: Date.now()
+    });
     try{ sessionStorage.setItem(CACHE_KEY, payload); }catch(_e){}
     try{ localStorage.setItem(CACHE_KEY, payload); }catch(_e){}
   }
 
   async function fetchVersionConfig(){
-    var G = getGlobals();
-    var u = new URL(G.VERSION_URL || VERSION_JSON_URL, location.href);
+    var u = new URL(VERSION_JSON_URL, location.href);
     u.searchParams.set("_", String(Date.now()) + "_" + Math.random().toString(16).slice(2));
     var res = await fetch(u.toString(), { cache:"no-store", credentials:"same-origin" });
     if(!res.ok) throw new Error("tasun-version.json:HTTP " + res.status);
@@ -92,135 +87,60 @@
 
   function parseVersion(cfg){
     cfg = (cfg && typeof cfg === "object") ? cfg : {};
-    return norm(cfg.version || cfg.ver || cfg.appVer || cfg.cacheV || cfg.cache_v || "");
+    var meta = (cfg.meta && typeof cfg.meta === "object") ? cfg.meta : {};
+    return norm(cfg.version || cfg.ver || cfg.appVer || cfg.APP_VER || cfg.appVersion || cfg.cacheV || cfg.cache_v || cfg.manualVersion || cfg.fallbackVersion || meta.version || meta.ver || meta.appVer || meta.cacheV || "");
   }
 
   function parseBuildStamp(cfg){
     cfg = (cfg && typeof cfg === "object") ? cfg : {};
-    return norm(cfg.buildStamp || cfg.build_stamp || cfg.pageBuildStamp || (cfg.meta && cfg.meta.buildStamp) || "");
+    var meta = (cfg.meta && typeof cfg.meta === "object") ? cfg.meta : {};
+    return norm(cfg.buildStamp || cfg.build_stamp || cfg.pageBuildStamp || cfg.page_build_stamp || meta.buildStamp || meta.build_stamp || meta.pageBuildStamp || "");
   }
 
   function currentUrlVersion(){
     try{ return norm(new URL(location.href).searchParams.get("v")); }catch(_e){ return ""; }
   }
 
-  async function fetchRemotePageStamp(pageFile){
-    var G = getGlobals();
-    try{
-      var page = norm(pageFile || G.PAGE_FILE || "index.html");
-      var u = new URL(page, location.href);
-      u.searchParams.set("_", String(Date.now()));
-      var res = await fetch(u.toString(), { cache:"no-store", credentials:"same-origin" });
-      if(!res.ok) return "";
-      var html = await res.text();
-      var m = String(html || "").match(G.REBUILD_STAMP_REGEX);
-      return m ? norm(m[1]) : "";
-    }catch(_e){
-      return "";
-    }
-  }
-
-  function shouldThrottleRedirect(ver, stamp){
-    try{
-      var key = REDIRECT_GUARD_PREFIX + (location.pathname || "") + "__" + norm(ver) + "__" + norm(stamp);
-      var raw = sessionStorage.getItem(key) || "";
-      var row = raw ? safeJSON(raw) : null;
-      var now = Date.now();
-      if(row && (now - Number(row.ts || 0)) < 12000) return true;
-      sessionStorage.setItem(key, JSON.stringify({ ts: now }));
-    }catch(_e){}
-    return false;
-  }
-
-  async function maybeRedirect(ver, buildStamp){
+  function maybeRedirect(ver){
     ver = norm(ver);
-    buildStamp = norm(buildStamp);
-    if(!ver) return false;
-
-    var G = getGlobals();
-    var curVer = currentUrlVersion();
-    var localStamp = norm(G.CURRENT_REBUILD_STAMP || "");
-    var remoteStamp = await fetchRemotePageStamp(G.PAGE_FILE);
-    var needRedirect = false;
-
+    if(!ver) return;
     try{
       var u = new URL(location.href);
-      if(curVer !== ver){
+      var cur = norm(u.searchParams.get("v"));
+      var guardKey = "tasun_single_ver_guard__" + (location.pathname || "") + "__" + ver;
+      var already = false;
+      try{ already = sessionStorage.getItem(guardKey) === "1"; }catch(_e){}
+      if(cur !== ver && !already){
+        try{ sessionStorage.setItem(guardKey, "1"); }catch(_e){}
         u.searchParams.set("v", ver);
-        needRedirect = true;
+        u.searchParams.set("_", String(Date.now()));
+        location.replace(u.toString());
       }
-      if(remoteStamp && localStamp && remoteStamp !== localStamp){
-        needRedirect = true;
-      }else if(buildStamp && localStamp && buildStamp !== localStamp){
-        needRedirect = true;
-      }
-      if(!needRedirect) return false;
-      if(shouldThrottleRedirect(ver, remoteStamp || buildStamp || localStamp)) return false;
-      u.searchParams.set("v", ver);
-      u.searchParams.set("_", String(Date.now()));
-      location.replace(u.toString());
-      return true;
     }catch(_e){}
-    return false;
-  }
-
-  function isRaciR268Page(){
-    var G = getGlobals();
-    var file = norm(G.PAGE_FILE || decodeURIComponent(location.pathname.split('/').pop() || ''));
-    var key = norm(G.PAGE_KEY || window.__TASUN_PAGE_KEY__ || '');
-    return key === 'raci-sxdh-simple' || file === '捷運汐東線權責分工精簡版.html';
-  }
-
-  function loadR268SelfHeal(){
-    try{
-      if(!isRaciR268Page()) return false;
-      if(window.__TASUN_RACI_R268_SELFHEAL_BASELINE__ || document.getElementById('tasun-raci-r268-selfheal-js')) return true;
-      var s = document.createElement('script');
-      s.id = 'tasun-raci-r268-selfheal-js';
-      s.src = addVer('tasun-raci-r268-selfheal.js', window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || currentUrlVersion() || '');
-      s.async = false;
-      s.defer = true;
-      s.setAttribute('data-tasun-selfheal', 'r268');
-      s.onerror = function(){ try{ console.warn('[Tasun Version Loader] R268 self-heal module load failed'); }catch(_e){} };
-      (document.head || document.documentElement).appendChild(s);
-      return true;
-    }catch(_e){ return false; }
-  }
-
-  function scheduleR268SelfHealLoad(){
-    if(document.readyState === 'loading'){
-      document.addEventListener('DOMContentLoaded', loadR268SelfHeal, { once:true, passive:true });
-    }else{
-      loadR268SelfHeal();
-    }
-    window.addEventListener('pageshow', loadR268SelfHeal, { passive:true });
   }
 
   (async function(){
     try{
       var cached = readCache();
       var initial = norm(currentUrlVersion() || (cached && cached.ver) || "");
-      if(initial) setGlobals(initial, null);
+      var initialBuild = norm(cached && cached.buildStamp || "");
+      if(initial) setGlobals(initial, initialBuild, null);
 
       var cfg = await fetchVersionConfig();
       var ver = parseVersion(cfg);
-      var stamp = parseBuildStamp(cfg);
+      var buildStamp = parseBuildStamp(cfg);
 
-      if(!ver){
-        ver = initial || NON_FORMAL_FALLBACK;
-      }
+      if(!ver) ver = initial || NON_FORMAL_FALLBACK;
 
-      setGlobals(ver, cfg);
-      saveCache(ver, stamp);
-      scheduleR268SelfHealLoad();
-      var redirected = await maybeRedirect(ver, stamp);
-      if(redirected) return;
+      setGlobals(ver, buildStamp, cfg);
+      saveCache(ver, buildStamp, cfg);
+      maybeRedirect(ver);
       READY_RESOLVE(true);
     }catch(_e){
       var cached = readCache();
       var fallback = norm(currentUrlVersion() || (cached && cached.ver) || NON_FORMAL_FALLBACK);
-      setGlobals(fallback, null);
-      scheduleR268SelfHealLoad();
+      var fallbackBuild = norm(cached && cached.buildStamp || "");
+      setGlobals(fallback, fallbackBuild, null);
       READY_RESOLVE(true);
     }
   })();

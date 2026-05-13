@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Tasun v5 自動版號發布器
+ * Tasun v5 R300 自動版號發布器
  * - 掃描 tasun-version.json 的 versionSources
+ * - 自動補入全自動版號鏈必要檔案：index、loader、發布腳本、workflow
  * - 依內容雜湊產生穩定版號
  * - 同步各 HTML 的 <meta name="tasun-build-stamp" content="...">
  * - 回寫 tasun-version.json 與 TASUN_REBUILD_STAMP
@@ -15,6 +16,12 @@ const ROOT = process.cwd();
 const VERSION_FILE = path.join(ROOT, 'tasun-version.json');
 const REBUILD_FILE = path.join(ROOT, 'TASUN_REBUILD_STAMP');
 const GENERATED_BY = 'publish-version_tasun_project_autoscan.mjs';
+const MANDATORY_VERSION_SOURCES = [
+  'index.html',
+  'tasun-version-loader.js',
+  'publish-version_tasun_project_autoscan.mjs',
+  '.github/workflows/release-version.yml'
+];
 
 function readText(file){
   return fs.readFileSync(file, 'utf8');
@@ -32,7 +39,7 @@ function readJson(file){
 function unique(arr){
   const out=[]; const seen=new Set();
   for(const raw of arr || []){
-    const v=String(raw || '').trim();
+    const v=String(raw || '').trim().replace(/\\/g, '/');
     if(!v || seen.has(v)) continue;
     seen.add(v); out.push(v);
   }
@@ -62,7 +69,8 @@ function normTextForHash(file, text){
     s = s
       .replace(/(<meta\b(?=[^>]*\bname\s*=\s*["']tasun-build-stamp["'])(?=[^>]*\bcontent\s*=\s*["'])([^>]*?\bcontent\s*=\s*["']))[^"']*(["'][^>]*>)/gi, '$1__TASUN_BUILD_STAMP__$3')
       .replace(/(meta\s+name=["']tasun-build-stamp["']\s+content=["'])[^"']*(["'])/gi, '$1__TASUN_BUILD_STAMP__$2')
-      .replace(/(tasun-raci-r\d+[^\n<]*)/gi, '__TASUN_RACI_TAG__')
+      .replace(/(TASUN_REBUILD_STAMP:)[^\n<]*/gi, '$1__TASUN_REBUILD_STAMP__')
+      .replace(/(\[TASUN BUILD\]\s*)[^\n"']*/gi, '$1__TASUN_BUILD_LOG__')
       .replace(/([?&]v=)[^&"'<>\s]+/gi, '$1__V__')
       .replace(/([?&]_=)[^&"'<>\s]+/gi, '$1__TS__')
       .replace(/([?&]_bs=)[^&"'<>\s]+/gi, '$1__BS__');
@@ -124,7 +132,8 @@ function setVersionFields(cfg, version, buildStamp, info){
     timezone:'Asia/Taipei',
     autoCommit:true,
     requiredPermission:'contents: write',
-    loopGuard:'sourceHash + bot actor skip + paths-ignore'
+    loopGuard:'sourceHash + bot actor skip + paths-ignore',
+    requiredSources:MANDATORY_VERSION_SOURCES.slice()
   });
   cfg.meta = Object.assign({}, cfg.meta || {}, {
     version,
@@ -137,6 +146,11 @@ function setVersionFields(cfg, version, buildStamp, info){
     missingCount:info.missing.length,
     missingSources:info.missing,
     htmlMetaSynced:true,
+    includeCurrentPage:true,
+    autoVersionEnabled:true,
+    versionMode:'auto',
+    releaseScript:'publish-version_tasun_project_autoscan.mjs',
+    releaseWorkflow:'.github/workflows/release-version.yml',
     updatedAt:cfg.updatedAt
   });
   return cfg;
@@ -148,7 +162,7 @@ function main(){
     process.exit(1);
   }
   const cfg = readJson(VERSION_FILE);
-  let sources = unique(cfg.versionSources || []);
+  let sources = unique([...(cfg.versionSources || []), ...MANDATORY_VERSION_SOURCES]);
   // 正式規則：版號檔本身不可列入內容雜湊，避免自我觸發。
   sources = sources.filter(x => x !== 'tasun-version.json' && x !== 'TASUN_REBUILD_STAMP');
   cfg.versionSources = sources;

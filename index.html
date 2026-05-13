@@ -1,12 +1,13 @@
 <!DOCTYPE html>
-<!-- TASUN_REBUILD_STAMP:index_v20260504_xidong_stable_login_r164 2026-05-03 23:20:00 (github-pages-html-network-refresh-fixed-link-no-entry-stage-scale) -->
+<!-- TASUN_REBUILD_STAMP:index_r300_auto_version_release_binding 2026-05-13 10:30:00+08:00 -->
 <html lang="zh-Hant">
 <head>
   <!-- Tasun v5 FINAL：版本/快取由 tasun-version.json 控制；腳本改為動態帶 v 載入 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Tasun 資料首頁 · 空無明</title>
-  <meta name="tasun-rebuild-stamp" content="index_v20260504_xidong_stable_login_r164 2026-05-03 23:20:00 (github-pages-html-network-refresh-fixed-link-no-entry-stage-scale)" />
+  <meta name="tasun-build-stamp" content="20260513_tasun_v5_index_r300_auto_version_release_binding" />
+  <meta name="tasun-rebuild-stamp" content="index_r300_auto_version_release_binding 2026-05-13 10:30:00+08:00" />
   <link rel="icon" href="data:,">
   <meta name="color-scheme" content="dark light">
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
@@ -49,7 +50,7 @@
 
   <script>
   (function(){
-    console.log('[TASUN BUILD] index_v20260504_goldzen_xidong_stable_login_r164 2026-05-03 23:20:00');
+    console.log('[TASUN BUILD] index_r300_auto_version_release_binding 2026-05-13 10:30:00+08:00');
     try{
       const dm = navigator.deviceMemory || 0;
       const conn = navigator.connection || {};
@@ -115,7 +116,19 @@
       HTML_NETWORK_REFRESH_GUARD_MS: 15000,
       TABLE_ID: 'tasunIndexButtonTable',
       DB_NAME: 'tasun_index_home_buttons_db_v1',
-      RESOURCE_KEY: 'index-home-buttons'
+      RESOURCE_KEY: 'index-home-buttons',
+      BUILD_STAMP_META_NAME: 'tasun-build-stamp',
+      AUTO_VERSION_ENABLED: true,
+      VERSION_MODE: 'auto',
+      INCLUDE_CURRENT_PAGE: true,
+      RELEASE_SCRIPT: 'publish-version_tasun_project_autoscan.mjs',
+      RELEASE_WORKFLOW: '.github/workflows/release-version.yml',
+      PAGE_BUILD_STAMP: (function(){
+        try{
+          var m = document.querySelector('meta[name="tasun-build-stamp"]');
+          return m ? String(m.getAttribute('content') || '').trim() : '';
+        }catch(_e){ return ''; }
+      })()
     });
     G.PAGE_KEY = C.PAGE_KEY;
     G.PAGE_FILE = C.PAGE_FILE;
@@ -123,6 +136,13 @@
     G.TABLE_ID = C.TABLE_ID;
     G.DB_NAME = C.DB_NAME;
     G.RESOURCE_KEY = C.RESOURCE_KEY;
+    G.VERSION_JSON = C.VERSION_URL;
+    G.VERSION_MODE = C.VERSION_MODE;
+    G.AUTO_VERSION_ENABLED = C.AUTO_VERSION_ENABLED;
+    G.INCLUDE_CURRENT_PAGE = C.INCLUDE_CURRENT_PAGE;
+    G.RELEASE_SCRIPT = C.RELEASE_SCRIPT;
+    G.RELEASE_WORKFLOW = C.RELEASE_WORKFLOW;
+    G.PAGE_BUILD_STAMP = C.PAGE_BUILD_STAMP;
     window.__TASUN_TABLE_ID__ = C.TABLE_ID;
     window.__TASUN_DB_NAME__ = C.DB_NAME;
     window.__TASUN_RESOURCE_KEY__ = C.RESOURCE_KEY;
@@ -142,6 +162,238 @@
     G.CURRENT_REBUILD_STAMP = R.currentRebuildStamp;
   })();
   </script>
+
+
+<script id="tasun-index-r300-auto-version-release-binding-core">
+/* R300：首頁接入真正全自動更新版號鏈。以 tasun-version.json 為唯一版本權威；比對 version/buildStamp，不一致即受控刷新。 */
+(function(){
+  'use strict';
+  if(window.__TASUN_INDEX_R300_AUTO_VERSION_RELEASE_BINDING__) return;
+  window.__TASUN_INDEX_R300_AUTO_VERSION_RELEASE_BINDING__ = true;
+
+  var STATE = window.__TASUN_INDEX_AUTO_VERSION_STATE__ = window.__TASUN_INDEX_AUTO_VERSION_STATE__ || {};
+  var MAX_ATTEMPTS = 2;
+  var FETCH_TIMEOUT_MS = 6500;
+  var COOLDOWN_MS = 45000;
+  var VERSION_JSON = 'tasun-version.json';
+  var LOCK_PREFIX = 'tasun_index_r300_auto_version_lock__';
+  var ATTEMPT_KEY = 'tasun_index_r300_auto_version_attempts_v1';
+
+  function norm(v){ return v == null ? '' : String(v).trim(); }
+  function now(){ return Date.now(); }
+  function getMeta(name){
+    try{
+      var m = document.querySelector('meta[name="' + name + '"]');
+      return m ? norm(m.getAttribute('content')) : '';
+    }catch(_e){ return ''; }
+  }
+  function query(name){
+    try{ return norm(new URL(location.href).searchParams.get(name)); }catch(_e){ return ''; }
+  }
+  function getLocalVersion(){
+    return norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || query('v') || '');
+  }
+  function getLocalBuildStamp(){
+    return norm(getMeta('tasun-build-stamp') || window.__TASUN_PAGE_BUILD_STAMP__ || window.__TASUN_BUILD_STAMP__ || getMeta('tasun-rebuild-stamp') || '');
+  }
+  function readAttemptMap(){
+    try{ return JSON.parse(sessionStorage.getItem(ATTEMPT_KEY) || localStorage.getItem(ATTEMPT_KEY) || '{}') || {}; }
+    catch(_e){ return {}; }
+  }
+  function writeAttemptMap(map){
+    try{ sessionStorage.setItem(ATTEMPT_KEY, JSON.stringify(map || {})); }catch(_e){}
+    try{ localStorage.setItem(ATTEMPT_KEY, JSON.stringify(map || {})); }catch(_e){}
+  }
+  function attemptsFor(key){
+    var map = readAttemptMap();
+    return Number(map[key] || 0) || 0;
+  }
+  function setAttempts(key, n){
+    if(!key) return;
+    var map = readAttemptMap();
+    if(n <= 0) delete map[key];
+    else map[key] = n;
+    writeAttemptMap(map);
+  }
+  function setWithV(ver){
+    ver = norm(ver);
+    if(!ver) return;
+    window.__CACHE_V = ver;
+    window.TASUN_APP_VER = ver;
+    window.APP_VER = ver;
+    window.__withV = function(url){
+      try{
+        var u = new URL(url, document.baseURI);
+        if(u.origin === location.origin){
+          u.searchParams.set('v', ver);
+          return u.toString();
+        }
+      }catch(_e){}
+      return url;
+    };
+  }
+  async function fetchJson(url){
+    var ctl = null;
+    var timer = null;
+    try{
+      ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      timer = setTimeout(function(){ try{ ctl && ctl.abort(); }catch(_e){} }, FETCH_TIMEOUT_MS);
+      var u = new URL(url, document.baseURI);
+      u.searchParams.set('_', String(now()));
+      var res = await fetch(u.toString(), {
+        cache:'no-store',
+        credentials:'same-origin',
+        signal: ctl ? ctl.signal : undefined,
+        headers:{ 'cache-control':'no-cache, no-store, must-revalidate', pragma:'no-cache' }
+      });
+      if(!res.ok) return null;
+      return await res.json().catch(function(){ return null; });
+    }catch(_e){
+      return null;
+    }finally{
+      try{ clearTimeout(timer); }catch(_e){}
+    }
+  }
+  function parseBundle(data){
+    data = data && typeof data === 'object' ? data : {};
+    var meta = data.meta && typeof data.meta === 'object' ? data.meta : {};
+    var version = norm(data.version || data.ver || data.appVer || data.APP_VER || data.appVersion || data.cacheV || data.cache_v || data.manualVersion || data.fallbackVersion || meta.version || meta.ver || meta.appVer || meta.cacheV || '');
+    var buildStamp = norm(data.buildStamp || data.build_stamp || data.pageBuildStamp || data.page_build_stamp || meta.buildStamp || meta.build_stamp || meta.pageBuildStamp || '');
+    var includeCurrentPage = data.includeCurrentPage !== false;
+    var mode = norm(data.versionMode || meta.versionMode || 'auto');
+    return { version:version, buildStamp:buildStamp, includeCurrentPage:includeCurrentPage, versionMode:mode, raw:data };
+  }
+  async function clearWebCaches(){
+    try{
+      if('caches' in window){
+        var names = await caches.keys().catch(function(){ return []; });
+        await Promise.all((names || []).map(function(name){ return caches.delete(name).catch(function(){ return false; }); }));
+      }
+    }catch(_e){}
+    try{
+      if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations){
+        var regs = await navigator.serviceWorker.getRegistrations().catch(function(){ return []; });
+        await Promise.all((regs || []).map(function(r){ return r.unregister().catch(function(){ return false; }); }));
+      }
+    }catch(_e){}
+  }
+  async function refreshTo(bundle, reason){
+    var targetKey = [bundle.version, bundle.buildStamp].filter(Boolean).join('|');
+    if(!targetKey) return false;
+    var lockKey = LOCK_PREFIX + targetKey;
+    var lockedAt = 0;
+    try{ lockedAt = Number(sessionStorage.getItem(lockKey) || localStorage.getItem(lockKey) || 0) || 0; }catch(_e){}
+    if(lockedAt && (now() - lockedAt) < COOLDOWN_MS) return false;
+    var n = attemptsFor(targetKey);
+    if(n >= MAX_ATTEMPTS) return false;
+    setAttempts(targetKey, n + 1);
+    try{ sessionStorage.setItem(lockKey, String(now())); }catch(_e){}
+    try{ localStorage.setItem(lockKey, String(now())); }catch(_e){}
+
+    STATE.reloading = true;
+    await clearWebCaches();
+
+    var url = new URL(location.href);
+    if(bundle.version) url.searchParams.set('v', bundle.version);
+    if(bundle.buildStamp) url.searchParams.set('_bs', bundle.buildStamp);
+    url.searchParams.set('_', String(now()));
+    url.searchParams.set('_r300', norm(reason || 'auto'));
+    location.replace(url.toString());
+    return true;
+  }
+  async function ensureAutoVersion(reason){
+    if(STATE.checking || STATE.reloading) return false;
+    STATE.checking = true;
+    try{
+      var data = await fetchJson(VERSION_JSON);
+      if(!data) return false;
+      var bundle = parseBundle(data);
+      window.__TASUN_VERSION_CONFIG__ = data;
+      window.__TASUN_LATEST_VERSION__ = bundle.version;
+      window.__TASUN_LATEST_BUILD_STAMP__ = bundle.buildStamp;
+      window.__TASUN_AUTO_VERSION_RELEASE_CHAIN__ = {
+        autoVersionEnabled:true,
+        versionMode:bundle.versionMode || 'auto',
+        includeCurrentPage:bundle.includeCurrentPage,
+        releaseScript:'publish-version_tasun_project_autoscan.mjs',
+        releaseWorkflow:'.github/workflows/release-version.yml',
+        pageFile:'index.html',
+        checkedAt:new Date().toISOString(),
+        reason:norm(reason)
+      };
+      if(bundle.version) setWithV(bundle.version);
+
+      var localV = getLocalVersion();
+      var localBS = getLocalBuildStamp();
+      var needRefresh = false;
+      if(bundle.version && bundle.version !== localV) needRefresh = true;
+      if(bundle.buildStamp && bundle.buildStamp !== localBS) needRefresh = true;
+
+      STATE.lastCheck = {
+        reason:norm(reason),
+        localVersion:localV,
+        remoteVersion:bundle.version,
+        localBuildStamp:localBS,
+        remoteBuildStamp:bundle.buildStamp,
+        needRefresh:needRefresh,
+        at:new Date().toISOString()
+      };
+
+      if(needRefresh) return await refreshTo(bundle, reason);
+      if(bundle.version && bundle.buildStamp){
+        setAttempts([bundle.version, bundle.buildStamp].join('|'), 0);
+      }
+      return false;
+    }catch(_e){
+      return false;
+    }finally{
+      STATE.checking = false;
+    }
+  }
+
+  function registerSelfHeal(){
+    try{
+      var rec = {
+        id:'indexR300AutoVersionReleaseChain',
+        page:'index.html',
+        title:'首頁真正全自動更新版號鏈',
+        mode:'check/repair/verify',
+        check:function(){
+          return !!(window.__TASUN_AUTO_VERSION_RELEASE_CHAIN__ &&
+            window.__TASUN_AUTO_VERSION_RELEASE_CHAIN__.autoVersionEnabled &&
+            window.__TASUN_AUTO_VERSION_RELEASE_CHAIN__.versionMode === 'auto' &&
+            window.__TASUN_AUTO_VERSION_RELEASE_CHAIN__.includeCurrentPage !== false);
+        },
+        repair:function(){ return ensureAutoVersion('selfheal-repair'); },
+        verify:function(){ return !!window.__TASUN_LATEST_VERSION__; },
+        standard:'Tasun v5 全站固定口令總版 + TasunSelfHealV5 + R268 + R300 auto version'
+      };
+      window.__TASUN_SELFHEAL_V5_FEATURES__ = window.__TASUN_SELFHEAL_V5_FEATURES__ || [];
+      var exists = window.__TASUN_SELFHEAL_V5_FEATURES__.some(function(x){ return x && x.id === rec.id; });
+      if(!exists) window.__TASUN_SELFHEAL_V5_FEATURES__.push(rec);
+      if(window.TasunSelfHealV5 && typeof window.TasunSelfHealV5.register === 'function'){
+        window.TasunSelfHealV5.register(rec);
+      }
+    }catch(_e){}
+  }
+
+  window.__TASUN_INDEX_R300_ENSURE_AUTO_VERSION__ = ensureAutoVersion;
+  registerSelfHeal();
+  Promise.resolve(window.__TASUN_VERSION_READY__ || true).then(function(){ ensureAutoVersion('boot').catch(function(){}); });
+
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', function(){ ensureAutoVersion('DOMContentLoaded').catch(function(){}); }, { once:true, passive:true });
+  }else{
+    setTimeout(function(){ ensureAutoVersion('readyState').catch(function(){}); }, 0);
+  }
+  window.addEventListener('pageshow', function(){ ensureAutoVersion('pageshow').catch(function(){}); }, { passive:true });
+  window.addEventListener('focus', function(){ ensureAutoVersion('focus').catch(function(){}); }, { passive:true });
+  document.addEventListener('visibilitychange', function(){
+    if(document.visibilityState === 'visible') ensureAutoVersion('visibilitychange').catch(function(){});
+  }, { passive:true });
+})();
+</script>
+
 
 <script id="tasun-index-r164-login-stability-guard">
 (function(){
