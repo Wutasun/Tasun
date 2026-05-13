@@ -1,6 +1,6 @@
 (function(global){
   'use strict';
-  var CORE_VER = '20260327_01_global_core_token_bridge';
+  var CORE_VER = norm(global.__CACHE_V || global.TASUN_APP_VER || global.APP_VER || '20260513_tasun_v5_r300_global_core_auto_version');
   var CURRENT_KEY = 'tasunCurrentUser_v1';
   var SESSION_KEY = 'tasunSession_v1';
   var INDEX_SESSION_KEY = 'tasunIndexSession_v1';
@@ -89,5 +89,40 @@
   async function syncBootstrap(opts){ opts = opts || {}; var apiBase = norm(opts.apiBase || global.TASUN_API_BASE || ''); var resourceKey = norm(opts.resourceKey || global.TASUN_RESOURCE_KEY || global.TASUN_PAGE_KEY || ''); var localRows = Array.isArray(opts.rows) ? opts.rows : []; if(!apiBase || !resourceKey) return { ok:false, reason:'missing-config' }; var readUrl = apiBase.replace(/\/+$/,'') + '/api/tasun/read'; var mergeUrl = apiBase.replace(/\/+$/,'') + '/api/tasun/merge'; if(localRows.length){ await fetchJson(mergeUrl,{ method:'POST', headers:{ 'content-type':'application/json','accept':'application/json' }, body: JSON.stringify({ resourceKey:resourceKey, payload:{ db: localRows, counter:Number(opts.counter||0)||0 } }) }); }
     return fetchJson(readUrl,{ method:'POST', headers:{ 'content-type':'application/json','accept':'application/json' }, body: JSON.stringify({ resourceKey:resourceKey }) }); }
 
-  global.TasunGlobalCore = { version:CORE_VER, nowISO:nowISO, addV:addV, getCurrentUser:getCurrentUser, setCurrentUser:setCurrentUser, bridgeAuth:bridgeAuth, setLastPass:setLastPass, clearSessionLogin:clearSessionLogin, requireLoginOnColdStart:requireLoginOnColdStart, normalizeAuthTable:normalizeAuthTable, getNamedButtons:getNamedButtons, getRouteMap:getRouteMap, resolveRouteByName:resolveRouteByName, navigateByName:navigateByName, applyButtonRoutes:applyButtonRoutes, getCloudToken:getCloudToken, mirrorToken:mirrorToken, buildAuthHeaders:buildAuthHeaders, fetchJson:fetchJson, syncBootstrap:syncBootstrap, TOKEN_KEYS:TOKEN_KEYS.slice() };
+
+  var AUTO_VERSION_STANDARD = Object.assign({}, global.__TASUN_AUTO_VERSION_STANDARD__ || {}, {
+    versionMode:'auto',
+    includeCurrentPage:true,
+    versionJson:'tasun-version.json',
+    releaseScript:'publish-version_tasun_project_autoscan.mjs',
+    releaseWorkflow:'.github/workflows/release-version.yml',
+    rebuildStampFile:'TASUN_REBUILD_STAMP',
+    htmlBuildStampMeta:'tasun-build-stamp',
+    source:'tasun-global-core.js'
+  });
+  global.__TASUN_AUTO_VERSION_STANDARD__ = AUTO_VERSION_STANDARD;
+  function getVersionState(){
+    return {
+      version:norm(global.__CACHE_V || global.TASUN_APP_VER || global.APP_VER || ''),
+      buildStamp:norm(global.__TASUN_PAGE_BUILD_STAMP__ || global.__TASUN_BUILD_STAMP__ || ''),
+      versionJson:AUTO_VERSION_STANDARD.versionJson,
+      releaseScript:AUTO_VERSION_STANDARD.releaseScript,
+      releaseWorkflow:AUTO_VERSION_STANDARD.releaseWorkflow,
+      checkedAt:nowISO()
+    };
+  }
+  function validateAutoVersionConfig(cfg){
+    cfg = cfg && typeof cfg === 'object' ? cfg : {};
+    var rel = cfg.release || {};
+    var meta = cfg.meta || {};
+    var version = norm(cfg.version || cfg.ver || cfg.appVer || cfg.APP_VER || cfg.cacheV || cfg.cache_v || meta.version || '');
+    var buildStamp = norm(cfg.buildStamp || cfg.build_stamp || cfg.pageBuildStamp || meta.buildStamp || '');
+    var ok = cfg.versionMode === 'auto' && cfg.includeCurrentPage === true &&
+      norm(rel.script) === AUTO_VERSION_STANDARD.releaseScript &&
+      norm(rel.workflow) === AUTO_VERSION_STANDARD.releaseWorkflow &&
+      !!version && !!buildStamp;
+    return { ok:ok, version:version, buildStamp:buildStamp, versionMode:norm(cfg.versionMode), includeCurrentPage:cfg.includeCurrentPage === true, releaseScript:norm(rel.script), releaseWorkflow:norm(rel.workflow) };
+  }
+
+  global.TasunGlobalCore = { version:CORE_VER, nowISO:nowISO, addV:addV, getCurrentUser:getCurrentUser, setCurrentUser:setCurrentUser, bridgeAuth:bridgeAuth, setLastPass:setLastPass, clearSessionLogin:clearSessionLogin, requireLoginOnColdStart:requireLoginOnColdStart, normalizeAuthTable:normalizeAuthTable, getNamedButtons:getNamedButtons, getRouteMap:getRouteMap, resolveRouteByName:resolveRouteByName, navigateByName:navigateByName, applyButtonRoutes:applyButtonRoutes, getCloudToken:getCloudToken, mirrorToken:mirrorToken, buildAuthHeaders:buildAuthHeaders, fetchJson:fetchJson, syncBootstrap:syncBootstrap, getVersionState:getVersionState, validateAutoVersionConfig:validateAutoVersionConfig, AUTO_VERSION_STANDARD:AUTO_VERSION_STANDARD, TOKEN_KEYS:TOKEN_KEYS.slice() };
 })(window);

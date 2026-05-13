@@ -1,10 +1,12 @@
-/* Tasun RACI R268+R269 unified self-heal. 2026-05-09 */
+/* Tasun RACI R268+R269+R300 unified self-heal. 2026-05-13 */
 (function(){
   'use strict';
   if(window.__TASUN_RACI_R268_R269_UNIFIED__) return;
   window.__TASUN_RACI_R268_R269_UNIFIED__ = true;
   window.__TASUN_RACI_R268_SELFHEAL_BASELINE__ = true;
   window.__TASUN_RACI_R269_STATUS_SINGLE_AUTHORITY__ = true;
+  window.__TASUN_RACI_R300_AUTO_VERSION_RELEASE_CHAIN__ = true;
+  window.__TASUN_RACI_R300_NO_OLD_DESKTOP_LIFT__ = true;
 
   var G = window.__TASUN_GLOBALS__ = Object.assign({
     PAGE_KEY:'raci-sxdh-simple',PAGE_FILE:'捷運汐東線權責分工精簡版.html',TABLE_ID:'raciTable',
@@ -45,14 +47,66 @@
 
   function patchWriters(){if(window.__TASUN_RACI_R268_R269_WRITERS_PATCHED__)return;window.__TASUN_RACI_R268_R269_WRITERS_PATCHED__=true;['setRaciBadge','updateRaciStatus','setCloudSyncStatus','setCloudStatusFromActual'].forEach(function(fn){if(typeof window[fn]!=='function')return;var old=window[fn];window[fn]=function(){var r=old.apply(this,arguments);setTimeout(canonicalStatus,0);setTimeout(canonicalStatus,80);setTimeout(canonicalStatus,240);return r;};});}
   function observeStatus(){if(S.observer)return;var bar=q('#statusBar')||q('.raciStatusBar');if(!bar||typeof MutationObserver==='undefined')return;S.observer=new MutationObserver(function(){debounce('status',canonicalStatus,40);});S.observer.observe(bar,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['style','class','data-badge']});}
-  function desktopLift(){if(document.getElementById('tasun-raci-r268-r269-desktop-lift-style'))return;var st=document.createElement('style');st.id='tasun-raci-r268-r269-desktop-lift-style';st.textContent='@media (min-width:821px){.topbar{padding-top:2px!important;padding-bottom:6px!important}.topbar .brand{position:relative!important;top:-22px!important;transform:translateY(-22px)!important}.topbar .title{margin-top:-8px!important}#btnSearch,#btnShowAll,#editMenuWrap{position:relative!important;top:-18px!important;transform:translateY(-18px)!important}.right{align-items:flex-start!important;padding-top:0!important}}';document.head.appendChild(st);}
+  function removeLegacyDesktopLift(){
+    try{
+      var old=document.getElementById('tasun-raci-r268-r269-desktop-lift-style');
+      if(old) old.remove();
+      var old2=document.getElementById('tasun-raci-r269-status-single-authority-style');
+      if(old2){
+        old2.textContent=String(old2.textContent||'')
+          .replace(/\.topbar\s*\.brand\s*\{[^}]*transform\s*:\s*translateY\([^}]+\}/g,'')
+          .replace(/#btnSearch,\s*#btnShowAll,\s*#editMenuWrap\s*\{[^}]*transform\s*:\s*translateY\([^}]+\}/g,'');
+      }
+    }catch(_e){}
+  }
+  function desktopLift(){
+    removeLegacyDesktopLift();
+    if(document.getElementById('tasun-raci-r300-stage-title-center-style'))return;
+    var st=document.createElement('style');
+    st.id='tasun-raci-r300-stage-title-center-style';
+    st.textContent='@media (min-width:821px){:root{--r300-stage-gap:.5cm}.wrap{left:var(--r300-stage-gap)!important;top:var(--r300-stage-gap)!important;width:calc(100vw - (2 * var(--r300-stage-gap)))!important;height:calc(100dvh - (2 * var(--r300-stage-gap)))!important}.topbar{min-height:112px!important;padding:.5cm!important}.topbar .brand{position:absolute!important;left:50%!important;top:50%!important;transform:translate(-50%,-50%)!important;text-align:center!important;z-index:3!important;pointer-events:none!important}.topbar .title{margin:0!important;text-align:center!important;white-space:nowrap!important}.nav-left{position:relative!important;z-index:4!important}.right{position:relative!important;z-index:4!important;margin-left:auto!important}.topbar #btnSearch,.topbar #btnShowAll,.topbar #editMenuWrap{transform:none!important;top:auto!important}}';
+    document.head.appendChild(st);
+  }
   function protectAdminPublish(){var role='';try{role=n(JSON.parse(sessionStorage.getItem('tasunCurrentUser_v1')||localStorage.getItem('tasunCurrentUser_v1')||'{}').role).toLowerCase();}catch(_e){}qa('button,a').forEach(function(el){var s=n(el.textContent||el.value||el.id||'');if(!/發布|發佈|publish/i.test(s))return;if(role!=='admin'){el.setAttribute('aria-disabled','true');el.classList.add('tasun-nonadmin-disabled');bindOnce(el,'click',function(ev){ev.preventDefault();ev.stopPropagation();warn('非 admin 不可發布正式版');},'adminPublishGuard',true);}});}
 
   async function readCloud(){try{if(typeof window.readCloudRows==='function'){var rows=await window.readCloudRows({reason:'r268-r269-authority-read'});if(Array.isArray(rows)){S.cloudRows=dedupe(rows);S.cloudDone=true;S.lastCloudAt=Date.now();window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__=S.cloudRows.slice();if(S.cloudRows.length)saveLocal(S.cloudRows);return S.cloudRows;}}}catch(e){warn('readCloud: '+(e&&e.message||e));}return null;}
   async function cloudRoundtrip(reason){if(S.cloudRunning)return false;S.cloudRunning=true;try{canonicalStatus();var local=dedupe(localRows());var cloud=await readCloud();var merged=dedupe([].concat(cloud||[],local));if(merged.length)saveLocal(merged);if(typeof window.mergeCloudRows==='function'&&merged.length)await window.mergeCloudRows(merged,{reason:reason||'r268-r269-roundtrip'});else if(typeof window.syncCloud==='function')await window.syncCloud(reason||'r268-r269-roundtrip');else if(typeof window.scheduleCloudSync==='function')window.scheduleCloudSync(reason||'r268-r269-roundtrip',80);var finalRows=await readCloud();if(finalRows&&finalRows.length)saveLocal(finalRows);S.cloudDone=true;canonicalStatus();return true;}catch(e){warn('cloudRoundtrip: '+(e&&e.message||e));S.cloudDone=true;canonicalStatus();return false;}finally{S.cloudRunning=false;}}
 
-  function registerSelfHeal(){try{var core=window.TasunSelfHealV5=window.TasunSelfHealV5||{features:{},register:function(k,f){this.features[k]=f||{};}};if(typeof core.register==='function'){core.register('raciR268R269StatusSingleAuthority',{check:function(){return true;},repair:function(){canonicalStatus();return true;},verify:function(){return true;},coolDownMs:900,maxRetry:6});core.register('raciR268R269DesktopLift',{check:function(){return !!document.getElementById('tasun-raci-r268-r269-desktop-lift-style');},repair:function(){desktopLift();return true;},verify:function(){return !!document.getElementById('tasun-raci-r268-r269-desktop-lift-style');},coolDownMs:900,maxRetry:6});core.register('raciR268R269CloudRoundtrip',{check:function(){return true;},repair:function(){cloudRoundtrip('selfheal');return true;},verify:function(){return true;},coolDownMs:1800,maxRetry:3});}}catch(_e){}}
-  function run(reason){var t=Date.now();if(t-S.last<Number(G.SELFHEAL_COOLDOWN_MS||900)&&reason!=='force')return;S.last=t;ensureTable();normalizeInputs();patchWriters();desktopLift();protectAdminPublish();registerSelfHeal();canonicalStatus();observeStatus();window.__TASUN_RACI_R268_R269_LAST_RUN__={reason:reason||'manual',at:new Date().toISOString()};}
+
+  function autoVersionState(){
+    var std = window.__TASUN_AUTO_VERSION_STANDARD__ || {};
+    var cfg = window.__TASUN_REMOTE_PAGE_META__ || {};
+    return {
+      standard:std,
+      version:n(window.__CACHE_V||window.TASUN_APP_VER||window.APP_VER||cfg.version||''),
+      buildStamp:n(window.__TASUN_PAGE_BUILD_STAMP__||window.__TASUN_BUILD_STAMP__||cfg.bundleBuildStamp||cfg.remoteBuildStamp||''),
+      releaseScript:n(std.releaseScript||'publish-version_tasun_project_autoscan.mjs'),
+      releaseWorkflow:n(std.releaseWorkflow||'.github/workflows/release-version.yml')
+    };
+  }
+  function autoVersionOk(){
+    var s=autoVersionState(), std=s.standard||{};
+    return n(std.versionMode||'auto')==='auto' && (std.includeCurrentPage===true || window.__TASUN_RACI_R300_AUTO_VERSION_RELEASE_CHAIN__) &&
+      s.releaseScript==='publish-version_tasun_project_autoscan.mjs' && s.releaseWorkflow==='.github/workflows/release-version.yml';
+  }
+  function repairAutoVersionStandard(){
+    window.__TASUN_AUTO_VERSION_STANDARD__ = Object.assign({}, window.__TASUN_AUTO_VERSION_STANDARD__ || {}, {
+      versionMode:'auto', includeCurrentPage:true, versionJson:'tasun-version.json',
+      releaseScript:'publish-version_tasun_project_autoscan.mjs', releaseWorkflow:'.github/workflows/release-version.yml',
+      rebuildStampFile:'TASUN_REBUILD_STAMP', htmlBuildStampMeta:'tasun-build-stamp', source:'tasun-raci-r268-selfheal.js'
+    });
+    window.__TASUN_RACI_R300_AUTO_VERSION_RELEASE_CHAIN__ = true;
+    return true;
+  }
+  function registerAutoVersionSelfHeal(core){
+    try{
+      core.register('raciR300AutoVersionReleaseChain',{check:autoVersionOk,repair:repairAutoVersionStandard,verify:autoVersionOk,coolDownMs:1800,maxRetry:3});
+      core.register('raciR300NoOldDesktopLift',{check:function(){return !document.getElementById('tasun-raci-r268-r269-desktop-lift-style');},repair:function(){removeLegacyDesktopLift();desktopLift();return true;},verify:function(){return !document.getElementById('tasun-raci-r268-r269-desktop-lift-style');},coolDownMs:900,maxRetry:4});
+    }catch(_e){}
+  }
+
+  function registerSelfHeal(){try{var core=window.TasunSelfHealV5=window.TasunSelfHealV5||{features:{},register:function(k,f){this.features[k]=f||{};}};if(typeof core.register==='function'){core.register('raciR268R269StatusSingleAuthority',{check:function(){return true;},repair:function(){canonicalStatus();return true;},verify:function(){return true;},coolDownMs:900,maxRetry:6});core.register('raciR268R269DesktopLift',{check:function(){return !!document.getElementById('tasun-raci-r268-r269-desktop-lift-style');},repair:function(){desktopLift();return true;},verify:function(){return !!document.getElementById('tasun-raci-r268-r269-desktop-lift-style');},coolDownMs:900,maxRetry:6});core.register('raciR268R269CloudRoundtrip',{check:function(){return true;},repair:function(){cloudRoundtrip('selfheal');return true;},verify:function(){return true;},coolDownMs:1800,maxRetry:3});registerAutoVersionSelfHeal(core);}}catch(_e){}}
+  function run(reason){var t=Date.now();if(t-S.last<Number(G.SELFHEAL_COOLDOWN_MS||900)&&reason!=='force')return;S.last=t;ensureTable();normalizeInputs();patchWriters();removeLegacyDesktopLift();desktopLift();repairAutoVersionStandard();protectAdminPublish();registerSelfHeal();canonicalStatus();observeStatus();window.__TASUN_RACI_R268_R269_LAST_RUN__={reason:reason||'manual',at:new Date().toISOString()};}
   window.__TASUN_RACI_CLOUD_ROUNDTRIP_DEDUPE__=cloudRoundtrip;window.__TASUN_RACI_R268_RUN_SELFHEAL__=run;window.__TASUN_RACI_R269_STATUS_SINGLE_AUTHORITY_RUN__=canonicalStatus;
   function boot(){run('boot');cloudRoundtrip('boot');[150,500,1000,1800,3000,5000,8000,12000].forEach(function(ms){setTimeout(function(){run('boot-'+ms);canonicalStatus();},ms);});}
   bindOnce(document,'input',function(){debounce('input',normalizeInputs,160);},'input',true);bindOnce(document,'change',function(){debounce('change',normalizeInputs,80);},'change',true);['pageshow','resize','orientationchange','focus','visibilitychange'].forEach(function(ev){bindOnce(window,ev,function(){debounce(ev,function(){run(ev);},160);},ev,true);});if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true,passive:true});else boot();
