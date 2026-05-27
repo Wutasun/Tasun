@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
   <script id="tasun-raci-r381-direct-child-flags">window.__TASUN_REQUIRE_LOGIN__ = false; window.__TASUN_DIRECT_PAGE__ = true; window.__TASUN_CHILD_PAGE__ = true; window.__TASUN_NO_INDEX_REDIRECT__ = true; window.__TASUN_RACI_DIRECT_CHILD__ = true;</script>
-  <!-- tasun-raci-r394-duplicate-report-delete-admin-gate-fix based-on-latest-upload-20260527 -->
+  <!-- tasun-raci-r395-import-upload-local-authority-first-fix based-on-r394-latest-version-20260527 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <meta http-equiv="Expires" content="0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
-  <meta name="tasun-build-stamp" content="20260527_tasun_v5_raci_r394_duplicate_report_delete_admin_gate_fix" />
+  <meta name="tasun-build-stamp" content="20260527_tasun_v5_raci_r395_import_upload_local_authority_first_fix" />
 <script id="tasun-github-pages-html-network-once-v5">
 (function(){
   'use strict';
@@ -84,6 +84,7 @@
   window.__TASUN_RACI_R392_SEARCH_PANEL_SINGLE_ROW_FIX__ = true;
   window.__TASUN_RACI_R393_MODAL_DROPDOWN_MOBILE_HEADER_LAYER_FIX__ = true;
   window.__TASUN_RACI_R394_DUPLICATE_REPORT_DELETE_ADMIN_GATE_FIX__ = true;
+  window.__TASUN_RACI_R395_IMPORT_UPLOAD_LOCAL_AUTHORITY_FIRST_FIX__ = true;
 })();
 </script>
 
@@ -4625,7 +4626,7 @@ body > .tasunR306VersionNoise,
   'use strict';
   if(window.__TASUN_RACI_R306_TITLE_GAP_05CM_SPEED__) return;
   window.__TASUN_RACI_R306_TITLE_GAP_05CM_SPEED__ = true;
-  var BUILD = '20260527_tasun_v5_raci_r394_duplicate_report_delete_admin_gate_fix';
+  var BUILD = '20260527_tasun_v5_raci_r395_import_upload_local_authority_first_fix';
   var G = window.__TASUN_GLOBALS__ = Object.assign(window.__TASUN_GLOBALS__ || {}, {
     PAGE_KEY:'raci-sxdh-simple',
     PAGE_FILE:'捷運汐東線權責分工精簡版.html',
@@ -6480,17 +6481,51 @@ body > .tasunR306VersionNoise,
           const r = normalizeRow(raw || {});
           return !!(r.deleted && !isSystemRowR133(r));
         }), true) : [];
-        if(localDeleteRowsR394.length){
+
+        /* R395：明確本端上傳/匯入/儲存/刪除時，本端新資料與刪除墓碑必須先上傳，再下傳雲端校正；
+           不可先套用既有雲端權威資料，否則匯入後會被舊雲端資料覆蓋回舊筆數。 */
+        if(localAll.length && explicitPendingR394){
+          let mergeOk = false;
+          let finalCloud = [];
           try{
-            await mergeCloudRows(localDeleteRowsR394);
-            cloudAll = await readCloudRows().catch(function(){ return cloudAll; });
-            window.__TASUN_RACI_R394_EXPLICIT_DELETE_FIRST__ = {
+            if(localDeleteRowsR394.length){
+              await mergeCloudRows(localDeleteRowsR394);
+              cloudAll = await readCloudRows().catch(function(){ return cloudAll; });
+              window.__TASUN_RACI_R394_EXPLICIT_DELETE_FIRST__ = {
+                reason:String(reason || ''),
+                tombstones:localDeleteRowsR394.length,
+                cloudRows:Array.isArray(cloudAll) ? cloudAll.length : 0,
+                at:new Date().toISOString()
+              };
+            }
+            const uploadRows = dedupeRows([].concat(cloudAll || [], localAll || []), true);
+            mergeOk = await mergeCloudRows(uploadRows);
+            finalCloud = await readCloudRows().catch(function(){ return []; });
+            if(finalCloud && finalCloud.length){
+              await applyCloudAuthorityRowsR294(finalCloud, 'r395-sync-after-explicit-local-upload-cloud-authority');
+              updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || finalCloud, 'duplicate-sync-confirm-download-r395');
+            }else{
+              db = activeRows(uploadRows).sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
+              deletedRows = dedupeRows(uploadRows.filter(r => r.deleted && !isSystemRowR133(r)), true);
+              render();
+            }
+            window.__TASUN_RACI_R395_EXPLICIT_UPLOAD_FIRST__ = {
               reason:String(reason || ''),
-              tombstones:localDeleteRowsR394.length,
-              cloudRows:Array.isArray(cloudAll) ? cloudAll.length : 0,
+              localRows:Array.isArray(localAll) ? localAll.length : 0,
+              uploadRows:uploadRows.length,
+              cloudBefore:Array.isArray(cloudAll) ? cloudAll.length : 0,
+              cloudAfter:Array.isArray(finalCloud) ? finalCloud.length : 0,
+              activeCount:db.length,
+              mergeOk:!!mergeOk,
               at:new Date().toISOString()
             };
-          }catch(_e){}
+            lastCloudSyncAt = Date.now();
+            setCloudSyncStatus(mergeOk ? '同步' : '待同步', reason, {r294:true, r395:true, explicitPending:true, localAuthorityFirst:true, mergeOk:!!mergeOk, cloudCount:(finalCloud||[]).length, localCount:localAll.length, activeCount:db.length, durationMs:Date.now()-startedAt});
+            return mergeOk;
+          }catch(_e){
+            setCloudSyncStatus('待同步', reason, {r395:true, explicitPending:true, error:String(_e && _e.message || _e), durationMs:Date.now()-startedAt});
+            return false;
+          }
         }
 
         const cloudHasAuthority = Array.isArray(cloudAll) && cloudAll.some(function(r){ return r && !isSystemRowR133(r); });
@@ -6500,24 +6535,6 @@ body > .tasunR306VersionNoise,
           lastCloudSyncAt = Date.now();
           setCloudSyncStatus('同步', reason, {r294:true, r394:true, cloudAuthority:true, deleteFirst:localDeleteRowsR394.length, cloudCount:cloudAll.length, activeCount:db.length, localDbPurged:true, durationMs:Date.now()-startedAt});
           return true;
-        }
-
-        /* 只有在明確的本端待同步情境才上傳本端資料；一般開頁/背景同步不可把舊本端資料覆蓋回空雲端。 */
-        if(localAll.length && explicitPendingR394){
-          const uploadRows = dedupeRows(localAll, true);
-          const mergeOk = await mergeCloudRows(uploadRows);
-          const finalCloud = await readCloudRows().catch(function(){ return []; });
-          if(finalCloud && finalCloud.length){
-            await applyCloudAuthorityRowsR294(finalCloud, 'r294-sync-after-explicit-upload-cloud-authority');
-            updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || finalCloud, 'duplicate-sync-confirm-download-r294');
-          }else{
-            db = activeRows(uploadRows).sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
-            deletedRows = dedupeRows(uploadRows.filter(r => r.deleted && !isSystemRowR133(r)), true);
-            render();
-          }
-          lastCloudSyncAt = Date.now();
-          setCloudSyncStatus(mergeOk ? '同步' : '待同步', reason, {r294:true, explicitPending:true, mergeOk:!!mergeOk, cloudCount:(finalCloud||[]).length, localCount:localAll.length, durationMs:Date.now()-startedAt});
-          return mergeOk;
         }
 
         /* 雲端確定空且無待同步：清除本端舊資料庫，避免舊資料復活。 */
@@ -7712,12 +7729,102 @@ function render(){
     return map;
   }
 
+
+  function importFullSignatureR395(row){
+    return getRowSignature(normalizeRow(row || {}));
+  }
+
+  function makeImportReplaceTombstonesR395(existingRows, importedRows, t){
+    const importedSig = new Set((Array.isArray(importedRows) ? importedRows : []).map(importFullSignatureR395).filter(Boolean));
+    const tombs = [];
+    dedupeRows(existingRows || [], true).forEach(function(raw){
+      const r = normalizeRow(raw || {});
+      if(r.deleted || isSystemRowR133(r) || isLegacyAfterRow2R163(r) || isMalformedRaciRowR170(r)) return;
+      const sig = importFullSignatureR395(r);
+      if(sig && importedSig.has(sig)) return;
+      tombs.push(Object.assign({}, r, {
+        deleted:true,
+        _deleted:true,
+        updatedAt:t,
+        rev:t,
+        deletedAt:t,
+        pendingDelete:true,
+        importReplaceR395:true,
+        pageKey:CFG.PAGE_KEY,
+        resourceKey:CFG.RESOURCE_KEY,
+        pageFile:CFG.PAGE_FILE
+      }));
+    });
+    return dedupeRows(tombs, true).filter(function(r){ return r && r.deleted && !isSystemRowR133(r); });
+  }
+
+  function cloudRowsContainImportedRowsR395(importedRows, cloudRows){
+    const imported = activeRows(importedRows || []);
+    const cloud = activeRows(cloudRows || []);
+    if(!imported.length) return true;
+    if(hasCloudConfirmedRows(imported, cloudRows || [])) return true;
+    const bySig = new Map();
+    cloud.forEach(function(raw){
+      const r = normalizeRow(raw || {});
+      const sig = importFullSignatureR395(r);
+      if(sig) bySig.set(sig, r);
+    });
+    return imported.every(function(raw){
+      const r = normalizeRow(raw || {});
+      const sig = importFullSignatureR395(r);
+      const c = sig ? bySig.get(sig) : null;
+      return !!(c && Number(c.rev || c.updatedAt || 0) >= Number(r.rev || r.updatedAt || 0));
+    });
+  }
+
+  async function persistImportedRowsToCloudAndRedownloadR395(importedRows, tombstones, replace, meta){
+    const imported = activeRows(importedRows || []);
+    const tombs = dedupeRows(tombstones || [], true).filter(function(r){ return r && r.deleted && !isSystemRowR133(r); });
+    const info = Object.assign({replace:!!replace, imported:imported.length, tombstones:tombs.length}, meta || {});
+    if(!imported.length && !tombs.length) return true;
+    let mergeOk = false;
+    let finalCloud = [];
+    try{
+      setCloudSyncStatus('同步中', 'r395-import-upload-local-authority-first', info);
+      let cloudBefore = await readCloudRows().catch(function(){ return []; });
+      const uploadRows = dedupeRows([].concat(cloudBefore || [], tombs, imported), true);
+      mergeOk = await mergeCloudRows(uploadRows);
+      finalCloud = await readCloudRows().catch(function(){ return []; });
+      if(!cloudRowsContainImportedRowsR395(imported, finalCloud)){
+        await mergeCloudRows(dedupeRows([].concat(tombs, imported), true));
+        finalCloud = await readCloudRows().catch(function(){ return []; });
+      }
+      const confirmed = cloudRowsContainImportedRowsR395(imported, finalCloud);
+      if(confirmed){
+        await applyCloudAuthorityRowsR294(finalCloud, 'r395-import-cloud-confirmed-redownload');
+        updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || finalCloud, 'r395-import-confirmed-duplicate-check');
+        render();
+        setCloudSyncStatus('同步', 'r395-import-upload-confirmed', Object.assign({}, info, {r395:true, mergeOk:!!mergeOk, confirmed:true, cloudCount:(finalCloud||[]).length, activeCount:db.length}));
+        window.__TASUN_RACI_R395_LAST_IMPORT_UPLOAD__ = Object.assign({}, info, {mergeOk:!!mergeOk, confirmed:true, cloudCount:(finalCloud||[]).length, activeCount:db.length, at:new Date().toISOString()});
+        return true;
+      }
+      try{ localStorage.setItem('tasunRACI_Simple_pending_sync_v151', JSON.stringify(Object.assign({}, info, {reason:'r395-import-upload-not-confirmed', at:Date.now()}))); }catch(_e){}
+      setCloudSyncStatus(mergeOk ? '待同步' : '待同步', 'r395-import-upload-not-confirmed', Object.assign({}, info, {r395:true, mergeOk:!!mergeOk, cloudCount:(finalCloud||[]).length, activeCount:db.length}));
+      window.__TASUN_RACI_R395_LAST_IMPORT_UPLOAD__ = Object.assign({}, info, {mergeOk:!!mergeOk, confirmed:false, cloudCount:(finalCloud||[]).length, activeCount:db.length, at:new Date().toISOString()});
+      scheduleCloudSync('import-save-r395-retry', 900);
+      return false;
+    }catch(err){
+      try{ localStorage.setItem('tasunRACI_Simple_pending_sync_v151', JSON.stringify(Object.assign({}, info, {reason:'r395-import-upload-error', error:String(err && err.message || err), at:Date.now()}))); }catch(_e){}
+      setCloudSyncStatus('待同步', 'r395-import-upload-error', Object.assign({}, info, {r395:true, error:String(err && err.message || err)}));
+      window.__TASUN_RACI_R395_LAST_IMPORT_UPLOAD__ = Object.assign({}, info, {mergeOk:!!mergeOk, confirmed:false, error:String(err && err.message || err), at:new Date().toISOString()});
+      scheduleCloudSync('import-save-r395-retry', 900);
+      return false;
+    }
+  }
+
+  window.__TASUN_RACI_R395_IMPORT_AUTHORITY_CORE_READY__ = true;
+
   async function importExcel(file){
     if(!canWrite()){ toast('唯讀不可上傳'); return; }
     const ok = await ensureXLSX();
     if(!ok){ toast('匯入功能載入失敗（請確認網路可連線）'); return; }
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
       try{
         const wb = XLSX.read(new Uint8Array(evt.target.result), { type:'array', cellDates:true });
         const sheetName = wb.SheetNames.includes('權責分工精簡版') ? '權責分工精簡版' : wb.SheetNames[0];
@@ -7727,26 +7834,31 @@ function render(){
         const map = locateHeaders(rows);
         if(map.project < 0){ toast('表頭需包含「工程項目」欄位'); return; }
         const replace = db.length ? confirm('是否要先清空既有資料，再匯入檔案內容？\n確定：清空後匯入\n取消：保留原資料並追加匯入') : true;
+        const beforeDb = Array.isArray(db) ? db.slice() : [];
+        const beforeDeleted = Array.isArray(deletedRows) ? deletedRows.slice() : [];
+        setCloudSyncStatus('同步中', replace ? 'r395-import-read-cloud-before-replace' : 'r395-import-read-cloud-before-append');
+        const cloudBefore = await readCloudRows().catch(function(){ return []; });
         if(replace){
-          const t = Date.now();
-          const tombstones = db.map((old) => Object.assign({}, normalizeRow(old), {deleted:true, _deleted:true, updatedAt:t, rev:t, deletedAt:t, pendingDelete:true, pageKey:CFG.PAGE_KEY, resourceKey:CFG.RESOURCE_KEY, pageFile:CFG.PAGE_FILE}));
-          deletedRows = dedupeRows([].concat(deletedRows, tombstones), true).filter(r => r.deleted);
-          saveDeletedRows(deletedRows);
           db = [];
+          deletedRows = [];
           localStorage.setItem(CFG.COUNTER_KEY, '0');
         }
-        const seen = new Set(db.map(r => [r.stage, r.focus, r.project, r.dueHandle, r.dueReview, r.dueVerify, r.dueApprove].join('｜').toLowerCase()));
+        const seenSource = replace ? [] : activeRows([].concat(db || [], cloudBefore || []));
+        const seen = new Set(seenSource.map(importFullSignatureR395).filter(Boolean));
+        const importedRows = [];
+        const importBatchAt = Date.now();
         let add = 0, skip = 0;
         for(let i=2;i<rows.length;i++){
           const src = rows[i] || [];
           const row = blankRow();
           for(const field of Object.keys(IMPORT_HEADERS)){
             const idx = map[field];
-            row[field] = idx >= 0 ? norm(src[idx]) : '';
+            row[field] = idx >= 0 ? cleanTextSpaces(norm(src[idx])) : '';
           }
-          if(Object.values(FIELD_IDS).every(fieldId => !row[Object.keys(FIELD_IDS).find(k => FIELD_IDS[k]===fieldId)])) continue;
+          const hasAnyField = Object.keys(FIELD_IDS).some(function(k){ return !!cleanTextSpaces(row[k]); });
+          if(!hasAnyField) continue;
           if(!row.project){ skip++; continue; }
-          const sig = [row.stage, row.focus, row.project, row.dueHandle, row.dueReview, row.dueVerify, row.dueApprove].join('｜').toLowerCase();
+          const sig = importFullSignatureR395(row);
           if(seen.has(sig)){ skip++; continue; }
           seen.add(sig);
           row.id = nextCounter();
@@ -7756,15 +7868,27 @@ function render(){
           row.resourceKey = CFG.RESOURCE_KEY;
           row.pageFile = CFG.PAGE_FILE;
           row.deleted = false;
-          row.updatedAt = Date.now();
+          row.updatedAt = importBatchAt + add + 1;
           row.rev = row.updatedAt;
-          db.push(normalizeRow(row));
+          importedRows.push(normalizeRow(row));
           add++;
         }
-        saveDB();
+        if(!importedRows.length){ toast(`匯入完成：新增 0 筆${skip ? `，略過 ${skip} 筆` : ''}`); return; }
+        let tombstones = [];
+        if(replace){
+          tombstones = makeImportReplaceTombstonesR395([].concat(beforeDb || [], beforeDeleted || [], cloudBefore || []), importedRows, importBatchAt + importedRows.length + 1000);
+          db = importedRows.slice();
+          deletedRows = tombstones.slice();
+          try{ localStorage.setItem(CFG.COUNTER_KEY, String(db.reduce(function(m,r){ return Math.max(m, Number(r && r.id) || 0); }, 0))); }catch(_e){}
+        }else{
+          db = activeRows(dedupeRows([].concat(db || [], importedRows), true)).sort((a,b) => (Number(a.id)||0) - (Number(b.id)||0));
+          deletedRows = dedupeRows(deletedRows || [], true).filter(function(r){ return r && r.deleted && !isSystemRowR133(r); });
+        }
+        cleanupLocalRowsR131('r395-import-local-authority-before-upload', [].concat(db || [], deletedRows || []));
+        try{ localStorage.setItem('tasunRACI_Simple_pending_sync_v151', JSON.stringify({reason:'import-save-r395', replace:!!replace, imported:add, skipped:skip, tombstones:tombstones.length, at:Date.now()})); }catch(_e){}
         render();
-        scheduleCloudSync('import-save', 80);
-        toast(`匯入完成：新增 ${add} 筆${skip ? `，略過 ${skip} 筆` : ''}，已即時上傳並下傳同步`);
+        const confirmed = await persistImportedRowsToCloudAndRedownloadR395(importedRows, tombstones, replace, {imported:add, skipped:skip});
+        toast(confirmed ? `匯入完成：新增 ${add} 筆${skip ? `，略過 ${skip} 筆` : ''}，雲端已更新並下傳校正` : `匯入完成：新增 ${add} 筆${skip ? `，略過 ${skip} 筆` : ''}，雲端尚未確認，已保留本端並排程重試`);
       }catch(err){
         console.error(err);
         toast('匯入失敗：請確認檔案格式與表頭');
@@ -9999,6 +10123,33 @@ body.searchOpen #searchPanel #btnCloseSearch{
         coolDownMs:1600,
         maxRetry:6
       });
+      core.register('raciR395ImportUploadLocalAuthorityFirst',{
+        check:function(){
+          try{ return !!window.__TASUN_RACI_R395_IMPORT_AUTHORITY_CORE_READY__; }catch(_e){ return false; }
+        },
+        repair:function(){
+          try{ return !!window.__TASUN_RACI_R395_IMPORT_AUTHORITY_CORE_READY__; }catch(_e){ return false; }
+        },
+        verify:function(){
+          try{ return !!(window.__TASUN_RACI_R395_IMPORT_UPLOAD_LOCAL_AUTHORITY_FIRST_FIX__ && window.__TASUN_RACI_R395_IMPORT_AUTHORITY_CORE_READY__); }catch(_e){ return false; }
+        },
+        coolDownMs:1600,
+        maxRetry:6
+      });
+      core.register('raciR395ImportReplaceCloudTombstoneScope',{
+        check:function(){
+          try{ return !!window.__TASUN_RACI_R395_IMPORT_AUTHORITY_CORE_READY__; }catch(_e){ return false; }
+        },
+        repair:function(){ return true; },
+        verify:function(){
+          try{
+            var last = window.__TASUN_RACI_R395_LAST_IMPORT_UPLOAD__ || null;
+            return !last || last.confirmed !== false || !!last.mergeOk;
+          }catch(_e){ return false; }
+        },
+        coolDownMs:1600,
+        maxRetry:6
+      });
       window.__TASUN_RACI_R393_MOBILE_HEADER_LAYER_RECORD__={
         page:'捷運汐東線權責分工精簡版.html',
         build:window.__TASUN_PAGE_BUILD_STAMP__||'',
@@ -10012,6 +10163,13 @@ body.searchOpen #searchPanel #btnCloseSearch{
         updatedAt:'2026-05-27T00:00:00+08:00',
         features:['raciR394DuplicateReportAdminOnly','raciR394DuplicateDeleteSyncTombstoneFirst'],
         rule:'重複資料報表與重複狀態列只允許 admin 顯示；刪除重複資料時必須先產生精準 uid/pk 刪除墓碑並先上傳雲端，再下傳雲端權威資料校正本端與報表。'
+      };
+      window.__TASUN_RACI_R395_IMPORT_UPLOAD_RECORD__={
+        page:'捷運汐東線權責分工精簡版.html',
+        build:window.__TASUN_PAGE_BUILD_STAMP__||'',
+        updatedAt:'2026-05-27T00:00:00+08:00',
+        features:['raciR395ImportUploadLocalAuthorityFirst','raciR395ImportReplaceCloudTombstoneScope'],
+        rule:'Excel 上傳/匯入屬明確本端待同步，必須先以上傳檔本端資料與刪除墓碑為權威上傳雲端，再下傳雲端校正；不得先套用舊雲端權威資料造成匯入後筆數退回。'
       };
     }catch(e){}
   }
@@ -10419,7 +10577,7 @@ body.r292ModalOpen{
   if(window.__TASUN_RACI_R381_MODAL_DROPDOWN_TRIANGLE_ONLY_CORE__) return;
   window.__TASUN_RACI_R381_MODAL_DROPDOWN_TRIANGLE_ONLY_CORE__ = true;
 
-  var BUILD='20260527_tasun_v5_raci_r394_duplicate_report_delete_admin_gate_fix';
+  var BUILD='20260527_tasun_v5_raci_r395_import_upload_local_authority_first_fix';
   var FIELD_BY_INPUT={
     mStage:'stage', mFocus:'focus', mProject:'project',
     mPkg:'pkg', mSupervise:'supervise', mIvv:'ivv', mConsult:'consult', mAgency:'agency',
@@ -10650,7 +10808,7 @@ body.r292ModalOpen{
 (function(){
   window.__TASUN_RACI_R381_FINAL_BASELINE__ = {
     page:'捷運汐東線權責分工精簡版.html',
-    buildStamp:'20260527_tasun_v5_raci_r394_duplicate_report_delete_admin_gate_fix',
+    buildStamp:'20260527_tasun_v5_raci_r395_import_upload_local_authority_first_fix',
     tableId:'raciTable',
     dbName:'tasun_raci_sxdh_simple_db_v117',
     titleTopGap:'0.5cm',
@@ -10887,7 +11045,7 @@ body.searchOpen #searchPanel{
   'use strict';
   if(window.__TASUN_RACI_R381_FULLSCREEN_VSCROLL_STICKY_CORE__) return;
   window.__TASUN_RACI_R381_FULLSCREEN_VSCROLL_STICKY_CORE__ = true;
-  var BUILD='20260527_tasun_v5_raci_r394_duplicate_report_delete_admin_gate_fix';
+  var BUILD='20260527_tasun_v5_raci_r395_import_upload_local_authority_first_fix';
   var S={raf:0,last:0,coolDown:500,observer:null};
   function q(sel,root){return (root||document).querySelector(sel);}
   function qa(sel,root){return Array.prototype.slice.call((root||document).querySelectorAll(sel));}
@@ -11357,7 +11515,7 @@ body.searchOpen .searchBackdrop{
       var core=window.TasunSelfHealV5=window.TasunSelfHealV5||{features:{},register:function(k,f){this.features[k]=f||{};},check:function(k){var f=this.features[k];return f&&f.check?f.check():false;},repair:function(k){var f=this.features[k];return f&&f.repair?f.repair():false;},verify:function(k){var f=this.features[k];return f&&f.verify?f.verify():false;}};
       window.__TASUN_SELFHEAL_BASELINE_R381_SEARCH_DROPDOWN__={
         page:'捷運汐東線權責分工精簡版.html',
-        build:'20260527_tasun_v5_raci_r394_duplicate_report_delete_admin_gate_fix',
+        build:'20260527_tasun_v5_raci_r395_import_upload_local_authority_first_fix',
         updatedAt:'2026-05-22T20:58:00+08:00',
         features:['raciR381SearchDropdownTopLayer','raciR381SearchDropdownTriangleOnly','raciR381SearchPanelOpaque'],
         rule:'搜尋表單只按各欄倒三角開啟最上層 Portal 下拉選單；輸入框不得自動展開；選取後自動套用篩選並關閉。'
@@ -11374,7 +11532,7 @@ body.searchOpen .searchBackdrop{
 <script id="tasun-raci-r381-selfheal-stage-vscroll-dropdown-record">
 (function(){
   'use strict';
-  var BUILD='20260527_tasun_v5_raci_r394_duplicate_report_delete_admin_gate_fix';
+  var BUILD='20260527_tasun_v5_raci_r395_import_upload_local_authority_first_fix';
   function q(s){try{return document.querySelector(s);}catch(_e){return null;}}
   function check(){
     var m=q('meta[name="tasun-build-stamp"]'), w=q('#tableWrap'), sp=q('#tasunR381SearchDropdownPortal'), mp=q('#tasunR381ModalDropdownPortal'), t=q('#raciTable');
@@ -11410,9 +11568,11 @@ body.searchOpen .searchBackdrop{
           'raciR381SearchDropdownTopLayer',
           'raciR393ModalDropdownButtonOnlyTopLayerHold',
           'raciR393MobileHeaderSlideUnderFixedCols',
+          'raciR395ImportUploadLocalAuthorityFirst',
+          'raciR395ImportReplaceCloudTombstoneScope',
           'raciR379EveryFormalPageOrCoreUpdateMustSyncTasunVersionJson'
         ],
-        rule:'桌機舞台佈滿螢幕且四周約0.5cm；tableWrap 為唯一垂直捲動容器；第1/2列表頭固定；新增表單與搜尋表單下拉均由倒三角開啟最上層 Portal；手機版第4欄後表頭滑動時必須在前三固定欄下層隱藏。'
+        rule:'桌機舞台佈滿螢幕且四周約0.5cm；tableWrap 為唯一垂直捲動容器；第1/2列表頭固定；新增表單與搜尋表單下拉均由倒三角開啟最上層 Portal；手機版第4欄後表頭滑動時必須在前三固定欄下層隱藏；Excel 上傳/匯入後必須先以本端新資料上傳雲端再下傳校正，避免被舊雲端資料覆蓋退回。'
       };
       core.register('raciR381FullScreenVScrollHeaderDropdownAuthority',{check:check,repair:repair,verify:check,coolDownMs:900,maxRetry:6});
     }catch(_e){}
@@ -11639,7 +11799,7 @@ body.searchOpen .searchBackdrop{
   'use strict';
   if(window.__TASUN_RACI_R392_SEARCH_PANEL_SINGLE_ROW_AUTHORITY__) return;
   window.__TASUN_RACI_R392_SEARCH_PANEL_SINGLE_ROW_AUTHORITY__=true;
-  var BUILD='20260527_tasun_v5_raci_r394_duplicate_report_delete_admin_gate_fix';
+  var BUILD='20260527_tasun_v5_raci_r395_import_upload_local_authority_first_fix';
   var S={raf:0,last:0,coolDown:450,observer:null};
   function q(s,r){return (r||document).querySelector(s);}
   function qa(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s));}
