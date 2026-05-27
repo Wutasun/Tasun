@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
   <script id="tasun-raci-r381-direct-child-flags">window.__TASUN_REQUIRE_LOGIN__ = false; window.__TASUN_DIRECT_PAGE__ = true; window.__TASUN_CHILD_PAGE__ = true; window.__TASUN_NO_INDEX_REDIRECT__ = true; window.__TASUN_RACI_DIRECT_CHILD__ = true;</script>
-  <!-- tasun-raci-r393-modal-dropdown-mobile-header-layer-fix based-on-latest-upload-20260527 -->
+  <!-- tasun-raci-r394-duplicate-report-delete-admin-gate-fix based-on-latest-upload-20260527 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta id="tasun-r135-cache-control" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
@@ -10,7 +10,7 @@
   <meta http-equiv="Expires" content="0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23070304%27/%3E%3Ctext x=%2750%25%27 y=%2757%25%27 text-anchor=%27middle%27 font-size=%2736%27 fill=%27%23f6d37a%27 font-family=%27Arial%27%3ET%3C/text%3E%3C/svg%3E">
   <title>捷運汐東線權責分工表 · Tasun</title>
-  <meta name="tasun-build-stamp" content="20260527_tasun_v5_raci_r393_modal_dropdown_mobile_header_layer_fix" />
+  <meta name="tasun-build-stamp" content="20260527_tasun_v5_raci_r394_duplicate_report_delete_admin_gate_fix" />
 <script id="tasun-github-pages-html-network-once-v5">
 (function(){
   'use strict';
@@ -83,6 +83,7 @@
   window.__TASUN_RACI_R381_FULLSCREEN_VSCROLL_HEADER_DROPDOWN_AUTHORITY__ = true;
   window.__TASUN_RACI_R392_SEARCH_PANEL_SINGLE_ROW_FIX__ = true;
   window.__TASUN_RACI_R393_MODAL_DROPDOWN_MOBILE_HEADER_LAYER_FIX__ = true;
+  window.__TASUN_RACI_R394_DUPLICATE_REPORT_DELETE_ADMIN_GATE_FIX__ = true;
 })();
 </script>
 
@@ -4624,7 +4625,7 @@ body > .tasunR306VersionNoise,
   'use strict';
   if(window.__TASUN_RACI_R306_TITLE_GAP_05CM_SPEED__) return;
   window.__TASUN_RACI_R306_TITLE_GAP_05CM_SPEED__ = true;
-  var BUILD = '20260527_tasun_v5_raci_r393_modal_dropdown_mobile_header_layer_fix';
+  var BUILD = '20260527_tasun_v5_raci_r394_duplicate_report_delete_admin_gate_fix';
   var G = window.__TASUN_GLOBALS__ = Object.assign(window.__TASUN_GLOBALS__ || {}, {
     PAGE_KEY:'raci-sxdh-simple',
     PAGE_FILE:'捷運汐東線權責分工精簡版.html',
@@ -6474,17 +6475,35 @@ body > .tasunR306VersionNoise,
           try{ await mergeCloudRows(cloudLegacyTombs); }catch(_e){}
         }
 
+        const explicitPendingR394 = hasExplicitLocalPendingR294(reason);
+        const localDeleteRowsR394 = explicitPendingR394 ? dedupeRows(localAll.filter(function(raw){
+          const r = normalizeRow(raw || {});
+          return !!(r.deleted && !isSystemRowR133(r));
+        }), true) : [];
+        if(localDeleteRowsR394.length){
+          try{
+            await mergeCloudRows(localDeleteRowsR394);
+            cloudAll = await readCloudRows().catch(function(){ return cloudAll; });
+            window.__TASUN_RACI_R394_EXPLICIT_DELETE_FIRST__ = {
+              reason:String(reason || ''),
+              tombstones:localDeleteRowsR394.length,
+              cloudRows:Array.isArray(cloudAll) ? cloudAll.length : 0,
+              at:new Date().toISOString()
+            };
+          }catch(_e){}
+        }
+
         const cloudHasAuthority = Array.isArray(cloudAll) && cloudAll.some(function(r){ return r && !isSystemRowR133(r); });
         if(cloudHasAuthority){
           await applyCloudAuthorityRowsR294(cloudAll, 'r294-sync-cloud-authority-purge-local');
-          updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || cloudAll, 'duplicate-sync-cloud-authority-r294');
+          updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || cloudAll, 'duplicate-sync-cloud-authority-r394');
           lastCloudSyncAt = Date.now();
-          setCloudSyncStatus('同步', reason, {r294:true, cloudAuthority:true, cloudCount:cloudAll.length, activeCount:db.length, localDbPurged:true, durationMs:Date.now()-startedAt});
+          setCloudSyncStatus('同步', reason, {r294:true, r394:true, cloudAuthority:true, deleteFirst:localDeleteRowsR394.length, cloudCount:cloudAll.length, activeCount:db.length, localDbPurged:true, durationMs:Date.now()-startedAt});
           return true;
         }
 
         /* 只有在明確的本端待同步情境才上傳本端資料；一般開頁/背景同步不可把舊本端資料覆蓋回空雲端。 */
-        if(localAll.length && hasExplicitLocalPendingR294(reason)){
+        if(localAll.length && explicitPendingR394){
           const uploadRows = dedupeRows(localAll, true);
           const mergeOk = await mergeCloudRows(uploadRows);
           const finalCloud = await readCloudRows().catch(function(){ return []; });
@@ -6878,7 +6897,12 @@ function render(){
     (Array.isArray(rows) ? rows : []).forEach((raw) => {
       const row = normalizeRow(raw);
       const sig = getRowSignature(row);
-      if(row.deleted){ tombUid.add(row.uid); if(sig) tombSig.add(sig); }
+      const tuid = norm(row.uid || row.pk);
+      /* R394：刪除墓碑優先以 uid/pk 精準刪除；只有完全沒有 uid/pk 時才退回簽章刪除，避免重複資料報表刪除一筆時把同簽章保留列一起遮掉。 */
+      if(row.deleted){
+        if(tuid) tombUid.add(tuid);
+        else if(sig) tombSig.add(sig);
+      }
     });
     (Array.isArray(rows) ? rows : []).forEach((raw) => {
       const row = normalizeRow(raw);
@@ -6964,10 +6988,24 @@ function render(){
       const admin = isAdmin();
       const badge = $('dupStatusBadge') || document.querySelector('[data-badge="duplicate"]');
       const btn = $('btnDupReport');
+      const panel = $('dupMask');
       const checked = !!(duplicateReport && duplicateReport.checkedAt);
       const dupCount = Number(duplicateReport && duplicateReport.duplicateCount || 0) || 0;
       const groupCount = Number(duplicateReport && duplicateReport.groups && duplicateReport.groups.length || 0) || 0;
       const showDup = !!(admin && checked && dupCount > 0);
+
+      if(!admin){
+        selectedDuplicateRow = null;
+        if(panel){
+          panel.classList.remove('show');
+          panel.style.display = 'none';
+          panel.setAttribute('aria-hidden','true');
+          panel.setAttribute('data-admin-only','true');
+        }
+      }else if(panel){
+        panel.setAttribute('data-admin-only','true');
+      }
+
       if(badge){
         badge.style.display = showDup ? 'inline-flex' : 'none';
         badge.hidden = !showDup;
@@ -6976,19 +7014,31 @@ function render(){
         badge.classList.toggle('tasunDupHidden', !showDup);
         if(showDup){
           setRaciBadge('duplicate', '重複');
-          badge.title = '雲端/本端重複資料：' + dupCount + ' 筆，' + groupCount + ' 組；定義：階段＋工作重點＋工作項目';
+          badge.title = '雲端/本端重複資料：' + dupCount + ' 筆，' + groupCount + ' 組；定義：階段＋工作重點＋工作項目；僅 admin 可查看。';
         }else{
-          badge.title = checked ? '雲端/本端判別完成：無重複；定義：階段＋工作重點＋工作項目' : '尚未完成重複檢查；無重複時不顯示此狀態列';
+          badge.title = admin
+            ? (checked ? '雲端/本端判別完成：無重複；定義：階段＋工作重點＋工作項目' : '尚未完成重複檢查；無重複時不顯示此狀態列')
+            : '重複資料報表僅 admin 顯示。';
         }
       }
       if(btn){
         btn.style.display = showDup ? 'inline-flex' : 'none';
         btn.hidden = !showDup;
+        btn.disabled = !showDup;
         btn.setAttribute('aria-hidden', showDup ? 'false' : 'true');
+        btn.setAttribute('data-admin-only','true');
         btn.classList.toggle('tasunDupVisible', showDup);
         btn.classList.toggle('tasunDupHidden', !showDup);
-        btn.title = '顯示重複資料報表（階段＋工作重點＋工作項目三欄相同）';
+        btn.title = admin ? '顯示重複資料報表（階段＋工作重點＋工作項目三欄相同）' : '重複資料報表僅 admin 可查看';
       }
+      window.__TASUN_RACI_R394_DUPLICATE_ADMIN_GATE_STATE__ = {
+        admin: !!admin,
+        visible: !!showDup,
+        duplicateCount: dupCount,
+        groupCount: groupCount,
+        checked: !!checked,
+        at: new Date().toISOString()
+      };
     }catch(_e){}
   }
 
@@ -6998,6 +7048,10 @@ function render(){
   }
 
   function renderDuplicateReport(){
+    if(!isAdmin()){
+      updateDuplicateControls();
+      return;
+    }
     const tbody = $('dupTbody');
     const summary = $('dupSummary');
     if(!tbody || !summary) return;
@@ -7065,18 +7119,29 @@ function render(){
 
   function removeDuplicateRowsFromCloudCache(target){
     const list = Array.isArray(target) ? target : [target];
-    const tokens = new Set(list.map(duplicateRowToken).filter(Boolean));
-    const ids = new Set(list.map(r => Number(normalizeRow(r).id)).filter(Number.isFinite));
+    const exactTokens = new Set(list.map(function(r){
+      const n = normalizeRow(r || {});
+      return norm(n.uid || n.pk);
+    }).filter(Boolean));
+    const fallbackTokens = new Set(list.map(duplicateRowToken).filter(Boolean));
     try{
       const raw = window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || [];
-      window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ = raw.filter(r => {
+      window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ = raw.filter(function(r){
         const n = normalizeRow(r || {});
-        const tk = duplicateRowToken(n);
-        if(tk && tokens.has(tk)) return false;
-        const id = Number(n.id);
-        if(Number.isFinite(id) && ids.has(id)) return false;
+        const exact = norm(n.uid || n.pk);
+        if(exactTokens.size && exact && exactTokens.has(exact)) return false;
+        if(!exactTokens.size){
+          const tk = duplicateRowToken(n);
+          if(tk && fallbackTokens.has(tk)) return false;
+        }
         return true;
       });
+      window.__TASUN_RACI_R394_DUPLICATE_CACHE_DELETE__ = {
+        exactCount: exactTokens.size,
+        fallbackCount: fallbackTokens.size,
+        remaining: window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__.length,
+        at: new Date().toISOString()
+      };
     }catch(_e){}
   }
 
@@ -7085,43 +7150,75 @@ function render(){
     if(!isAdmin()){ toast('僅 admin 可刪除'); return false; }
     const target = normalizeRow(targetRow || {});
     const targetToken = duplicateRowToken(target);
+    const targetExactToken = norm(target.uid || target.pk);
     const targetId = Number(target.id);
+    const pendingKeyR394 = 'tasunRACI_Simple_duplicate_delete_tombs_v394';
     const t = Date.now();
+    const tombUid = targetExactToken || createUid(target);
     const tomb = Object.assign({}, target, {
-      uid: norm(target.uid || target.pk) || createUid(target),
-      pk: norm(target.pk || target.uid) || createUid(target),
+      uid: tombUid,
+      pk: tombUid,
       deleted:true,
       _deleted:true,
       updatedAt:t,
       rev:t,
       deletedAt:t,
       pendingDelete:true,
+      duplicateDelete:true,
+      duplicateDeleteTargetToken:targetToken,
+      duplicateDeleteExactToken:targetExactToken,
+      duplicateDeleteR394:true,
       pageKey:CFG.PAGE_KEY,
       resourceKey:CFG.RESOURCE_KEY,
       pageFile:CFG.PAGE_FILE
     });
-    db = (db || []).filter((item) => {
+    db = (db || []).filter(function(item){
       const n = normalizeRow(item || {});
+      const exact = norm(n.uid || n.pk);
       const tk = duplicateRowToken(n);
       const id = Number(n.id);
-      if(targetToken && tk === targetToken) return false;
-      if(Number.isFinite(targetId) && Number.isFinite(id) && id === targetId) return false;
+      if(targetExactToken && exact === targetExactToken) return false;
+      if(!targetExactToken && targetToken && tk === targetToken) return false;
+      /* R394：同 ID 可能有多筆不同 uid 的重複資料，只有完全沒有 uid/token 時才退回用 ID 刪除，避免把保留列一起刪除。 */
+      if(!targetExactToken && !targetToken && Number.isFinite(targetId) && Number.isFinite(id) && id === targetId) return false;
       return true;
     });
     deletedRows = dedupeRows([].concat(deletedRows || [], [tomb]), true).filter(r => r.deleted && !isSystemRowR133(r));
     try{ localStorage.setItem(CFG.DB_KEY, JSON.stringify(db)); }catch(_e){}
     try{ localStorage.setItem(CFG.DELETED_KEY, JSON.stringify(deletedRows)); }catch(_e){}
+    try{
+      const pending = dedupeRows([].concat(parseRows(localStorage.getItem(pendingKeyR394)), [tomb]), true).filter(function(r){ return r && r.deleted && !isSystemRowR133(r); });
+      localStorage.setItem(pendingKeyR394, JSON.stringify(pending));
+      window.__TASUN_RACI_R394_PENDING_DUPLICATE_DELETE_TOMBS__ = pending;
+    }catch(_e){}
     try{ saveIdbRows([].concat(db, deletedRows)); }catch(_e){}
     removeDuplicateRowsFromCloudCache(tomb);
-    updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || [], reason || 'duplicate-delete-local');
+    selectedDuplicateRow = null;
+    updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || [], reason || 'duplicate-delete-local-r394');
     render();
     if(!(options && options.silent)) toast('已刪除重複資料，正在同步雲端');
     try{ clearTimeout(cloudSyncTimer); }catch(_e){}
-    setCloudSyncStatus('同步中', reason || 'duplicate-delete');
+    setCloudSyncStatus('同步中', reason || 'duplicate-delete-r394');
     setTimeout(function(){
-      Promise.resolve(syncCloud(reason || 'duplicate-delete'))
-        .then(function(){ try{ updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || [], 'duplicate-delete-after-sync'); renderDuplicateReport(); }catch(_e){} })
-        .catch(function(){ try{ localStorage.setItem('tasunRACI_Simple_pending_sync_v177', JSON.stringify({reason:reason || 'duplicate-delete-pending', at:Date.now(), deletedCount:deletedRows.length})); scheduleCloudSync((reason || 'duplicate-delete') + '-retry', 650); }catch(_e){} });
+      const syncReason = reason || 'duplicate-delete-r394';
+      Promise.resolve()
+        .then(function(){
+          const pending = dedupeRows([].concat(parseRows(localStorage.getItem(pendingKeyR394)), [tomb]), true).filter(function(r){ return r && r.deleted && !isSystemRowR133(r); });
+          window.__TASUN_RACI_R394_PENDING_DUPLICATE_DELETE_TOMBS__ = pending;
+          return pending.length ? mergeCloudRows(pending) : true;
+        })
+        .then(function(){ return syncCloud(syncReason + '-confirm'); })
+        .then(function(){
+          try{ localStorage.removeItem(pendingKeyR394); }catch(_e){}
+          try{ window.__TASUN_RACI_R394_PENDING_DUPLICATE_DELETE_TOMBS__ = []; }catch(_e){}
+          try{ updateDuplicateStatusFromRows(window.__TASUN_RACI_LAST_CLOUD_RAW_ROWS__ || [], 'duplicate-delete-after-sync-r394'); renderDuplicateReport(); updateDuplicateControls(); }catch(_e){}
+        })
+        .catch(function(){
+          try{
+            localStorage.setItem('tasunRACI_Simple_pending_sync_v177', JSON.stringify({reason:syncReason + '-pending-r394', at:Date.now(), deletedCount:deletedRows.length}));
+            scheduleCloudSync(syncReason + '-retry-r394', 650);
+          }catch(_e){}
+        });
     }, 0);
     return true;
   }
@@ -9866,12 +9963,55 @@ body.searchOpen #searchPanel #btnCloseSearch{
         coolDownMs:900,
         maxRetry:6
       });
+      core.register('raciR394DuplicateReportAdminOnly',{
+        check:function(){
+          try{
+            if(typeof updateDuplicateControls === 'function') updateDuplicateControls();
+            var admin = (typeof isAdmin === 'function') ? isAdmin() : false;
+            var p = document.getElementById('dupMask');
+            var b = document.getElementById('btnDupReport');
+            if(!admin){
+              return !!((!p || !p.classList.contains('show')) && (!b || b.hidden || getComputedStyle(b).display === 'none'));
+            }
+            return true;
+          }catch(_e){ return false; }
+        },
+        repair:function(){ try{ updateDuplicateControls(); return true; }catch(_e){ return false; } },
+        verify:function(){
+          try{
+            var admin = (typeof isAdmin === 'function') ? isAdmin() : false;
+            var p = document.getElementById('dupMask');
+            var b = document.getElementById('btnDupReport');
+            return admin || !!((!p || !p.classList.contains('show')) && (!b || b.hidden || getComputedStyle(b).display === 'none'));
+          }catch(_e){ return false; }
+        },
+        coolDownMs:1200,
+        maxRetry:6
+      });
+      core.register('raciR394DuplicateDeleteSyncTombstoneFirst',{
+        check:function(){
+          try{
+            return !!(typeof performDeleteDuplicateRowObject === 'function' && typeof mergeCloudRows === 'function' && typeof syncCloud === 'function');
+          }catch(_e){ return false; }
+        },
+        repair:function(){ try{ updateDuplicateControls(); return true; }catch(_e){ return false; } },
+        verify:function(){ return !!window.__TASUN_RACI_R394_DUPLICATE_REPORT_DELETE_ADMIN_GATE_FIX__; },
+        coolDownMs:1600,
+        maxRetry:6
+      });
       window.__TASUN_RACI_R393_MOBILE_HEADER_LAYER_RECORD__={
         page:'捷運汐東線權責分工精簡版.html',
         build:window.__TASUN_PAGE_BUILD_STAMP__||'',
         updatedAt:'2026-05-27T00:00:00+08:00',
         features:['raciR393MobileHeaderSlideUnderFixedCols'],
         rule:'手機版第4欄以後表頭水平向左滑動時，必須位於第1~3固定欄表頭下層並被遮住，不得蓋在固定欄上方。'
+      };
+      window.__TASUN_RACI_R394_DUPLICATE_REPORT_RECORD__={
+        page:'捷運汐東線權責分工精簡版.html',
+        build:window.__TASUN_PAGE_BUILD_STAMP__||'',
+        updatedAt:'2026-05-27T00:00:00+08:00',
+        features:['raciR394DuplicateReportAdminOnly','raciR394DuplicateDeleteSyncTombstoneFirst'],
+        rule:'重複資料報表與重複狀態列只允許 admin 顯示；刪除重複資料時必須先產生精準 uid/pk 刪除墓碑並先上傳雲端，再下傳雲端權威資料校正本端與報表。'
       };
     }catch(e){}
   }
@@ -10279,7 +10419,7 @@ body.r292ModalOpen{
   if(window.__TASUN_RACI_R381_MODAL_DROPDOWN_TRIANGLE_ONLY_CORE__) return;
   window.__TASUN_RACI_R381_MODAL_DROPDOWN_TRIANGLE_ONLY_CORE__ = true;
 
-  var BUILD='20260527_tasun_v5_raci_r393_modal_dropdown_mobile_header_layer_fix';
+  var BUILD='20260527_tasun_v5_raci_r394_duplicate_report_delete_admin_gate_fix';
   var FIELD_BY_INPUT={
     mStage:'stage', mFocus:'focus', mProject:'project',
     mPkg:'pkg', mSupervise:'supervise', mIvv:'ivv', mConsult:'consult', mAgency:'agency',
@@ -10510,7 +10650,7 @@ body.r292ModalOpen{
 (function(){
   window.__TASUN_RACI_R381_FINAL_BASELINE__ = {
     page:'捷運汐東線權責分工精簡版.html',
-    buildStamp:'20260527_tasun_v5_raci_r393_modal_dropdown_mobile_header_layer_fix',
+    buildStamp:'20260527_tasun_v5_raci_r394_duplicate_report_delete_admin_gate_fix',
     tableId:'raciTable',
     dbName:'tasun_raci_sxdh_simple_db_v117',
     titleTopGap:'0.5cm',
@@ -10747,7 +10887,7 @@ body.searchOpen #searchPanel{
   'use strict';
   if(window.__TASUN_RACI_R381_FULLSCREEN_VSCROLL_STICKY_CORE__) return;
   window.__TASUN_RACI_R381_FULLSCREEN_VSCROLL_STICKY_CORE__ = true;
-  var BUILD='20260527_tasun_v5_raci_r393_modal_dropdown_mobile_header_layer_fix';
+  var BUILD='20260527_tasun_v5_raci_r394_duplicate_report_delete_admin_gate_fix';
   var S={raf:0,last:0,coolDown:500,observer:null};
   function q(sel,root){return (root||document).querySelector(sel);}
   function qa(sel,root){return Array.prototype.slice.call((root||document).querySelectorAll(sel));}
@@ -11217,7 +11357,7 @@ body.searchOpen .searchBackdrop{
       var core=window.TasunSelfHealV5=window.TasunSelfHealV5||{features:{},register:function(k,f){this.features[k]=f||{};},check:function(k){var f=this.features[k];return f&&f.check?f.check():false;},repair:function(k){var f=this.features[k];return f&&f.repair?f.repair():false;},verify:function(k){var f=this.features[k];return f&&f.verify?f.verify():false;}};
       window.__TASUN_SELFHEAL_BASELINE_R381_SEARCH_DROPDOWN__={
         page:'捷運汐東線權責分工精簡版.html',
-        build:'20260527_tasun_v5_raci_r393_modal_dropdown_mobile_header_layer_fix',
+        build:'20260527_tasun_v5_raci_r394_duplicate_report_delete_admin_gate_fix',
         updatedAt:'2026-05-22T20:58:00+08:00',
         features:['raciR381SearchDropdownTopLayer','raciR381SearchDropdownTriangleOnly','raciR381SearchPanelOpaque'],
         rule:'搜尋表單只按各欄倒三角開啟最上層 Portal 下拉選單；輸入框不得自動展開；選取後自動套用篩選並關閉。'
@@ -11234,7 +11374,7 @@ body.searchOpen .searchBackdrop{
 <script id="tasun-raci-r381-selfheal-stage-vscroll-dropdown-record">
 (function(){
   'use strict';
-  var BUILD='20260527_tasun_v5_raci_r393_modal_dropdown_mobile_header_layer_fix';
+  var BUILD='20260527_tasun_v5_raci_r394_duplicate_report_delete_admin_gate_fix';
   function q(s){try{return document.querySelector(s);}catch(_e){return null;}}
   function check(){
     var m=q('meta[name="tasun-build-stamp"]'), w=q('#tableWrap'), sp=q('#tasunR381SearchDropdownPortal'), mp=q('#tasunR381ModalDropdownPortal'), t=q('#raciTable');
@@ -11499,7 +11639,7 @@ body.searchOpen .searchBackdrop{
   'use strict';
   if(window.__TASUN_RACI_R392_SEARCH_PANEL_SINGLE_ROW_AUTHORITY__) return;
   window.__TASUN_RACI_R392_SEARCH_PANEL_SINGLE_ROW_AUTHORITY__=true;
-  var BUILD='20260527_tasun_v5_raci_r393_modal_dropdown_mobile_header_layer_fix';
+  var BUILD='20260527_tasun_v5_raci_r394_duplicate_report_delete_admin_gate_fix';
   var S={raf:0,last:0,coolDown:450,observer:null};
   function q(s,r){return (r||document).querySelector(s);}
   function qa(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s));}
