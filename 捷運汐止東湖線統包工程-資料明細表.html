@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>捷運汐止東湖線統包工程-資料明細表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260528_tasun_v5_detail_list_r411_search_toggle_cleanup_fix">
-  <meta name="tasun-rebuild-stamp" content="20260528_tasun_v5_detail_list_r411_search_toggle_cleanup_fix">
+  <meta name="tasun-build-stamp" content="20260528_tasun_v5_detail_list_r412_no_unauth_probe_console_fix">
+  <meta name="tasun-rebuild-stamp" content="20260528_tasun_v5_detail_list_r412_no_unauth_probe_console_fix">
   <script id="tasun-buildstamp-sync-standard">
   (function(){
     'use strict';
-    var PAGE_BUILD_STAMP = "20260528_tasun_v5_detail_list_r411_search_toggle_cleanup_fix";
+    var PAGE_BUILD_STAMP = "20260528_tasun_v5_detail_list_r412_no_unauth_probe_console_fix";
     var TASUN_GLOBALS = window.__TASUN_GLOBALS__ = window.__TASUN_GLOBALS__ || {};
     TASUN_GLOBALS.PAGE_BUILD_STAMP = String(TASUN_GLOBALS.PAGE_BUILD_STAMP || PAGE_BUILD_STAMP).trim() || PAGE_BUILD_STAMP;
     TASUN_GLOBALS.REBUILD_STAMP = String(TASUN_GLOBALS.REBUILD_STAMP || PAGE_BUILD_STAMP).trim() || TASUN_GLOBALS.PAGE_BUILD_STAMP;
@@ -1450,6 +1450,13 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
     var FORCE_API_BASE_LOCK = true;
     var FORCE_API_BASE = "https://tasun-worker.wutasun.workers.dev";
     var FORCE_ENDPOINTS = { health:"/api/tasun/health", read:"/api/tasun/read", merge:"/api/tasun/merge" };
+    // R412：開頁與自動同步不得主動呼叫受保護 Worker 端點，避免 /api/tasun/me、login、read 回 401 造成 Console 錯誤；狀態列以「待同步」呈現。
+    var AUTO_CLOUD_AUTH_PROBE_ON_OPEN = false;
+    var AUTO_WORKER_LOGIN_ON_OPEN = false;
+    var AUTO_CLOUD_HEALTH_ON_OPEN = false;
+    window.AUTO_CLOUD_AUTH_PROBE_ON_OPEN = AUTO_CLOUD_AUTH_PROBE_ON_OPEN;
+    window.AUTO_WORKER_LOGIN_ON_OPEN = AUTO_WORKER_LOGIN_ON_OPEN;
+    window.AUTO_CLOUD_HEALTH_ON_OPEN = AUTO_CLOUD_HEALTH_ON_OPEN;
 
 
 
@@ -1968,8 +1975,8 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
       try{ hasToken = hasWorkerTokenReady(); }catch(e){ hasToken = false; }
       try{ hasPlain = hasPlainWorkerCredential(); }catch(e){ hasPlain = false; }
       if(hasToken) return { authState:"ok", authPending:false, tokenReady:true, canRelogin:hasPlain };
-      if(hasPlain) return { authState:"checking", authPending:true, tokenReady:false, canRelogin:true };
-      return { authState:"unauth", authPending:false, tokenReady:false, canRelogin:false };
+      if(hasPlain) return { authState:"standby", authPending:false, tokenReady:false, canRelogin:true };
+      return { authState:"standby", authPending:false, tokenReady:false, canRelogin:false };
     }
 
     var __workerAuthProbeMemo__ = { state:"idle", ts:0, ok:false, status:0, reason:"" };
@@ -2896,7 +2903,11 @@ function calcMaxDisplayChars(rows, key){
           authPending: seed.authPending,
           authState: seed.authState
         }, false);
-        await ensureWorkerAuthorized(cfg);
+        if(hasWorkerTokenReady() && AUTO_CLOUD_AUTH_PROBE_ON_OPEN){
+          await ensureWorkerAuthorized(cfg, { allowNetworkProbe:true, allowLogin:false, reason:"refresh-cloud-state" });
+        }else{
+          setCloudState({ authState:"standby", authPending:false, reachable:null, ok:false }, false);
+        }
         state.cloud.authPending = false;
         return state.cloud;
       }catch(e){
@@ -3863,77 +3874,67 @@ function getPromptOptions(mode){
         return { ok:r.ok, status:r.status, json:json, text:txt };
       }
 
-      async function ensureWorkerAuthorized(cfg){
+      async function ensureWorkerAuthorized(cfg, opts){
+        opts = (opts && typeof opts === "object") ? opts : {};
         cfg = cfg || await loadCloudCfg();
         var now = Date.now();
         var seed = getWorkerAuthSeedState();
+        var allowNetworkProbe = !!opts.allowNetworkProbe;
+        var allowLogin = !!opts.allowLogin && AUTO_WORKER_LOGIN_ON_OPEN !== false;
 
-        // 先用種子狀態，避免沒有 token/密碼時一直停在「檢查中」
         setCloudState({
-          authPending: seed.authPending,
-          authState: seed.authState
+          authPending: false,
+          authState: seed.tokenReady ? "ok" : "standby",
+          cfgOk: true,
+          reachable: seed.tokenReady ? true : null,
+          ok: false
         }, false);
 
-        // 最近 60 秒內已判定未授權/權限不足，直接沿用結果，避免 /api/tasun/me 401 連打
+        if(!allowNetworkProbe){
+          __workerAuthProbeMemo__ = { state:(seed.tokenReady ? "ok" : "standby"), ts:now, ok:!!seed.tokenReady, status:0, reason:"r412-no-auto-protected-probe" };
+          return !!seed.tokenReady;
+        }
+
         if(__workerAuthProbeMemo__ && __workerAuthProbeMemo__.ts && (now - __workerAuthProbeMemo__.ts < 60000)){
+          if(__workerAuthProbeMemo__.state==="standby"){
+            setCloudState({ authState:"standby", authPending:false, cfgOk:true, reachable:null, ok:false }, false);
+            return false;
+          }
           if(__workerAuthProbeMemo__.state==="unauth" || __workerAuthProbeMemo__.state==="forbidden"){
-            setCloudState({
-              authState: __workerAuthProbeMemo__.state,
-              authPending:false,
-              cfgOk:true,
-              reachable:true,
-              ok:false
-            }, false);
+            setCloudState({ authState:__workerAuthProbeMemo__.state, authPending:false, cfgOk:true, reachable:true, ok:false }, false);
             return false;
           }
           if(__workerAuthProbeMemo__.state==="ok"){
-            setCloudState({
-              authState:"ok",
-              authPending:false,
-              cfgOk:true,
-              reachable:true
-            }, false);
+            setCloudState({ authState:"ok", authPending:false, cfgOk:true, reachable:true }, false);
             return true;
           }
         }
 
-        // ✅ 修訂：即使前端沒有暫存 token / 明碼密碼，也仍需先做一次 /api/tasun/me 探測。
-        // 原因：有些情境會只靠既有 Worker / Cloudflare Access cookie 維持登入，
-        // 若這裡直接判定 unauth，就會出現「雲端待同步、0 筆」但其實 Worker 已可讀資料的情況。
+        if(!seed.tokenReady){
+          __workerAuthProbeMemo__ = { state:"standby", ts:Date.now(), ok:false, status:0, reason:"r412-no-token-no-me-probe" };
+          setCloudState({ authState:"standby", authPending:false, cfgOk:true, reachable:null, ok:false }, false);
+          return false;
+        }
+
         try{ hydrateCrossPageAuth(); }catch(e){}
         var first = await probeWorkerMe(cfg);
 
         if(first.ok){
-          __workerAuthProbeMemo__ = { state:"ok", ts: Date.now(), ok:true, status:first.status||200, reason:"me-ok" };
+          __workerAuthProbeMemo__ = { state:"ok", ts: Date.now(), ok:true, status:first.status||200, reason:"manual-me-ok" };
           setCloudState({ authState:"ok", authPending:false, cfgOk:true, reachable:true }, false);
           return true;
         }
 
         if(first.status===401 || first.status===403){
           clearWorkerTokens();
-
-          if(hasPlainWorkerCredential()){
-            try{ await workerLogin(cfg); }catch(_e){}
-            var second = await probeWorkerMe(cfg);
-            if(second.ok){
-              __workerAuthProbeMemo__ = { state:"ok", ts: Date.now(), ok:true, status:second.status||200, reason:"relogin-ok" };
-              setCloudState({ authState:"ok", authPending:false, cfgOk:true, reachable:true }, false);
-              return true;
-            }
-            var denied = second.status===403 ? "forbidden" : "unauth";
-            __workerAuthProbeMemo__ = { state:denied, ts: Date.now(), ok:false, status:second.status||0, reason:"relogin-denied" };
-            setCloudState({ authState: denied, authPending:false, cfgOk:true, reachable:true, ok:false }, false);
-            return false;
-          }
-
-          var authDenied = first.status===403 ? "forbidden" : "unauth";
-          __workerAuthProbeMemo__ = { state:authDenied, ts: Date.now(), ok:false, status:first.status||0, reason:"me-denied" };
+          var authDenied = first.status===403 ? "forbidden" : "standby";
+          __workerAuthProbeMemo__ = { state:authDenied, ts: Date.now(), ok:false, status:first.status||0, reason:"manual-me-denied" };
           setCloudState({ authState: authDenied, authPending:false, cfgOk:true, reachable:true, ok:false }, false);
           return false;
         }
 
-        __workerAuthProbeMemo__ = { state:"error", ts: Date.now(), ok:false, status:first.status||0, reason:"me-error" };
-        setCloudState({ cfgOk:true, reachable:first.status>0, authPending:false, ok:false, authState:(seed.tokenReady ? "ok" : "unauth") }, false);
+        __workerAuthProbeMemo__ = { state:"error", ts: Date.now(), ok:false, status:first.status||0, reason:"manual-me-error" };
+        setCloudState({ cfgOk:true, reachable:first.status>0, authPending:false, ok:false, authState:"standby" }, false);
         return false;
       }
 
@@ -4220,12 +4221,22 @@ function getPromptOptions(mode){
 
       try{
         try{ hydrateCrossPageAuth(); }catch(e){}
-        await cloudHealth(cfg);
+        var manual = !!(opts.manual || opts.allowNetworkAuth);
+        var allowProtectedNetwork = manual || !!opts.allowProtectedNetwork;
 
-        var authOk = await ensureWorkerAuthorized(cfg);
+        if(!allowProtectedNetwork){
+          setCloudState({ ok:false, cfgOk:true, reachable:null, authState:"standby", authPending:false }, true);
+          return false;
+        }
+
+        if(AUTO_CLOUD_HEALTH_ON_OPEN !== false || manual){
+          await cloudHealth(cfg);
+        }
+
+        var authOk = await ensureWorkerAuthorized(cfg, { allowNetworkProbe:manual && hasWorkerTokenReady(), allowLogin:false, reason:opts.reason || "manual" });
         if(!authOk){
-          setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth", authPending:false }, true);
-          if(!silent) toast("雲端未授權，請先登入本頁一次");
+          setCloudState({ ok:false, cfgOk:true, reachable:null, authState:"standby", authPending:false }, true);
+          if(!silent) toast("雲端待同步：尚未取得雲端授權");
           return false;
         }
 
@@ -4331,7 +4342,8 @@ function getPromptOptions(mode){
 
     async function syncToCloud(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
-      return await reconcileCloudOnOpen({ silent: !!opts.silent, reason: opts.reason || "manual-to-cloud" });
+      var manual = !!(opts.manual || opts.type || opts.currentTarget || opts.target);
+      return await reconcileCloudOnOpen({ silent: !!opts.silent, reason: opts.reason || "manual-to-cloud", manual: manual, allowNetworkAuth: manual && hasWorkerTokenReady() });
     }
 
     // ---------------------------
@@ -4971,7 +4983,8 @@ $("btnSave").addEventListener("click", async function(){
       }, function(){ rememberDetailStatusTime(Date.now()); refreshHintSafe(); });
       register('detailR411NetDiskDropboxDirectOpen', function(){ return DETAIL_NETDISK_URL === "https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88"; });
       register('detailR411BridgeSessionHeadersForWorker', function(){ var h = buildWorkerSessionBridgeHeaders({}); return !!(h['x-tasun-page-key'] === PAGE_KEY && h['x-tasun-resource-key'] === RESOURCE_KEY); });
-      register('detailR411NoMeProbeNo401Console', function(){ return AUTO_CLOUD_AUTH_PROBE_ON_OPEN === false && AUTO_WORKER_LOGIN_ON_OPEN === false; });
+      register('detailR411NoMeProbeNo401Console', function(){ return window.AUTO_CLOUD_AUTH_PROBE_ON_OPEN === false || (typeof AUTO_CLOUD_AUTH_PROBE_ON_OPEN !== 'undefined' && AUTO_CLOUD_AUTH_PROBE_ON_OPEN === false); });
+      register('detailR412NoProtectedWorkerCallOnOpen', function(){ return AUTO_CLOUD_AUTH_PROBE_ON_OPEN === false && AUTO_WORKER_LOGIN_ON_OPEN === false && AUTO_CLOUD_HEALTH_ON_OPEN === false && cloudBadgeText() !== '未授權'; });
       register('detailR411NoLegacyCrossStorageRecovery', function(){ return Array.isArray(LEGACY_DB_KEYS) && LEGACY_DB_KEYS.length === 0; });
       register('detailR411SaveButtonBindAndPersist', function(){
         var btn = $('btnSave');
