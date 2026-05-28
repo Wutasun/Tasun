@@ -5,15 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>捷運汐止東湖線統包工程-資料明細表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260528_tasun_v5_detail_list_r413_bridge_sync_status_fix">
-  <meta name="tasun-rebuild-stamp" content="20260528_tasun_v5_detail_list_r413_bridge_sync_status_fix">
+  <meta name="tasun-build-stamp" content="20260528_tasun_v5_detail_list_r414_version_authority_bridge_sync_fix">
+  <meta name="tasun-rebuild-stamp" content="20260528_tasun_v5_detail_list_r414_version_authority_bridge_sync_fix">
   <script id="tasun-buildstamp-sync-standard">
   (function(){
     'use strict';
-    var PAGE_BUILD_STAMP = "20260528_tasun_v5_detail_list_r413_bridge_sync_status_fix";
+    var PAGE_BUILD_STAMP = "20260528_tasun_v5_detail_list_r414_version_authority_bridge_sync_fix";
     var TASUN_GLOBALS = window.__TASUN_GLOBALS__ = window.__TASUN_GLOBALS__ || {};
-    TASUN_GLOBALS.PAGE_BUILD_STAMP = String(TASUN_GLOBALS.PAGE_BUILD_STAMP || PAGE_BUILD_STAMP).trim() || PAGE_BUILD_STAMP;
-    TASUN_GLOBALS.REBUILD_STAMP = String(TASUN_GLOBALS.REBUILD_STAMP || PAGE_BUILD_STAMP).trim() || TASUN_GLOBALS.PAGE_BUILD_STAMP;
+    // R414：本頁正式 build stamp 先成為全域權威，避免舊 URL v、舊版 tasun-version-loader 或 bfcache 全域值把頁面降回 R412/R413。
+    TASUN_GLOBALS.PAGE_BUILD_STAMP = PAGE_BUILD_STAMP;
+    TASUN_GLOBALS.REBUILD_STAMP = PAGE_BUILD_STAMP;
     window.__TASUN_BUILD_STAMP__ = TASUN_GLOBALS.PAGE_BUILD_STAMP;
     window.__TASUN_PAGE_BUILD_STAMP__ = TASUN_GLOBALS.PAGE_BUILD_STAMP;
     window.PAGE_BUILD_STAMP = TASUN_GLOBALS.PAGE_BUILD_STAMP;
@@ -27,10 +28,25 @@
     function norm(v){ return (v===undefined || v===null) ? '' : String(v).trim(); }
     function queryV(){ try{ return norm(new URL(location.href).searchParams.get('v')); }catch(_e){ return ''; } }
     function now(){ return Date.now(); }
+    function buildRank(v){
+      var s = norm(v);
+      var m = s.match(/(?:^|_)r(\d+)(?:_|$)/i);
+      return m ? Number(m[1]) : 0;
+    }
+    function isNewerBuild(a, b){
+      var ra = buildRank(a), rb = buildRank(b);
+      if(ra || rb) return ra > rb;
+      return norm(a) && norm(a) !== norm(b);
+    }
+    function authoritativeBuild(localValue, remoteValue){
+      var local = norm(localValue || PAGE_BUILD_STAMP);
+      var remote = norm(remoteValue || '');
+      return (remote && isNewerBuild(remote, local)) ? remote : local;
+    }
     function ensureWithV(){
       if(typeof window.__withV === 'function') return;
       window.__withV = function(url){
-        var vv = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || queryV() || '');
+        var vv = authoritativeBuild(PAGE_BUILD_STAMP, window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || queryV() || '');
         if(!vv) return url;
         try{
           var u = new URL(url, document.baseURI);
@@ -150,7 +166,15 @@
 
         ensureWithV();
         var bundle = await fetchVersionBundle();
-        if(!bundle) return false;
+        if(!bundle){
+          if(queryV() && queryV() !== PAGE_BUILD_STAMP){
+            return await hardRefreshTo(PAGE_BUILD_STAMP, PAGE_BUILD_STAMP);
+          }
+          window.__CACHE_V = PAGE_BUILD_STAMP;
+          window.TASUN_APP_VER = PAGE_BUILD_STAMP;
+          window.APP_VER = PAGE_BUILD_STAMP;
+          return false;
+        }
 
         var curV = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || queryV() || '');
         var latestV = norm(bundle.version);
@@ -159,30 +183,36 @@
         var remoteHtmlBS = norm(remotePage && remotePage.htmlBuildStamp);
         var remoteRebuildStamp = norm(remotePage && remotePage.htmlRebuildStamp);
         var currentRebuild = norm(window.TASUN_REBUILD_STAMP || window.__TASUN_REBUILD_STAMP__ || PAGE_BUILD_STAMP);
+        var authorityV = authoritativeBuild(PAGE_BUILD_STAMP, latestV || latestBS || remoteHtmlBS || '');
+        var authorityBS = authoritativeBuild(PAGE_BUILD_STAMP, latestBS || remoteHtmlBS || latestV || '');
         var needRefresh = false;
 
-        if(latestV && latestV !== curV) needRefresh = true;
-        if(latestBS && latestBS !== PAGE_BUILD_STAMP) needRefresh = true;
-        if(remoteHtmlBS && remoteHtmlBS !== PAGE_BUILD_STAMP) needRefresh = true;
-        if(remoteRebuildStamp && currentRebuild && remoteRebuildStamp !== currentRebuild) needRefresh = true;
+        // R414：只允許升版，不允許 tasun-version.json、遠端 HTML 或 URL v 把目前頁面降回舊版。
+        if(latestV && latestV !== PAGE_BUILD_STAMP && isNewerBuild(latestV, PAGE_BUILD_STAMP)) needRefresh = true;
+        if(latestBS && latestBS !== PAGE_BUILD_STAMP && isNewerBuild(latestBS, PAGE_BUILD_STAMP)) needRefresh = true;
+        if(remoteHtmlBS && remoteHtmlBS !== PAGE_BUILD_STAMP && isNewerBuild(remoteHtmlBS, PAGE_BUILD_STAMP)) needRefresh = true;
+        if(remoteRebuildStamp && currentRebuild && remoteRebuildStamp !== currentRebuild && isNewerBuild(remoteRebuildStamp, currentRebuild)) needRefresh = true;
 
         try{
           sessionStorage.setItem(CHECK_LOCK_KEY, JSON.stringify({
             ts: now(),
-            v: latestV || curV || '',
-            bs: latestBS || remoteHtmlBS || PAGE_BUILD_STAMP
+            v: authorityV || curV || '',
+            bs: authorityBS || PAGE_BUILD_STAMP
           }));
         }catch(_e){}
 
         if(needRefresh){
-          return await hardRefreshTo(latestV || curV, latestBS || remoteHtmlBS || PAGE_BUILD_STAMP);
+          return await hardRefreshTo(authorityV || latestV || curV, authorityBS || latestBS || remoteHtmlBS || PAGE_BUILD_STAMP);
         }
 
-        if(latestV){
-          window.__CACHE_V = latestV;
-          window.TASUN_APP_VER = latestV;
-          window.APP_VER = latestV;
+        // R414：若使用者仍以舊版 ?v=R412/R413 進入，但目前 HTML 已是新版，立即校正網址與全域版號。
+        if((queryV() && queryV() !== authorityV) || (curV && curV !== authorityV && buildRank(curV) < buildRank(authorityV))){
+          return await hardRefreshTo(authorityV || PAGE_BUILD_STAMP, authorityBS || PAGE_BUILD_STAMP);
         }
+
+        window.__CACHE_V = authorityV || PAGE_BUILD_STAMP;
+        window.TASUN_APP_VER = authorityV || PAGE_BUILD_STAMP;
+        window.APP_VER = authorityV || PAGE_BUILD_STAMP;
         return false;
       } finally {
         RUNNING = false;
@@ -1420,8 +1450,8 @@ window.TASUN_REBUILD_STAMP = pickGlobalValue(window.TASUN_REBUILD_STAMP, TASUN_G
 window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__, window.TASUN_REBUILD_STAMP, TASUN_GLOBALS.REBUILD_STAMP);
 
     function currentAppVer(){
-      var v = String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || "").trim();
-      if(v) return v;
+      var v = "";
+      // R414：本頁 meta / PAGE_BUILD_STAMP 優先於舊版 loader、舊 URL v，避免狀態列顯示 R412。
       try{
         v = String((document.querySelector('meta[name="tasun-build-stamp"]') || {}).content || "").trim();
         if(v) return v;
@@ -1430,6 +1460,8 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
         v = String(window.__TASUN_PAGE_BUILD_STAMP__ || window.__TASUN_BUILD_STAMP__ || window.PAGE_BUILD_STAMP || "").trim();
         if(v) return v;
       }catch(e){}
+      v = String(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || "").trim();
+      if(v) return v;
       try{
         var qv = new URL(location.href).searchParams.get('v');
         if(qv) return String(qv).trim();
@@ -1450,7 +1482,7 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
     var FORCE_API_BASE_LOCK = true;
     var FORCE_API_BASE = "https://tasun-worker.wutasun.workers.dev";
     var FORCE_ENDPOINTS = { health:"/api/tasun/health", read:"/api/tasun/read", merge:"/api/tasun/merge" };
-    // R413：開頁與自動同步改用 browser-session-bridge 安全同步，不再以 /api/tasun/me 或 login 探測授權；避免 401 Console，同步成功後狀態列顯示已同步。
+    // R414：頁面版本以本頁 build stamp 與 tasun-version.json 同步為準，不得被舊 URL v 或舊 tasun-version 降版；雲端以 browser-session-bridge 受控自動同步，成功後顯示已同步。
     var AUTO_CLOUD_AUTH_PROBE_ON_OPEN = false;
     var AUTO_WORKER_LOGIN_ON_OPEN = false;
     var AUTO_CLOUD_HEALTH_ON_OPEN = false;
@@ -2041,6 +2073,11 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
       return headers;
     }
 
+    function buildWorkerSessionBridgeHeaders(extra){
+      // R414：自我修復與 Worker read/merge 使用同一組 bridge header，不再存在未定義函式造成自我修復錯誤。
+      return buildWorkerAuthHeaders(extra || {});
+    }
+
     function ensureActionButtonsVisible(){
       try{
         var cur = null;
@@ -2138,10 +2175,14 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
         try{ ensureActionButtonsVisible(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
 
-        if(!syncedOnce){
+        if(!syncedOnce && (ok || hasBridgeSessionReady())){
           if(!syncPromise){
-            syncPromise = reconcileCloudOnOpen({ silent:true }).catch(function(){ return false; }).then(function(){
-              syncedOnce = true;
+            syncPromise = reconcileCloudOnOpen({ silent:true, reason:'r414-auth-hydration-bridge', allowProtectedNetwork:hasBridgeSessionReady() }).catch(function(){ return false; }).then(function(result){
+              syncedOnce = (result === true);
+              if(!syncedOnce && hasBridgeSessionReady()){
+                setTimeout(function(){ try{ settle(); }catch(_e){} }, 900);
+              }
+              return result;
             }).finally(function(){
               syncPromise = null;
             });
@@ -3935,13 +3976,13 @@ function getPromptOptions(mode){
         }, false);
 
         if(hasBridgeSessionReady()){
-          __workerAuthProbeMemo__ = { state:"ok", ts:now, ok:true, status:0, reason:"r413-browser-session-bridge-no-me-probe" };
+          __workerAuthProbeMemo__ = { state:"ok", ts:now, ok:true, status:0, reason:"r414-browser-session-bridge-no-me-probe" };
           setCloudState({ authState:"ok", authPending:false, cfgOk:true, reachable:true }, false);
           return true;
         }
 
         if(!allowNetworkProbe){
-          __workerAuthProbeMemo__ = { state:(seed.tokenReady ? "ok" : "standby"), ts:now, ok:!!seed.tokenReady, status:0, reason:"r412-no-auto-protected-probe" };
+          __workerAuthProbeMemo__ = { state:(seed.tokenReady ? "ok" : "standby"), ts:now, ok:!!seed.tokenReady, status:0, reason:"r414-no-auto-protected-probe" };
           return !!seed.tokenReady;
         }
 
@@ -3961,7 +4002,7 @@ function getPromptOptions(mode){
         }
 
         if(!seed.tokenReady){
-          __workerAuthProbeMemo__ = { state:"standby", ts:Date.now(), ok:false, status:0, reason:"r412-no-token-no-me-probe" };
+          __workerAuthProbeMemo__ = { state:"standby", ts:Date.now(), ok:false, status:0, reason:"r414-no-token-no-me-probe" };
           setCloudState({ authState:"standby", authPending:false, cfgOk:true, reachable:null, ok:false }, false);
           return false;
         }
@@ -4586,7 +4627,7 @@ function getPromptOptions(mode){
       closeLogin();
       toast("登入成功");
       try{ await refreshCloudAuthState(); }catch(e){}
-      setTimeout(function(){ reconcileCloudOnOpen({ silent:true }); }, 60);
+      setTimeout(function(){ reconcileCloudOnOpen({ silent:true, reason:'r414-login-bridge-sync', allowProtectedNetwork:hasBridgeSessionReady() }); }, 60);
     }
 
     // ---------------------------
@@ -4928,7 +4969,7 @@ $("btnSave").addEventListener("click", async function(){
 
 
     // ---------------------------
-    // TasunSelfHealV5 unified registration (R411 detail-list)
+    // TasunSelfHealV5 unified registration (R414 detail-list)
     // ---------------------------
     var DETAIL_SELFHEAL_CHECKS = [
       "detailR411GlobalConstantsSingleEntrance",
@@ -4946,7 +4987,10 @@ $("btnSave").addEventListener("click", async function(){
       "detailR411NoLegacyCrossStorageRecovery",
       "detailR411SaveButtonBindAndPersist",
       "detailR411SearchButtonTogglePanel",
-      "detailR411RemoveUnusedCloudButtonsAndTokenUi"
+      "detailR411RemoveUnusedCloudButtonsAndTokenUi",
+      "detailR414VersionAuthorityNoDowngrade",
+      "detailR414BridgeRetryUntilSynced",
+      "detailR414CloudStatusAutoSettles"
     ];
     window.__TASUN_DETAIL_SELFHEAL_CHECKS__ = DETAIL_SELFHEAL_CHECKS.slice();
 
@@ -5000,11 +5044,11 @@ $("btnSave").addEventListener("click", async function(){
         searchPanel: { buttonId:'btnSearch', hiddenByDefault:true, fields:['qText','fTrade','fSys','btnClear'] },
         removedButtons: ['btnCloud','btnToken','tokenMask'],
         checks: DETAIL_SELFHEAL_CHECKS.slice(),
-        updatedAt: "2026-05-28T01:10:00+08:00"
+        updatedAt: "2026-05-28T23:05:00+08:00"
       };
       function hasId(id){ return !!$(id); }
       function register(name, check, repair){
-        root.register(name, { group:'detail-list-r411', timeoutMs:1800, check:check, repair:repair || function(){}, verify:check });
+        root.register(name, { group:'detail-list-r414', timeoutMs:1800, check:check, repair:repair || function(){}, verify:check });
       }
       register('detailR411GlobalConstantsSingleEntrance', function(){ return !!(PAGE_KEY && RESOURCE_KEY && IDB_NAME && TABLE_ID); });
       register('detailR411RequiredDomPreflight', function(){ return ['hint','tbl','tbody','btnNetDisk','mAttach','btnSearch','qText','fTrade','fSys','btnClear'].every(hasId); });
@@ -5048,12 +5092,30 @@ $("btnSave").addEventListener("click", async function(){
       register('detailR411RemoveUnusedCloudButtonsAndTokenUi', function(){
         return !hasId('btnCloud') && !hasId('btnToken') && !hasId('tokenMask');
       });
+      register('detailR414VersionAuthorityNoDowngrade', function(){
+        var qv = '';
+        try{ qv = new URL(location.href).searchParams.get('v') || ''; }catch(e){}
+        return currentAppVer() === PAGE_BUILD_STAMP && (!qv || buildRank(qv) <= buildRank(PAGE_BUILD_STAMP));
+      }, function(){
+        try{ window.__CACHE_V = PAGE_BUILD_STAMP; window.TASUN_APP_VER = PAGE_BUILD_STAMP; window.APP_VER = PAGE_BUILD_STAMP; }catch(e){}
+        try{ refreshHintSafe(); }catch(e){}
+      });
+      register('detailR414BridgeRetryUntilSynced', function(){
+        return !hasBridgeSessionReady() || cloudBadgeText() === '已同步' || (state.cloud && state.cloud.syncInProgress);
+      }, function(){
+        if(hasBridgeSessionReady()) reconcileCloudOnOpen({ silent:true, reason:'r414-selfheal-bridge-retry', allowProtectedNetwork:true }).catch(function(){});
+      });
+      register('detailR414CloudStatusAutoSettles', function(){
+        return cloudBadgeText() !== '待同步' || !hasBridgeSessionReady();
+      }, function(){
+        if(hasBridgeSessionReady()) reconcileCloudOnOpen({ silent:true, reason:'r414-selfheal-cloud-status', allowProtectedNetwork:true }).catch(function(){});
+      });
       return root;
     }
 
     function runDetailSelfHeal(reason){
       try{ registerDetailSelfHeal(); }catch(e){}
-      try{ window.TasunSelfHealV5 && window.TasunSelfHealV5.schedule && window.TasunSelfHealV5.schedule('detail-list-r411', reason || 'manual', 220); }catch(e){}
+      try{ window.TasunSelfHealV5 && window.TasunSelfHealV5.schedule && window.TasunSelfHealV5.schedule('detail-list-r414', reason || 'manual', 220); }catch(e){}
     }
 
     // ---------------------------
@@ -5208,7 +5270,7 @@ $("btnSave").addEventListener("click", async function(){
         try{ refresh(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         try{ hydrateCrossPageAuth(); }catch(e){}
         try{ await refreshCloudAuthState(); }catch(e){}
-        try{ await cloudHealth(); }catch(e){}
+        if(AUTO_CLOUD_HEALTH_ON_OPEN !== false){ try{ await cloudHealth(); }catch(e){} }
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         // ✅ 開頁同步策略修正：只要雲端設定有效，就主動跑一次 reconcile；
         // 由 reconcile / ensureWorkerAuthorized 自行判斷已授權、未授權或連線失敗，
@@ -5216,7 +5278,7 @@ $("btnSave").addEventListener("click", async function(){
         try{
           var _c = (typeof state !== "undefined" && state && state.cloud) ? state.cloud : {};
           if(_c && _c.cfgOk){
-            await reconcileCloudOnOpen({ silent:true });
+            await reconcileCloudOnOpen({ silent:true, reason:'r414-boot-bridge-sync', allowProtectedNetwork:hasBridgeSessionReady() });
             try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
           }else{
             try{ setCloudState({ authState:"unauth", authPending:false, ok:false }, false); }catch(e){}
