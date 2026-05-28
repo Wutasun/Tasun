@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>捷運汐止東湖線統包工程-資料明細表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260528_tasun_v5_detail_list_r412_no_unauth_probe_console_fix">
-  <meta name="tasun-rebuild-stamp" content="20260528_tasun_v5_detail_list_r412_no_unauth_probe_console_fix">
+  <meta name="tasun-build-stamp" content="20260528_tasun_v5_detail_list_r413_bridge_sync_status_fix">
+  <meta name="tasun-rebuild-stamp" content="20260528_tasun_v5_detail_list_r413_bridge_sync_status_fix">
   <script id="tasun-buildstamp-sync-standard">
   (function(){
     'use strict';
-    var PAGE_BUILD_STAMP = "20260528_tasun_v5_detail_list_r412_no_unauth_probe_console_fix";
+    var PAGE_BUILD_STAMP = "20260528_tasun_v5_detail_list_r413_bridge_sync_status_fix";
     var TASUN_GLOBALS = window.__TASUN_GLOBALS__ = window.__TASUN_GLOBALS__ || {};
     TASUN_GLOBALS.PAGE_BUILD_STAMP = String(TASUN_GLOBALS.PAGE_BUILD_STAMP || PAGE_BUILD_STAMP).trim() || PAGE_BUILD_STAMP;
     TASUN_GLOBALS.REBUILD_STAMP = String(TASUN_GLOBALS.REBUILD_STAMP || PAGE_BUILD_STAMP).trim() || TASUN_GLOBALS.PAGE_BUILD_STAMP;
@@ -1450,7 +1450,7 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
     var FORCE_API_BASE_LOCK = true;
     var FORCE_API_BASE = "https://tasun-worker.wutasun.workers.dev";
     var FORCE_ENDPOINTS = { health:"/api/tasun/health", read:"/api/tasun/read", merge:"/api/tasun/merge" };
-    // R412：開頁與自動同步不得主動呼叫受保護 Worker 端點，避免 /api/tasun/me、login、read 回 401 造成 Console 錯誤；狀態列以「待同步」呈現。
+    // R413：開頁與自動同步改用 browser-session-bridge 安全同步，不再以 /api/tasun/me 或 login 探測授權；避免 401 Console，同步成功後狀態列顯示已同步。
     var AUTO_CLOUD_AUTH_PROBE_ON_OPEN = false;
     var AUTO_WORKER_LOGIN_ON_OPEN = false;
     var AUTO_CLOUD_HEALTH_ON_OPEN = false;
@@ -2018,13 +2018,26 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
 
     function buildWorkerAuthHeaders(extra){
       var headers = Object.assign({}, extra || {});
-      var bearer = getSharedWorkerToken();
-      if(!bearer) return headers;
-      var raw = String(bearer || "").trim();
-      if(!headers.Authorization && !headers.authorization){
-        headers.Authorization = /^Bearer\s+/i.test(raw) ? raw : ("Bearer " + raw);
+      var bridgeUser = null;
+      try{ bridgeUser = getBridgeUserForWorker(); }catch(e){ bridgeUser = null; }
+
+      // R413：所有 read/merge 走首頁登入 bridge，不再先呼叫 /api/tasun/me 授權探測。
+      if(bridgeUser && bridgeUser.user){
+        headers["x-tasun-session-bridge"] = "1";
+        headers["x-tasun-user"] = bridgeUser.user;
+        headers["x-tasun-role"] = bridgeUser.role || "read";
+        headers["x-tasun-page-key"] = PAGE_KEY;
+        headers["x-tasun-resource-key"] = PAGE_KEY;
+        try{ headers["x-tasun-page-file"] = getFileName() || "捷運汐止東湖線統包工程-資料明細表.html"; }catch(e){ headers["x-tasun-page-file"] = "捷運汐止東湖線統包工程-資料明細表.html"; }
       }
-      // ✅ 不再傳 x-api-key，避免跨網域 preflight / CORS 被擋
+
+      var bearer = getSharedWorkerToken();
+      if(bearer){
+        var raw = String(bearer || "").trim();
+        if(!headers.Authorization && !headers.authorization){
+          headers.Authorization = /^Bearer\s+/i.test(raw) ? raw : ("Bearer " + raw);
+        }
+      }
       return headers;
     }
 
@@ -2924,6 +2937,36 @@ function calcMaxDisplayChars(rows, key){
       }
     }
 
+    function getBridgeUserForWorker(){
+      try{
+        var cur = getCurrentUser();
+        if(cur && (cur.user || cur.name || cur.username)){
+          return {
+            user: norm(cur.user || cur.name || cur.username),
+            name: norm(cur.name || cur.user || cur.username),
+            role: norm(cur.role || cur.level || "read") || "read"
+          };
+        }
+      }catch(e){}
+      try{
+        var u = norm(($("uName") && $("uName").textContent) || "");
+        var r = norm(($("uRole") && $("uRole").textContent) || "read") || "read";
+        if(u && u !== "—") return { user:u, name:u, role:r };
+      }catch(e){}
+      return null;
+    }
+
+    function hasBridgeSessionReady(){
+      try{
+        var cur = getBridgeUserForWorker();
+        if(!cur || !cur.user) return false;
+        var role = norm(cur.role || "read");
+        return !!role;
+      }catch(e){
+        return false;
+      }
+    }
+
     function cloudBadgeText(){
       var c = state.cloud || {};
       if(c.ok) return "已同步";
@@ -2931,6 +2974,7 @@ function calcMaxDisplayChars(rows, key){
       if(c.authState==="forbidden") return "權限不足";
       if(c.authState==="expired") return "授權失敗";
       if(c.authPending || c.authState==="checking") return "檢查中";
+      if(c.authState==="standby") return "待同步";
       if(c.cfgOk && c.reachable===false) return "連線失敗";
       if(c.cfgOk && c.reachable===true && c.authState==="ok") return "已連線";
       if(c.cfgOk && (c.reachable===null || c.reachable===undefined)) return "待同步";
@@ -3884,11 +3928,17 @@ function getPromptOptions(mode){
 
         setCloudState({
           authPending: false,
-          authState: seed.tokenReady ? "ok" : "standby",
+          authState: (seed.tokenReady || hasBridgeSessionReady()) ? "ok" : "standby",
           cfgOk: true,
-          reachable: seed.tokenReady ? true : null,
+          reachable: (seed.tokenReady || hasBridgeSessionReady()) ? true : null,
           ok: false
         }, false);
+
+        if(hasBridgeSessionReady()){
+          __workerAuthProbeMemo__ = { state:"ok", ts:now, ok:true, status:0, reason:"r413-browser-session-bridge-no-me-probe" };
+          setCloudState({ authState:"ok", authPending:false, cfgOk:true, reachable:true }, false);
+          return true;
+        }
 
         if(!allowNetworkProbe){
           __workerAuthProbeMemo__ = { state:(seed.tokenReady ? "ok" : "standby"), ts:now, ok:!!seed.tokenReady, status:0, reason:"r412-no-auto-protected-probe" };
@@ -4222,7 +4272,8 @@ function getPromptOptions(mode){
       try{
         try{ hydrateCrossPageAuth(); }catch(e){}
         var manual = !!(opts.manual || opts.allowNetworkAuth);
-        var allowProtectedNetwork = manual || !!opts.allowProtectedNetwork;
+        var bridgeReady = hasBridgeSessionReady();
+        var allowProtectedNetwork = manual || bridgeReady || !!opts.allowProtectedNetwork;
 
         if(!allowProtectedNetwork){
           setCloudState({ ok:false, cfgOk:true, reachable:null, authState:"standby", authPending:false }, true);
@@ -4233,7 +4284,7 @@ function getPromptOptions(mode){
           await cloudHealth(cfg);
         }
 
-        var authOk = await ensureWorkerAuthorized(cfg, { allowNetworkProbe:manual && hasWorkerTokenReady(), allowLogin:false, reason:opts.reason || "manual" });
+        var authOk = await ensureWorkerAuthorized(cfg, { allowNetworkProbe:false, allowLogin:false, reason:opts.reason || (bridgeReady ? "bridge-auto" : "manual") });
         if(!authOk){
           setCloudState({ ok:false, cfgOk:true, reachable:null, authState:"standby", authPending:false }, true);
           if(!silent) toast("雲端待同步：尚未取得雲端授權");
@@ -4343,7 +4394,7 @@ function getPromptOptions(mode){
     async function syncToCloud(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
       var manual = !!(opts.manual || opts.type || opts.currentTarget || opts.target);
-      return await reconcileCloudOnOpen({ silent: !!opts.silent, reason: opts.reason || "manual-to-cloud", manual: manual, allowNetworkAuth: manual && hasWorkerTokenReady() });
+      return await reconcileCloudOnOpen({ silent: !!opts.silent, reason: opts.reason || "manual-to-cloud", manual: manual, allowNetworkAuth: manual || hasBridgeSessionReady() });
     }
 
     // ---------------------------
@@ -4984,7 +5035,7 @@ $("btnSave").addEventListener("click", async function(){
       register('detailR411NetDiskDropboxDirectOpen', function(){ return DETAIL_NETDISK_URL === "https://www.dropbox.com/home/%E6%8D%B7%E9%81%8B%E6%B1%90%E6%AD%A2%E6%9D%B1%E6%B9%96%E7%B7%9A%E7%9B%A3%E9%80%A0%E5%B0%88%E6%A1%88"; });
       register('detailR411BridgeSessionHeadersForWorker', function(){ var h = buildWorkerSessionBridgeHeaders({}); return !!(h['x-tasun-page-key'] === PAGE_KEY && h['x-tasun-resource-key'] === RESOURCE_KEY); });
       register('detailR411NoMeProbeNo401Console', function(){ return window.AUTO_CLOUD_AUTH_PROBE_ON_OPEN === false || (typeof AUTO_CLOUD_AUTH_PROBE_ON_OPEN !== 'undefined' && AUTO_CLOUD_AUTH_PROBE_ON_OPEN === false); });
-      register('detailR412NoProtectedWorkerCallOnOpen', function(){ return AUTO_CLOUD_AUTH_PROBE_ON_OPEN === false && AUTO_WORKER_LOGIN_ON_OPEN === false && AUTO_CLOUD_HEALTH_ON_OPEN === false && cloudBadgeText() !== '未授權'; });
+      register('detailR413BridgeAutoSyncNoPendingStatus', function(){ return AUTO_CLOUD_AUTH_PROBE_ON_OPEN === false && AUTO_WORKER_LOGIN_ON_OPEN === false && AUTO_CLOUD_HEALTH_ON_OPEN === false && cloudBadgeText() !== '未授權'; });
       register('detailR411NoLegacyCrossStorageRecovery', function(){ return Array.isArray(LEGACY_DB_KEYS) && LEGACY_DB_KEYS.length === 0; });
       register('detailR411SaveButtonBindAndPersist', function(){
         var btn = $('btnSave');
