@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>捷運汐止東湖線統包工程-資料明細表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260529_tasun_v5_detail_list_r418_multidevice_authority_sync_fix">
-  <meta name="tasun-rebuild-stamp" content="20260529_tasun_v5_detail_list_r418_multidevice_authority_sync_fix">
+  <meta name="tasun-build-stamp" content="20260529_tasun_v5_detail_list_r419_cloud_authority_purge_local_fix">
+  <meta name="tasun-rebuild-stamp" content="20260529_tasun_v5_detail_list_r419_cloud_authority_purge_local_fix">
   <script id="tasun-buildstamp-sync-standard">
   (function(){
     'use strict';
-    var PAGE_BUILD_STAMP = "20260529_tasun_v5_detail_list_r418_multidevice_authority_sync_fix";
+    var PAGE_BUILD_STAMP = "20260529_tasun_v5_detail_list_r419_cloud_authority_purge_local_fix";
     var TASUN_GLOBALS = window.__TASUN_GLOBALS__ = window.__TASUN_GLOBALS__ || {};
     TASUN_GLOBALS.PAGE_BUILD_STAMP = String(TASUN_GLOBALS.PAGE_BUILD_STAMP || PAGE_BUILD_STAMP).trim() || PAGE_BUILD_STAMP;
     TASUN_GLOBALS.REBUILD_STAMP = String(TASUN_GLOBALS.REBUILD_STAMP || PAGE_BUILD_STAMP).trim() || TASUN_GLOBALS.PAGE_BUILD_STAMP;
@@ -197,10 +197,10 @@
   })();
   </script>
 
-  <script id="tasun-detail-r418-version-canonical">
+  <script id="tasun-detail-r419-version-canonical">
   (function(){
     "use strict";
-    var V = "20260529_tasun_v5_detail_list_r418_multidevice_authority_sync_fix";
+    var V = "20260529_tasun_v5_detail_list_r419_cloud_authority_purge_local_fix";
     try{
       window.__CACHE_V = V;
       window.TASUN_APP_VER = V;
@@ -271,7 +271,7 @@
     window.TASUN_APP_VER = norm(window.TASUN_APP_VER || "");
     window.__CACHE_V = norm(window.__CACHE_V || "");
 
-    document.write('<script src="tasun-version-loader.js?v=20260529_tasun_v5_detail_list_r418_multidevice_authority_sync_fix&_=' + Date.now() + '"><\/script>');
+    document.write('<script src="tasun-version-loader.js?v=20260529_tasun_v5_detail_list_r419_cloud_authority_purge_local_fix&_=' + Date.now() + '"><\/script>');
 
     (async function(){
       try{
@@ -1739,7 +1739,7 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
     var AUTO_SYNC = true;
     var SYNC_DEBOUNCE_MS = 900;      // 變更後去抖
     var SYNC_MIN_GAP_MS = 1500;      // 連續同步最小間隔
-    var SYNC_PERIODIC_MS = 45*1000;    // R418：多設備維護保底同步（45 秒，受去抖與互斥保護）
+    var SYNC_PERIODIC_MS = 45*1000;    // R419：多設備維護保底同步（45 秒，受去抖與互斥保護）
     var _sync = { timer:null, inFlight:false, pending:false, lastRun:0, lastReason:"" };
 
     function scheduleSync(reason, immediate){
@@ -3998,15 +3998,15 @@ function getPromptOptions(mode){
         try{ bridgeReady = hasBridgeSessionReady(); }catch(e){ bridgeReady = false; }
         try{ tokenReady = hasWorkerTokenReady(); }catch(e){ tokenReady = false; }
 
-        // R418：不以 /api/tasun/me 做開頁授權探測，避免 Console 401；
+        // R419：不以 /api/tasun/me 做開頁授權探測，避免 Console 401；
         // read/merge 直接帶 browser-session-bridge / token，由 Worker 判定。
         if(bridgeReady || tokenReady){
-          __workerAuthProbeMemo__ = { state:"ok", ts: Date.now(), ok:true, status:0, reason: bridgeReady ? "session-bridge-ready-r418" : "token-ready-r418" };
+          __workerAuthProbeMemo__ = { state:"ok", ts: Date.now(), ok:true, status:0, reason: bridgeReady ? "session-bridge-ready-r419" : "token-ready-r419" };
           setCloudState({ authState:"ok", authPending:false, cfgOk:true, reachable:true }, false);
           return true;
         }
 
-        __workerAuthProbeMemo__ = { state:"standby", ts: Date.now(), ok:false, status:0, reason:"no-token-or-bridge-r418" };
+        __workerAuthProbeMemo__ = { state:"standby", ts: Date.now(), ok:false, status:0, reason:"no-token-or-bridge-r419" };
         setCloudState({ authState:"standby", authPending:false, cfgOk:true, reachable:null, ok:false }, false);
         return false;
       }
@@ -4321,10 +4321,115 @@ function getPromptOptions(mode){
       }catch(e){ return false; }
     }
 
+
+    function getActiveCanonicalRowsR419(rows){
+      return canonicalizeRows(rows || []).filter(function(r){ return r && !r.deleted; });
+    }
+
+    function getAuthorityCounterR419(rows, prefer){
+      var alive = getActiveCanonicalRowsR419(rows || []);
+      var maxId = 0;
+      alive.forEach(function(r){
+        var n = Number(r && r.id || 0) || 0;
+        if(n > maxId) maxId = n;
+      });
+      return Math.max(Number(prefer || 0) || 0, maxId, alive.length);
+    }
+
+    async function purgeLocalAuthorityStoresR419(reason){
+      var removed = [];
+      try{ await idbPutRows(PAGE_KEY, []); removed.push('idbRows'); }catch(e){}
+      try{ await idbClearOps(PAGE_KEY); removed.push('idbOps'); }catch(e){}
+      try{
+        await idbPutMeta({
+          pageKey: PAGE_KEY,
+          counter: 0,
+          lastSyncAt: 0,
+          clientId: state.clientId || getClientId(),
+          updatedAt: nowISO(),
+          purgedBy: 'r419-cloud-authority',
+          reason: String(reason || '')
+        });
+        removed.push('idbMeta');
+      }catch(e){}
+      try{ localStorage.removeItem(DB_KEY); removed.push(DB_KEY); }catch(e){}
+      try{ localStorage.removeItem(COUNTER_KEY); removed.push(COUNTER_KEY); }catch(e){}
+      try{
+        (LEGACY_DB_KEYS || []).forEach(function(k){
+          try{ if(k){ localStorage.removeItem(k); removed.push(k); } }catch(_e){}
+        });
+      }catch(e){}
+      try{
+        sessionStorage.removeItem(DB_KEY);
+        sessionStorage.removeItem(COUNTER_KEY);
+      }catch(e){}
+      window.__TASUN_DETAIL_R419_LAST_LOCAL_PURGE__ = {
+        reason: String(reason || ''),
+        removed: removed,
+        at: nowISO()
+      };
+      return true;
+    }
+
+    async function applyCloudAuthorityRowsR419(rows, counter, reason, opts){
+      opts = (opts && typeof opts === 'object') ? opts : {};
+      var clean = canonicalizeRows(rows || []);
+      var c = getAuthorityCounterR419(clean, counter);
+      await purgeLocalAuthorityStoresR419(reason || 'r419-cloud-authority-apply');
+      state.db = clean;
+      state.counter = c;
+      state.lastSyncAt = Date.now();
+      try{ await idbClearOps(PAGE_KEY); }catch(e){}
+      await saveLocal({ db: state.db, counter: state.counter, rev: 'r419-' + Date.now().toString(16), updatedAt: nowISO() });
+      try{ localStorage.setItem("tasun_detail_last_ok_at__" + PAGE_KEY, String(state.lastSyncAt)); }catch(_e){}
+      try{
+        window.__TASUN_DETAIL_R419_LAST_AUTHORITY_APPLY__ = {
+          reason: String(reason || ''),
+          cloudRows: Array.isArray(rows) ? rows.length : 0,
+          activeRows: getActiveCanonicalRowsR419(clean).length,
+          counter: c,
+          localDbPurged: true,
+          savedCloudAuthorityToLocal: true,
+          at: nowISO()
+        };
+      }catch(e){}
+      buildDictsFromDb();
+      if(!opts.noRender) refresh();
+      return { db: state.db, counter: state.counter };
+    }
+
+    function hasCloudAuthorityRowsR419(payload){
+      try{
+        return !!(payload && Array.isArray(payload.db) && payload.db.some(function(raw){
+          var r = ensureRowV1(raw);
+          return r && !r.deleted;
+        }));
+      }catch(e){
+        return !!(payload && Array.isArray(payload.db) && payload.db.length);
+      }
+    }
+
+    async function readCloudAuthorityR419(cfg, phase){
+      var got = await cloudReadWithFallbackKeys(cfg, PAGE_KEY, { allowFallback:true, allowPrimaryEmptyReturn:true });
+      got = got || { db:[], counter:0, resourceKey: PAGE_KEY };
+      got.db = canonicalizeRows(got.db || []);
+      got.counter = getAuthorityCounterR419(got.db, got.counter);
+      window.__TASUN_DETAIL_R419_LAST_CLOUD_READ__ = {
+        phase: String(phase || ''),
+        resourceKey: got.resourceKey || PAGE_KEY,
+        rows: got.db.length,
+        activeRows: getActiveCanonicalRowsR419(got.db).length,
+        counter: got.counter,
+        at: nowISO()
+      };
+      return got;
+    }
+
+
 async function reconcileCloudOnOpen(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
       var silent = (opts.silent!==false);
-      var reason = norm(opts.reason || 'open-cloud-authority-r418');
+      var reason = norm(opts.reason || 'open-cloud-authority-r419');
 
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)){
@@ -4345,51 +4450,90 @@ async function reconcileCloudOnOpen(opts){
           return false;
         }
 
-        // R418 正式邏輯：開頁/同步一律「先下載雲端 → 本端去重刷新 → 合併本端變異 → 上傳雲端 → 雲端去重後再下傳校正」。
+        // R419 正式邏輯：
+        // 開頁先下載雲端資料 → 將本端資料上傳雲端去重比對 → 再下傳 →
+        // 清空本端舊 DB / IDB / ops → 以最後下傳的雲端權威資料回填本端。
         var localAll = await readLocalAuthorityRows();
-        var remoteBase = await cloudReadWithFallbackKeys(cfg, PAGE_KEY, { allowFallback:true, allowPrimaryEmptyReturn:true });
+        var remoteBefore = await readCloudAuthorityR419(cfg, 'r419-before-upload');
 
-        if(remoteBase && remoteBase.resourceKey && remoteBase.resourceKey !== PAGE_KEY && hasCloudPayloadRows(remoteBase)){
+        if(remoteBefore && remoteBefore.resourceKey && remoteBefore.resourceKey !== PAGE_KEY && hasCloudPayloadRows(remoteBefore)){
           try{
             await cloudMerge(cfg, PAGE_KEY, {
-              db: canonicalizeRows(remoteBase.db || []),
-              counter: Number(remoteBase.counter || (remoteBase.db||[]).length) || (remoteBase.db||[]).length || 0
+              db: canonicalizeRows(remoteBefore.db || []),
+              counter: getAuthorityCounterR419(remoteBefore.db || [], remoteBefore.counter)
             }, {
               user: state.user || '', role: state.role || '', appVer: APP_VER,
-              clientId: state.clientId || getClientId(), at: nowISO(), reason: 'r418-promote-legacy-key:' + remoteBase.resourceKey
+              clientId: state.clientId || getClientId(), at: nowISO(), reason: 'r419-promote-legacy-key:' + remoteBefore.resourceKey
             });
-            remoteBase = await cloudRead(cfg, PAGE_KEY);
+            remoteBefore = await readCloudAuthorityR419(cfg, 'r419-after-legacy-promote');
           }catch(_promoteErr){}
         }
 
-        var mergedRows = canonicalizeRows([].concat((remoteBase && remoteBase.db) || [], localAll || []));
-        var mergedCounter = Math.max(
-          Number(remoteBase && remoteBase.counter || 0) || 0,
-          Number(state.counter || 0) || 0,
-          mergedRows.filter(function(r){ return r && !r.deleted; }).length
-        );
+        var uploadRows = canonicalizeRows([].concat((remoteBefore && remoteBefore.db) || [], localAll || []));
+        var uploadCounter = getAuthorityCounterR419(uploadRows, Math.max(
+          Number(remoteBefore && remoteBefore.counter || 0) || 0,
+          Number(state.counter || 0) || 0
+        ));
 
         var pushed = await cloudMerge(cfg, PAGE_KEY, {
-          db: mergedRows,
-          counter: mergedCounter
+          db: uploadRows,
+          counter: uploadCounter
         }, {
           user: state.user || '', role: state.role || '', appVer: APP_VER,
-          clientId: state.clientId || getClientId(), at: nowISO(), reason: 'r418-multidevice-merge-upload:' + reason
+          clientId: state.clientId || getClientId(), at: nowISO(), reason: 'r419-upload-local-after-download:' + reason,
+          localRows: Array.isArray(localAll) ? localAll.length : 0,
+          cloudBeforeRows: remoteBefore && Array.isArray(remoteBefore.db) ? remoteBefore.db.length : 0
         });
 
-        var finalCloud = await cloudRead(cfg, PAGE_KEY).catch(function(){ return pushed; });
-        var out = mergePayload(finalCloud, { db: mergedRows, counter: mergedCounter });
-        out.db = canonicalizeRows(out.db || []);
-        out.counter = Math.max(Number(out.counter||0)||0, out.db.filter(function(r){ return r && !r.deleted; }).length);
+        var finalCloud = null;
+        try{
+          finalCloud = await readCloudAuthorityR419(cfg, 'r419-final-redownload');
+        }catch(_readBackErr){
+          finalCloud = pushed || { db:[], counter:0 };
+          finalCloud.db = canonicalizeRows(finalCloud.db || []);
+          finalCloud.counter = getAuthorityCounterR419(finalCloud.db, finalCloud.counter);
+        }
 
-        state.db = out.db;
-        state.counter = out.counter;
-        state.lastSyncAt = Date.now();
+        // 防呆：merge 成功但 readback 暫時回空時，先使用 Worker merge 回應；若仍回空，
+        // 使用本次送往雲端的去重資料，避免網路瞬斷導致本端被誤清空。
+        if(!hasCloudAuthorityRowsR419(finalCloud) && hasCloudAuthorityRowsR419(pushed)){
+          finalCloud = {
+            db: canonicalizeRows(pushed.db || []),
+            counter: getAuthorityCounterR419(pushed.db || [], pushed.counter),
+            resourceKey: PAGE_KEY
+          };
+        }
+        if(!hasCloudAuthorityRowsR419(finalCloud) && hasCloudAuthorityRowsR419({db:uploadRows})){
+          finalCloud = {
+            db: canonicalizeRows(uploadRows || []),
+            counter: uploadCounter,
+            resourceKey: PAGE_KEY,
+            fallbackFromUploadRows: true
+          };
+        }
+
+        await applyCloudAuthorityRowsR419(
+          (finalCloud && finalCloud.db) || [],
+          finalCloud && finalCloud.counter,
+          'r419-final-cloud-authority-purge-local:' + reason
+        );
+
         try{ await idbClearOps(PAGE_KEY); }catch(e){}
-        await saveLocal({ db: state.db, counter: state.counter });
-        buildDictsFromDb();
         setCloudState({ ok:true, cfgOk:true, reachable:true, authState:'ok', authPending:false, lastOkAt:Date.now(), lastSyncAt:nowISO(), syncInProgress:false }, false);
         refresh();
+
+        window.__TASUN_DETAIL_R419_LAST_SYNC_FLOW__ = {
+          reason: reason,
+          localBeforeRows: Array.isArray(localAll) ? localAll.length : 0,
+          cloudBeforeRows: remoteBefore && Array.isArray(remoteBefore.db) ? remoteBefore.db.length : 0,
+          uploadRows: uploadRows.length,
+          finalCloudRows: finalCloud && Array.isArray(finalCloud.db) ? finalCloud.db.length : 0,
+          activeRows: getActiveCanonicalRowsR419(state.db).length,
+          counter: state.counter,
+          localPurgedThenCloudApplied: true,
+          at: nowISO()
+        };
+
         if(!silent) toast("已完成雲端同步");
         return true;
       }catch(e){
@@ -4999,12 +5143,47 @@ $("btnSave").addEventListener("click", async function(){
       });
       // 週期保底同步（避免長時間開著頁面但沒互動；具互斥與去抖，不會無限輪詢）
       setInterval(function(){ scheduleSync("periodic"); }, SYNC_PERIODIC_MS);
-      setTimeout(function(){ scheduleSync("boot-r418", true); }, 300);
-      setTimeout(function(){ scheduleSync("boot-r418-confirm", true); }, 2200);
-      setTimeout(function(){ scheduleSync("boot-r418-final", true); }, 6500);
+      setTimeout(function(){ scheduleSync("boot-r419", true); }, 300);
+      setTimeout(function(){ scheduleSync("boot-r419-confirm", true); }, 2200);
+      setTimeout(function(){ scheduleSync("boot-r419-final", true); }, 6500);
 
     }
 
+
+
+    // ---------------------------
+    // R419 Self-heal registration: cloud authority purge-local sync
+    // ---------------------------
+    try{
+      window.TasunSelfHealV5 = window.TasunSelfHealV5 || {};
+      window.TasunSelfHealV5.records = window.TasunSelfHealV5.records || {};
+      window.TasunSelfHealV5.records.detailListR419 = {
+        group: 'detail-list-r419',
+        updatedAt: nowISO(),
+        checks: [
+          'detailR419TableIdentityIndividualDb',
+          'detailR419DownloadUploadRedownloadThenPurgeLocal',
+          'detailR419CloudAuthorityWinsLocalCache',
+          'detailR419MultiDeviceRowsAndDisplayNoConsistent',
+          'detailR419NoInfinitePollingOrMobileBusyLoop'
+        ],
+        verify: function(){
+          return !!(
+            ensureDetailTableIdentity()
+            && state
+            && Array.isArray(state.db)
+            && window.__TASUN_PAGE_KEY__ === PAGE_KEY
+            && window.__TASUN_DB_NAME__ === IDB_NAME
+          );
+        },
+        repair: function(){
+          try{ ensureDetailTableIdentity(); }catch(_e){}
+          try{ scheduleSync('selfheal-r419-cloud-authority', true); }catch(_e){}
+          return true;
+        }
+      };
+      window.__TASUN_DETAIL_SELFHEAL_R419__ = window.TasunSelfHealV5.records.detailListR419;
+    }catch(_e){}
 
     // ---------------------------
     // Console diagnostics
