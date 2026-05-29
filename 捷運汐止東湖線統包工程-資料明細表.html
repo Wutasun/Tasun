@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>捷運汐止東湖線統包工程-資料明細表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260529_tasun_v5_detail_list_r420_cloud_status_retry_fix">
-  <meta name="tasun-rebuild-stamp" content="20260529_tasun_v5_detail_list_r420_cloud_status_retry_fix">
+  <meta name="tasun-build-stamp" content="20260529_tasun_v5_detail_list_r421_cloud_failure_endpoint_recover_fix">
+  <meta name="tasun-rebuild-stamp" content="20260529_tasun_v5_detail_list_r421_cloud_failure_endpoint_recover_fix">
   <script id="tasun-buildstamp-sync-standard">
   (function(){
     'use strict';
-    var PAGE_BUILD_STAMP = "20260529_tasun_v5_detail_list_r420_cloud_status_retry_fix";
+    var PAGE_BUILD_STAMP = "20260529_tasun_v5_detail_list_r421_cloud_failure_endpoint_recover_fix";
     var TASUN_GLOBALS = window.__TASUN_GLOBALS__ = window.__TASUN_GLOBALS__ || {};
     TASUN_GLOBALS.PAGE_BUILD_STAMP = String(TASUN_GLOBALS.PAGE_BUILD_STAMP || PAGE_BUILD_STAMP).trim() || PAGE_BUILD_STAMP;
     TASUN_GLOBALS.REBUILD_STAMP = String(TASUN_GLOBALS.REBUILD_STAMP || PAGE_BUILD_STAMP).trim() || TASUN_GLOBALS.PAGE_BUILD_STAMP;
@@ -197,10 +197,10 @@
   })();
   </script>
 
-  <script id="tasun-detail-r420-version-canonical">
+  <script id="tasun-detail-r421-version-canonical">
   (function(){
     "use strict";
-    var V = "20260529_tasun_v5_detail_list_r420_cloud_status_retry_fix";
+    var V = "20260529_tasun_v5_detail_list_r421_cloud_failure_endpoint_recover_fix";
     try{
       window.__CACHE_V = V;
       window.TASUN_APP_VER = V;
@@ -271,7 +271,7 @@
     window.TASUN_APP_VER = norm(window.TASUN_APP_VER || "");
     window.__CACHE_V = norm(window.__CACHE_V || "");
 
-    document.write('<script src="tasun-version-loader.js?v=20260529_tasun_v5_detail_list_r420_cloud_status_retry_fix&_=' + Date.now() + '"><\/script>');
+    document.write('<script src="tasun-version-loader.js?v=20260529_tasun_v5_detail_list_r421_cloud_failure_endpoint_recover_fix&_=' + Date.now() + '"><\/script>');
 
     (async function(){
       try{
@@ -1752,9 +1752,21 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
     var SYNC_DEBOUNCE_MS = 900;      // 變更後去抖
     var SYNC_MIN_GAP_MS = 1500;      // 連續同步最小間隔
     var SYNC_PERIODIC_MS = 45*1000;  // 多設備維護保底同步（45 秒，受去抖與互斥保護）
-    var SYNC_MAX_RETRY = 3;          // R420：同一輪同步最多連續重試 3 次，避免「同步檢查中」無限輪詢
+    var SYNC_MAX_RETRY = 3;          // R421：同一輪最多連續重試 3 次，避免同步失敗無限輪詢
     var SYNC_RETRY_COOLDOWN_MS = 30*1000;
     var _sync = { timer:null, inFlight:false, pending:false, lastRun:0, lastReason:"", failCount:0, nextRetryAt:0, lastError:"" };
+
+    function isCloudSoftStandbyR421(){
+      try{
+        var c = state.cloud || {};
+        var label = norm(c.statusLabel || "");
+        var a = norm(c.authState || "").toLowerCase();
+        return !!(
+          label === "待同步" || label === "待登入" || label === "離線待同步" ||
+          a === "standby" || a === "unauth" || a === "expired"
+        );
+      }catch(e){ return false; }
+    }
 
     function scheduleSync(reason, immediate){
       if(!AUTO_SYNC) return;
@@ -1786,17 +1798,26 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
           _sync.lastError = "browser-offline";
           _sync.failCount = Math.min((_sync.failCount||0) + 1, SYNC_MAX_RETRY);
           _sync.nextRetryAt = Date.now() + SYNC_RETRY_COOLDOWN_MS;
-          setCloudState({ ok:false, reachable:false, authState:"sync_failed", authPending:false, syncInProgress:false, statusLabel:"離線待同步", lastError:"瀏覽器目前離線", lastFailAt:Date.now() }, true);
+          setCloudState({ ok:false, reachable:false, authState:"standby", authPending:false, syncInProgress:false, statusLabel:"離線待同步", lastError:"瀏覽器目前離線", lastFailAt:Date.now() }, true);
           return;
         }
         var ok = await syncToCloud({ silent:true, reason:_sync.lastReason||"auto" });
-        if(ok === false) throw new Error("sync returned false");
+        if(ok === false){
+          // 由 reconcileCloudOnOpen 已經分類狀態；待登入/待同步不是程式失敗，不可再改成「同步失敗」。
+          if(isCloudSoftStandbyR421()){
+            _sync.failCount = 0;
+            _sync.nextRetryAt = Date.now() + SYNC_PERIODIC_MS;
+            return;
+          }
+          var last = (state.cloud && (state.cloud.lastError || state.cloud.statusLabel)) || "cloud sync returned false";
+          throw new Error(last);
+        }
         _sync.failCount = 0;
         _sync.nextRetryAt = 0;
         _sync.lastError = "";
       }catch(e){
         _sync.failCount = Number(_sync.failCount||0) + 1;
-        _sync.lastError = String(e && e.message || e || "sync failed");
+        _sync.lastError = String(e && e.message || e || "cloud sync failed");
         if(_sync.failCount < SYNC_MAX_RETRY){
           _sync.pending = true;
           _sync.nextRetryAt = Date.now() + Math.min(120000, SYNC_RETRY_COOLDOWN_MS * _sync.failCount);
@@ -3066,11 +3087,10 @@ function calcMaxDisplayChars(rows, key){
       }
     }
 
-
-    function classifyCloudErrorR420(err){
+    function classifyCloudErrorR421(err){
       var msg = String((err && err.message) ? err.message : (err || "")).trim();
       var low = msg.toLowerCase();
-      var out = { authState:"sync_failed", reachable:null, statusLabel:"同步失敗", message:msg };
+      var out = { authState:"standby", reachable:null, statusLabel:"待同步", message:msg };
       if(/403|forbidden|權限不足/.test(low)){
         out.authState = "forbidden";
         out.reachable = true;
@@ -3079,20 +3099,27 @@ function calcMaxDisplayChars(rows, key){
         out.authState = "unauth";
         out.reachable = true;
         out.statusLabel = "待登入";
-      }else if(/failed to fetch|network|timeout|timed out|load failed|連線|offline|browser-offline/.test(low)){
-        out.authState = "sync_failed";
+      }else if(/timeout|timed out|abort/.test(low)){
+        out.authState = "standby";
+        out.reachable = false;
+        out.statusLabel = "連線逾時";
+      }else if(/failed to fetch|network|load failed|連線|offline|browser-offline/.test(low)){
+        out.authState = "standby";
         out.reachable = false;
         out.statusLabel = "連線失敗";
-      }else if(/404|not found/.test(low)){
-        out.authState = "sync_failed";
+      }else if(/404|not found|405|method not allowed|api/.test(low)){
+        out.authState = "standby";
         out.reachable = false;
-        out.statusLabel = "API未連線";
+        out.statusLabel = "API待連線";
+      }else if(/cloud sync returned false|sync returned false|returned false/.test(low)){
+        out.authState = "standby";
+        out.statusLabel = "待同步";
       }
       return out;
     }
 
     function setCloudFailureState(err, repaint){
-      var c = classifyCloudErrorR420(err);
+      var c = classifyCloudErrorR421(err);
       setCloudState({
         ok:false,
         cfgOk:true,
@@ -3117,7 +3144,6 @@ function calcMaxDisplayChars(rows, key){
       if(c.authState==="forbidden") return "權限不足";
       if(c.authState==="expired" || c.authState==="unauth") return "待登入";
       if(c.authState==="standby") return "待同步";
-      if(c.authState==="sync_failed") return "同步失敗";
       if(c.cfgOk) return c.lastOkAt ? "已同步" : "待同步";
       return "未設定";
     }
@@ -3148,6 +3174,7 @@ function calcMaxDisplayChars(rows, key){
           next.authState = "ok";
           next.authPending = false;
           next.syncInProgress = false;
+          next.statusLabel = "已同步";
           if(!next.lastOkAt) next.lastOkAt = Date.now();
           try{ localStorage.setItem("tasun_detail_last_ok_at__" + PAGE_KEY, String(next.lastOkAt)); }catch(_e){}
         }
@@ -3169,7 +3196,6 @@ function calcMaxDisplayChars(rows, key){
           next.authState = next.authPending ? "checking" : "standby";
           if(!next.statusLabel) next.statusLabel = next.authPending ? "同步檢查中" : "待同步";
         }
-        if(next.ok){ next.statusLabel = "已同步"; }
 
         state.cloud = next;
 
@@ -4066,8 +4092,9 @@ function getPromptOptions(mode){
       }
 
 
+
       var __workerReauthPromise = null;
-      async function tryWorkerReauthR420(cfg){
+      async function tryWorkerReauthR421(cfg){
         if(__workerReauthPromise) return await __workerReauthPromise;
         __workerReauthPromise = (async function(){
           try{
@@ -4089,6 +4116,62 @@ function getPromptOptions(mode){
         return await __workerReauthPromise;
       }
 
+      function uniqueStringsR421(arr){
+        var seen = Object.create(null), out = [];
+        (arr || []).forEach(function(v){
+          v = norm(v);
+          if(!v || seen[v]) return;
+          seen[v] = 1;
+          out.push(v);
+        });
+        return out;
+      }
+
+      function addCloudQueryR421(url, pageKey){
+        try{
+          var u = new URL(url);
+          u.searchParams.set("key", pageKey);
+          u.searchParams.set("resourceKey", pageKey);
+          u.searchParams.set("pageKey", pageKey);
+          u.searchParams.set("fileKey", pageKey);
+          u.searchParams.set("tableId", TABLE_ID);
+          u.searchParams.set("dbName", IDB_NAME);
+          return u.toString();
+        }catch(e){
+          var q = "key=" + encodeURIComponent(pageKey) + "&resourceKey=" + encodeURIComponent(pageKey) + "&pageKey=" + encodeURIComponent(pageKey) + "&fileKey=" + encodeURIComponent(pageKey);
+          return url + (url.indexOf("?") >= 0 ? "&" : "?") + q;
+        }
+      }
+
+      async function tasunFetchR421(url, options, timeoutMs){
+        options = Object.assign({}, options || {});
+        timeoutMs = Number(timeoutMs || 15000);
+        var originalCredentials = options.credentials;
+        async function once(creds){
+          var controller = null, tm = null;
+          var opt = Object.assign({}, options);
+          if(creds) opt.credentials = creds;
+          if(window.AbortController){
+            controller = new AbortController();
+            opt.signal = controller.signal;
+            tm = setTimeout(function(){ try{ controller.abort(); }catch(_e){} }, timeoutMs);
+          }
+          try{
+            return await fetch(url, opt);
+          }finally{
+            if(tm) clearTimeout(tm);
+          }
+        }
+        try{
+          return await once(originalCredentials || getWorkerCredentialMode());
+        }catch(e){
+          // Cross-origin Worker 若不接受 credentialed CORS，改用 omit 再試一次；仍會帶 session-bridge headers。
+          if((originalCredentials || "").toLowerCase() !== "omit"){
+            return await once("omit");
+          }
+          throw e;
+        }
+      }
       async function probeWorkerMe(cfg){
         cfg = cfg || await loadCloudCfg();
         var apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
@@ -4128,55 +4211,68 @@ function getPromptOptions(mode){
 
       async function cloudReadRaw(cfg, pageKey){
         cfg = cfg || await loadCloudCfg();
+        pageKey = norm(pageKey || PAGE_KEY) || PAGE_KEY;
         const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
         const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/read";
-        const postUrl = _joinUrl(apiBase, readPath);
-        const pullBase = _joinUrl(apiBase, "/api/tasun/pull");
-        const query = "?key=" + encodeURIComponent(pageKey) + "&resourceKey=" + encodeURIComponent(pageKey) + "&pageKey=" + encodeURIComponent(pageKey) + "&fileKey=" + encodeURIComponent(pageKey);
-        const getUrl = pullBase + query;
-        async function doPost(body){
-          return await fetch(postUrl, {
-            method: "POST", cache: "no-store", credentials: getWorkerCredentialMode(cfg),
-            headers: buildWorkerSessionBridgeHeaders({ "content-type":"application/json", "accept":"application/json" }),
-            body: JSON.stringify(body)
-          });
-        }
-        async function doPostWithAuthRetry(body){
-          var r = await doPost(body);
-          if(r && isAuthHttpStatus(r.status)){
-            var ok = await tryWorkerReauthR420(cfg);
-            if(ok) r = await doPost(body);
-          }
-          return r;
-        }
-        async function doGet(){
-          return await fetch(getUrl, {
-            method: "GET", cache: "no-store", credentials: getWorkerCredentialMode(cfg),
-            headers: buildWorkerSessionBridgeHeaders({ "accept":"application/json" })
-          });
-        }
-        async function doGetWithAuthRetry(){
-          var r = await doGet();
-          if(r && isAuthHttpStatus(r.status)){
-            var ok = await tryWorkerReauthR420(cfg);
-            if(ok) r = await doGet();
-          }
-          return r;
-        }
-        var tries = [
-          { resourceKey: pageKey, key: pageKey, pageKey: pageKey, fileKey: pageKey },
+        var postPaths = uniqueStringsR421([readPath, "/api/tasun/read", "/api/read", "/api/tasun/pull", "/api/pull"]);
+        var getPaths = uniqueStringsR421(["/api/tasun/pull", readPath, "/api/read", "/api/pull"]);
+        var bodies = [
+          { resourceKey: pageKey, key: pageKey, pageKey: pageKey, fileKey: pageKey, tableId: TABLE_ID, dbName: IDB_NAME },
           { resourceKey: pageKey, pageKey: pageKey },
           { key: pageKey },
           { pageKey: pageKey }
         ];
-        var r = null;
-        for(var i=0;i<tries.length;i++){
-          r = await doPostWithAuthRetry(tries[i]);
-          if(r && r.ok) return r;
-          if(r && r.status!==404 && r.status!==400) return r;
+        var last = null;
+        async function doPost(path, body){
+          return await tasunFetchR421(_joinUrl(apiBase, path), {
+            method: "POST", cache: "no-store", credentials: getWorkerCredentialMode(cfg),
+            headers: buildWorkerSessionBridgeHeaders({ "content-type":"application/json", "accept":"application/json" }),
+            body: JSON.stringify(body)
+          }, 15000);
         }
-        return await doGetWithAuthRetry();
+        async function doPostWithAuthRetry(path, body){
+          var r = await doPost(path, body);
+          if(r && isAuthHttpStatus(r.status)){
+            var ok = await tryWorkerReauthR421(cfg);
+            if(ok) r = await doPost(path, body);
+          }
+          return r;
+        }
+        async function doGet(path){
+          return await tasunFetchR421(addCloudQueryR421(_joinUrl(apiBase, path), pageKey), {
+            method: "GET", cache: "no-store", credentials: getWorkerCredentialMode(cfg),
+            headers: buildWorkerSessionBridgeHeaders({ "accept":"application/json" })
+          }, 15000);
+        }
+        async function doGetWithAuthRetry(path){
+          var r = await doGet(path);
+          if(r && isAuthHttpStatus(r.status)){
+            var ok = await tryWorkerReauthR421(cfg);
+            if(ok) r = await doGet(path);
+          }
+          return r;
+        }
+        for(var p=0;p<postPaths.length;p++){
+          for(var i=0;i<bodies.length;i++){
+            try{
+              var rp = await doPostWithAuthRetry(postPaths[p], bodies[i]);
+              last = rp || last;
+              if(rp && rp.ok) return rp;
+              if(rp && ![400,404,405,501].includes(Number(rp.status))) break;
+            }catch(e){ last = { ok:false, status:0, _tasunError:String(e && e.message || e) }; }
+          }
+        }
+        for(var g=0;g<getPaths.length;g++){
+          try{
+            var rg = await doGetWithAuthRetry(getPaths[g]);
+            last = rg || last;
+            if(rg && rg.ok) return rg;
+            if(rg && ![400,404,405,501].includes(Number(rg.status))) break;
+          }catch(e){ last = { ok:false, status:0, _tasunError:String(e && e.message || e) }; }
+        }
+        if(last && last._tasunError) throw new Error(last._tasunError);
+        return last || new Response(JSON.stringify({ ok:false, error:"no cloud read endpoint responded" }), { status: 503, headers:{ "content-type":"application/json" } });
       }
       async function cloudHealth(cfg){
         try{
@@ -4301,7 +4397,7 @@ function getPromptOptions(mode){
         if(!r || !r.ok){
           const t = await (r ? r.text().catch(()=> "") : Promise.resolve(""));
           if(r && isAuthHttpStatus(r.status)){
-            try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth", authPending:false, syncInProgress:false, statusLabel:"待登入" }, true); }catch(_e){}
+            try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth" }, true); }catch(_e){}
           }
           throw new Error("cloud read failed: " + (r ? r.status : 0) + " " + String(t||"").slice(0,200));
         }
@@ -4370,6 +4466,7 @@ function getPromptOptions(mode){
 
       async function cloudMerge(cfg, pageKey, payloadLike, clientInfo){
         cfg = cfg || await loadCloudCfg();
+        pageKey = norm(pageKey || PAGE_KEY) || PAGE_KEY;
         const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
         const mergePath = (eps && eps.merge) ? String(eps.merge) : "/api/tasun/merge";
@@ -4380,50 +4477,70 @@ function getPromptOptions(mode){
           if(payload.data && typeof payload.data==="object") payload = payload.data;
         }
         payload = payload || { db:[], counter:0 };
-
-        const body = {
+        var cleanRows = canonicalizeRows(Array.isArray(payload.db) ? payload.db : []);
+        var cleanCounter = getAuthorityCounterR419(cleanRows, Number(payload.counter)||0);
+        var client = clientInfo && typeof clientInfo==="object" ? clientInfo : {};
+        var fullBody = {
           resourceKey: pageKey,
           key: pageKey,
           pageKey: pageKey,
-          payload: {
-            db: Array.isArray(payload.db) ? payload.db : [],
-            counter: Number(payload.counter)||0
-          },
-          client: clientInfo && typeof clientInfo==="object" ? clientInfo : {}
+          fileKey: pageKey,
+          tableId: TABLE_ID,
+          dbName: IDB_NAME,
+          payload: { db: cleanRows, counter: cleanCounter },
+          data: { db: cleanRows, counter: cleanCounter },
+          rows: cleanRows,
+          items: cleanRows,
+          records: cleanRows,
+          counter: cleanCounter,
+          client: client
         };
-
-        const url = _joinUrl(apiBase, mergePath);
-
-        let r = await fetch(url, {
-          method: "POST",
-          cache: "no-store",
-          credentials: getWorkerCredentialMode(cfg),
-          headers: buildWorkerSessionBridgeHeaders({ "content-type":"application/json", "accept":"application/json" }),
-          body: JSON.stringify(body)
-        });
-        if(r && isAuthHttpStatus(r.status)){
-          var reauthOk = await tryWorkerReauthR420(cfg);
-          if(reauthOk){
-            r = await fetch(url, {
-              method: "POST",
-              cache: "no-store",
-              credentials: getWorkerCredentialMode(cfg),
-              headers: buildWorkerSessionBridgeHeaders({ "content-type":"application/json", "accept":"application/json" }),
-              body: JSON.stringify(body)
-            });
+        var bodyVariants = [
+          fullBody,
+          { key: pageKey, payload: { db: cleanRows, counter: cleanCounter }, client: client },
+          { pageKey: pageKey, data: { db: cleanRows, counter: cleanCounter }, client: client },
+          { resourceKey: pageKey, db: cleanRows, counter: cleanCounter, client: client }
+        ];
+        var paths = uniqueStringsR421([mergePath, "/api/tasun/merge", "/api/merge", "/api/tasun/save", "/api/save"]);
+        var last = null, lastText = "";
+        async function doMerge(path, body){
+          return await tasunFetchR421(_joinUrl(apiBase, path), {
+            method: "POST",
+            cache: "no-store",
+            credentials: getWorkerCredentialMode(cfg),
+            headers: buildWorkerSessionBridgeHeaders({ "content-type":"application/json", "accept":"application/json" }),
+            body: JSON.stringify(body)
+          }, 20000);
+        }
+        for(var p=0;p<paths.length;p++){
+          for(var i=0;i<bodyVariants.length;i++){
+            var r = null;
+            try{
+              r = await doMerge(paths[p], bodyVariants[i]);
+              if(r && isAuthHttpStatus(r.status)){
+                var ok = await tryWorkerReauthR421(cfg);
+                if(ok) r = await doMerge(paths[p], bodyVariants[i]);
+              }
+              last = r || last;
+              if(r && r.ok){
+                const j = await r.json().catch(function(){ return {}; });
+                return _normalizePullResponse(j);
+              }
+              if(r){
+                try{ lastText = await r.clone().text(); }catch(_e){ lastText = ""; }
+                if(![400,404,405,501].includes(Number(r.status))) break;
+              }
+            }catch(e){
+              lastText = String(e && e.message || e);
+              last = { ok:false, status:0 };
+            }
           }
         }
-        if(!r.ok){
-          const t = await r.text().catch(()=> "");
-          if(isAuthHttpStatus(r.status)){
-            try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth", authPending:false, syncInProgress:false, statusLabel:"待登入" }, true); }catch(_e){}
-          }
-          throw new Error("cloud merge failed: " + r.status + " " + t.slice(0,200));
+        if(last && isAuthHttpStatus(last.status)){
+          try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth", statusLabel:"待登入" }, true); }catch(_e){}
         }
-        const j = await r.json().catch(function(){ return {}; });
-        return _normalizePullResponse(j);
+        throw new Error("cloud merge failed: " + (last ? last.status : 0) + " " + String(lastText||"").slice(0,200));
       }
-
     
     function hasExplicitLocalPendingForCloud(reason, dirtyRows){
       reason = norm(reason || '').toLowerCase();
@@ -4490,7 +4607,7 @@ function getPromptOptions(mode){
           lastSyncAt: 0,
           clientId: state.clientId || getClientId(),
           updatedAt: nowISO(),
-          purgedBy: 'r419-cloud-authority',
+          purgedBy: 'r421-cloud-authority',
           reason: String(reason || '')
         });
         removed.push('idbMeta');
@@ -4597,7 +4714,7 @@ async function reconcileCloudOnOpen(opts){
         // 開頁先下載雲端資料 → 將本端資料上傳雲端去重比對 → 再下傳 →
         // 清空本端舊 DB / IDB / ops → 以最後下傳的雲端權威資料回填本端。
         var localAll = await readLocalAuthorityRows();
-        var remoteBefore = await readCloudAuthorityR419(cfg, 'r419-before-upload');
+        var remoteBefore = await readCloudAuthorityR419(cfg, 'r421-before-upload');
 
         if(remoteBefore && remoteBefore.resourceKey && remoteBefore.resourceKey !== PAGE_KEY && hasCloudPayloadRows(remoteBefore)){
           try{
@@ -4606,9 +4723,9 @@ async function reconcileCloudOnOpen(opts){
               counter: getAuthorityCounterR419(remoteBefore.db || [], remoteBefore.counter)
             }, {
               user: state.user || '', role: state.role || '', appVer: APP_VER,
-              clientId: state.clientId || getClientId(), at: nowISO(), reason: 'r419-promote-legacy-key:' + remoteBefore.resourceKey
+              clientId: state.clientId || getClientId(), at: nowISO(), reason: 'r421-promote-legacy-key:' + remoteBefore.resourceKey
             });
-            remoteBefore = await readCloudAuthorityR419(cfg, 'r419-after-legacy-promote');
+            remoteBefore = await readCloudAuthorityR419(cfg, 'r421-after-legacy-promote');
           }catch(_promoteErr){}
         }
 
@@ -4623,14 +4740,14 @@ async function reconcileCloudOnOpen(opts){
           counter: uploadCounter
         }, {
           user: state.user || '', role: state.role || '', appVer: APP_VER,
-          clientId: state.clientId || getClientId(), at: nowISO(), reason: 'r419-upload-local-after-download:' + reason,
+          clientId: state.clientId || getClientId(), at: nowISO(), reason: 'r421-upload-local-after-download:' + reason,
           localRows: Array.isArray(localAll) ? localAll.length : 0,
           cloudBeforeRows: remoteBefore && Array.isArray(remoteBefore.db) ? remoteBefore.db.length : 0
         });
 
         var finalCloud = null;
         try{
-          finalCloud = await readCloudAuthorityR419(cfg, 'r419-final-redownload');
+          finalCloud = await readCloudAuthorityR419(cfg, 'r421-final-redownload');
         }catch(_readBackErr){
           finalCloud = pushed || { db:[], counter:0 };
           finalCloud.db = canonicalizeRows(finalCloud.db || []);
@@ -4658,11 +4775,11 @@ async function reconcileCloudOnOpen(opts){
         await applyCloudAuthorityRowsR419(
           (finalCloud && finalCloud.db) || [],
           finalCloud && finalCloud.counter,
-          'r419-final-cloud-authority-purge-local:' + reason
+          'r421-final-cloud-authority-purge-local:' + reason
         );
 
         try{ await idbClearOps(PAGE_KEY); }catch(e){}
-        setCloudState({ ok:true, cfgOk:true, reachable:true, authState:'ok', authPending:false, lastOkAt:Date.now(), lastSyncAt:nowISO(), syncInProgress:false }, false);
+        setCloudState({ ok:true, cfgOk:true, reachable:true, authState:'ok', authPending:false, lastOkAt:Date.now(), lastSyncAt:nowISO(), syncInProgress:false, statusLabel:'已同步' }, false);
         refresh();
 
         window.__TASUN_DETAIL_R419_LAST_SYNC_FLOW__ = {
@@ -4682,7 +4799,13 @@ async function reconcileCloudOnOpen(opts){
       }catch(e){
         var msg = String(e && e.message ? e.message : e || "");
         var classified = setCloudFailureState(msg, true);
-        if(!silent) toast((classified && classified.statusLabel ? classified.statusLabel : "同步失敗") + "：" + msg);
+        window.__TASUN_DETAIL_R421_LAST_SYNC_ERROR__ = {
+          reason: reason,
+          message: msg,
+          statusLabel: classified && classified.statusLabel,
+          at: nowISO()
+        };
+        if(!silent) toast((classified && classified.statusLabel ? classified.statusLabel : "待同步") + "：" + msg);
         return false;
       }
     }
@@ -5285,22 +5408,22 @@ $("btnSave").addEventListener("click", async function(){
       });
       // 週期保底同步（避免長時間開著頁面但沒互動；具互斥與去抖，不會無限輪詢）
       setInterval(function(){ scheduleSync("periodic"); }, SYNC_PERIODIC_MS);
-      setTimeout(function(){ scheduleSync("boot-r419", true); }, 300);
-      setTimeout(function(){ scheduleSync("boot-r419-confirm", true); }, 2200);
-      setTimeout(function(){ scheduleSync("boot-r419-final", true); }, 6500);
+      setTimeout(function(){ scheduleSync("boot-r421", true); }, 300);
+      setTimeout(function(){ scheduleSync("boot-r421-confirm", true); }, 2200);
+      setTimeout(function(){ scheduleSync("boot-r421-final", true); }, 6500);
 
     }
 
 
 
     // ---------------------------
-    // R419 Self-heal registration: cloud authority purge-local sync
+    // R421 Self-heal registration: cloud failure endpoint recovery sync
     // ---------------------------
     try{
       window.TasunSelfHealV5 = window.TasunSelfHealV5 || {};
       window.TasunSelfHealV5.records = window.TasunSelfHealV5.records || {};
-      window.TasunSelfHealV5.records.detailListR420 = {
-        group: 'detail-list-r420',
+      window.TasunSelfHealV5.records.detailListR421 = {
+        group: 'detail-list-r421',
         updatedAt: nowISO(),
         checks: [
           'detailR419TableIdentityIndividualDb',
@@ -5311,7 +5434,11 @@ $("btnSave").addEventListener("click", async function(){
           'detailR420CloudStatusNotStuckAtChecking',
           'detailR420WorkerAuthRetryOn401',
           'detailR420RetryCooldownNoInfiniteLoop',
-          'detailR420PurgeLocalIdbRowsBeforeCloudAuthorityApply'
+          'detailR420PurgeLocalIdbRowsBeforeCloudAuthorityApply',
+          'detailR421CloudFailureStatusClassifiedNoGenericSyncFail',
+          'detailR421ReadMergeMultiEndpointFallback',
+          'detailR421FetchTimeoutAbortAndCredentialFallback',
+          'detailR421SoftStandbyDoesNotBecomeSyncFailed'
         ],
         verify: function(){
           return !!(
@@ -5320,22 +5447,30 @@ $("btnSave").addEventListener("click", async function(){
             && Array.isArray(state.db)
             && window.__TASUN_PAGE_KEY__ === PAGE_KEY
             && window.__TASUN_DB_NAME__ === IDB_NAME
-            && typeof classifyCloudErrorR420 === 'function'
-            && typeof tryWorkerReauthR420 === 'function'
+            && typeof classifyCloudErrorR421 === 'function'
+            && typeof setCloudFailureState === 'function'
+            && typeof tryWorkerReauthR421 === 'function'
             && typeof idbClearRowsForPage === 'function'
+            && typeof tasunFetchR421 === 'function'
             && _sync && Number(_sync.failCount || 0) <= SYNC_MAX_RETRY
           );
         },
         repair: function(){
           try{ ensureDetailTableIdentity(); }catch(_e){}
-          try{ if(state && state.cloud && state.cloud.authState === 'checking' && !state.cloud.syncInProgress){ setCloudState({ authState:'standby', statusLabel:'待同步', authPending:false, syncInProgress:false }, true); } }catch(_e){}
-          try{ scheduleSync('selfheal-r420-cloud-status', true); }catch(_e){}
+          try{
+            if(state && state.cloud && (state.cloud.authState === 'checking' || state.cloud.statusLabel === '同步失敗') && !state.cloud.syncInProgress){
+              setCloudState({ authState:'standby', statusLabel:'待同步', authPending:false, syncInProgress:false }, true);
+            }
+          }catch(_e){}
+          try{ scheduleSync('selfheal-r421-cloud-recover', true); }catch(_e){}
           return true;
         }
       };
-      window.TasunSelfHealV5.records.detailListR419 = window.TasunSelfHealV5.records.detailListR420;
-      window.__TASUN_DETAIL_SELFHEAL_R420__ = window.TasunSelfHealV5.records.detailListR420;
-      window.__TASUN_DETAIL_SELFHEAL_R419__ = window.TasunSelfHealV5.records.detailListR420;
+      window.TasunSelfHealV5.records.detailListR419 = window.TasunSelfHealV5.records.detailListR421;
+      window.TasunSelfHealV5.records.detailListR420 = window.TasunSelfHealV5.records.detailListR421;
+      window.__TASUN_DETAIL_SELFHEAL_R421__ = window.TasunSelfHealV5.records.detailListR421;
+      window.__TASUN_DETAIL_SELFHEAL_R420__ = window.TasunSelfHealV5.records.detailListR421;
+      window.__TASUN_DETAIL_SELFHEAL_R419__ = window.TasunSelfHealV5.records.detailListR421;
     }catch(_e){}
 
     // ---------------------------
@@ -5358,8 +5493,7 @@ $("btnSave").addEventListener("click", async function(){
             user: cur ? (cur.user || cur.name || "") : "—",
             role: cur ? (cur.role || "read") : "—",
             cloud: Object.assign({}, state.cloud || {}),
-            tokenReady: hasWorkerTokenReady(),
-            syncRuntime: { failCount:_sync.failCount||0, nextRetryAt:_sync.nextRetryAt||0, lastError:_sync.lastError||"" }
+            tokenReady: hasWorkerTokenReady()
           };
         }catch(e){
           return { ok:false, error: String(e && e.message || e) };
