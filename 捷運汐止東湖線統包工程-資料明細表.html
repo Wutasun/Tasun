@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>捷運汐止東湖線統包工程-資料明細表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260601_tasun_v5_detail_list_r428_search_edit_toolbar_fix">
-  <meta name="tasun-rebuild-stamp" content="20260601_tasun_v5_detail_list_r428_search_edit_toolbar_fix">
+  <meta name="tasun-build-stamp" content="20260601_tasun_v5_detail_list_r429_cloud_checking_timeout_fix">
+  <meta name="tasun-rebuild-stamp" content="20260601_tasun_v5_detail_list_r429_cloud_checking_timeout_fix">
   <script id="tasun-buildstamp-sync-standard">
   (function(){
     'use strict';
-    var PAGE_BUILD_STAMP = "20260601_tasun_v5_detail_list_r428_search_edit_toolbar_fix";
+    var PAGE_BUILD_STAMP = "20260601_tasun_v5_detail_list_r429_cloud_checking_timeout_fix";
     var TASUN_GLOBALS = window.__TASUN_GLOBALS__ = window.__TASUN_GLOBALS__ || {};
     TASUN_GLOBALS.PAGE_BUILD_STAMP = String(TASUN_GLOBALS.PAGE_BUILD_STAMP || PAGE_BUILD_STAMP).trim() || PAGE_BUILD_STAMP;
     TASUN_GLOBALS.REBUILD_STAMP = String(TASUN_GLOBALS.REBUILD_STAMP || PAGE_BUILD_STAMP).trim() || TASUN_GLOBALS.PAGE_BUILD_STAMP;
@@ -197,11 +197,11 @@
   })();
   </script>
 
-  <script id="tasun-detail-r428-version-canonical">
-  /* R428：修復舊版 r419 canonical 造成網址與頁面版本被強制拉回 r419。 */
+  <script id="tasun-detail-r429-version-canonical">
+  /* R429：延續 R428 canonical，並修復雲端狀態長時間停在「同步檢查中」。 */
   (function(){
     "use strict";
-    var V = "20260601_tasun_v5_detail_list_r428_search_edit_toolbar_fix";
+    var V = "20260601_tasun_v5_detail_list_r429_cloud_checking_timeout_fix";
     try{
       window.__CACHE_V = V;
       window.TASUN_APP_VER = V;
@@ -272,7 +272,7 @@
     window.TASUN_APP_VER = norm(window.TASUN_APP_VER || "");
     window.__CACHE_V = norm(window.__CACHE_V || "");
 
-    document.write('<script src="tasun-version-loader.js?v=20260601_tasun_v5_detail_list_r428_search_edit_toolbar_fix&_=' + Date.now() + '"><\/script>');
+    document.write('<script src="tasun-version-loader.js?v=20260601_tasun_v5_detail_list_r429_cloud_checking_timeout_fix&_=' + Date.now() + '"><\/script>');
 
     (async function(){
       try{
@@ -1863,6 +1863,8 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
     var SYNC_DEBOUNCE_MS = 900;      // 變更後去抖
     var SYNC_MIN_GAP_MS = 1500;      // 連續同步最小間隔
     var SYNC_PERIODIC_MS = 45*1000;    // R419：多設備維護保底同步（45 秒，受去抖與互斥保護）
+    var CLOUD_SYNC_TIMEOUT_MS = 12000;   // R429：雲端 fetch 最長等待，避免狀態卡在「同步檢查中」
+    var CLOUD_CHECKING_MAX_MS = 12000;   // R429：同步檢查顯示最長時間，逾時自動收斂為穩定狀態
     var _sync = { timer:null, inFlight:false, pending:false, lastRun:0, lastReason:"" };
 
     function scheduleSync(reason, immediate){
@@ -3158,20 +3160,67 @@ function calcMaxDisplayChars(rows, key){
       }
     }
 
+    function cloudCheckingExpired(c){
+      c = c || state.cloud || {};
+      var started = Number(c.checkStartedAt || c.syncStartedAt || 0);
+      return !!(started && (Date.now() - started) > CLOUD_CHECKING_MAX_MS);
+    }
+
+    function hasLastSuccessfulCloudSync(){
+      try{
+        var c = state.cloud || {};
+        if(c.lastOkAt) return true;
+        var savedOk = Number(localStorage.getItem("tasun_detail_last_ok_at__" + PAGE_KEY) || 0);
+        return !!savedOk;
+      }catch(_e){
+        return false;
+      }
+    }
+
+    function repairExpiredCloudCheckingState(repaint){
+      try{
+        var c = state.cloud || {};
+        if(c.ok) return false;
+        if(!(c.syncInProgress || c.authPending || c.authState==="checking")) return false;
+        if(!cloudCheckingExpired(c)) return false;
+
+        var hasOk = hasLastSuccessfulCloudSync();
+        setCloudState({
+          ok: !!hasOk,
+          cfgOk: c.cfgOk !== false,
+          reachable: hasOk ? true : (c.reachable === false ? false : null),
+          authState: hasOk ? "ok" : (c.authState === "forbidden" ? "forbidden" : "standby"),
+          authPending: false,
+          syncInProgress: false,
+          checkExpiredAt: Date.now()
+        }, repaint !== false);
+        return true;
+      }catch(_e){
+        return false;
+      }
+    }
+
     function cloudBadgeText(){
+      repairExpiredCloudCheckingState(false);
       var c = state.cloud || {};
       if(c.ok) return "已同步";
-      if(c.syncInProgress || c.authPending || c.authState==="checking") return "同步檢查中";
+      if(!c.syncInProgress && hasLastSuccessfulCloudSync() && (c.authState==="ok" || c.authState==="standby" || c.authState==="checking" || !c.authState)) return "已同步";
+      if(c.syncInProgress || c.authPending || c.authState==="checking"){
+        return cloudCheckingExpired(c) ? (hasLastSuccessfulCloudSync() ? "已同步" : "連線檢查逾時") : "同步檢查中";
+      }
       if(c.cfgOk && c.reachable===false) return "連線失敗";
       if(c.authState==="forbidden") return "權限不足";
-      if(c.authState==="expired" || c.authState==="unauth" || c.authState==="standby") return "同步檢查中";
-      if(c.cfgOk) return "同步檢查中";
-      return "同步檢查中";
+      if(c.authState==="expired" || c.authState==="unauth") return "待登入";
+      if(c.authState==="standby") return hasLastSuccessfulCloudSync() ? "已同步" : "連線檢查逾時";
+      if(c.cfgOk) return hasLastSuccessfulCloudSync() ? "已同步" : "連線檢查逾時";
+      return "雲端未設定";
     }
 
     function cloudBadgeBad(){
+      repairExpiredCloudCheckingState(false);
       var c = state.cloud || {};
-      if(c.ok) return false;
+      if(c.ok || hasLastSuccessfulCloudSync()) return false;
+      if(c.syncInProgress || c.authPending || c.authState==="checking") return true;
       if(c.authState==="unauth" || c.authState==="expired" || c.reachable===false || !c.cfgOk) return true;
       return true;
     }
@@ -4042,6 +4091,23 @@ function getPromptOptions(mode){
         return base + path;
       }
 
+      function fetchCloudWithTimeout(url, options, timeoutMs){
+        options = Object.assign({}, options || {});
+        timeoutMs = Number(timeoutMs || CLOUD_SYNC_TIMEOUT_MS) || 12000;
+        var controller = null;
+        var timer = null;
+        if(typeof AbortController !== "undefined"){
+          controller = new AbortController();
+          options.signal = controller.signal;
+          timer = setTimeout(function(){
+            try{ controller.abort(); }catch(_e){}
+          }, timeoutMs);
+        }
+        return fetch(url, options).finally(function(){
+          if(timer) clearTimeout(timer);
+        });
+      }
+
       function clearWorkerTokens(){
         try{
           TOKEN_BRIDGE_KEYS.forEach(function(k){ try{ sessionStorage.removeItem(k); }catch(e){} try{ localStorage.removeItem(k); }catch(e){} });
@@ -4084,13 +4150,13 @@ function getPromptOptions(mode){
         if(!cred || !cred.user || !cred.pass) return "";
         var apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         var url = _joinUrl(apiBase, "/api/tasun/login");
-        var r = await fetch(url, {
+        var r = await fetchCloudWithTimeout(url, {
           method: "POST",
           cache: "no-store",
           credentials: getWorkerCredentialMode(cfg),
           headers: { "content-type":"application/json", "accept":"application/json" },
           body: JSON.stringify({ username: cred.user, password: cred.pass, user: cred.user, pass: cred.pass })
-        });
+        }, CLOUD_SYNC_TIMEOUT_MS);
         if(!r.ok){
           var t = await r.text().catch(function(){ return ""; });
           throw new Error("worker login failed: " + r.status + " " + String(t).slice(0,200));
@@ -4111,12 +4177,12 @@ function getPromptOptions(mode){
         cfg = cfg || await loadCloudCfg();
         var apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
         var url = _joinUrl(apiBase, "/api/tasun/me");
-        var r = await fetch(url, {
+        var r = await fetchCloudWithTimeout(url, {
           method: "GET",
           cache: "no-store",
           credentials: getWorkerCredentialMode(cfg),
           headers: buildWorkerSessionBridgeHeaders({ "accept":"application/json" })
-        });
+        }, CLOUD_SYNC_TIMEOUT_MS);
         var txt = await r.text().catch(function(){ return ""; });
         var json = null; try{ json = txt ? JSON.parse(txt) : null; }catch(e){ json = null; }
         return { ok:r.ok, status:r.status, json:json, text:txt };
@@ -4154,17 +4220,17 @@ function getPromptOptions(mode){
         const query = "?key=" + encodeURIComponent(pageKey) + "&resourceKey=" + encodeURIComponent(pageKey) + "&pageKey=" + encodeURIComponent(pageKey) + "&fileKey=" + encodeURIComponent(pageKey);
         const getUrl = pullBase + query;
         async function doPost(body){
-          return await fetch(postUrl, {
+          return await fetchCloudWithTimeout(postUrl, {
             method: "POST", cache: "no-store", credentials: getWorkerCredentialMode(cfg),
             headers: buildWorkerSessionBridgeHeaders({ "content-type":"application/json", "accept":"application/json" }),
             body: JSON.stringify(body)
-          });
+          }, CLOUD_SYNC_TIMEOUT_MS);
         }
         async function doGet(){
-          return await fetch(getUrl, {
+          return await fetchCloudWithTimeout(getUrl, {
             method: "GET", cache: "no-store", credentials: getWorkerCredentialMode(cfg),
             headers: buildWorkerSessionBridgeHeaders({ "accept":"application/json" })
-          });
+          }, CLOUD_SYNC_TIMEOUT_MS);
         }
         var tries = [
           { resourceKey: pageKey, key: pageKey, pageKey: pageKey, fileKey: pageKey },
@@ -4195,7 +4261,7 @@ function getPromptOptions(mode){
           let reachable = false;
           for(const url of candidates){
             try{
-              const r = await fetch(url, { method:"GET", credentials: getWorkerCredentialMode(cfg), cache:"no-store", headers: buildWorkerSessionBridgeHeaders({ accept:"application/json" }) });
+              const r = await fetchCloudWithTimeout(url, { method:"GET", credentials: getWorkerCredentialMode(cfg), cache:"no-store", headers: buildWorkerSessionBridgeHeaders({ accept:"application/json" }) }, CLOUD_SYNC_TIMEOUT_MS);
               if(r.ok){ reachable = true; break; }
             }catch(_e){}
           }
@@ -4396,13 +4462,13 @@ function getPromptOptions(mode){
 
         const url = _joinUrl(apiBase, mergePath);
 
-        const r = await fetch(url, {
+        const r = await fetchCloudWithTimeout(url, {
           method: "POST",
           cache: "no-store",
           credentials: getWorkerCredentialMode(cfg),
           headers: buildWorkerSessionBridgeHeaders({ "content-type":"application/json", "accept":"application/json" }),
           body: JSON.stringify(body)
-        });
+        }, CLOUD_SYNC_TIMEOUT_MS);
         if(!r.ok){
           const t = await r.text().catch(()=> "");
           if(isAuthHttpStatus(r.status)){
@@ -4672,8 +4738,16 @@ async function reconcileCloudOnOpen(opts){
       }catch(e){
         var msg = String(e && e.message ? e.message : e || "");
         var st = /401|403|unauth|forbidden/i.test(msg) ? 'standby' : ((state.cloud && state.cloud.authState) || 'standby');
-        setCloudState({ ok:false, authState:st, reachable:(state.cloud && state.cloud.reachable!==undefined ? state.cloud.reachable : null), authPending:false, syncInProgress:false }, true);
-        if(!silent) toast("雲端同步檢查中：" + msg);
+        setCloudState({
+          ok: !!hasLastSuccessfulCloudSync(),
+          authState: hasLastSuccessfulCloudSync() ? "ok" : st,
+          reachable: hasLastSuccessfulCloudSync() ? true : (state.cloud && state.cloud.reachable!==undefined ? state.cloud.reachable : null),
+          authPending:false,
+          syncInProgress:false,
+          lastErrorAt: Date.now(),
+          lastError: msg
+        }, true);
+        if(!silent) toast((hasLastSuccessfulCloudSync() ? "雲端已保持最後同步狀態：" : "雲端連線檢查逾時：") + msg);
         return false;
       }
     }
@@ -5376,6 +5450,13 @@ $("btnSave").addEventListener("click", async function(){
       setTimeout(function(){ scheduleSync("boot-r419", true); }, 300);
       setTimeout(function(){ scheduleSync("boot-r419-confirm", true); }, 2200);
       setTimeout(function(){ scheduleSync("boot-r419-final", true); }, 6500);
+      setInterval(function(){
+        try{
+          if(repairExpiredCloudCheckingState(true)){
+            try{ refreshHintSafe(); }catch(_e){}
+          }
+        }catch(_e){}
+      }, 5000);
 
     }
 
@@ -5395,7 +5476,10 @@ $("btnSave").addEventListener("click", async function(){
           'detailR419DownloadUploadRedownloadThenPurgeLocal',
           'detailR419CloudAuthorityWinsLocalCache',
           'detailR419MultiDeviceRowsAndDisplayNoConsistent',
-          'detailR419NoInfinitePollingOrMobileBusyLoop'
+          'detailR419NoInfinitePollingOrMobileBusyLoop',
+          'detailR429CloudCheckingTimeoutNoStuck',
+          'detailR429FetchAbortTimeoutNoInfiniteChecking',
+          'detailR429LastSuccessfulSyncBadgeRecovered'
         ],
         verify: function(){
           return !!(
@@ -5404,6 +5488,8 @@ $("btnSave").addEventListener("click", async function(){
             && Array.isArray(state.db)
             && window.__TASUN_PAGE_KEY__ === PAGE_KEY
             && window.__TASUN_DB_NAME__ === IDB_NAME
+            && typeof repairExpiredCloudCheckingState === "function"
+            && typeof fetchCloudWithTimeout === "function"
           );
         },
         repair: function(){
