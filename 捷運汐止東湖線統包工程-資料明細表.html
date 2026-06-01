@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>捷運汐止東湖線統包工程-資料明細表 · Tasun</title>
 
-  <meta name="tasun-build-stamp" content="20260601_tasun_v5_detail_list_r425_cloud_pending_authority_sync_fix">
-  <meta name="tasun-rebuild-stamp" content="20260601_tasun_v5_detail_list_r425_cloud_pending_authority_sync_fix">
+  <meta name="tasun-build-stamp" content="20260601_tasun_v5_detail_list_r426_api_endpoint_cors_recover_fix">
+  <meta name="tasun-rebuild-stamp" content="20260601_tasun_v5_detail_list_r426_api_endpoint_cors_recover_fix">
   <script id="tasun-buildstamp-sync-standard">
   (function(){
     'use strict';
-    var PAGE_BUILD_STAMP = "20260601_tasun_v5_detail_list_r425_cloud_pending_authority_sync_fix";
+    var PAGE_BUILD_STAMP = "20260601_tasun_v5_detail_list_r426_api_endpoint_cors_recover_fix";
     var TASUN_GLOBALS = window.__TASUN_GLOBALS__ = window.__TASUN_GLOBALS__ || {};
     TASUN_GLOBALS.PAGE_BUILD_STAMP = String(TASUN_GLOBALS.PAGE_BUILD_STAMP || PAGE_BUILD_STAMP).trim() || PAGE_BUILD_STAMP;
     TASUN_GLOBALS.REBUILD_STAMP = String(TASUN_GLOBALS.REBUILD_STAMP || PAGE_BUILD_STAMP).trim() || TASUN_GLOBALS.PAGE_BUILD_STAMP;
@@ -200,7 +200,7 @@
   <script id="tasun-detail-r421-version-canonical">
   (function(){
     "use strict";
-    var V = "20260601_tasun_v5_detail_list_r425_cloud_pending_authority_sync_fix";
+    var V = "20260601_tasun_v5_detail_list_r426_api_endpoint_cors_recover_fix";
     try{
       window.__CACHE_V = V;
       window.TASUN_APP_VER = V;
@@ -271,7 +271,7 @@
     window.TASUN_APP_VER = norm(window.TASUN_APP_VER || "");
     window.__CACHE_V = norm(window.__CACHE_V || "");
 
-    document.write('<script src="tasun-version-loader.js?v=20260601_tasun_v5_detail_list_r425_cloud_pending_authority_sync_fix&_=' + Date.now() + '"><\/script>');
+    document.write('<script src="tasun-version-loader.js?v=20260601_tasun_v5_detail_list_r426_api_endpoint_cors_recover_fix&_=' + Date.now() + '"><\/script>');
 
     (async function(){
       try{
@@ -2396,21 +2396,36 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
         if(res && res.ok){
           var text = await res.text();
           var json = parseJsonLenient(text);
+
+          // R426：先讀全站 global api 區塊，避免本頁尚未列在 resources 時，
+          // 前端誤判為 API endpoint 不完整而停在「API待連線」。
+          if(json && json.api && typeof json.api === "object"){
+            var api = json.api;
+            var apiBaseGlobal = api.apiBase || api.base || api.url || "";
+            if(isValidApiBase(apiBaseGlobal)) cfg.apiBase = apiBaseGlobal;
+            cfg.endpoints = normalizeEndpoints(Object.assign({}, cfg.endpoints, {
+              health: api.health,
+              read: api.read,
+              merge: api.merge
+            }, api.endpoints || {}));
+            if(api.credentials!==undefined && api.credentials!==null && String(api.credentials).trim()!=="") cfg.credentials = String(api.credentials).trim();
+          }
+
           if(json && json.resources && typeof json.resources==="object"){
             var fn = getFileName();
             var r = json.resources;
-            var pick = r[fn] || r[PAGE_KEY] || r["*"] || null;
+            var pick = r[fn] || r[PAGE_KEY] || r[RESOURCE_KEY] || r[PAGE_FILE] || r["*"] || null;
             if(pick){
-              if(isValidApiBase(pick.apiBase)) cfg.apiBase = pick.apiBase;
+              if(isValidApiBase(pick.apiBase || pick.base)) cfg.apiBase = pick.apiBase || pick.base;
               if(pick.credentials!==undefined && pick.credentials!==null && String(pick.credentials).trim()!=="") cfg.credentials = String(pick.credentials).trim();
-              if(pick.endpoints) cfg.endpoints = normalizeEndpoints(pick.endpoints);
+              if(pick.endpoints) cfg.endpoints = normalizeEndpoints(Object.assign({}, cfg.endpoints, pick.endpoints));
               if(pick.netDiskUrl) cfg.netDiskUrl = String(pick.netDiskUrl);
               else if(pick.links && pick.links.netDiskUrl) cfg.netDiskUrl = String(pick.links.netDiskUrl);
 
             }else{
-              if(isValidApiBase(json.apiBase)) cfg.apiBase = json.apiBase;
+              if(isValidApiBase(json.apiBase || json.base)) cfg.apiBase = json.apiBase || json.base;
               if(json.credentials!==undefined && json.credentials!==null && String(json.credentials).trim()!=="") cfg.credentials = String(json.credentials).trim();
-              if(json.endpoints) cfg.endpoints = normalizeEndpoints(json.endpoints);
+              if(json.endpoints) cfg.endpoints = normalizeEndpoints(Object.assign({}, cfg.endpoints, json.endpoints));
               if(json.netDiskUrl) cfg.netDiskUrl = String(json.netDiskUrl);
               else if(json.links && json.links.netDiskUrl) cfg.netDiskUrl = String(json.links.netDiskUrl);
 
@@ -3095,6 +3110,7 @@ function calcMaxDisplayChars(rows, key){
       var msg = String((err && err.message) ? err.message : (err || "")).trim();
       var low = msg.toLowerCase();
       var out = { authState:"standby", reachable:null, statusLabel:"待同步", message:msg };
+
       if(/403|forbidden|權限不足/.test(low)){
         out.authState = "forbidden";
         out.reachable = true;
@@ -3110,11 +3126,17 @@ function calcMaxDisplayChars(rows, key){
       }else if(/failed to fetch|network|load failed|連線|offline|browser-offline/.test(low)){
         out.authState = "standby";
         out.reachable = false;
-        out.statusLabel = "連線失敗";
-      }else if(/404|not found|405|method not allowed|api|cloud read failed|cloud merge failed|no cloud read endpoint|endpoint responded|no confirmed cloud read/i.test(low)){
+        out.statusLabel = "待同步";
+      }else if(/no confirmed cloud read|no cloud read endpoint|no cloud merge endpoint|endpoint responded|cloud read failed|cloud merge failed/.test(low)){
+        // R426：端點暫時不可用時不得長時間卡「API待連線」；
+        // 前端會啟動 no-preflight fallback 與受控重試，UI 以「待同步」呈現。
         out.authState = "standby";
-        out.reachable = false;
-        out.statusLabel = "API待連線";
+        out.reachable = null;
+        out.statusLabel = "待同步";
+      }else if(/404|not found|405|method not allowed|api/.test(low)){
+        out.authState = "standby";
+        out.reachable = null;
+        out.statusLabel = "待同步";
       }else if(/cloud sync returned false|sync returned false|returned false/.test(low)){
         out.authState = "standby";
         out.statusLabel = "待同步";
@@ -4246,21 +4268,104 @@ function getPromptOptions(mode){
         return false;
       }
 
+
+      function getStoredEndpointR426(kind){
+        try{
+          return norm(localStorage.getItem("tasun_detail_endpoint_r426__" + PAGE_KEY + "__" + kind) || "");
+        }catch(e){ return ""; }
+      }
+
+      function rememberEndpointR426(kind, path){
+        try{
+          path = norm(path);
+          if(path) localStorage.setItem("tasun_detail_endpoint_r426__" + PAGE_KEY + "__" + kind, path);
+        }catch(e){}
+      }
+
+      function endpointCandidatesR426(kind, preferred, defaults){
+        var saved = getStoredEndpointR426(kind);
+        return uniqueStringsR421([saved, preferred].concat(defaults || []));
+      }
+
+      function simpleCloudHeadersR426(extra){
+        // R426：簡易 CORS fallback 僅使用 safelisted headers，避免 OPTIONS preflight
+        // 被 Worker 未處理而導致瀏覽器直接 Failed to fetch。
+        var h = { "accept":"application/json, text/plain, */*" };
+        extra = (extra && typeof extra === "object") ? extra : {};
+        Object.keys(extra).forEach(function(k){
+          if(!k) return;
+          h[k] = extra[k];
+        });
+        return h;
+      }
+
+      async function tasunFetchSimpleR426(url, options, timeoutMs){
+        options = Object.assign({}, options || {});
+        timeoutMs = Number(timeoutMs || 15000);
+        var controller = null, tm = null;
+        var opt = Object.assign({
+          method: "GET",
+          cache: "no-store",
+          credentials: "omit",
+          mode: "cors"
+        }, options);
+        opt.credentials = "omit";
+        if(window.AbortController){
+          controller = new AbortController();
+          opt.signal = controller.signal;
+          tm = setTimeout(function(){ try{ controller.abort(); }catch(_e){} }, timeoutMs);
+        }
+        try{
+          return await fetch(url, opt);
+        }finally{
+          if(tm) clearTimeout(tm);
+        }
+      }
+
+      function cloneBodyForTextPlainR426(body){
+        try{
+          return JSON.stringify(body || {});
+        }catch(e){
+          return "{}";
+        }
+      }
+
+      function markEndpointIssueR426(kind, detail){
+        try{
+          window.__TASUN_DETAIL_R426_ENDPOINT_LAST_ISSUE__ = {
+            kind: kind || "",
+            detail: detail || "",
+            at: nowISO()
+          };
+        }catch(e){}
+      }
+
       async function cloudReadRaw(cfg, pageKey){
         cfg = cfg || await loadCloudCfg();
         pageKey = norm(pageKey || PAGE_KEY) || PAGE_KEY;
-        const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
-        const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-        const readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/read";
-        var postPaths = uniqueStringsR421([readPath, "/api/tasun/read", "/api/read", "/api/tasun/pull", "/api/pull"]);
-        var getPaths = uniqueStringsR421(["/api/tasun/pull", readPath, "/api/read", "/api/pull"]);
+        var apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
+        var eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
+        var readPath = (eps && eps.read) ? String(eps.read) : "/api/tasun/read";
+
+        // R426：讀取端點採「記憶成功端點 + 多路徑 + no-preflight fallback」。
+        // 避免 Chrome/Edge 因 custom headers、credentials 或 Worker OPTIONS 未回應而一直停在「API待連線」。
+        var postPaths = endpointCandidatesR426("readPost", readPath, [
+          "/api/tasun/read", "/api/tasun/pull", "/api/read", "/api/pull",
+          "/api/tasun/data/read", "/api/data/read", "/read", "/pull"
+        ]);
+        var getPaths = endpointCandidatesR426("readGet", "/api/tasun/pull", [
+          readPath, "/api/tasun/read", "/api/read", "/api/pull",
+          "/api/tasun/data/read", "/api/data/read", "/read", "/pull"
+        ]);
+
         var bodies = [
           { resourceKey: pageKey, key: pageKey, pageKey: pageKey, fileKey: pageKey, tableId: TABLE_ID, dbName: IDB_NAME },
           { resourceKey: pageKey, pageKey: pageKey },
           { key: pageKey },
           { pageKey: pageKey }
         ];
-        var last = null;
+        var last = null, lastText = "";
+
         async function doPost(path, body){
           return await tasunFetchR421(_joinUrl(apiBase, path), {
             method: "POST", cache: "no-store", credentials: getWorkerCredentialMode(cfg),
@@ -4290,24 +4395,105 @@ function getPromptOptions(mode){
           }
           return r;
         }
+        async function doSimpleGet(path){
+          return await tasunFetchSimpleR426(addCloudQueryR421(_joinUrl(apiBase, path), pageKey), {
+            method: "GET",
+            headers: simpleCloudHeadersR426()
+          }, 15000);
+        }
+        async function doSimplePost(path, body){
+          return await tasunFetchSimpleR426(_joinUrl(apiBase, path), {
+            method: "POST",
+            headers: simpleCloudHeadersR426({ "content-type":"text/plain" }),
+            body: cloneBodyForTextPlainR426(body)
+          }, 15000);
+        }
+        function keepLast(r, path, mode){
+          last = r || last;
+          try{ if(r) r._tasunEndpointPath = path; }catch(e){}
+          try{ if(r) r._tasunEndpointMode = mode; }catch(e){}
+        }
+
         for(var p=0;p<postPaths.length;p++){
           for(var i=0;i<bodies.length;i++){
             try{
               var rp = await doPostWithAuthRetry(postPaths[p], bodies[i]);
-              last = rp || last;
-              if(rp && rp.ok) return rp;
-              if(rp && ![400,404,405,501].includes(Number(rp.status))) break;
-            }catch(e){ last = { ok:false, status:0, _tasunError:String(e && e.message || e) }; }
+              keepLast(rp, postPaths[p], "post-json");
+              if(rp && rp.ok){
+                rememberEndpointR426("readPost", postPaths[p]);
+                return rp;
+              }
+              if(rp){
+                try{ lastText = await rp.clone().text(); }catch(_e){ lastText = ""; }
+                if(![400,404,405,501].includes(Number(rp.status))) break;
+              }
+            }catch(e){
+              lastText = String(e && e.message || e);
+              last = { ok:false, status:0, _tasunError:lastText, _tasunEndpointPath:postPaths[p], _tasunEndpointMode:"post-json" };
+            }
           }
         }
+
         for(var g=0;g<getPaths.length;g++){
           try{
             var rg = await doGetWithAuthRetry(getPaths[g]);
-            last = rg || last;
-            if(rg && rg.ok) return rg;
-            if(rg && ![400,404,405,501].includes(Number(rg.status))) break;
-          }catch(e){ last = { ok:false, status:0, _tasunError:String(e && e.message || e) }; }
+            keepLast(rg, getPaths[g], "get-auth");
+            if(rg && rg.ok){
+              rememberEndpointR426("readGet", getPaths[g]);
+              return rg;
+            }
+            if(rg){
+              try{ lastText = await rg.clone().text(); }catch(_e){ lastText = ""; }
+              if(![400,404,405,501].includes(Number(rg.status))) break;
+            }
+          }catch(e){
+            lastText = String(e && e.message || e);
+            last = { ok:false, status:0, _tasunError:lastText, _tasunEndpointPath:getPaths[g], _tasunEndpointMode:"get-auth" };
+          }
         }
+
+        // R426 no-preflight fallback：若前述因 CORS/OPTIONS/credentials/custom headers 失敗，
+        // 改用 credentials:omit + safelisted headers。這是修復 Chrome 一直 API待連線的主要路徑。
+        for(var sg=0;sg<getPaths.length;sg++){
+          try{
+            var rsg = await doSimpleGet(getPaths[sg]);
+            keepLast(rsg, getPaths[sg], "get-simple");
+            if(rsg && rsg.ok){
+              rememberEndpointR426("readGet", getPaths[sg]);
+              try{ window.__TASUN_DETAIL_R426_SIMPLE_READ_FALLBACK_OK__ = { path:getPaths[sg], method:"GET", at:nowISO() }; }catch(_e){}
+              return rsg;
+            }
+            if(rsg){
+              try{ lastText = await rsg.clone().text(); }catch(_e){ lastText = ""; }
+            }
+          }catch(e){
+            lastText = String(e && e.message || e);
+            last = { ok:false, status:0, _tasunError:lastText, _tasunEndpointPath:getPaths[sg], _tasunEndpointMode:"get-simple" };
+          }
+        }
+
+        for(var sp=0;sp<postPaths.length;sp++){
+          for(var bi=0;bi<bodies.length;bi++){
+            try{
+              var rsp = await doSimplePost(postPaths[sp], bodies[bi]);
+              keepLast(rsp, postPaths[sp], "post-simple");
+              if(rsp && rsp.ok){
+                rememberEndpointR426("readPost", postPaths[sp]);
+                try{ window.__TASUN_DETAIL_R426_SIMPLE_READ_FALLBACK_OK__ = { path:postPaths[sp], method:"POST-text", at:nowISO() }; }catch(_e){}
+                return rsp;
+              }
+              if(rsp){
+                try{ lastText = await rsp.clone().text(); }catch(_e){ lastText = ""; }
+                if(![400,404,405,501].includes(Number(rsp.status))) break;
+              }
+            }catch(e){
+              lastText = String(e && e.message || e);
+              last = { ok:false, status:0, _tasunError:lastText, _tasunEndpointPath:postPaths[sp], _tasunEndpointMode:"post-simple" };
+            }
+          }
+        }
+
+        markEndpointIssueR426("read", String(lastText || (last && last._tasunError) || (last && last.status) || "no cloud read endpoint responded"));
         if(last && last._tasunError) throw new Error(last._tasunError);
         return last || new Response(JSON.stringify({ ok:false, error:"no cloud read endpoint responded" }), { status: 503, headers:{ "content-type":"application/json" } });
       }
@@ -4529,42 +4715,46 @@ function getPromptOptions(mode){
       async function cloudMerge(cfg, pageKey, payloadLike, clientInfo){
         cfg = cfg || await loadCloudCfg();
         pageKey = norm(pageKey || PAGE_KEY) || PAGE_KEY;
-        const apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
-        const eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
-        const mergePath = (eps && eps.merge) ? String(eps.merge) : "/api/tasun/merge";
+        var apiBase = (cfg && cfg.apiBase) ? String(cfg.apiBase) : "";
+        var eps = (cfg && cfg.endpoints) ? cfg.endpoints : {};
+        var mergePath = (eps && eps.merge) ? String(eps.merge) : "/api/tasun/merge";
 
-        let payload = payloadLike;
+        var payload = payloadLike;
         if(payload && typeof payload === "object"){
-          if(payload.payload && typeof payload.payload==="object") payload = payload.payload;
-          if(payload.data && typeof payload.data==="object") payload = payload.data;
+          if(payload.payload && typeof payload.payload === "object") payload = payload.payload;
+          else if(payload.data && typeof payload.data === "object" && (Array.isArray(payload.data.db) || Array.isArray(payload.data.rows) || Array.isArray(payload.data.items))) payload = payload.data;
         }
-        payload = payload || { db:[], counter:0 };
-        var cleanRows = canonicalizeRows(Array.isArray(payload.db) ? payload.db : []);
-        var cleanCounter = getAuthorityCounterR419(cleanRows, Number(payload.counter)||0);
-        var client = clientInfo && typeof clientInfo==="object" ? clientInfo : {};
-        var fullBody = {
-          resourceKey: pageKey,
-          key: pageKey,
+        payload = payload && typeof payload === "object" ? payload : { db:[], counter:0 };
+
+        var cleanRows = canonicalizeRows(payload.db || payload.rows || payload.items || []);
+        var cleanCounter = getAuthorityCounterR419(cleanRows, payload.counter);
+        var client = Object.assign({
+          user: state.user || "",
+          role: state.role || "",
+          appVer: APP_VER,
           pageKey: pageKey,
-          fileKey: pageKey,
+          resourceKey: pageKey,
           tableId: TABLE_ID,
           dbName: IDB_NAME,
-          payload: { db: cleanRows, counter: cleanCounter },
-          data: { db: cleanRows, counter: cleanCounter },
-          rows: cleanRows,
-          items: cleanRows,
-          records: cleanRows,
-          counter: cleanCounter,
-          client: client
-        };
+          clientId: state.clientId || getClientId(),
+          at: nowISO()
+        }, clientInfo || {});
+
         var bodyVariants = [
-          fullBody,
           { key: pageKey, payload: { db: cleanRows, counter: cleanCounter }, client: client },
+          { resourceKey: pageKey, payload: { db: cleanRows, counter: cleanCounter }, client: client },
+          { pageKey: pageKey, payload: { db: cleanRows, counter: cleanCounter }, client: client },
+          { key: pageKey, data: { db: cleanRows, counter: cleanCounter }, client: client },
+          { resourceKey: pageKey, data: { db: cleanRows, counter: cleanCounter }, client: client },
           { pageKey: pageKey, data: { db: cleanRows, counter: cleanCounter }, client: client },
           { resourceKey: pageKey, db: cleanRows, counter: cleanCounter, client: client }
         ];
-        var paths = uniqueStringsR421([mergePath, "/api/tasun/merge", "/api/merge", "/api/tasun/save", "/api/save"]);
+        var paths = endpointCandidatesR426("mergePost", mergePath, [
+          "/api/tasun/merge", "/api/merge", "/api/tasun/save", "/api/save",
+          "/api/tasun/data/merge", "/api/data/merge", "/merge", "/save"
+        ]);
         var last = null, lastText = "";
+
         async function doMerge(path, body){
           return await tasunFetchR421(_joinUrl(apiBase, path), {
             method: "POST",
@@ -4574,6 +4764,14 @@ function getPromptOptions(mode){
             body: JSON.stringify(body)
           }, 20000);
         }
+        async function doSimpleMerge(path, body){
+          return await tasunFetchSimpleR426(_joinUrl(apiBase, path), {
+            method: "POST",
+            headers: simpleCloudHeadersR426({ "content-type":"text/plain" }),
+            body: cloneBodyForTextPlainR426(body)
+          }, 20000);
+        }
+
         for(var p=0;p<paths.length;p++){
           for(var i=0;i<bodyVariants.length;i++){
             var r = null;
@@ -4585,7 +4783,8 @@ function getPromptOptions(mode){
               }
               last = r || last;
               if(r && r.ok){
-                const j = await r.json().catch(function(){ return {}; });
+                rememberEndpointR426("mergePost", paths[p]);
+                var j = await r.json().catch(function(){ return {}; });
                 return _normalizePullResponse(j);
               }
               if(r){
@@ -4594,13 +4793,39 @@ function getPromptOptions(mode){
               }
             }catch(e){
               lastText = String(e && e.message || e);
-              last = { ok:false, status:0 };
+              last = { ok:false, status:0, _tasunError:lastText };
             }
           }
         }
+
+        // R426 no-preflight fallback for merge：改用 text/plain + omit，避免 OPTIONS preflight 卡住。
+        for(var sp=0;sp<paths.length;sp++){
+          for(var bi=0;bi<bodyVariants.length;bi++){
+            var sr = null;
+            try{
+              sr = await doSimpleMerge(paths[sp], bodyVariants[bi]);
+              last = sr || last;
+              if(sr && sr.ok){
+                rememberEndpointR426("mergePost", paths[sp]);
+                try{ window.__TASUN_DETAIL_R426_SIMPLE_MERGE_FALLBACK_OK__ = { path:paths[sp], at:nowISO() }; }catch(_e){}
+                var sj = await sr.json().catch(function(){ return {}; });
+                return _normalizePullResponse(sj);
+              }
+              if(sr){
+                try{ lastText = await sr.clone().text(); }catch(_e){ lastText = ""; }
+                if(![400,404,405,501].includes(Number(sr.status))) break;
+              }
+            }catch(e2){
+              lastText = String(e2 && e2.message || e2);
+              last = { ok:false, status:0, _tasunError:lastText };
+            }
+          }
+        }
+
         if(last && isAuthHttpStatus(last.status)){
           try{ setCloudState({ ok:false, cfgOk:true, reachable:true, authState:"unauth", statusLabel:"待登入" }, true); }catch(_e){}
         }
+        markEndpointIssueR426("merge", String(lastText || (last && last._tasunError) || (last && last.status) || "no cloud merge endpoint responded"));
         throw new Error("cloud merge failed: " + (last ? last.status : 0) + " " + String(lastText||"").slice(0,200));
       }
     
@@ -4903,15 +5128,30 @@ async function reconcileCloudOnOpen(opts){
       try{
         var c = state.cloud || {};
         var txt = cloudBadgeText();
-        return !c.ok && !c.syncInProgress && (txt === '待同步' || c.statusLabel === '待同步' || c.authState === 'standby');
+        var label = norm(c.statusLabel || "");
+        return !c.ok && !c.syncInProgress && (
+          txt === '待同步' || txt === 'API待連線' || txt === '連線失敗' || txt === '連線逾時' ||
+          label === '待同步' || label === 'API待連線' || label === '連線失敗' || label === '連線逾時' ||
+          c.authState === 'standby'
+        );
       }catch(e){ return false; }
     }
 
     async function recoverPendingCloudStateR425(reason){
-      reason = norm(reason || 'r425-pending-recover');
+      reason = norm(reason || 'r426-endpoint-recover');
       try{
         if(!isPendingCloudStatusR425()) return !!(state.cloud && state.cloud.ok);
         if(_sync && _sync.inFlight) return false;
+
+        var now = Date.now();
+        var key = 'tasun_detail_r426_endpoint_recover_lock__' + PAGE_KEY;
+        try{
+          var last = Number(sessionStorage.getItem(key) || 0) || 0;
+          if(last && (now - last) < 3500) return false;
+          sessionStorage.setItem(key, String(now));
+        }catch(_e){}
+
+        setCloudState({ ok:false, cfgOk:true, authState:'standby', authPending:false, syncInProgress:false, statusLabel:'待同步' }, true);
         return await reconcileCloudOnOpen({ silent:true, reason:reason });
       }catch(e){
         try{ setCloudFailureState(e, true); }catch(_e){}
@@ -5522,19 +5762,20 @@ $("btnSave").addEventListener("click", async function(){
       setTimeout(function(){ scheduleSync("boot-r425-final", true); }, 6500);
       setTimeout(function(){ recoverPendingCloudStateR425("boot-r425-pending-watchdog"); }, 9000);
       setTimeout(function(){ recoverPendingCloudStateR425("boot-r425-pending-watchdog-final"); }, 15000);
+      setTimeout(function(){ recoverPendingCloudStateR425("boot-r426-api-standby-recover"); }, 21000);
 
     }
 
 
 
     // ---------------------------
-    // R425 Self-heal registration: cloud pending authority sync
+    // R426 Self-heal registration: API endpoint/CORS recovery
     // ---------------------------
     try{
       window.TasunSelfHealV5 = window.TasunSelfHealV5 || {};
       window.TasunSelfHealV5.records = window.TasunSelfHealV5.records || {};
-      window.TasunSelfHealV5.records.detailListR425 = {
-        group: 'detail-list-r425',
+      window.TasunSelfHealV5.records.detailListR426 = {
+        group: 'detail-list-r426',
         updatedAt: nowISO(),
         checks: [
           'detailR419TableIdentityIndividualDb',
@@ -5553,7 +5794,11 @@ $("btnSave").addEventListener("click", async function(){
           'detailR425PendingStatusAutoAuthoritySync',
           'detailR425ConfirmedEmptyCloudMarksSynced',
           'detailR425PrimaryEmptyFallbackLegacyOnlyOnBoot',
-          'detailR425NoSilentEmptyReadWhenAllEndpointsFail'
+          'detailR425NoSilentEmptyReadWhenAllEndpointsFail',
+          'detailR426CloudResourceConfigFromGlobalApi',
+          'detailR426CorsNoPreflightReadFallback',
+          'detailR426SimplePostMergeFallback',
+          'detailR426ApiStandbyRetryNoStuck'
         ],
         verify: function(){
           return !!(
@@ -5570,13 +5815,16 @@ $("btnSave").addEventListener("click", async function(){
             && typeof hasConfirmedCloudReadR425 === 'function'
             && typeof shouldFallbackLegacyWhenPrimaryEmptyR425 === 'function'
             && typeof recoverPendingCloudStateR425 === 'function'
+            && typeof tasunFetchSimpleR426 === 'function'
+            && typeof endpointCandidatesR426 === 'function'
+            && typeof rememberEndpointR426 === 'function'
             && _sync && Number(_sync.failCount || 0) <= SYNC_MAX_RETRY
           );
         },
         repair: function(){
           try{ ensureDetailTableIdentity(); }catch(_e){}
           try{
-            if(state && state.cloud && (state.cloud.authState === 'checking' || state.cloud.statusLabel === '同步失敗') && !state.cloud.syncInProgress){
+            if(state && state.cloud && (state.cloud.authState === 'checking' || state.cloud.statusLabel === '同步失敗' || state.cloud.statusLabel === 'API待連線') && !state.cloud.syncInProgress){
               setCloudState({ authState:'standby', statusLabel:'待同步', authPending:false, syncInProgress:false }, true);
             }
           }catch(_e){}
@@ -5585,13 +5833,15 @@ $("btnSave").addEventListener("click", async function(){
           return true;
         }
       };
-      window.TasunSelfHealV5.records.detailListR421 = window.TasunSelfHealV5.records.detailListR425;
-      window.TasunSelfHealV5.records.detailListR420 = window.TasunSelfHealV5.records.detailListR425;
-      window.TasunSelfHealV5.records.detailListR419 = window.TasunSelfHealV5.records.detailListR425;
-      window.__TASUN_DETAIL_SELFHEAL_R425__ = window.TasunSelfHealV5.records.detailListR425;
-      window.__TASUN_DETAIL_SELFHEAL_R421__ = window.TasunSelfHealV5.records.detailListR425;
-      window.__TASUN_DETAIL_SELFHEAL_R420__ = window.TasunSelfHealV5.records.detailListR425;
-      window.__TASUN_DETAIL_SELFHEAL_R419__ = window.TasunSelfHealV5.records.detailListR425;
+      window.TasunSelfHealV5.records.detailListR425 = window.TasunSelfHealV5.records.detailListR426;
+      window.TasunSelfHealV5.records.detailListR421 = window.TasunSelfHealV5.records.detailListR426;
+      window.TasunSelfHealV5.records.detailListR420 = window.TasunSelfHealV5.records.detailListR426;
+      window.TasunSelfHealV5.records.detailListR419 = window.TasunSelfHealV5.records.detailListR426;
+      window.__TASUN_DETAIL_SELFHEAL_R426__ = window.TasunSelfHealV5.records.detailListR426;
+      window.__TASUN_DETAIL_SELFHEAL_R425__ = window.TasunSelfHealV5.records.detailListR426;
+      window.__TASUN_DETAIL_SELFHEAL_R421__ = window.TasunSelfHealV5.records.detailListR426;
+      window.__TASUN_DETAIL_SELFHEAL_R420__ = window.TasunSelfHealV5.records.detailListR426;
+      window.__TASUN_DETAIL_SELFHEAL_R419__ = window.TasunSelfHealV5.records.detailListR426;
     }catch(_e){}
 
     // ---------------------------
