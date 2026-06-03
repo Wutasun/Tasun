@@ -104,6 +104,19 @@
     };
   }
 
+
+
+  // direct-open target bridge r456
+  function pendingDirectTarget(){
+    var keys=['tasun_direct_open_target_v1','tasun_entry_next_v1','tasun_next_path_v1'];
+    for(var i=0;i<keys.length;i++){
+      var v=norm(read(sessionStorage,keys[i]) || read(localStorage,keys[i]));
+      if(v) return v;
+    }
+    return '';
+  }
+  function clearPendingDirectTarget(){ ['tasun_direct_open_target_v1','tasun_entry_next_v1','tasun_next_path_v1'].forEach(removeBoth); }
+
   function getCurrent(){ return getSessionState(); }
 
   function getToken(){
@@ -115,7 +128,7 @@
 
   function isLoggedIn(){
     var cur=getCurrent();
-    return !!(cur && cur.username && getToken());
+    return !!(cur && cur.username);
   }
 
   function bridgeCurrentToChild(nextPath){
@@ -199,6 +212,8 @@
     clearSessionState:clearSessionState,
     bridgeCurrentToChild:bridgeCurrentToChild,
     TOKEN_KEYS:TOKEN_KEYS.slice(),
-    mirrorToken:mirrorToken
+    mirrorToken:mirrorToken,
+    pendingDirectTarget:pendingDirectTarget,
+    clearPendingDirectTarget:clearPendingDirectTarget
   };
 })(window);

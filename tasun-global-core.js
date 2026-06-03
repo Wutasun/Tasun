@@ -1,6 +1,6 @@
 (function(global){
   'use strict';
-  var CORE_VER = norm(global.__CACHE_V || global.TASUN_APP_VER || global.APP_VER || '20260513_tasun_v5_r300_global_core_auto_version');
+  var CORE_VER = norm(global.__CACHE_V || global.TASUN_APP_VER || global.APP_VER || '20260603_tasun_v5_all_pages_r456_direct_open_login_guard_page_entry_fix');
   var CURRENT_KEY = 'tasunCurrentUser_v1';
   var SESSION_KEY = 'tasunSession_v1';
   var INDEX_SESSION_KEY = 'tasunIndexSession_v1';
@@ -75,7 +75,7 @@
   }
   function clearSessionLogin(){ [CURRENT_KEY, SESSION_KEY, SESSION_BRIDGE_KEY, INDEX_SESSION_KEY, LAST_PASS_KEY, 'tasunSso_v2', 'tasunSso_v1'].forEach(removeBoth); TOKEN_KEYS.forEach(removeBoth); }
   function hasAnySitePageOpenSignal(){ try{ return sessionStorage.getItem(INDEX_SESSION_KEY) === '1'; }catch(_e){ return false; } }
-  function requireLoginOnColdStart(){ return !hasAnySitePageOpenSignal(); }
+  function requireLoginOnColdStart(){ return !(hasAnySitePageOpenSignal() || !!getCurrentUser()); }
   function normalizeAuthTable(){ var t = safeJSON(readLocal(AUTH_KEY)) || {}; var users = Array.isArray(t.users) ? t.users : Array.isArray(t.rows) ? t.rows : Array.isArray(t) ? t : []; return users.map(function(u){ return { user:norm(u.user || u.username || u.name), name:norm(u.name || u.user || u.username), role:normalizeRole(u.role || 'read'), pass:norm(u.pass || u.password || u.pwd || u.secret || u.passwd || '') }; }).filter(function(u){ return !!u.user; }); }
   function getNamedButtons(){ var raw = safeJSON(readLocal(BUTTONS_KEY)) || {}; var list = Array.isArray(raw.buttons) ? raw.buttons : Array.isArray(raw) ? raw : []; return list.map(function(x, idx){ return { key:norm(x.key || ('btn' + (idx+1))), name:norm(x.name || x.label || x.title || ('btn' + (idx+1))), href:norm(x.href || x.url || ''), target:norm(x.target || '') }; }); }
   function defaultRouteMap(){ return { '捷運汐止東湖線':'汐東工程管理表.html','捷運汐東線':'汐東工程管理表.html','汐東工程管理表':'汐東工程管理表.html','臻鼎時代大廈管理表':'臻鼎管理表.html','工程資料庫':'工程資料庫.html','系統/權限':'權限表.html' }; }
@@ -125,4 +125,9 @@
   }
 
   global.TasunGlobalCore = { version:CORE_VER, nowISO:nowISO, addV:addV, getCurrentUser:getCurrentUser, setCurrentUser:setCurrentUser, bridgeAuth:bridgeAuth, setLastPass:setLastPass, clearSessionLogin:clearSessionLogin, requireLoginOnColdStart:requireLoginOnColdStart, normalizeAuthTable:normalizeAuthTable, getNamedButtons:getNamedButtons, getRouteMap:getRouteMap, resolveRouteByName:resolveRouteByName, navigateByName:navigateByName, applyButtonRoutes:applyButtonRoutes, getCloudToken:getCloudToken, mirrorToken:mirrorToken, buildAuthHeaders:buildAuthHeaders, fetchJson:fetchJson, syncBootstrap:syncBootstrap, getVersionState:getVersionState, validateAutoVersionConfig:validateAutoVersionConfig, AUTO_VERSION_STANDARD:AUTO_VERSION_STANDARD, TOKEN_KEYS:TOKEN_KEYS.slice() };
+
+  global.__TASUN_DIRECT_OPEN_HELPERS_R456__ = {
+    directOpenTargetR456:function(){ try{ return sessionStorage.getItem('tasun_direct_open_target_v1') || localStorage.getItem('tasun_direct_open_target_v1') || sessionStorage.getItem('tasun_next_path_v1') || localStorage.getItem('tasun_next_path_v1') || ''; }catch(_e){ return ''; } },
+    clearDirectOpenTargetR456:function(){ ['tasun_direct_open_target_v1','tasun_entry_next_v1','tasun_next_path_v1'].forEach(function(k){ try{ sessionStorage.removeItem(k); }catch(_e){} try{ localStorage.removeItem(k); }catch(_e){} }); }
+  };
 })(window);
