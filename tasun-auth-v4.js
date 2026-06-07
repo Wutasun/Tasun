@@ -1,4 +1,4 @@
-/* TasunAuthV4 core-chain aligned v6
+/* TasunAuthV4 core-chain aligned v6-r495
  * - Worker token login only
  * - session/token/child-bridge unified in one core file
  */
@@ -11,6 +11,8 @@
   var INDEX_SESSION_KEY='tasunIndexSession_v1';
   var NEXT_KEY='tasun_next_path_v1';
   var LAST_PASS_KEY='tasunLastLoginPass_v1';
+  var INDEX_VERIFIED_AT_KEY='tasunIndexLoginVerifiedAt_v1';
+  var INDEX_VERIFIED_USER_KEY='tasunIndexLoginVerifiedUser_v1';
   var TOKEN_KEYS=[
     'tasunBearerToken_v1','tasunCloudToken_v1','tasunCloudToken','tasun_token',
     'tasunToken','tasunWorkerToken','tasun_auth_token','tasun_session_token'
@@ -75,10 +77,12 @@
       write(sessionStorage,SESSION_KEY,row); write(localStorage,SESSION_KEY,row);
       write(sessionStorage,SESSION_BRIDGE_KEY,row); write(localStorage,SESSION_BRIDGE_KEY,row);
       write(sessionStorage,INDEX_SESSION_KEY,'1'); write(localStorage,INDEX_SESSION_KEY,'1');
+      write(sessionStorage,INDEX_VERIFIED_AT_KEY,String(Date.now())); write(localStorage,INDEX_VERIFIED_AT_KEY,String(Date.now()));
+      write(sessionStorage,INDEX_VERIFIED_USER_KEY,row.user); write(localStorage,INDEX_VERIFIED_USER_KEY,row.user);
       mirrorToken(row.token);
       if(keepPass){ write(sessionStorage,LAST_PASS_KEY,keepPass); write(localStorage,LAST_PASS_KEY,keepPass); }
     }else{
-      [CURRENT_KEY,SESSION_KEY,SESSION_BRIDGE_KEY,INDEX_SESSION_KEY,LAST_PASS_KEY].forEach(removeBoth);
+      [CURRENT_KEY,SESSION_KEY,SESSION_BRIDGE_KEY,INDEX_SESSION_KEY,LAST_PASS_KEY,INDEX_VERIFIED_AT_KEY,INDEX_VERIFIED_USER_KEY].forEach(removeBoth);
       mirrorToken('');
     }
     return row;
