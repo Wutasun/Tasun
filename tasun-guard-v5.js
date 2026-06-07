@@ -1,5 +1,5 @@
 /*!
- * tasun-guard-v5 r456 (index login + direct-open target bridge)
+ * tasun-guard-v5 r501 (index login + direct-open target bridge)
  * - Direct child pages require Tasun index login when no session exists.
  * - Stores same-origin next path in session/local storage, redirects to index.html?next=...
  */
