@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- R594: 修復開啟網頁仍停在 r592 的版本鎖與舊快取問題；新增最早期 force-latest 守門，當 URL v/_bs 仍為 R592/R593 或缺少最新版參數時，先清除舊版版本鎖、Cache Storage、Service Worker、R303 refresh attempts 與舊 build stamp memo，再改寫至 R594 最新版；同步強化 R303 maybeRefresh 會解除 Service Worker，避免強制更新後仍由舊快取回灌 R592。保留 R593 已完成的下拉、附件、編輯功能修正與既有 UI。 -->
 <!-- R593: 依正常參考檔「捷運汐東線事項記錄1.html」比對 R584~R592 後，回收新增表單欄位下拉、附件新增超連結、編輯功能選單的重複 capture / pointer / shield 程式為單一正式入口；出處/出處項次/頁碼/附件輸入框不再點擊自動開單，僅右側下拉箭頭開啟；下拉選項 pointerdown/click 均可選取並自動關閉；新增附件按鍵改為表單內單一 openAttachmentLinkModal 流程，不再被 R591/R592 殘留 click suppress 或透明遮罩攔截；保留既有 UI、欄位、雲端同步、登入守門與 TasunSelfHealV5/R268。 -->
 <!-- R592: 修正「編輯功能 > 新增」開啟表單後「附件新增超連結」按鍵無法執行，以及編輯功能下拉選單仍可能開啟後點選失效。問題點為 R591 全頁 hit-shield 與全域 click suppress 會在表單開啟後短時間吞掉新增表單按鍵 click，且選單開啟時 shield 仍可能搶先收到事件。R592 改為選單開啟時不啟用全頁遮罩，只以 document capture 與座標命中執行；選單按下後只抑制同座標的一次殘留 click，不阻擋表單內工項按鍵；新增/編輯表單所有新增工項、附件超連結、套用/取消/關閉/儲存按鍵統一重綁並納入 TasunSelfHealV5/R268。 -->
 <!-- R591: 依復健影片再次深入修正「編輯功能」下拉選單無法點選；問題點為 R590 仍以 pointerup/click 為主要執行點，遇到固定表頭、表格滑動容器、瀏覽器事件重定向或透明層攔截時，按下選單後 pointerup/click 可能落到底層而未執行。R591 改為選單項目 pointerdown/mousedown/touchstart 立即命中執行，並新增透明 hit-shield 吸收後續 pointerup/click，避免再穿透到新增表單或資料列；保留原 UI、原功能入口、雲端同步與 TasunSelfHealV5/R268。 -->
@@ -13,6 +14,82 @@
 <!-- R582: 修正編輯後按儲存資料列短暫顯示後消失；分離「編輯替換墓碑」與「正式刪除墓碑」，編輯墓碑只清除舊簽章舊時間資料，不再誤刪新儲存列或後續同內容資料，並保留 R581 多行段落功能。 -->
 <html lang="zh-Hant">
 <head>
+<script id="tasun-sxdh-notes-r594-force-latest-from-old-url">
+(function(){
+  "use strict";
+  var LATEST = "20260701_tasun_v5_sxdh_notes_r594_force_latest_from_old_r592_url_fix";
+  var PAGE_FILE = "捷運汐東線事項記錄.html";
+  var FLAG = "__TASUN_SXDH_NOTES_FORCE_LATEST_R594__";
+  if(window[FLAG]) return;
+  window[FLAG] = true;
+  window.__TASUN_SXDH_NOTES_FORCE_LATEST_VERSION_R594__ = LATEST;
+  window.__CACHE_V = LATEST;
+  window.TASUN_APP_VER = LATEST;
+  window.APP_VER = LATEST;
+  function n(v){ return v == null ? "" : String(v).trim(); }
+  function removeOldMemo(store){
+    try{
+      if(!store) return;
+      var keys = [];
+      for(var i=0;i<store.length;i++) keys.push(store.key(i));
+      keys.forEach(function(k){
+        var kk = n(k);
+        if(!kk) return;
+        var low = kk.toLowerCase();
+        if(/session|user|auth|token|password|pass|login|sso/.test(low)) return;
+        if(/tasun/.test(low) && /(version|build|rebuild|cache|memo|lock|refresh|r303|r584|r585|r586|r587|r588|r589|r590|r591|r592|r593|sxdh_notes|sxdh-notes)/.test(low)){
+          try{ store.removeItem(kk); }catch(_e){}
+        }
+      });
+      try{ store.removeItem("tasun_r303_refresh_attempts::" + PAGE_FILE); }catch(_e){}
+    }catch(_e){}
+  }
+  function cleanupAsync(){
+    try{ removeOldMemo(sessionStorage); }catch(_e){}
+    try{ removeOldMemo(localStorage); }catch(_e){}
+    try{
+      if("caches" in window){
+        caches.keys().then(function(names){
+          return Promise.all((names || []).map(function(name){ return caches.delete(name).catch(function(){ return false; }); }));
+        }).catch(function(){});
+      }
+    }catch(_e){}
+    try{
+      if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations){
+        navigator.serviceWorker.getRegistrations().then(function(regs){
+          return Promise.all((regs || []).map(function(reg){ return reg.unregister().catch(function(){ return false; }); }));
+        }).catch(function(){});
+      }
+    }catch(_e){}
+  }
+  function shouldReload(){
+    try{
+      var u = new URL(location.href);
+      var v = n(u.searchParams.get("v"));
+      var bs = n(u.searchParams.get("_bs"));
+      if(v !== LATEST) return true;
+      if(bs && bs !== LATEST) return true;
+      if(!bs) return false;
+      return false;
+    }catch(_e){ return false; }
+  }
+  function forceReload(){
+    try{
+      cleanupAsync();
+      var u = new URL(location.href);
+      u.searchParams.set("v", LATEST);
+      u.searchParams.set("_bs", LATEST);
+      u.searchParams.set("_rt", String(Date.now()));
+      u.searchParams.set("_forceLatest", "R594");
+      setTimeout(function(){ try{ location.replace(u.toString()); }catch(_e){ location.href = u.toString(); } }, 120);
+      return true;
+    }catch(_e){ return false; }
+  }
+  window.__TASUN_SXDH_NOTES_CLEAR_OLD_VERSION_LOCKS_R594__ = cleanupAsync;
+  cleanupAsync();
+  if(shouldReload()) forceReload();
+})();
+</script>
   <style id="tasun-direct-open-login-guard-style-r456">
   html.tasun-auth-pending body{visibility:hidden!important;}
   html.tasun-auth-blocked body{visibility:visible!important;}
@@ -200,8 +277,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>捷運汐東線事項記錄 · Tasun</title>
-  <meta name="tasun-build-stamp" content="20260701_tasun_v5_sxdh_notes_r593_integrated_dropdown_attachment_menu_fix" />
-  <meta name="tasun-rebuild-stamp" content="20260701_tasun_v5_sxdh_notes_r593_integrated_dropdown_attachment_menu_fix" />
+  <meta name="tasun-build-stamp" content="20260701_tasun_v5_sxdh_notes_r594_force_latest_from_old_r592_url_fix" />
+  <meta name="tasun-rebuild-stamp" content="20260701_tasun_v5_sxdh_notes_r594_force_latest_from_old_r592_url_fix" />
   <link rel="icon" href="data:,">
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
   <meta http-equiv="Pragma" content="no-cache">
@@ -378,7 +455,7 @@
   var tableId = 'tbl';
   var resourceKey = 'sxdh-notes';
   var dbName = 'tasun_sxdh_notes_db_v36';
-  var buildStamp = '20260701_tasun_v5_sxdh_notes_r593_integrated_dropdown_attachment_menu_fix';
+  var buildStamp = '20260701_tasun_v5_sxdh_notes_r594_force_latest_from_old_r592_url_fix';
   var dropboxDriveUrlR461 = 'https://www.dropbox.com/scl/fo/glb4s65934h195bxuyuqm/AH5ClZ2u4MtPMvmgtfOUAa4?rlkey=tfxkpbpw8k9bctshx5xvuge8h&st=3crbe29u&dl=0';
   var dropboxDriveUrlR460 = dropboxDriveUrlR461;
   window.__TASUN_SXDH_NOTES_DROPBOX_DRIVE_URL_R461__ = dropboxDriveUrlR461;
@@ -402,7 +479,7 @@
     RELEASE_WORKFLOW: '.github/workflows/release-version.yml',
     R303_FETCH_TIMEOUT_MS: 6000,
     R303_COOLDOWN_MS: 1500,
-    R303_MAX_REFRESH_ATTEMPTS: 2
+    R303_MAX_REFRESH_ATTEMPTS: 4
   });
   window.__TASUN_PAGE_KEY__ = pageKey;
   window.__TASUN_PAGE_FILE__ = pageFile;
@@ -419,7 +496,7 @@
     releaseScript: 'publish-version_tasun_project_autoscan.mjs',
     releaseWorkflow: '.github/workflows/release-version.yml',
     htmlBuildStamp: buildStamp,
-    check: ['version/cacheV/buildStamp/pageBuildStamp', 'GitHub Actions release-version.yml', 'publish-version_tasun_project_autoscan.mjs', 'table identity', 'cloud dedupe before sync', 'text-space-normalize', 'r459-page-column-between-attach-remark', 'r459-status-version-badge-removed', 'r460-open-attach-dropbox-drive', 'r461-single-dropbox-tab-no-page-redirect', 'r582-edit-tombstone-does-not-delete-new-active-row', 'r582-mutation-sync-preserve-local-edit-row', 'r583-add-save-render-unsaved-prompt', 'r584-page-attach-column-swap', 'r584-source-item-before-page', 'r584-source-item-dropdown-button', 'r584-fast-mutation-cloud-sync', 'r585-form-field-dropdown-add-buttons', 'r585-page-attach-sourceitem-options-from-table-unique', 'r586-dropdown-arrow-only-no-input-native-list', 'r586-attachment-link-modal-like-official-register', 'r587-attachment-modal-buttons-executable', 'r587-no-network-drive-buttons', 'r588-edit-menu-dismiss-execute', 'r589-form-buttons-edit-pick-open', 'r590-edit-menu-click-target-executable', 'r591-edit-menu-pointerdown-hit-shield', 'r592-attachment-button-menu-click-suppress-scope', 'r593-integrated-dropdown-attachment-menu']
+    check: ['version/cacheV/buildStamp/pageBuildStamp', 'GitHub Actions release-version.yml', 'publish-version_tasun_project_autoscan.mjs', 'table identity', 'cloud dedupe before sync', 'text-space-normalize', 'r459-page-column-between-attach-remark', 'r459-status-version-badge-removed', 'r460-open-attach-dropbox-drive', 'r461-single-dropbox-tab-no-page-redirect', 'r582-edit-tombstone-does-not-delete-new-active-row', 'r582-mutation-sync-preserve-local-edit-row', 'r583-add-save-render-unsaved-prompt', 'r584-page-attach-column-swap', 'r584-source-item-before-page', 'r584-source-item-dropdown-button', 'r584-fast-mutation-cloud-sync', 'r585-form-field-dropdown-add-buttons', 'r585-page-attach-sourceitem-options-from-table-unique', 'r586-dropdown-arrow-only-no-input-native-list', 'r586-attachment-link-modal-like-official-register', 'r587-attachment-modal-buttons-executable', 'r587-no-network-drive-buttons', 'r588-edit-menu-dismiss-execute', 'r589-form-buttons-edit-pick-open', 'r590-edit-menu-click-target-executable', 'r591-edit-menu-pointerdown-hit-shield', 'r592-attachment-button-menu-click-suppress-scope', 'r593-integrated-dropdown-attachment-menu', 'r594-force-latest-old-r592-url-cache-clean']
   };
   var S = { last:0, checking:false, reloading:false, timers:Object.create(null) };
   function n(v){ return String(v == null ? '' : v).trim(); }
@@ -521,6 +598,9 @@
     try{
       if('caches' in window){ var names = await caches.keys().catch(function(){ return []; }); await Promise.all((names||[]).map(function(name){ return caches.delete(name).catch(function(){ return false; }); })); }
     }catch(_e){}
+    try{
+      if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations){ var regs = await navigator.serviceWorker.getRegistrations().catch(function(){ return []; }); await Promise.all((regs||[]).map(function(reg){ return reg.unregister().catch(function(){ return false; }); })); }
+    }catch(_e){}
     var u = new URL(location.href);
     if(version) u.searchParams.set('v', version);
     if(bs) u.searchParams.set('_bs', bs);
@@ -577,6 +657,7 @@
       core.register(pageKey + ':r591EditMenuPointerdownShieldExecutable', { check:function(){var m=q('#editMenu'),sh=q('#editMenuHitShieldR591'); return !!q('#editBtn')&&!!m&&!!sh&&window.__TASUN_SXDH_NOTES_R588_EDIT_MENU_BOUND_VERSION__==='R593';}, repair:function(){try{if(typeof window.__TASUN_SXDH_NOTES_BIND_EDIT_MENU_R588__==='function')window.__TASUN_SXDH_NOTES_BIND_EDIT_MENU_R588__();}catch(_e){} try{if(typeof ensureEditMenuShieldR591==='function')ensureEditMenuShieldR591();}catch(_e){} window.__TASUN_SXDH_NOTES_R591_SELFHEAL__={ok:true,repairAt:new Date().toISOString()}; return true;}, verify:function(){var m=q('#editMenu'),sh=q('#editMenuHitShieldR591'); return !!m && m.getAttribute('data-r591-menu')==='bound' && !!sh;}, coolDownMs:1200, maxRetry:4 });
       core.register(pageKey + ':r592AttachmentButtonAndMenuSuppressScoped', { check:function(){return !!q('#editBtn')&&!!q('#editMenu')&&window.__TASUN_SXDH_NOTES_R588_EDIT_MENU_BOUND_VERSION__==='R593'&&!!q('#formOverlay [data-open-attach-link-r586]')&&!!q('#btnR586AttachApply');}, repair:function(){try{if(typeof window.__TASUN_SXDH_NOTES_BIND_EDIT_MENU_R588__==='function')window.__TASUN_SXDH_NOTES_BIND_EDIT_MENU_R588__();}catch(_e){} try{if(typeof window.__TASUN_SXDH_NOTES_BIND_FORM_BUTTONS_R589__==='function')window.__TASUN_SXDH_NOTES_BIND_FORM_BUTTONS_R589__();}catch(_e){} try{if(typeof bindAttachModalButtonsR587==='function')bindAttachModalButtonsR587();}catch(_e){} window.__TASUN_SXDH_NOTES_R592_SELFHEAL__={ok:true,repairAt:new Date().toISOString()}; return true;}, verify:function(){var m=q('#editMenu');return !!m&&m.getAttribute('data-r592-menu')==='bound'&&!!q('#formOverlay [data-open-attach-link-r586]')&&!!q('#btnR586AttachApply');}, coolDownMs:1200, maxRetry:4 });
       core.register(pageKey + ':r593IntegratedDropdownAttachmentMenu', { check:function(){return !!q('#editBtn')&&!!q('#editMenu')&&window.__TASUN_SXDH_NOTES_R588_EDIT_MENU_BOUND_VERSION__==='R593'&&!!q('#fieldDropdownR586')&&!!q('#formOverlay [data-open-attach-link-r586]')&&!!q('#btnR586AttachApply');}, repair:function(){try{if(typeof window.__TASUN_SXDH_NOTES_BIND_EDIT_MENU_R588__==='function')window.__TASUN_SXDH_NOTES_BIND_EDIT_MENU_R588__();}catch(_e){} try{if(typeof window.__TASUN_SXDH_NOTES_BIND_FORM_BUTTONS_R589__==='function')window.__TASUN_SXDH_NOTES_BIND_FORM_BUTTONS_R589__();}catch(_e){} try{if(typeof bindFieldDropdownTriggersR593==='function')bindFieldDropdownTriggersR593();}catch(_e){} try{if(typeof bindAttachModalButtonsR587==='function')bindAttachModalButtonsR587();}catch(_e){} window.__TASUN_SXDH_NOTES_R593_SELFHEAL__={ok:true,repairAt:new Date().toISOString()}; return true;}, verify:function(){var m=q('#editMenu');return !!m&&m.getAttribute('data-r593-menu')==='bound'&&!!q('#fieldDropdownR586')&&!!q('#formOverlay [data-open-attach-link-r586]')&&!!q('#btnR586AttachApply');}, coolDownMs:1200, maxRetry:4 });
+      core.register(pageKey + ':r594ForceLatestFromOldR592Url', { check:function(){return window.__TASUN_SXDH_NOTES_FORCE_LATEST_VERSION_R594__==='20260701_tasun_v5_sxdh_notes_r594_force_latest_from_old_r592_url_fix' && getMetaBuild()==='20260701_tasun_v5_sxdh_notes_r594_force_latest_from_old_r592_url_fix';}, repair:function(){try{ if(typeof window.__TASUN_SXDH_NOTES_CLEAR_OLD_VERSION_LOCKS_R594__==='function') window.__TASUN_SXDH_NOTES_CLEAR_OLD_VERSION_LOCKS_R594__(); }catch(_e){} window.__CACHE_V='20260701_tasun_v5_sxdh_notes_r594_force_latest_from_old_r592_url_fix'; window.TASUN_APP_VER='20260701_tasun_v5_sxdh_notes_r594_force_latest_from_old_r592_url_fix'; window.APP_VER='20260701_tasun_v5_sxdh_notes_r594_force_latest_from_old_r592_url_fix'; return true;}, verify:function(){return getMetaBuild()==='20260701_tasun_v5_sxdh_notes_r594_force_latest_from_old_r592_url_fix' && String(location.href).indexOf('r592')<0;}, coolDownMs:1200, maxRetry:4 });
     }catch(_e){}
   }
   function boot(){ ensureVersionLoader(); ensureTableIdentity(); normalizeTextBeforeSync(); registerSelfHeal(); checkVersion('boot', true); }
@@ -658,8 +739,8 @@
   function deletionMaps(rows){var uids={},sigs={},editSigs={};(Array.isArray(rows)?rows:[]).forEach(function(x){var r=normRow(x);if(!r||!r.deleted)return;var s=clean(r.oldRowSig||r.editOldSig||r.tombSig||rowSig(r)).toLowerCase(),tm=tombTimeR582(r);if(isEditTombR582(r)){if(s)editSigs[s]=Math.max(Number(editSigs[s]||0),tm);return;}uids[r.uid]=true;if(s)sigs[s]=Math.max(Number(sigs[s]||0),tm);});return {uids:uids,sigs:sigs,editSigs:editSigs};}
   function isBlockedByDeletionMapR582(r,del){if(!r||r.deleted)return false;del=del||{};var s=rowSig(r),rt=Number(r.updatedAt||r.rev||0)||0;if(del.uids&&del.uids[r.uid])return true;if(s&&del.sigs&&del.sigs[s])return true;if(s&&del.editSigs&&del.editSigs[s]){var et=Number(del.editSigs[s]||0)||0;if(!rt||rt<=et)return true;}return false;}
   window.__TASUN_SXDH_NOTES_R582_EDIT_TOMBSTONE_GUARD__=true;
-  window.__TASUN_SXDH_NOTES_R583_FORM_SAVE_RENDER_PROMPT__={ok:true,version:"r583",build:"20260701_tasun_v5_sxdh_notes_r593_integrated_dropdown_attachment_menu_fix"};
-  window.__TASUN_SXDH_NOTES_R584_FAST_MUTATION_SYNC__={ok:true,version:"r584",build:"20260701_tasun_v5_sxdh_notes_r593_integrated_dropdown_attachment_menu_fix"};
+  window.__TASUN_SXDH_NOTES_R583_FORM_SAVE_RENDER_PROMPT__={ok:true,version:"r583",build:"20260701_tasun_v5_sxdh_notes_r594_force_latest_from_old_r592_url_fix"};
+  window.__TASUN_SXDH_NOTES_R584_FAST_MUTATION_SYNC__={ok:true,version:"r584",build:"20260701_tasun_v5_sxdh_notes_r594_force_latest_from_old_r592_url_fix"};
   function dedupe(rows,keepDeleted){var list=[];(Array.isArray(rows)?rows:[]).forEach(function(x){var r=normRow(x);if(!r)return;if(r.deleted&&!keepDeleted)return;if(!r.deleted&&!meaningful(r))return;list.push(r);});var del=deletionMaps(list),byUid=new Map(),bySig=new Map();list.forEach(function(r){var s=rowSig(r);if(!r.deleted&&isBlockedByDeletionMapR582(r,del))return;if(byUid.has(r.uid)){var old=byUid.get(r.uid);if(old.deleted&&!r.deleted)return;if(r.deleted&&!old.deleted){byUid.set(r.uid,r);return;}if(Number(r.updatedAt)>=Number(old.updatedAt)||Number(r.rev)>=Number(old.rev))byUid.set(r.uid,r);return;}if(!r.deleted&&s&&bySig.has(s)){var ou=bySig.get(s),orow=byUid.get(ou);if(!orow||orow.deleted)return;if(Number(r.updatedAt)>=Number(orow.updatedAt)||Number(r.rev)>=Number(orow.rev)){byUid.delete(ou);bySig.set(s,r.uid);byUid.set(r.uid,r);}return;}if(!r.deleted&&s)bySig.set(s,r.uid);byUid.set(r.uid,r);});return Array.from(byUid.values()).filter(function(r){return keepDeleted||!r.deleted;}).sort(function(a,b){var aa=Number(a["項次"]||a.no||a.num||a.index||0),bb=Number(b["項次"]||b.no||b.num||b.index||0);if(aa&&bb&&aa!==bb)return aa-bb;var da=dateOf(a),db=dateOf(b);if(da&&db&&da!==db)return db.localeCompare(da);return String(a.uid).localeCompare(String(b.uid),"zh-Hant");});}
   function extractRows(obj){var out=[];function walk(x,d){if(d>7||x==null)return;if(typeof x==="string"){var t=x.trim();if((t[0]==="{"||t[0]==="[")&&t.length<800000)walk(parse(t),d+1);return;}if(Array.isArray(x)){x.forEach(function(v){walk(v,d+1);});return;}if(!plain(x))return;var r=normRow(x);if(r)out.push(r);["rows","db","data","items","records","list","notes","table","payload","result","body","value","entries"].forEach(function(k){if(x[k]!=null)walk(x[k],d+1);});}walk(obj,0);return dedupe(out,true);}
   function roleDefaultUser(role){role=n(role).toLowerCase();if(role==="admin")return "alex";if(role==="write"||role==="editor")return "tasun";return "wu";}
