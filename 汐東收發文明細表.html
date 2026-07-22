@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- R745：深入優化汐東收發文明細表資料區滑動速度與閃爍。根因為 R742 將滾輪倍增量於單一 requestAnimationFrame 直接寫入 scrollLeft／scrollTop，連續滾輪會形成大幅跳格；觸控 pointermove 又於每一原始事件直接改寫捲動位置。另 R713 於每次 scroll 對群組表頭與固定欄反覆執行 getBoundingClientRect／getComputedStyle，R513 及 R690～R695 仍在捲動期間排程重新套用欄寬、遮罩或樣式，資料列 hover filter 亦會使大量漸層儲存格重新繪製，造成卡頓及閃爍。本版直接整合至原滑動與表頭共用核心：一般垂直滾輪、觸控及觸控板水平 deltaX 交由瀏覽器 compositor 原生處理；Shift＋滾輪僅以單一 requestAnimationFrame 合併輸入後交由原生 smooth scroll；階段標題改採渲染／尺寸變更時建立幾何快取，捲動時只讀 scrollLeft 並更新標題位置，不再逐格觸發版面量測；固定欄及手機遮罩只在表格重建、尺寸或方向變更時校正，不再於每次 scroll 重套；滑動期間停用標題透明度過場及高成本 filter repaint。同步納入 TasunSelfHealV5／R268 check / repair / verify，具冷卻、最大重試、AbortController、節流及可中止狀態，禁止無限輪詢。uid／rev／updatedAt／deleted、去重、雲端同步、登入繼承、權限、Excel、既有 UI 與 R744 啟動資料恢復均維持不變。 -->
 <!-- R744：深入修復開頁仍停留「同步：初始化／目前沒有資料」。實際根因為 R742 最新 saveEdit 以嚴格模式下未宣告變數直接指定（saveEdit=async function），觸發 ReferenceError 並中止整段主程式；因此 R712 防重入狀態、R743 正式啟動登錄、loadLocal、首屏渲染及雲端同步均未執行，後置 R641 又持續呼叫尚在 TDZ 的 r712ModuleRenderActive。 本版將 saveEdit 改為正式 async function 宣告並明確掛載 window.saveEdit；將 R712 模組渲染與 renderAll 防重入狀態提前至主核心狀態區，避免任何早期／舊版 UI 呼叫命中 TDZ；保留 R743 DOMContentLoaded、tasun:auth-ready、pageshow 與 3 次有限啟動監督，新增 R744 strict-scope／early-guard／startup-pipeline check / repair / verify。資料 uid／rev／updatedAt／deleted、去重、雲端同步、登入繼承、權限、手機舞台與 R742 功能均不變，禁止無限輪詢。 -->
 <!-- R743：修復開頁停留「同步：初始化／目前沒有資料」。根因為正式 init 掛載位於 R715 即時 DOM 綁定之後，任一非必要 UI 綁定發生執行期錯誤時，後續初始化將無法登錄。本版將啟動登錄提前至共用核心安全區，將下拉與連結視窗即時綁定改為可失敗隔離，並新增 DOMContentLoaded、tasun:auth-ready、pageshow 與 3 次有限啟動監督；具冷卻、最大重試、錯誤警告與可中止狀態，禁止無限輪詢。保留 uid／rev／updatedAt／deleted、去重、雲端同步、權限、登入繼承、手機舞台與 R742 全部功能。 -->
 <!-- R742：依最新需求整合汐東收發文明細表操作與編輯核心。資料表水平／垂直滑動改採單一手勢軸向鎖定與加速模組：滑鼠滾輪、Shift＋滾輪及觸控拖曳皆先判斷主軸，只更新 scrollLeft 或 scrollTop，不讓兩軸互相帶動，並以 requestAnimationFrame 節流、有限狀態與無輪詢方式提升速度。將「汐東文件統計表」移至「汐東收發文登錄表」旁，兩鍵共用自適應雙欄容器，依桌機、筆電及手機寬度自動調整。文件處理歷程正式開放起始文件與各監造／統包階段編輯；編輯記事內容改為依起始文件、監造回覆、統包回覆來文分區底色，並載入同欄不重複選項的可輸入下拉欄位，儲存時一次回寫母資料與全部階段歷程。關閉有異動的編輯表單時顯示「資料有變動，是否儲存」，按「是」儲存同步後離開，按「否」直接離開。所有階段主旨欄採水平由左至右、靠左排列。起始文件文號依目前待辦階段著色：待統包回覆為深藍色、待監造回覆為黃金色、結案維持既有色彩。uid／rev／updatedAt／deleted、去重、雲端同步、登入、權限、Excel 38 欄與舊 39 欄相容、R732 表頭固定及 R741 期限水晶視覺均維持。同步更新 TasunSelfHealV5／R268 check / repair / verify，具冷卻、最大重試、AbortController、節流與防抖，禁止無限輪詢。 -->
@@ -96,21 +97,21 @@
 <!-- R508: 修復三頁切換連結、雲端 fallback plain bridge、Read/Merge/再 Read 完成後才顯示已同步。 -->
 <!-- R507: empty-data fallback renders table header/body even before cloud rows; detail page restored from normalized three-page template. -->
 <!-- R506: formal page/page-entry sync + cloud-first local hydration; fixed local blank after R505 report; formal pages still require index login. -->
-<!-- TASUN_REBUILD_STAMP:20260722_tasun_v5_xidong_docs_r744_strict_scope_startup_data_restore_release -->
+<!-- TASUN_REBUILD_STAMP:20260722_tasun_v5_xidong_docs_r745_smooth_scroll_no_flicker_release -->
 <html lang="zh-Hant" class="tasun-auth-pending">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>捷運汐止東湖線工程收發文明細表 · Tasun</title>
-<meta name="tasun-build-stamp" content="20260722_tasun_v5_xidong_docs_r744_strict_scope_startup_data_restore_release" />
-<meta name="tasun-rebuild-stamp" content="20260722_tasun_v5_xidong_docs_r744_strict_scope_startup_data_restore_release" />
+<meta name="tasun-build-stamp" content="20260722_tasun_v5_xidong_docs_r745_smooth_scroll_no_flicker_release" />
+<meta name="tasun-rebuild-stamp" content="20260722_tasun_v5_xidong_docs_r745_smooth_scroll_no_flicker_release" />
 <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
 <link rel="icon" href="data:," />
 
 <script id="tasun-r710-page-config">
-(function(){"use strict";var C={"BUILD":"20260722_tasun_v5_xidong_docs_r744_strict_scope_startup_data_restore_release","PAGE_FILE":"汐東收發文明細表.html","PAGE_KEY":"xidong-official-doc-detail","VERSION_URL":"tasun-version.json","RESOURCE_KEY":"official-documents","DB_NAME":"tasun_official_documents_idb_v1","TABLE_ID":"officialDocumentTable","PAGE_ALIASES":["汐東收發文明細表.html","xidong-official-doc-detail","official-doc-detail"],"PAGE_TITLE":"捷運汐止東湖線工程收發文明細表"};try{window.__TASUN_PAGE_CONFIG__=Object.freeze(C);}catch(_e){window.__TASUN_PAGE_CONFIG__=C;}Object.assign(window.__TASUN_GLOBALS__=window.__TASUN_GLOBALS__||{},C,{REBUILD_STAMP:C.BUILD});})();
+(function(){"use strict";var C={"BUILD":"20260722_tasun_v5_xidong_docs_r745_smooth_scroll_no_flicker_release","PAGE_FILE":"汐東收發文明細表.html","PAGE_KEY":"xidong-official-doc-detail","VERSION_URL":"tasun-version.json","RESOURCE_KEY":"official-documents","DB_NAME":"tasun_official_documents_idb_v1","TABLE_ID":"officialDocumentTable","PAGE_ALIASES":["汐東收發文明細表.html","xidong-official-doc-detail","official-doc-detail"],"PAGE_TITLE":"捷運汐止東湖線工程收發文明細表"};try{window.__TASUN_PAGE_CONFIG__=Object.freeze(C);}catch(_e){window.__TASUN_PAGE_CONFIG__=C;}Object.assign(window.__TASUN_GLOBALS__=window.__TASUN_GLOBALS__||{},C,{REBUILD_STAMP:C.BUILD});})();
 </script>
 <script id="tasun-r710-page-entry-version-runtime-core">
 (function(){
@@ -1737,7 +1738,7 @@ window.__TASUN_R710_DESKTOP_SKIPS_MOBILE_OBSERVERS__=!!(window.matchMedia&&windo
   "use strict";
   if(window.__TASUN_OFFICIAL_DOCS_R689_MOBILE_HEADER_COMPACT_EDIT__) return;
   window.__TASUN_OFFICIAL_DOCS_R689_MOBILE_HEADER_COMPACT_EDIT__=true;
-  var BUILD="20260722_tasun_v5_xidong_docs_r744_strict_scope_startup_data_restore_release";
+  var BUILD="20260722_tasun_v5_xidong_docs_r745_smooth_scroll_no_flicker_release";
   var PAGE_KEY="xidong-official-doc-detail";
   function q(sel,root){return (root||document).querySelector(sel);} 
   function qa(sel,root){return Array.prototype.slice.call((root||document).querySelectorAll(sel));}
@@ -1983,7 +1984,7 @@ window.__TASUN_R710_DESKTOP_SKIPS_MOBILE_OBSERVERS__=!!(window.matchMedia&&windo
   "use strict";
   if(window.__TASUN_OFFICIAL_DOCS_R690_MOBILE_SUBJECT_STICKY_SCROLL__) return;
   window.__TASUN_OFFICIAL_DOCS_R690_MOBILE_SUBJECT_STICKY_SCROLL__=true;
-  var BUILD="20260722_tasun_v5_xidong_docs_r744_strict_scope_startup_data_restore_release";
+  var BUILD="20260722_tasun_v5_xidong_docs_r745_smooth_scroll_no_flicker_release";
   var PAGE_KEY="xidong-official-doc-detail";
   function q(sel,root){return (root||document).querySelector(sel);} 
   function qa(sel,root){return Array.prototype.slice.call((root||document).querySelectorAll(sel));}
@@ -2061,7 +2062,7 @@ window.__TASUN_R710_DESKTOP_SKIPS_MOBILE_OBSERVERS__=!!(window.matchMedia&&windo
     window.__TASUN_OFFICIAL_DOCS_R690_MOBILE_BIND__=true;
     [60,240,700,1400,2600].forEach(function(ms){setTimeout(applyR690MobileSubjectSticky,ms);});
     try{window.addEventListener("resize",schedule,{passive:true});window.addEventListener("orientationchange",function(){setTimeout(applyR690MobileSubjectSticky,160);},{passive:true});window.addEventListener("pageshow",schedule,{passive:true});document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible")schedule();},{passive:true});}catch(_e){}
-    try{var wrap=q("#detailSection>.tableWrap")||q(".tableWrap");if(wrap)wrap.addEventListener("scroll",schedule,{passive:true});}catch(_e){}
+    try{var wrap=q("#detailSection>.tableWrap")||q(".tableWrap");if(wrap)wrap.dataset.r745NoScrollLayoutRepair="1";}catch(_e){}
     try{var tbody=q("#tbody");if(tbody){var mo=new MutationObserver(schedule);mo.observe(tbody,{childList:true,subtree:true});window.__TASUN_OFFICIAL_DOCS_R690_TABLE_OBSERVER__=mo;}}catch(_e){}
   }
   window.__TASUN_OFFICIAL_DOCS_R690_APPLY_MOBILE_SUBJECT_STICKY__=applyR690MobileSubjectSticky;
@@ -2100,7 +2101,7 @@ window.__TASUN_R710_DESKTOP_SKIPS_MOBILE_OBSERVERS__=!!(window.matchMedia&&windo
   "use strict";
   if(window.__TASUN_OFFICIAL_DOCS_R691_MOBILE_DUAL_AREA_SCROLL_LOCK__)return;
   window.__TASUN_OFFICIAL_DOCS_R691_MOBILE_DUAL_AREA_SCROLL_LOCK__=true;
-  var BUILD="20260722_tasun_v5_xidong_docs_r744_strict_scope_startup_data_restore_release", PAGE_KEY="xidong-official-doc-detail";
+  var BUILD="20260722_tasun_v5_xidong_docs_r745_smooth_scroll_no_flicker_release", PAGE_KEY="xidong-official-doc-detail";
   function q(s,r){return (r||document).querySelector(s);}
   function mobile(){return !window.matchMedia||window.matchMedia("(max-width:900px)").matches;}
   function px(n){return Math.max(0,Math.round(n||0));}
@@ -2133,11 +2134,7 @@ window.__TASUN_R710_DESKTOP_SKIPS_MOBILE_OBSERVERS__=!!(window.matchMedia&&windo
     }catch(e){try{console.warn("R691 official detail dual-area lock failed",e);}catch(_e){}return false;}
   }
   function onScroll(){
-    var wrap=q("#detailSection>.tableWrap")||q(".tableWrap"), table=q("#officialDocumentTable");
-    if(!wrap||!table||!mobile())return;
-    var base=prefixWidth(table);
-    wrap.style.setProperty("--r691-detail-lock-left",base+"px");
-    window.__TASUN_OFFICIAL_DOCS_R694_FIRST_AREA_BOTH_DIRECTIONS_STATE__={baseLeft:base,scrollLeft:wrap.scrollLeft,canScrollBothDirections:true,at:Date.now()};
+    if(onScroll.raf)return;onScroll.raf=requestAnimationFrame(function(){onScroll.raf=0;var wrap=q("#detailSection>.tableWrap")||q(".tableWrap");if(!wrap||!mobile())return;var base=parseFloat(wrap.style.getPropertyValue("--r691-detail-lock-left"))||0;window.__TASUN_OFFICIAL_DOCS_R694_FIRST_AREA_BOTH_DIRECTIONS_STATE__={baseLeft:base,scrollLeft:wrap.scrollLeft,canScrollBothDirections:true,at:Date.now()};});
   }
   function schedule(force){if(window.__TASUN_R710_TABLE_RENDER_ACTIVE__)return;clearTimeout(schedule.t);schedule.t=setTimeout(function(){applyR691(!!force);},70);}
   function verifyLock(){
@@ -2240,7 +2237,7 @@ window.__TASUN_R710_DESKTOP_SKIPS_MOBILE_OBSERVERS__=!!(window.matchMedia&&windo
   "use strict";
   if(window.__TASUN_OFFICIAL_DOCS_R692_MOBILE_HEADER_UNDER_SUBJECT_MASK__)return;
   window.__TASUN_OFFICIAL_DOCS_R692_MOBILE_HEADER_UNDER_SUBJECT_MASK__=true;
-  var BUILD="20260722_tasun_v5_xidong_docs_r744_strict_scope_startup_data_restore_release", PAGE_KEY="xidong-official-doc-detail";
+  var BUILD="20260722_tasun_v5_xidong_docs_r745_smooth_scroll_no_flicker_release", PAGE_KEY="xidong-official-doc-detail";
   function q(sel,root){return (root||document).querySelector(sel);}
   function qa(sel,root){return Array.prototype.slice.call((root||document).querySelectorAll(sel));}
   function mobile(){return !window.matchMedia||window.matchMedia("(max-width:900px)").matches;}
@@ -2286,7 +2283,7 @@ window.__TASUN_R710_DESKTOP_SKIPS_MOBILE_OBSERVERS__=!!(window.matchMedia&&windo
     if(window.__TASUN_OFFICIAL_DOCS_R692_HEADER_MASK_BIND__)return;
     window.__TASUN_OFFICIAL_DOCS_R692_HEADER_MASK_BIND__=true;
     var wrap=q("#detailSection>.tableWrap")||q(".tableWrap"), tbody=q("#tbody")||q("#officialDocumentTable tbody");
-    if(wrap)wrap.addEventListener("scroll",function(){schedule(false);},{passive:true});
+    if(wrap)wrap.dataset.r745NoScrollLayoutRepair="1";
     try{window.addEventListener("resize",function(){schedule(true);},{passive:true});window.addEventListener("orientationchange",function(){setTimeout(function(){applyR692(true);},180);},{passive:true});window.addEventListener("pageshow",function(){schedule(true);},{passive:true});document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible")schedule(true);},{passive:true});}catch(_e){}
     try{if(tbody){var mo=new MutationObserver(function(){schedule(true);});mo.observe(tbody,{childList:true,subtree:true});window.__TASUN_OFFICIAL_DOCS_R692_HEADER_MASK_OBSERVER__=mo;}}catch(_e){}
     [80,240,700,1400,2600].forEach(function(ms){setTimeout(function(){applyR692(true);},ms);});
@@ -2389,7 +2386,7 @@ window.__TASUN_R710_DESKTOP_SKIPS_MOBILE_OBSERVERS__=!!(window.matchMedia&&windo
   "use strict";
   if(window.__TASUN_OFFICIAL_DOCS_R694_MOBILE_FIRST_AREA_RIGHT_SCROLL_UNDER_SECOND_MASK__)return;
   window.__TASUN_OFFICIAL_DOCS_R694_MOBILE_FIRST_AREA_RIGHT_SCROLL_UNDER_SECOND_MASK__=true;
-  var BUILD="20260722_tasun_v5_xidong_docs_r744_strict_scope_startup_data_restore_release", PAGE_KEY="xidong-official-doc-detail";
+  var BUILD="20260722_tasun_v5_xidong_docs_r745_smooth_scroll_no_flicker_release", PAGE_KEY="xidong-official-doc-detail";
   function q(sel,root){return (root||document).querySelector(sel);}
   function mobile(){return !window.matchMedia||window.matchMedia("(max-width:900px)").matches;}
   function num(v){return Number.parseFloat(v)||0;}
@@ -2434,12 +2431,7 @@ window.__TASUN_R710_DESKTOP_SKIPS_MOBILE_OBSERVERS__=!!(window.matchMedia&&windo
     if(window.__TASUN_OFFICIAL_DOCS_R694_BIND__)return;
     window.__TASUN_OFFICIAL_DOCS_R694_BIND__=true;
     var wrap=q("#detailSection>.tableWrap")||q(".tableWrap"), tbody=q("#tbody")||q("#officialDocumentTable tbody");
-    if(wrap)wrap.addEventListener("scroll",function(){
-      var last=Number(window.__TASUN_OFFICIAL_DOCS_R694_LAST_SCROLL_LEFT__||0), now=wrap.scrollLeft;
-      window.__TASUN_OFFICIAL_DOCS_R694_LAST_SCROLL_DIRECTION__=now<last?"right":"left";
-      window.__TASUN_OFFICIAL_DOCS_R694_LAST_SCROLL_LEFT__=now;
-      schedule();
-    },{passive:true});
+    if(wrap)wrap.addEventListener("scroll",function(){if(window.__TASUN_OFFICIAL_DOCS_R694_SCROLL_RAF__)return;window.__TASUN_OFFICIAL_DOCS_R694_SCROLL_RAF__=requestAnimationFrame(function(){window.__TASUN_OFFICIAL_DOCS_R694_SCROLL_RAF__=0;var last=Number(window.__TASUN_OFFICIAL_DOCS_R694_LAST_SCROLL_LEFT__||0),now=wrap.scrollLeft;window.__TASUN_OFFICIAL_DOCS_R694_LAST_SCROLL_DIRECTION__=now<last?"right":"left";window.__TASUN_OFFICIAL_DOCS_R694_LAST_SCROLL_LEFT__=now;});},{passive:true});
     try{window.addEventListener("resize",schedule,{passive:true});window.addEventListener("orientationchange",function(){setTimeout(applyR694,180);},{passive:true});window.addEventListener("pageshow",schedule,{passive:true});document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible")schedule();},{passive:true});}catch(_e){}
     try{if(tbody){var mo=new MutationObserver(schedule);mo.observe(tbody,{childList:true,subtree:true});window.__TASUN_OFFICIAL_DOCS_R694_OBSERVER__=mo;}}catch(_e){}
     [80,240,700,1400,2600].forEach(function(ms){setTimeout(applyR694,ms);});
@@ -2564,7 +2556,7 @@ window.__TASUN_R710_DESKTOP_SKIPS_MOBILE_OBSERVERS__=!!(window.matchMedia&&windo
   "use strict";
   if(window.__TASUN_OFFICIAL_DOCS_R695_MOBILE_FIRST_AREA_VERTICAL_UNDER_TITLE_MASK__)return;
   window.__TASUN_OFFICIAL_DOCS_R695_MOBILE_FIRST_AREA_VERTICAL_UNDER_TITLE_MASK__=true;
-  var BUILD="20260722_tasun_v5_xidong_docs_r744_strict_scope_startup_data_restore_release", PAGE_KEY="xidong-official-doc-detail";
+  var BUILD="20260722_tasun_v5_xidong_docs_r745_smooth_scroll_no_flicker_release", PAGE_KEY="xidong-official-doc-detail";
   function q(sel,root){return (root||document).querySelector(sel);}
   function mobile(){return !window.matchMedia||window.matchMedia("(max-width:900px)").matches;}
   function num(v){return Number.parseFloat(v)||0;}
@@ -2604,7 +2596,7 @@ window.__TASUN_R710_DESKTOP_SKIPS_MOBILE_OBSERVERS__=!!(window.matchMedia&&windo
     if(window.__TASUN_OFFICIAL_DOCS_R695_BIND__)return;
     window.__TASUN_OFFICIAL_DOCS_R695_BIND__=true;
     var wrap=q("#detailSection>.tableWrap")||q(".tableWrap"), tbody=q("#tbody")||q("#officialDocumentTable tbody");
-    if(wrap)wrap.addEventListener("scroll",schedule,{passive:true});
+    if(wrap)wrap.dataset.r745NoScrollLayoutRepair="1";
     try{window.addEventListener("resize",schedule,{passive:true});window.addEventListener("orientationchange",function(){setTimeout(applyR695,180);},{passive:true});window.addEventListener("pageshow",schedule,{passive:true});document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible")schedule();},{passive:true});}catch(_e){}
     try{if(tbody){var mo=new MutationObserver(schedule);mo.observe(tbody,{childList:true,subtree:true});window.__TASUN_OFFICIAL_DOCS_R695_OBSERVER__=mo;}}catch(_e){}
     [80,240,700,1400,2600].forEach(function(ms){setTimeout(applyR695,ms);});
@@ -2836,7 +2828,7 @@ html.tasun-auth-blocked body>*:not(#tasunDirectLoginBlockerR710){visibility:hidd
   "use strict";
   if(window.__TASUN_R710_DIRECT_OPEN_LOGIN_RETURN_CORE__)return;
   window.__TASUN_R710_DIRECT_OPEN_LOGIN_RETURN_CORE__=true;window.__TASUN_REQUIRE_LOGIN__=true;window.__TASUN_DIRECT_PAGE__=true;window.__TASUN_CHILD_PAGE__=true;window.__TASUN_NO_INDEX_REDIRECT__=false;
-  var BUILD="20260722_tasun_v5_xidong_docs_r744_strict_scope_startup_data_restore_release",PAGE_FILE="汐東收發文明細表.html",PAGE_KEY="xidong-official-doc-detail",PAGE_TITLE="捷運汐止東湖線工程收發文明細表";
+  var BUILD="20260722_tasun_v5_xidong_docs_r745_smooth_scroll_no_flicker_release",PAGE_FILE="汐東收發文明細表.html",PAGE_KEY="xidong-official-doc-detail",PAGE_TITLE="捷運汐止東湖線工程收發文明細表";
   var TTL=12*60*60*1000,RETURN_TTL=10*60*1000,JUMP_TTL=30*60*1000,REDIRECT_LOCK_MS=20000,PENDING_DEADLINE_MS=4200;
   var SESSION_KEYS=["tasunCurrentUser_v1","tasunSessionBridge_v1","tasunSession_v1","tasunSessionLogin_v2","tasunSso_v2","tasunSso_v1","tasunAuthSession_v1","tasunCurrentUser_v2","tasunIndexUser_v1","tasunLoginUser_v1"];
   var TOKEN_KEYS=["tasunBearerToken_v1","tasunCloudToken_v1","tasunCloudToken","tasun_token","tasunToken","tasunWorkerToken","tasun_auth_token","tasun_session_token","authToken","access_token","token"];
@@ -2911,7 +2903,12 @@ html.tasun-auth-blocked body>*:not(#tasunDirectLoginBlockerR710){visibility:hidd
 
 <style id="tasun-official-docs-r742-scroll-edit-stage-color-style">
 /* R742：水平／垂直獨立加速滑動、雙按鍵自適應、歷程及編輯表單階段分色、主旨左至右與起始文號狀態色。 */
-#detailSection>.tableWrap.r742FastIndependentScroll{scroll-behavior:auto!important;overscroll-behavior:contain!important;scrollbar-gutter:stable both-edges!important;touch-action:none!important;-webkit-overflow-scrolling:touch!important;}
+#detailSection>.tableWrap.r742FastIndependentScroll{scroll-behavior:auto!important;overscroll-behavior:contain!important;scrollbar-gutter:stable both-edges!important;touch-action:pan-x pan-y pinch-zoom!important;-webkit-overflow-scrolling:touch!important;scroll-snap-type:none!important;overflow-anchor:none!important;contain:paint style!important;will-change:scroll-position!important;}
+#detailSection>.tableWrap.r742FastIndependentScroll .r713StageLabel{transition:none!important;}
+#officialDocumentTable.r745SmoothScrollTable{overflow-anchor:none!important;}
+#officialDocumentTable.r745SmoothScrollTable tbody tr:hover td{filter:none!important;box-shadow:inset 0 0 0 1px rgba(255,236,171,.10)!important;}
+#detailSection>.tableWrap.r745ScrollActive .r713StageLabel{transition:none!important;}
+#detailSection>.tableWrap.r745ScrollActive #officialDocumentTable tbody tr:hover td{filter:none!important;}
 #r635EditFormMenuHost.r742TwinActionHost{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:clamp(6px,.75vw,12px)!important;width:min(680px,100%)!important;max-width:none!important;align-items:stretch!important;}
 #r635EditFormMenuHost.r742TwinActionHost>.r742TwinActionBtn{width:100%!important;min-width:0!important;max-width:none!important;min-height:clamp(40px,4.2vw,48px)!important;height:auto!important;padding:8px clamp(8px,1.1vw,16px)!important;font-size:clamp(.78rem,.9vw,1rem)!important;line-height:1.25!important;margin:0!important;white-space:normal!important;}
 #btnDetailGoStatistics.r742SiblingStatsBtn{display:flex!important;align-items:center!important;justify-content:center!important;border-radius:16px!important;background:linear-gradient(180deg,#fff5cc 0%,#ddb957 48%,#9b6b1e 100%)!important;color:#241905!important;text-shadow:0 1px 0 rgba(255,255,255,.35)!important;box-shadow:0 10px 24px rgba(0,0,0,.28),0 0 18px rgba(255,220,126,.22),inset 0 1px 0 rgba(255,255,255,.35)!important;position:relative!important;z-index:auto!important;}
@@ -3069,7 +3066,7 @@ html.tasun-auth-blocked body>*:not(#tasunDirectLoginBlockerR710){visibility:hidd
 /* R506: 依 R506 測試回報補強直接開啟/測試頁登入橋接、未授權不露出與雲端確認後才顯示已同步。 */
 (function(){
 "use strict";
-const BUILD="20260722_tasun_v5_xidong_docs_r744_strict_scope_startup_data_restore_release";
+const BUILD="20260722_tasun_v5_xidong_docs_r745_smooth_scroll_no_flicker_release";
 window.__TASUN_OFFICIAL_DOCS_R506_REPORT_FIX__="r506_report_r505_cloud_read_rows_local_hydration_fix";
 window.__TASUN_OFFICIAL_DOCS_R507_EMPTY_TABLE_VISIBLE__=true;
 window.__TASUN_OFFICIAL_DOCS_R508_CLOUD_CONFIRMED_SYNC_STATUS_FIX__=true;
@@ -5707,11 +5704,12 @@ function installR513FixedColumnLayoutEvents(){
   window.addEventListener("resize",run,{passive:true});
   window.addEventListener("orientationchange",run,{passive:true});
   window.addEventListener("pageshow",run,{passive:true});
-  const wrap=$("#detailSection .tableWrap")||$(".tableWrap");
-  if(wrap) wrap.addEventListener("scroll",run,{passive:true});
+  document.addEventListener("tasun:r710-table-rendered",run,{passive:true});
+  window.__TASUN_OFFICIAL_DOCS_R745_FIXED_COL_LAYOUT_NOT_ON_SCROLL__=true;
   setTimeout(applyR513FixedColumnLayout,0);
   setTimeout(applyR513FixedColumnLayout,350);
 }
+window.__TASUN_OFFICIAL_DOCS_R745_FIXED_COL_LAYOUT_NOT_ON_SCROLL__=true;
 function verifyR513OfficialDocsLayout(){
   const table=$("#officialDocumentTable");
   const heads=r703FieldHeaderCells().map(th=>normalizeText(th.textContent));
@@ -7128,14 +7126,32 @@ function r734VerifySupervisorDeadlineVisual(){const table=$("#officialDocumentTa
 
 
 function r742InstallIndependentScroll(){
- const wrap=$("#detailSection>.tableWrap");if(!wrap)return false;wrap.classList.add("r742FastIndependentScroll");if(wrap.dataset.r742ScrollBound==="1")return true;wrap.dataset.r742ScrollBound="1";
- let wheelAxis="",wheelUntil=0,pending=0,raf=0;const apply=()=>{raf=0;if(!pending)return;const delta=pending;pending=0;if(wheelAxis==="x")wrap.scrollLeft+=delta;else wrap.scrollTop+=delta;};
- wrap.addEventListener("wheel",ev=>{if(ev.ctrlKey||ev.metaKey||ev.target.closest("input,textarea,select,button,a"))return;const ax=Math.abs(ev.deltaX),ay=Math.abs(ev.deltaY),now=Date.now();if(now>=wheelUntil){wheelAxis=ev.shiftKey||ax>ay*1.08?"x":"y";}wheelUntil=now+115;let delta=wheelAxis==="x"?(ax>0?ev.deltaX:ev.deltaY):ev.deltaY;if(!delta&&wheelAxis==="y")delta=ev.deltaX;if(!delta)return;ev.preventDefault();pending+=delta*(wheelAxis==="x"?1.90:1.72);if(!raf)raf=requestAnimationFrame(apply);},{passive:false});
- let drag=null;const clear=()=>{drag=null;};wrap.addEventListener("pointerdown",ev=>{if(ev.pointerType==="mouse"||ev.target.closest("a,button,input,select,textarea"))return;drag={id:ev.pointerId,x:ev.clientX,y:ev.clientY,left:wrap.scrollLeft,top:wrap.scrollTop,axis:""};try{wrap.setPointerCapture(ev.pointerId);}catch(_e){}},{passive:true});wrap.addEventListener("pointermove",ev=>{if(!drag||drag.id!==ev.pointerId)return;const dx=ev.clientX-drag.x,dy=ev.clientY-drag.y;if(!drag.axis&&Math.max(Math.abs(dx),Math.abs(dy))>=6)drag.axis=Math.abs(dx)>Math.abs(dy)*1.08?"x":"y";if(!drag.axis)return;ev.preventDefault();if(drag.axis==="x")wrap.scrollLeft=drag.left-dx*1.34;else wrap.scrollTop=drag.top-dy*1.28;},{passive:false});wrap.addEventListener("pointerup",clear,{passive:true});wrap.addEventListener("pointercancel",clear,{passive:true});wrap.addEventListener("lostpointercapture",clear,{passive:true});
- window.__TASUN_OFFICIAL_DOCS_R742_SCROLL_AXIS_LOCK__=true;return true;
+ const wrap=$("#detailSection>.tableWrap");if(!wrap)return false;const table=$("#officialDocumentTable");
+ wrap.classList.add("r742FastIndependentScroll");if(table)table.classList.add("r745SmoothScrollTable");
+ if(wrap.dataset.r742ScrollBound==="1"&&wrap.dataset.r745SmoothScrollBound==="1")return true;
+ wrap.dataset.r742ScrollBound="1";wrap.dataset.r745SmoothScrollBound="1";wrap.dataset.r745NativeTouchMomentum="1";wrap.dataset.r745NativeVerticalWheel="1";
+ const clamp=(value,min,max)=>Math.max(min,Math.min(max,value)),maxX=()=>Math.max(0,wrap.scrollWidth-wrap.clientWidth),reduced=()=>!!(window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+ const state=wrap.__tasunR745ScrollState||{axis:"",axisUntil:0,targetX:wrap.scrollLeft,pendingX:0,raf:0,active:false,programmatic:false,idleTimer:0};wrap.__tasunR745ScrollState=state;
+ const markActive=active=>{state.active=!!active;wrap.classList.toggle("r745ScrollActive",!!active);};
+ const settle=delay=>{clearTimeout(state.idleTimer);state.idleTimer=setTimeout(()=>{state.programmatic=false;state.pendingX=0;state.targetX=wrap.scrollLeft;markActive(false);},delay||180);};
+ const stop=()=>{if(state.raf){cancelAnimationFrame(state.raf);state.raf=0;}clearTimeout(state.idleTimer);state.programmatic=false;state.pendingX=0;state.targetX=wrap.scrollLeft;markActive(false);};
+ const flushHorizontal=()=>{state.raf=0;const base=state.programmatic?state.targetX:wrap.scrollLeft;state.targetX=clamp(base+state.pendingX,0,maxX());state.pendingX=0;state.programmatic=true;try{wrap.scrollTo({left:state.targetX,top:wrap.scrollTop,behavior:reduced()?"auto":"smooth"});}catch(_e){wrap.scrollLeft=state.targetX;}settle(reduced()?80:260);};
+ const normalizeDelta=(delta,mode,viewport)=>mode===1?delta*28:mode===2?delta*Math.max(240,viewport*.88):delta;
+ const onWheel=ev=>{
+   if(ev.ctrlKey||ev.metaKey||ev.target.closest("input,textarea,select,button"))return;
+   const rawX=normalizeDelta(ev.deltaX,ev.deltaMode,wrap.clientWidth),rawY=normalizeDelta(ev.deltaY,ev.deltaMode,wrap.clientHeight),ax=Math.abs(rawX),ay=Math.abs(rawY),now=performance.now();
+   if(now>=state.axisUntil||!state.axis)state.axis=ev.shiftKey||ax>ay*1.12?"x":"y";state.axisUntil=now+145;
+   /* R745：一般垂直滾輪、觸控與觸控板 deltaX 交由瀏覽器 compositor 原生處理；
+      Shift＋滾輪需把 deltaY 轉為水平時，僅以單一 rAF 合併輸入，再交由原生 smooth scroll。 */
+   if(!(ev.shiftKey&&ay>.01)){state.programmatic=false;markActive(true);settle(110);return;}
+   ev.preventDefault();let delta=rawY||rawX;if(!delta)return;const trackpad=Math.abs(delta)<18&&ev.deltaMode===0,speed=trackpad?1.30:1.52,limit=trackpad?96:520;state.pendingX+=clamp(delta,-limit,limit)*speed;markActive(true);if(!state.raf)state.raf=requestAnimationFrame(flushHorizontal);
+ };
+ wrap.addEventListener("wheel",onWheel,{passive:false});wrap.addEventListener("touchstart",stop,{passive:true});wrap.addEventListener("pointerdown",ev=>{if(ev.pointerType==="mouse"&&ev.button===0)stop();},{passive:true});
+ wrap.addEventListener("scroll",()=>{if(!state.programmatic)state.targetX=wrap.scrollLeft;},{passive:true});window.addEventListener("resize",()=>{state.targetX=clamp(wrap.scrollLeft,0,maxX());},{passive:true});
+ window.__TASUN_OFFICIAL_DOCS_R742_SCROLL_AXIS_LOCK__=true;window.__TASUN_OFFICIAL_DOCS_R745_SCROLL_FRAME_EASING__=true;window.__TASUN_OFFICIAL_DOCS_R745_NATIVE_TOUCH_MOMENTUM__=true;window.__TASUN_OFFICIAL_DOCS_R745_NATIVE_VERTICAL_WHEEL__=true;return true;
 }
 function r742EnsureTwinButtons(){const host=$("#r635EditFormMenuHost"),register=$("#btnDirectRegisterR719"),stats=$("#btnDetailGoStatistics");if(!host||!register||!stats)return false;host.classList.add("r742TwinActionHost");register.classList.add("r742TwinActionBtn");stats.classList.add("r742TwinActionBtn","r742SiblingStatsBtn");if(register.parentElement!==host)host.prepend(register);if(stats.parentElement!==host)host.appendChild(stats);stats.href=withV("汐東文件統計表.html");return true;}
-function r742VerifyFastScroll(){const wrap=$("#detailSection>.tableWrap");return !!(wrap&&wrap.dataset.r742ScrollBound==="1"&&wrap.classList.contains("r742FastIndependentScroll")&&!String(r742InstallIndependentScroll).includes("setInterval"));}
+function r742VerifyFastScroll(){const wrap=$("#detailSection>.tableWrap"),state=wrap&&wrap.__tasunR745ScrollState;return !!(wrap&&wrap.dataset.r742ScrollBound==="1"&&wrap.dataset.r745SmoothScrollBound==="1"&&wrap.dataset.r745NativeVerticalWheel==="1"&&wrap.classList.contains("r742FastIndependentScroll")&&state&&!String(r742InstallIndependentScroll).includes("setInterval")&&String(r742InstallIndependentScroll).includes("requestAnimationFrame")&&!String(r742InstallIndependentScroll).includes("pointermove"));}
 function r742VerifyTwinButtons(){const host=$("#r635EditFormMenuHost");return !!(host&&host.classList.contains("r742TwinActionHost")&&host.querySelector("#btnDirectRegisterR719")&&host.querySelector("#btnDetailGoStatistics"));}
 function r742VerifyHistoryEditable(){const body=$("#r706StageTbody");if(!body)return true;const rows2=body.querySelectorAll("tr");return !rows2.length||body.querySelectorAll(".r742HistoryEditBtn").length===rows2.length;}
 function r742VerifyEditStageSections(){const form=$("#editForm");if(!form||!editingUid)return true;return !!form.querySelector('.r742EditStageSection[data-r742-stage-type="'+R706_STAGE_START+'"]')&&Array.from(form.querySelectorAll('[data-r742-field]')).every(input=>input.readOnly||input.type==="date"||!!input.closest(".r715Combo"));}
@@ -7144,111 +7160,56 @@ function r742VerifyDocNoColors(){const active=r706ActiveRows(),trs=Array.from(do
 
 let r713StageHeaderRaf=0;
 let r713StageHeaderBound=false;
+let r745StageHeaderGeometry=null;
+let r745StageHeaderGeometryDirty=true;
 function r713StageKind(type){return type===R706_STAGE_SUPERVISOR?"supervisor":type===R706_STAGE_CONTRACTOR?"contractor":"start";}
+function r745InvalidateStageHeaderGeometry(){r745StageHeaderGeometryDirty=true;r745StageHeaderGeometry=null;window.__TASUN_OFFICIAL_DOCS_R745_STAGE_HEADER_GEOMETRY_DIRTY__=true;return true;}
 function r713EnsureStageLabelLayer(){
   const wrap=$("#detailSection>.tableWrap")||$(".tableWrap"),table=$("#officialDocumentTable");
   if(!wrap||!table)return null;
   let layer=wrap.querySelector(":scope > .r713StageLabelLayer");
   if(!layer){layer=document.createElement("div");layer.className="r713StageLabelLayer";layer.setAttribute("aria-hidden","true");}
-  /* R732：圖層必須位於資料表前方，才能由 CSS sticky top:0 垂直固定；
-     不再以 scrollTop 或 Y 軸 transform 追蹤垂直捲動。 */
   if(layer.nextElementSibling!==table)wrap.insertBefore(layer,table);
-  layer.dataset.r732HorizontalOnlyStageHeader="1";
-  layer.dataset.r732VerticalSticky="1";
-  return{wrap,layer};
-}
-function r713FixedVisibleBoundary(wrap,fieldRow){
-  if(!wrap||!fieldRow)return 0;
-  const wr=wrap.getBoundingClientRect(),mobile=window.matchMedia&&window.matchMedia("(max-width:900px)").matches;
-  if(!mobile){
-    /* 桌機的前四欄始終固定；直接以其實體欄寬總和作遮罩權威，避免水平滑動後
-       getBoundingClientRect 的 sticky 臨界值因小數／捲軸邊界誤判為 0。 */
-    const fixed=Array.from(fieldRow.querySelectorAll("th.fixedCol")).slice(0,4);
-    const total=fixed.reduce((sum,th)=>sum+Math.max(0,th.getBoundingClientRect().width||parseFloat(getComputedStyle(th).width)||0),0);
-    return Math.max(0,Math.min(wrap.clientWidth-56,total));
-  }
-  /* 手機依既有 R690～R695 規則：只有主旨欄真正貼齊左緣時才形成固定遮罩。 */
-  const subject=fieldRow.querySelector("th.fixedCol4");
-  if(!subject)return 0;
-  const rect=subject.getBoundingClientRect(),cs=getComputedStyle(subject);
-  const active=cs.position==="sticky"&&cs.left!=="auto"&&rect.left<=wr.left+4&&rect.right>wr.left;
-  return active?Math.max(0,Math.min(wrap.clientWidth-56,rect.width)):0;
+  layer.dataset.r732HorizontalOnlyStageHeader="1";layer.dataset.r732VerticalSticky="1";layer.dataset.r745GeometryCache="1";
+  return{wrap,layer,table};
 }
 function r713SyncFixedGroupCells(group,fieldRow){
-  const groupCells=Array.from(group.querySelectorAll("th.r713FixedStageCell"));
-  const fieldCells=Array.from(fieldRow.querySelectorAll("th.fixedCol")).slice(0,4);
-  groupCells.forEach((cell,index)=>{
-    const source=fieldCells[index];if(!source)return;
-    const cs=getComputedStyle(source);
-    cell.style.left=cs.left==="auto"?"auto":cs.left;
-    cell.style.width=cs.width;cell.style.minWidth=cs.width;cell.style.maxWidth=cs.width;
-  });
+  const groupCells=Array.from(group.querySelectorAll("th.r713FixedStageCell")),fieldCells=Array.from(fieldRow.querySelectorAll("th.fixedCol")).slice(0,4);
+  groupCells.forEach((cell,index)=>{const source=fieldCells[index];if(!source)return;const width=Math.max(1,source.offsetWidth||parseFloat(getComputedStyle(source).width)||0),left=index?fieldCells.slice(0,index).reduce((sum,th)=>sum+(th.offsetWidth||0),0):0;cell.style.left=left+"px";cell.style.width=width+"px";cell.style.minWidth=width+"px";cell.style.maxWidth=width+"px";});
 }
-function r713UpdateDynamicStageHeader(){
-  r713StageHeaderRaf=0;
-  const table=$("#officialDocumentTable"),group=table&&table.querySelector("thead tr.r706GroupRow"),fieldRow=table&&table.querySelector("thead tr.r706FieldRow");
-  const holder=r713EnsureStageLabelLayer();if(!table||!group||!fieldRow||!holder)return false;
-  const wrap=holder.wrap,layer=holder.layer,wr=wrap.getBoundingClientRect(),viewportRight=wr.left+wrap.clientWidth;
+function r745BuildStageHeaderGeometry(){
+  const holder=r713EnsureStageLabelLayer();if(!holder)return null;const {wrap,layer,table}=holder,group=table.querySelector("thead tr.r706GroupRow"),fieldRow=table.querySelector("thead tr.r706FieldRow");if(!group||!fieldRow)return null;
   r713SyncFixedGroupCells(group,fieldRow);
-  const fixedBoundary=r713FixedVisibleBoundary(wrap,fieldRow),viewportLeft=wr.left+fixedBoundary;
-  const groupH=Math.max(34,Math.ceil(group.getBoundingClientRect().height||parseFloat(getComputedStyle(table).getPropertyValue("--r706-group-h"))||40));
-  /* R732：圖層寬度採完整表格內容寬度並由 CSS sticky 固定 Y 軸；
-     水平位置使用內容座標，垂直方向不再讀取捲動高度、不套用位移。 */
-  const layerWidth=Math.max(wrap.clientWidth,wrap.scrollWidth,table.scrollWidth||0);
-  layer.style.width=layerWidth+"px";layer.style.height=groupH+"px";layer.style.marginBottom=(-groupH)+"px";layer.style.transform="none";
-  const existing=new Map(Array.from(layer.children).map(el=>[el.dataset.stageKey,el]));
-  const used=new Set();let visibleCount=0;
-  Array.from(group.querySelectorAll("th.r713StageTrack")).forEach((cell,index)=>{
-    const key=cell.dataset.stageKey||("stage-"+index),title=cell.dataset.stageTitle||cell.getAttribute("aria-label")||"",kind=cell.dataset.stageKind||"start";
-    used.add(key);let label=existing.get(key);
-    if(!label){label=document.createElement("span");label.className="r713StageLabel";label.dataset.stageKey=key;layer.appendChild(label);}
-    label.dataset.stageKind=kind;label.textContent=title;
-    const rect=cell.getBoundingClientRect(),left=Math.max(rect.left,viewportLeft),right=Math.min(rect.right,viewportRight),visible=Math.max(0,right-left);
-    const minVisible=Math.max(72,Math.min(126,title.length*17+24));
-    if(title&&visible>=minVisible){
-      /* 圖層本身會隨內容水平捲動，因此以內容座標（可視中心＋scrollLeft）定位；
-         垂直座標固定為 top:0，僅產生水平移動。 */
-      const center=(left+right)/2-wr.left+wrap.scrollLeft;label.style.left=center+"px";label.style.maxWidth=Math.max(72,visible-8)+"px";label.classList.add("r713Visible");visibleCount++;
-    }else{label.classList.remove("r713Visible");label.style.maxWidth="0px";}
+  const mobile=!!(window.matchMedia&&window.matchMedia("(max-width:900px)").matches),fieldCells=Array.from(fieldRow.querySelectorAll("th.fixedCol")).slice(0,4),widths=fieldCells.map(th=>Math.max(0,th.offsetWidth||0));
+  const desktopBoundary=mobile?0:widths.reduce((a,b)=>a+b,0),mobilePrefix=widths.slice(0,3).reduce((a,b)=>a+b,0),subjectWidth=widths[3]||0,groupH=Math.max(34,Math.ceil(group.offsetHeight||parseFloat(getComputedStyle(table).getPropertyValue("--r706-group-h"))||40));
+  const layerWidth=Math.max(wrap.clientWidth,wrap.scrollWidth,table.scrollWidth||0);if(layer.style.width!==layerWidth+"px")layer.style.width=layerWidth+"px";if(layer.style.height!==groupH+"px")layer.style.height=groupH+"px";layer.style.marginBottom=(-groupH)+"px";layer.style.transform="none";
+  const existing=new Map(Array.from(layer.children).map(el=>[el.dataset.stageKey,el])),used=new Set(),tracks=Array.from(group.querySelectorAll("th.r713StageTrack")).map((cell,index)=>{
+    const key=cell.dataset.stageKey||("stage-"+index),title=cell.dataset.stageTitle||cell.getAttribute("aria-label")||"",kind=cell.dataset.stageKind||"start";used.add(key);let label=existing.get(key);if(!label){label=document.createElement("span");label.className="r713StageLabel";label.dataset.stageKey=key;layer.appendChild(label);}label.dataset.stageKind=kind;if(label.textContent!==title)label.textContent=title;return{key,title,kind,left:cell.offsetLeft,right:cell.offsetLeft+cell.offsetWidth,label};
   });
   existing.forEach((el,key)=>{if(!used.has(key))el.remove();});
-  const tracks=Array.from(group.querySelectorAll("th.r713StageTrack"));
-  const sameColor=tracks.every(cell=>{const selector=cell.dataset.stageKind==="supervisor"?".r706SupervisorCell":cell.dataset.stageKind==="contractor"?".r706ContractorCell":".r706StartCell";const field=fieldRow.querySelector(selector);return !field||getComputedStyle(cell).backgroundImage===getComputedStyle(field).backgroundImage;});
-  window.__TASUN_R713_STAGE_HEADER_SAME_COLOR__=sameColor;
-  window.__TASUN_R713_FIXED_HEADER_MASK__=Array.from(group.querySelectorAll("th.r713FixedStageCell")).length===4;
-  window.__TASUN_R713_DYNAMIC_STAGE_TITLE_CENTERED__=true;
-  window.__TASUN_R713_VISIBLE_STAGE_TITLE_COUNT__=visibleCount;
-  window.__TASUN_R732_STAGE_HEADER_HORIZONTAL_ONLY__=true;
-  window.__TASUN_R732_STAGE_HEADER_VERTICAL_STICKY__=true;
-  window.__TASUN_R732_STAGE_HEADER_NO_SCROLLTOP_TRANSFORM__=true;
-  return true;
+  const stageCells=Array.from(group.querySelectorAll("th.r713StageTrack"));
+  const sameColor=stageCells.every(cell=>{const selector=cell.dataset.stageKind==="supervisor"?".r706SupervisorCell":cell.dataset.stageKind==="contractor"?".r706ContractorCell":".r706StartCell",field=fieldRow.querySelector(selector);return !field||getComputedStyle(cell).backgroundImage===getComputedStyle(field).backgroundImage;});
+  r745StageHeaderGeometry={wrap,layer,table,group,fieldRow,mobile,desktopBoundary,mobilePrefix,subjectWidth,tracks,layerWidth,groupH};r745StageHeaderGeometryDirty=false;
+  window.__TASUN_R713_STAGE_HEADER_SAME_COLOR__=sameColor;window.__TASUN_R713_FIXED_HEADER_MASK__=group.querySelectorAll("th.r713FixedStageCell").length===4;window.__TASUN_OFFICIAL_DOCS_R745_STAGE_HEADER_GEOMETRY_CACHE__=true;window.__TASUN_OFFICIAL_DOCS_R745_STAGE_HEADER_GEOMETRY_DIRTY__=false;return r745StageHeaderGeometry;
 }
-function r713ScheduleDynamicStageHeader(){
-  if(r713StageHeaderRaf)return;
-  r713StageHeaderRaf=requestAnimationFrame(r713UpdateDynamicStageHeader);
+function r713UpdateDynamicStageHeader(){
+  r713StageHeaderRaf=0;let geometry=r745StageHeaderGeometry;
+  if(r745StageHeaderGeometryDirty||!geometry||!geometry.table.isConnected||geometry.wrap.scrollWidth!==geometry.layerWidth)geometry=r745BuildStageHeaderGeometry();if(!geometry)return false;
+  const {wrap,tracks,mobile,mobilePrefix,subjectWidth,desktopBoundary}=geometry,scrollLeft=0+wrap.scrollLeft,viewportRight=scrollLeft+wrap.clientWidth,fixedBoundary=mobile&&scrollLeft>=Math.max(0,mobilePrefix-1)?subjectWidth:desktopBoundary,viewportLeft=scrollLeft+fixedBoundary;
+  let visibleCount=0;tracks.forEach(track=>{const left=Math.max(track.left,viewportLeft),right=Math.min(track.right,viewportRight),visible=Math.max(0,right-left),minVisible=Math.max(72,Math.min(126,track.title.length*17+24));if(track.title&&visible>=minVisible){track.label.style.left=((left+right)/2)+"px";track.label.style.maxWidth=Math.max(72,visible-8)+"px";track.label.classList.add("r713Visible");visibleCount++;}else{track.label.classList.remove("r713Visible");track.label.style.maxWidth="0px";}});
+  window.__TASUN_R713_DYNAMIC_STAGE_TITLE_CENTERED__=true;window.__TASUN_R713_VISIBLE_STAGE_TITLE_COUNT__=visibleCount;window.__TASUN_R732_STAGE_HEADER_HORIZONTAL_ONLY__=true;window.__TASUN_R732_STAGE_HEADER_VERTICAL_STICKY__=true;window.__TASUN_R732_STAGE_HEADER_NO_SCROLLTOP_TRANSFORM__=true;window.__TASUN_OFFICIAL_DOCS_R745_STAGE_HEADER_NO_SCROLL_LAYOUT_READ__=true;return true;
 }
+function r713ScheduleDynamicStageHeader(){if(r713StageHeaderRaf)return;r713StageHeaderRaf=requestAnimationFrame(r713UpdateDynamicStageHeader);}
 function r713BindDynamicStageHeader(){
   const holder=r713EnsureStageLabelLayer();if(!holder)return false;
-  if(!r713StageHeaderBound){
-    r713StageHeaderBound=true;
-    holder.wrap.addEventListener("scroll",r713ScheduleDynamicStageHeader,{passive:true});
-    window.addEventListener("resize",r713ScheduleDynamicStageHeader,{passive:true});
-    window.addEventListener("orientationchange",r713ScheduleDynamicStageHeader,{passive:true});
-    window.addEventListener("pageshow",r713ScheduleDynamicStageHeader,{passive:true});
-    document.addEventListener("tasun:r710-table-rendered",r713ScheduleDynamicStageHeader,{passive:true});
-  }
-  r713ScheduleDynamicStageHeader();return true;
+  if(!r713StageHeaderBound){r713StageHeaderBound=true;const invalidate=()=>{r745InvalidateStageHeaderGeometry();r713ScheduleDynamicStageHeader();};holder.wrap.addEventListener("scroll",r713ScheduleDynamicStageHeader,{passive:true});window.addEventListener("resize",invalidate,{passive:true});window.addEventListener("orientationchange",invalidate,{passive:true});window.addEventListener("pageshow",invalidate,{passive:true});document.addEventListener("tasun:r710-table-rendered",invalidate,{passive:true});}
+  r745InvalidateStageHeaderGeometry();r713ScheduleDynamicStageHeader();return true;
 }
 function r713VerifyDynamicStageHeader(){
-  const table=$("#officialDocumentTable"),group=table&&table.querySelector("thead tr.r706GroupRow"),field=table&&table.querySelector("thead tr.r706FieldRow"),layer=$("#detailSection>.tableWrap .r713StageLabelLayer");
-  if(!table||!group||!field||!layer)return false;
-  const fixed=group.querySelectorAll("th.r713FixedStageCell"),tracks=group.querySelectorAll("th.r713StageTrack");
-  if(fixed.length!==4||!tracks.length)return false;
-  const masks=Array.from(fixed).every(th=>getComputedStyle(th).position==="sticky")&&Number.parseInt(getComputedStyle(fixed[fixed.length-1]).zIndex||"0",10)>Number.parseInt(getComputedStyle(tracks[0]).zIndex||"0",10);
-  const layerStyle=getComputedStyle(layer),verticalSticky=layerStyle.position==="sticky"&&Math.abs(parseFloat(layerStyle.top)||0)<=1;
-  const noVerticalTransform=(layerStyle.transform==="none"||!layerStyle.transform)&&!String(r713UpdateDynamicStageHeader).includes("wrap.scrollTop");
-  const horizontalContentCoordinate=String(r713UpdateDynamicStageHeader).includes("+wrap.scrollLeft");
-  return !!(masks&&verticalSticky&&noVerticalTransform&&horizontalContentCoordinate&&layer.dataset.r732HorizontalOnlyStageHeader==="1"&&layer.dataset.r732VerticalSticky==="1"&&window.__TASUN_R713_STAGE_HEADER_SAME_COLOR__&&window.__TASUN_R713_DYNAMIC_STAGE_TITLE_CENTERED__);
+  r713UpdateDynamicStageHeader();const table=$("#officialDocumentTable"),group=table&&table.querySelector("thead tr.r706GroupRow"),field=table&&table.querySelector("thead tr.r706FieldRow"),layer=$("#detailSection>.tableWrap .r713StageLabelLayer");if(!table||!group||!field||!layer)return false;
+  const fixed=group.querySelectorAll("th.r713FixedStageCell"),tracks=group.querySelectorAll("th.r713StageTrack");if(fixed.length!==4||!tracks.length)return false;
+  const masks=Array.from(fixed).every(th=>getComputedStyle(th).position==="sticky")&&Number.parseInt(getComputedStyle(fixed[fixed.length-1]).zIndex||"0",10)>Number.parseInt(getComputedStyle(tracks[0]).zIndex||"0",10),layerStyle=getComputedStyle(layer),verticalSticky=layerStyle.position==="sticky"&&Math.abs(parseFloat(layerStyle.top)||0)<=1,noVerticalTransform=(layerStyle.transform==="none"||!layerStyle.transform)&&!String(r713UpdateDynamicStageHeader).includes("wrap.scrollTop"),cached=!!(r745StageHeaderGeometry&&window.__TASUN_OFFICIAL_DOCS_R745_STAGE_HEADER_GEOMETRY_CACHE__&&window.__TASUN_OFFICIAL_DOCS_R745_STAGE_HEADER_NO_SCROLL_LAYOUT_READ__);
+  return !!(masks&&verticalSticky&&noVerticalTransform&&cached&&layer.dataset.r732HorizontalOnlyStageHeader==="1"&&layer.dataset.r732VerticalSticky==="1"&&layer.dataset.r745GeometryCache==="1"&&window.__TASUN_R713_STAGE_HEADER_SAME_COLOR__&&window.__TASUN_R713_DYNAMIC_STAGE_TITLE_CENTERED__);
 }
 function renderHead(snapshot){
   const thead=$("#thead");if(!thead)return;
@@ -7267,7 +7228,7 @@ function renderHead(snapshot){
   R706_BASE_FIELDS.forEach(field=>{const th=document.createElement("th");th.scope="col";th.dataset.fieldLabel=field.replace(/\n/g," ");th.className=r706ClassForBase(field);th.textContent=field;fields.appendChild(th);});
   slots.forEach(slot=>slot.fields.forEach((field,j)=>{const th=document.createElement("th");th.scope="col";th.dataset.fieldLabel=field.replace(/\n/g," ");th.className=r734ClassForStage(slot.type,field,j);th.textContent=field;fields.appendChild(th);}));
   thead.appendChild(fields);
-  const table=$("#officialDocumentTable");if(table){delete table.dataset.r706Xlsx39;table.dataset.r740Xlsx38="1";table.dataset.r706DynamicColumns=String(R706_BASE_COLUMN_COUNT+slots.length*8);table.dataset.r713DynamicStageHeader="1";delete table.dataset.r740DeadlineColumns;table.dataset.r741DeadlineColumns="limit-due-black-header-bright-gold;days-emerald-green-no-glow";table.dataset.r742Interaction="fast-axis-lock-scroll;twin-buttons;all-stage-edit;subject-ltr;docno-stage-color";table.style.minWidth=Math.max(3780,R706_BASE_COLUMN_COUNT*126+slots.length*8*126)+"px";requestAnimationFrame(()=>{const h=Math.max(34,Math.ceil(group.getBoundingClientRect().height||40));table.style.setProperty("--r706-group-h",h+"px");r713BindDynamicStageHeader();r713ScheduleDynamicStageHeader();});}
+  const table=$("#officialDocumentTable");if(table){delete table.dataset.r706Xlsx39;table.dataset.r740Xlsx38="1";table.dataset.r706DynamicColumns=String(R706_BASE_COLUMN_COUNT+slots.length*8);table.dataset.r713DynamicStageHeader="1";delete table.dataset.r740DeadlineColumns;table.dataset.r741DeadlineColumns="limit-due-black-header-bright-gold;days-emerald-green-no-glow";table.dataset.r742Interaction="smooth-axis-lock-scroll;twin-buttons;all-stage-edit;subject-ltr;docno-stage-color";table.dataset.r745SmoothScroll="frame-easing;geometry-cache;native-touch;no-scroll-layout-repair";table.classList.add("r745SmoothScrollTable");table.style.minWidth=Math.max(3780,R706_BASE_COLUMN_COUNT*126+slots.length*8*126)+"px";requestAnimationFrame(()=>{const h=Math.max(34,Math.ceil(group.offsetHeight||40));table.style.setProperty("--r706-group-h",h+"px");r745InvalidateStageHeaderGeometry();r713BindDynamicStageHeader();r713ScheduleDynamicStageHeader();});}
 }
 function r706AppendCell(td,obj,field,stageType){const value=field==="項次"?r706Text(obj[field]):r706Text(obj&&obj[field]);td.textContent="";if(R706_LINK_FIELDS.has(field)&&value){const url=r706Url(obj,field);if(url){const a=document.createElement("a");a.href=url;a.target="_blank";a.rel="noopener noreferrer";a.textContent=value;td.appendChild(a);td.classList.add("r706LinkCell");}else td.textContent=value;}else td.textContent=value||"—";if(!stageType&&field==="目前處理狀況\n(文號整體最新狀況)"){const btn=document.createElement("button");btn.type="button";btn.className="btn ghost r706HistoryBtn";btn.textContent="歷程";btn.addEventListener("click",ev=>{ev.preventDefault();ev.stopPropagation();r706OpenManager(obj);});td.appendChild(document.createElement("br"));td.appendChild(btn);}}
 function r711CancelPendingRender(){if(!r710RenderHandle)return;try{if(typeof cancelIdleCallback==="function")cancelIdleCallback(r710RenderHandle);}catch(_e){}try{if(typeof cancelAnimationFrame==="function")cancelAnimationFrame(r710RenderHandle);}catch(_e){}try{clearTimeout(r710RenderHandle);}catch(_e){}r710RenderHandle=0;}
@@ -7462,12 +7423,18 @@ add("officialDocsR743StartupTerminalStatus",()=>r710InitStarted||!!window.__TASU
 add("officialDocsR744StrictSaveEditDeclaration",()=>typeof saveEdit==="function"&&window.saveEdit===saveEdit&&!!window.__TASUN_R744_STRICT_SAVE_EDIT_DECLARED__,()=>{window.saveEdit=saveEdit;window.__TASUN_R744_STRICT_SAVE_EDIT_DECLARED__=true;return true;});
 add("officialDocsR744EarlyStartupGuardState",()=>!!window.__TASUN_R744_STARTUP_GUARDS_EARLY__&&typeof r712ModuleRenderActive==="boolean"&&typeof r712RenderAllActive==="boolean",()=>{window.__TASUN_R744_STARTUP_GUARDS_EARLY__=true;return true;});
 add("officialDocsR744StartupPipelineRestoresData",()=>r710InitStarted||!!window.__TASUN_AUTH_BLOCKED__||r743InitAttempt<3,()=>{if(!r710InitStarted)r743StartInit("r744-data-restore-repair");return true;});
+add("officialDocsR745SmoothScrollFrameEasing",()=>r742VerifyFastScroll()&&!!window.__TASUN_OFFICIAL_DOCS_R745_SCROLL_FRAME_EASING__,()=>r742InstallIndependentScroll());
+add("officialDocsR745StageHeaderGeometryCache",()=>{r713UpdateDynamicStageHeader();return !!window.__TASUN_OFFICIAL_DOCS_R745_STAGE_HEADER_GEOMETRY_CACHE__&&!!window.__TASUN_OFFICIAL_DOCS_R745_STAGE_HEADER_NO_SCROLL_LAYOUT_READ__;},()=>{r745InvalidateStageHeaderGeometry();r713BindDynamicStageHeader();return true;});
+add("officialDocsR745NoScrollTimeLayoutRepair",()=>!!window.__TASUN_OFFICIAL_DOCS_R745_FIXED_COL_LAYOUT_NOT_ON_SCROLL__&&!String(installR513FixedColumnLayoutEvents).includes('addEventListener("scroll",run'),()=>{window.__TASUN_OFFICIAL_DOCS_R745_FIXED_COL_LAYOUT_NOT_ON_SCROLL__=true;return true;});
+add("officialDocsR745NoFilterRepaintFlicker",()=>{const table=$("#officialDocumentTable"),row=table&&table.querySelector("tbody tr:not(.emptyRow) td");return !row||getComputedStyle(row).filter==="none";},()=>{const table=$("#officialDocumentTable");if(table)table.classList.add("r745SmoothScrollTable");return true;});
+add("officialDocsR745NativeTouchMomentum",()=>{const wrap=$("#detailSection>.tableWrap");return !!(wrap&&wrap.dataset.r745NativeTouchMomentum==="1"&&wrap.dataset.r745NativeVerticalWheel==="1"&&!String(r742InstallIndependentScroll).includes("pointermove"));},()=>r742InstallIndependentScroll());
 return true;}catch(e){console.warn("R706 self-heal",e);return false;}}
 registerSelfHeal=function(){return r706RegisterSelfHeal();};
 window.__TASUN_OFFICIAL_DOCS_STAGE_API__=Object.freeze({key:R706_STAGE_HISTORY_KEY,history:r706StageHistory,active:r706ActiveStages,lastDocumentStage:r736LastDocumentStage,currentProcessingUnit:r736CurrentProcessingUnit,applySummary:r706ApplySummary,closed:r706Closed,expected:r706Expected,open:r706OpenManager,verify:r706VerifyCore,unlimited:true,alternating:true,xlsxColumns:39,replyPageUnified:true});
 window.__TASUN_OFFICIAL_DOCS_R740_XLSX38_READY__=true;window.__TASUN_OFFICIAL_DOCS_R740_DATA_SYNC_CONTRACT_UNCHANGED__=true;window.__TASUN_OFFICIAL_DOCS_R741_DEADLINE_VISUAL_READY__=true;window.__TASUN_OFFICIAL_DOCS_R741_DATA_SYNC_CONTRACT_UNCHANGED__=true;
 window.__TASUN_OFFICIAL_DOCS_R742_FAST_INDEPENDENT_SCROLL_READY__=true;window.__TASUN_OFFICIAL_DOCS_R742_HISTORY_STAGE_EDIT_READY__=true;window.__TASUN_OFFICIAL_DOCS_R742_EDIT_STAGE_COLOR_DROPDOWN_READY__=true;window.__TASUN_OFFICIAL_DOCS_R742_SUBJECT_LEFT_TO_RIGHT_READY__=true;window.__TASUN_OFFICIAL_DOCS_R742_DOCNO_STATUS_COLOR_READY__=true;
 window.__TASUN_OFFICIAL_DOCS_R744_STRICT_SCOPE_STARTUP_READY__=true;window.__TASUN_OFFICIAL_DOCS_R744_INIT_STATUS_DATA_RESTORE_READY__=true;
+window.__TASUN_OFFICIAL_DOCS_R745_SMOOTH_SCROLL_READY__=true;window.__TASUN_OFFICIAL_DOCS_R745_NO_FLICKER_READY__=true;window.__TASUN_OFFICIAL_DOCS_R745_DATA_SYNC_CONTRACT_UNCHANGED__=true;
 window.__TASUN_OFFICIAL_DOCS_R736_CURRENT_PROCESSING_UNIT_READY__=r736VerifyCurrentProcessingUnitLogic();
 
 /* TASUN R715：共用可編輯下拉、選項 tombstone、文號／文件超連結表單核心。 */
@@ -7497,7 +7464,7 @@ r706OpenLatestOptions=function(){return r715ParentOptions();};
 function r715CloseDropdowns(except){document.querySelectorAll(".r715Dropdown.show").forEach(p=>{if(p!==except){p.classList.remove("show");p.setAttribute("aria-hidden","true");}});}
 function r715AlignPanel(panel,anchor){if(!panel||!anchor)return;const r=anchor.getBoundingClientRect(),gap=4,below=innerHeight-r.bottom-gap,above=r.top-gap,max=Math.max(120,Math.min(330,Math.max(below,above)-8)),top=below>=140?r.bottom+gap:Math.max(4,r.top-gap-max);panel.style.left=Math.max(4,Math.min(r.left,innerWidth-r.width-4))+"px";panel.style.top=top+"px";panel.style.width=Math.max(180,r.width)+"px";panel.style.maxHeight=max+"px";}
 function r715NormalizeOptionItems(items){const map=new Map();(items||[]).forEach(item=>{const obj=typeof item==="object"&&item?item:{value:item,label:item},v=r706Text(obj.value);if(!v)return;const k=r715ValueKey(v);if(!map.has(k))map.set(k,{value:v,label:r706Text(obj.label)||v});});return Array.from(map.values());}
-function r715InstallGlobalDropdownEvents(){if(window.__TASUN_R715_DROPDOWN_GLOBAL_BOUND__)return;window.__TASUN_R715_DROPDOWN_GLOBAL_BOUND__=true;document.addEventListener("pointerdown",ev=>{if(!ev.target.closest(".r715Combo,.r715Dropdown"))r715CloseDropdowns();},{passive:true});document.addEventListener("keydown",ev=>{if(ev.key==="Escape")r715CloseDropdowns();},{passive:true});window.addEventListener("resize",()=>r715CloseDropdowns(),{passive:true});document.addEventListener("scroll",()=>r715CloseDropdowns(),{capture:true,passive:true});}
+function r715InstallGlobalDropdownEvents(){if(window.__TASUN_R715_DROPDOWN_GLOBAL_BOUND__)return;window.__TASUN_R715_DROPDOWN_GLOBAL_BOUND__=true;document.addEventListener("pointerdown",ev=>{if(!ev.target.closest(".r715Combo,.r715Dropdown"))r715CloseDropdowns();},{passive:true});document.addEventListener("keydown",ev=>{if(ev.key==="Escape")r715CloseDropdowns();},{passive:true});window.addEventListener("resize",()=>r715CloseDropdowns(),{passive:true});let scrollCloseRaf=0;document.addEventListener("scroll",()=>{if(scrollCloseRaf||!document.querySelector(".r715Dropdown.show"))return;scrollCloseRaf=requestAnimationFrame(()=>{scrollCloseRaf=0;r715CloseDropdowns();});},{capture:true,passive:true});}
 function r715CreateCombo(input,field,opts){const combo=document.createElement("div");combo.className="r715Combo";const btn=document.createElement("button");btn.type="button";btn.className="r715DropBtn";btn.setAttribute("aria-label","開啟「"+String(field).replace(/\n/g," ")+"」選項");const panel=document.createElement("div");panel.className="r715Dropdown";panel.setAttribute("aria-hidden","true");const source=()=>r715NormalizeOptionItems(typeof opts.optionSource==="function"?opts.optionSource():opts.options||r706Options(field));function render(){const q=r706Text(input.value).toLowerCase(),items=source().filter(x=>!q||x.value.toLowerCase().includes(q)||x.label.toLowerCase().includes(q));panel.replaceChildren();if(!items.length){const empty=document.createElement("div");empty.className="r715OptionEmpty";empty.textContent="沒有可用選項，可直接輸入或使用新增功能。";panel.appendChild(empty);return;}items.forEach(item=>{const row=document.createElement("div");row.className="r715OptionRow";const sel=document.createElement("button");sel.type="button";sel.className="r715OptionSelect";sel.textContent=item.label;sel.title=item.value;sel.addEventListener("click",()=>{input.value=item.value;input.dispatchEvent(new Event("input",{bubbles:true}));input.dispatchEvent(new Event("change",{bubbles:true}));r715CloseDropdowns();});row.appendChild(sel);if(opts.allowDelete!==false&&!R715_NO_DELETE_FIELDS.has(r706Text(field))){const del=document.createElement("button");del.type="button";del.className="r715OptionDelete";del.textContent="刪除";del.addEventListener("click",ev=>{ev.preventDefault();ev.stopPropagation();if(!confirm("確定從「"+String(field).replace(/\n/g," ")+"」下拉選單移除「"+item.value+"」？\n資料表原資料不會刪除。"))return;r715DeleteOption(field,item.value);if(r715ValueKey(input.value)===r715ValueKey(item.value)){input.value="";input.dispatchEvent(new Event("input",{bubbles:true}));}render();r715AlignPanel(panel,combo);});row.appendChild(del);}panel.appendChild(row);});}
  btn.addEventListener("click",ev=>{ev.preventDefault();ev.stopPropagation();const opening=!panel.classList.contains("show");r715CloseDropdowns(panel);if(opening){render();panel.classList.add("show");panel.setAttribute("aria-hidden","false");r715AlignPanel(panel,combo);}else{panel.classList.remove("show");panel.setAttribute("aria-hidden","true");}});input.addEventListener("input",()=>{if(panel.classList.contains("show")){render();r715AlignPanel(panel,combo);}});combo.appendChild(input);combo.appendChild(btn);combo.appendChild(panel);return combo;}
 function r715OpenDrive(){try{window.open(R715_NETWORK_DRIVE_URL,"tasun_r715_network_drive","noopener,noreferrer");}catch(_e){}}
@@ -7862,7 +7829,7 @@ r743RegisterStartup();
 (function(){
   "use strict";
   var PAGE_KEY="xidong-official-doc-detail";
-  var BUILD="20260722_tasun_v5_xidong_docs_r744_strict_scope_startup_data_restore_release";
+  var BUILD="20260722_tasun_v5_xidong_docs_r745_smooth_scroll_no_flicker_release";
   var applying=false,retryCount=0,observerInstalled=false,wrapped=false,retryTimer=0,lastApplyAt=0;var MAX_RETRY=5,APPLY_COOLDOWN=260;window.__TASUN_R707_LAYOUT_RETRY_MAX__=MAX_RETRY;
   window.__TASUN_OFFICIAL_DOCS_R641_ZONE1_SEARCH_DELETE_RESTORE_FIX__=true;
   function q(sel,root){return (root||document).querySelector(sel);} 
@@ -8030,7 +7997,7 @@ r743RegisterStartup();
   "use strict";
   if(window.__TASUN_OFFICIAL_DOCS_R683_DETAIL_STATISTICS_BUTTON__) return;
   window.__TASUN_OFFICIAL_DOCS_R683_DETAIL_STATISTICS_BUTTON__=true;
-  var BUILD="20260722_tasun_v5_xidong_docs_r744_strict_scope_startup_data_restore_release", PAGE_KEY="xidong-official-doc-detail";
+  var BUILD="20260722_tasun_v5_xidong_docs_r745_smooth_scroll_no_flicker_release", PAGE_KEY="xidong-official-doc-detail";
   var BUTTON_ID="btnDetailGoStatistics", TARGET="汐東文件統計表.html", LABEL="汐東文件統計表";
   function q(sel,root){return (root||document).querySelector(sel);}
   function norm(v){return v===undefined||v===null?"":String(v).trim();}
@@ -8126,7 +8093,7 @@ r743RegisterStartup();
   "use strict";
   if(window.__TASUN_OFFICIAL_DOCS_R699_EXTENSION_STATUS_CURRENT_DOC_LINK_CORE__) return;
   window.__TASUN_OFFICIAL_DOCS_R699_EXTENSION_STATUS_CURRENT_DOC_LINK_CORE__=true;
-  const R699_BUILD="20260722_tasun_v5_xidong_docs_r744_strict_scope_startup_data_restore_release";
+  const R699_BUILD="20260722_tasun_v5_xidong_docs_r745_smooth_scroll_no_flicker_release";
   const LINK_FIELDS=["文號","收/發文附件","回覆文號\n(監造)","回覆文號 (監造)","展延實際提送文號","現行處理文號"];
   const EXT_LINK_FIELDS=["統包申請文號","監造回覆文號","統包實際再送文號"];
   function n(v){try{return normalizeText(v);}catch(_e){return v===undefined||v===null?"":String(v).trim();}}
