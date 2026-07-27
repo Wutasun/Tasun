@@ -1,3 +1,4 @@
+<!-- R772：依 R771 發布後桌機仍顯示 15 筆、手機仍顯示 14 筆之實機回報，重新由雲端傳輸契約、時間欄位、已知本機鏡像及去重決勝規則逐層檢查。根因一：R771 雖增加 Merge 後回讀驗證，但 cloudPostR508 仍固定使用舊 POST /api/tasun/read 與 POST /api/tasun/merge，且 json-bridge 帶入 x-tasun-* 自訂標頭；既有 Worker CORS 只保證 content-type／authorization，部分瀏覽器會在預檢階段阻擋自訂標頭，造成桌機保留本機第 15 筆而雲端實際仍只有 14 筆。根因二：現行 Worker 標準契約為 GET /api/read?key=... 與 POST /api/merge {key,pk:"uid",items:[...]},舊穩定 Worker 則為 POST /api/tasun/read／merge；單一路徑無法跨部署版本穩定同步。根因三：標準 Worker 回讀 updatedAt／createdAt 為 ISO 日期字串，舊程式以 Number(updatedAt) 比較會得到 NaN，使同一文號的新舊資料、tombstone、排序及回讀驗證在不同設備可能採用不同結果。根因四：開頁快速載入只取主儲存鍵，正式雲端上傳前未合併 4 個已知 localStorage／sessionStorage 鏡像，若第 15 筆仍位於舊鏡像便不會被送上雲端。R772 將雲端讀寫收斂為單一雙契約轉接器：優先使用標準 GET /api/read、POST /api/merge，並依序相容 /api/tasun/pull、/api/db/:resource、舊 /api/tasun/read 與兩種 legacy merge；所有請求只使用 Worker 允許的最小標頭及既有 Bearer／Cookie，不再送出會造成 CORS 預檢失敗的 x-tasun-* 標頭。正式同步前只讀取固定白名單的 4 個本機資料鍵並去重合併，不掃描其他儲存空間；所有主列、展延與階段 updatedAt 統一轉為毫秒，支援 number、數字字串與 ISO 字串；同 logicalKey、同時間、同 rev 時以 tombstone、uid 與穩定內容簽章決定唯一結果，資料 digest 同時包含內容，避免相同 metadata 但內容不同仍誤判同步成功。同步流程仍為下載→本機刷新→上傳→雲端回讀→逐 logicalKey／內容／updatedAt／rev／deleted／有效筆數驗證，最多 3 次、single-flight、AbortController、冷卻、防抖、錯誤警告且禁止無限輪詢。通過後桌機、手機、不同瀏覽器及不同版本頁面一律採雲端回讀資料重新排序並重編項次 1～N；R770 手機雙區、桌機固定七欄、UI、登入、權限、Excel、resourceKey／dbName／tableId 與資料欄位契約維持不變。 -->
 <!-- R771：依桌機顯示 15 筆、手機顯示 14 筆但兩端均誤顯示「已同步」之實機回報，深入修正跨設備資料權威、筆數與項次一致性。根因一：既有 authoritySync 在 Merge 後雖再次 Read，但未驗證雲端是否已真正包含本端全部 logicalKey；即使雲端仍為 14 筆，程式仍以 remote.concat(local) 保留桌機本端第 15 筆並直接標示已同步，手機只讀到雲端 14 筆，因此兩端同時顯示已同步卻筆數不同。R771 將同步流程收斂為「下載→本地與雲端去重合併→上傳→再次下載→逐 logicalKey／updatedAt／rev／deleted 驗證」單一權威；雲端回讀未包含所有合併資料時最多執行 3 次有界 Merge／Read，未通過不得顯示已同步，改明確顯示本端／雲端筆數。根因二：舊 dedupe 只依日期與 updatedAt 排序，同日期同時間資料會保留各設備不同的輸入順序，造成項次可能不一致；R771 新增單一 deterministic comparator，依日期、updatedAt、rev、文號、uid 固定排序，再統一重編有效資料項次 1～N。根因三：舊 R519 延遲狀態 finalizer 可讀取先前成功 marker，再把實際未完成的同步覆蓋成已同步；R771 規定「已同步」必須同時具備本次雲端回讀驗證 receipt、相同有效筆數與資料 digest，舊 marker 不得單獨放行。新增 pageshow／focus／online／visibility-visible 與同瀏覽器 storage 事件之單次 debounce 同步，具 15 秒冷卻、single-flight、AbortController、最大重試與錯誤警告，不使用 setInterval 或無限輪詢。同步成功後本機 localStorage、sessionStorage、雲端回讀資料、桌機、手機及不同版本頁面皆採相同資料集與項次；保留既有 R770 手機雙區、桌機固定七欄、UI、登入、權限、Excel、uid／rev／updatedAt／deleted、資料內容與刪除 tombstone 契約。 -->
 <!-- R770：依最新手機實機畫面回報，將 R769 手機前 7 欄雙區核心整合改為「前 4 欄主旨定位雙區」。左側第 1 區只包含項次、收／發文、文號、主旨；四欄表頭與資料共用同一 colgroup 並整體水平移動，正式移除 clone 上的 seqCell、fixedCol1～7、left 與 position 殘留，修復項次被舊 td.seqCell sticky 規則鎖住而不能水平移動。左區以資料最大可見字數及 Canvas 實測欄寬，前三欄總寬作為單一 subject anchor；滑至主旨時停止再向右超捲，使主旨穩定停在第 1 區左界，仍可向左滑回項次。第 2 區自第 5 欄起顯示全部起始文件及不限次數動態階段欄位，可獨立水平滑動並與第 1 區同步垂直滑動；右區以 overflow clip、較低層級及金色界線隱藏於第 1 區右側邊界下方。兩區群組表頭依來源欄位交集重建，欄位表頭垂直 sticky 並與資料同步水平移動、文字置中。手機儲存格縮小為一般欄上下 0.16cm、左右 0.07cm，日期／編號／文號欄四周 0.07cm；一般欄每行最多 10 字、主旨最多 15 字、表頭每 4 字換行且括號群組不拆。直／橫版依顯示寬度調整字級及主旨欄寬，桌機版前 7 欄、既有 UI、按鍵、登入、權限、uid／rev／updatedAt／deleted、去重、雲端同步及 Excel 契約不變。R769 runtime/style/self-heal 已由 R770 單一核心取代；僅於正式渲染、尺寸／方向變更及來源 DOM 異動後 debounce 重建，具 AbortController、冷卻、最大重試、錯誤警告與 6 秒有界回復，禁止 setInterval 與無限輪詢；納入 TasunSelfHealV5／R268 check / repair / verify。 -->
 <!-- R767：依 R766 實際畫面未縮小「日期／編號／文號」欄邊框距離之回報，深入檢查確認問題不在 padding 是否寫入，而在欄寬幾何仍由 R757 一般最小欄寬與 R765 前七欄三分之一比例分配強制放大。R766 僅替目標欄加入左右 0.1cm padding class，卻未讓該分類進入 r757ColumnPixelWidth 與 r765DistributeFixedWidths；表頭／資料雖具有 0.1cm computed padding，欄位仍被固定 width／min-width／max-width 撐寬，因此置中文字與左右邊框間仍留下大量空白。R767 將修正直接整合至原欄寬單一權威核心：凡正式表頭包含「日期」「編號」「文號」者，先以表頭每四字換行及資料每行最多十字規則，依實際字型 Canvas 量測最大顯示文字寬，再只加左右各 0.1cm 與邊框安全值形成內容貼合欄寬；表頭與整欄資料格同步以 inline important 固定左右各 0.1cm，避免舊 R513／R690／R706 CSS 權重覆蓋。桌機前七固定欄仍維持總寬為可視螢幕 1/3，但「文號」與「到期日期(監造)」等關鍵字欄先保留內容貼合寬度，剩餘寬度只分配給其他固定欄，不再把日期／文號欄按比例放大；其餘捲動區目標欄亦直接採內容貼合寬度。若極窄桌機不足以同時滿足一／三總寬與所有最小內容寬，才採單次受限比例縮放並標記 constrained，不建立輪詢。新增 TasunSelfHealV5／R268 check / repair / verify，驗證左右 padding、實際欄寬、內容量測寬、前七欄一／三總寬與無黑縫均由同一陣列一致控制；具冷卻、有限重試、AbortController、節流／防抖且禁止無限輪詢。R766 文字去空白、R765 固定七欄、R764 防閃、R763 表頭換行、uid／rev／updatedAt／deleted、去重、雲端同步、登入、權限、按鍵、Excel 與既有 UI 均維持不變。 -->
@@ -117,21 +118,21 @@
 <!-- R508: 修復三頁切換連結、雲端 fallback plain bridge、Read/Merge/再 Read 完成後才顯示已同步。 -->
 <!-- R507: empty-data fallback renders table header/body even before cloud rows; detail page restored from normalized three-page template. -->
 <!-- R506: formal page/page-entry sync + cloud-first local hydration; fixed local blank after R505 report; formal pages still require index login. -->
-<!-- TASUN_REBUILD_STAMP:20260727_tasun_v5_xidong_docs_r771_cross_device_count_sequence_cloud_roundtrip_release -->
+<!-- TASUN_REBUILD_STAMP:20260727_tasun_v5_xidong_docs_r772_dual_transport_timestamp_count_convergence_release -->
 <html lang="zh-Hant" class="tasun-auth-pending tasun-r764-table-layout-pending">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>捷運汐止東湖線工程收發文明細表 · Tasun</title>
-<meta name="tasun-build-stamp" content="20260727_tasun_v5_xidong_docs_r771_cross_device_count_sequence_cloud_roundtrip_release" />
-<meta name="tasun-rebuild-stamp" content="20260727_tasun_v5_xidong_docs_r771_cross_device_count_sequence_cloud_roundtrip_release" />
+<meta name="tasun-build-stamp" content="20260727_tasun_v5_xidong_docs_r772_dual_transport_timestamp_count_convergence_release" />
+<meta name="tasun-rebuild-stamp" content="20260727_tasun_v5_xidong_docs_r772_dual_transport_timestamp_count_convergence_release" />
 <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
 <link rel="icon" href="data:," />
 
 <script id="tasun-r710-page-config">
-(function(){"use strict";var C={"BUILD":"20260727_tasun_v5_xidong_docs_r771_cross_device_count_sequence_cloud_roundtrip_release","PAGE_FILE":"汐東收發文明細表.html","PAGE_KEY":"xidong-official-doc-detail","VERSION_URL":"tasun-version.json","RESOURCE_KEY":"official-documents","DB_NAME":"tasun_official_documents_idb_v1","TABLE_ID":"officialDocumentTable","PAGE_ALIASES":["汐東收發文明細表.html","xidong-official-doc-detail","official-doc-detail"],"PAGE_TITLE":"捷運汐止東湖線工程收發文明細表"};try{window.__TASUN_PAGE_CONFIG__=Object.freeze(C);}catch(_e){window.__TASUN_PAGE_CONFIG__=C;}Object.assign(window.__TASUN_GLOBALS__=window.__TASUN_GLOBALS__||{},C,{REBUILD_STAMP:C.BUILD});})();
+(function(){"use strict";var C={"BUILD":"20260727_tasun_v5_xidong_docs_r772_dual_transport_timestamp_count_convergence_release","PAGE_FILE":"汐東收發文明細表.html","PAGE_KEY":"xidong-official-doc-detail","VERSION_URL":"tasun-version.json","RESOURCE_KEY":"official-documents","DB_NAME":"tasun_official_documents_idb_v1","TABLE_ID":"officialDocumentTable","PAGE_ALIASES":["汐東收發文明細表.html","xidong-official-doc-detail","official-doc-detail"],"PAGE_TITLE":"捷運汐止東湖線工程收發文明細表"};try{window.__TASUN_PAGE_CONFIG__=Object.freeze(C);}catch(_e){window.__TASUN_PAGE_CONFIG__=C;}Object.assign(window.__TASUN_GLOBALS__=window.__TASUN_GLOBALS__||{},C,{REBUILD_STAMP:C.BUILD});})();
 </script>
 <script id="tasun-r710-page-entry-version-runtime-core">
 (function(){
@@ -1789,7 +1790,7 @@ window.__TASUN_R710_DESKTOP_SKIPS_MOBILE_OBSERVERS__=!!(window.matchMedia&&windo
   "use strict";
   if(window.__TASUN_OFFICIAL_DOCS_R689_MOBILE_HEADER_COMPACT_EDIT__) return;
   window.__TASUN_OFFICIAL_DOCS_R689_MOBILE_HEADER_COMPACT_EDIT__=true;
-  var BUILD="20260727_tasun_v5_xidong_docs_r771_cross_device_count_sequence_cloud_roundtrip_release";
+  var BUILD="20260727_tasun_v5_xidong_docs_r772_dual_transport_timestamp_count_convergence_release";
   var PAGE_KEY="xidong-official-doc-detail";
   function q(sel,root){return (root||document).querySelector(sel);} 
   function qa(sel,root){return Array.prototype.slice.call((root||document).querySelectorAll(sel));}
@@ -2139,7 +2140,7 @@ html.tasun-auth-blocked body>*:not(#tasunDirectLoginBlockerR710){visibility:hidd
   "use strict";
   if(window.__TASUN_R710_DIRECT_OPEN_LOGIN_RETURN_CORE__)return;
   window.__TASUN_R710_DIRECT_OPEN_LOGIN_RETURN_CORE__=true;window.__TASUN_REQUIRE_LOGIN__=true;window.__TASUN_DIRECT_PAGE__=true;window.__TASUN_CHILD_PAGE__=true;window.__TASUN_NO_INDEX_REDIRECT__=false;
-  var BUILD="20260727_tasun_v5_xidong_docs_r771_cross_device_count_sequence_cloud_roundtrip_release",PAGE_FILE="汐東收發文明細表.html",PAGE_KEY="xidong-official-doc-detail",PAGE_TITLE="捷運汐止東湖線工程收發文明細表";
+  var BUILD="20260727_tasun_v5_xidong_docs_r772_dual_transport_timestamp_count_convergence_release",PAGE_FILE="汐東收發文明細表.html",PAGE_KEY="xidong-official-doc-detail",PAGE_TITLE="捷運汐止東湖線工程收發文明細表";
   var TTL=12*60*60*1000,RETURN_TTL=10*60*1000,JUMP_TTL=30*60*1000,REDIRECT_LOCK_MS=20000,PENDING_DEADLINE_MS=4200;
   var SESSION_KEYS=["tasunCurrentUser_v1","tasunSessionBridge_v1","tasunSession_v1","tasunSessionLogin_v2","tasunSso_v2","tasunSso_v1","tasunAuthSession_v1","tasunCurrentUser_v2","tasunIndexUser_v1","tasunLoginUser_v1"];
   var TOKEN_KEYS=["tasunBearerToken_v1","tasunCloudToken_v1","tasunCloudToken","tasun_token","tasunToken","tasunWorkerToken","tasun_auth_token","tasun_session_token","authToken","access_token","token"];
@@ -2564,7 +2565,7 @@ html.tasun-r764-table-layout-ready #detailSection>.tableWrap{visibility:visible!
 /* R506: 依 R506 測試回報補強直接開啟/測試頁登入橋接、未授權不露出與雲端確認後才顯示已同步。 */
 (function(){
 "use strict";
-const BUILD="20260727_tasun_v5_xidong_docs_r771_cross_device_count_sequence_cloud_roundtrip_release";
+const BUILD="20260727_tasun_v5_xidong_docs_r772_dual_transport_timestamp_count_convergence_release";
 window.__TASUN_OFFICIAL_DOCS_R506_REPORT_FIX__="r506_report_r505_cloud_read_rows_local_hydration_fix";
 window.__TASUN_OFFICIAL_DOCS_R507_EMPTY_TABLE_VISIBLE__=true;
 window.__TASUN_OFFICIAL_DOCS_R508_CLOUD_CONFIRMED_SYNC_STATUS_FIX__=true;
@@ -2579,6 +2580,7 @@ window.__TASUN_OFFICIAL_DOCS_R514_REPLY_EXTENSION_HEADER_TECH_COLOR_FIX__=true;
 window.__TASUN_OFFICIAL_DOCS_R646_EXTENSION_ACTUAL_SUBMIT_COLUMNS_FIX__=true;
 window.__TASUN_OFFICIAL_DOCS_R515_SUPERVISOR_DAYS_HEADER_NEON_TEXT_FIX__=true;
 window.__TASUN_OFFICIAL_DOCS_R519_CLOUD_CONFIRMED_UI_STATUS_FIX__=true;
+window.__TASUN_OFFICIAL_DOCS_R772_DUAL_TRANSPORT_TIMESTAMP_COUNT_CONVERGENCE__=true;
 window.__TASUN_OFFICIAL_DOCS_R513_FIXED4_SCROLL_BACK_HIDE_SYNC_FIX__=true;
 window.__TASUN_OFFICIAL_DOCS_R601_DETAIL_EDIT_BUTTON_FIX__=true;
 window.__TASUN_OFFICIAL_DOCS_R622_DETAIL_DOCNO_MODIFY_FIX__=true;
@@ -2826,6 +2828,26 @@ function escapeHtml(s){return norm(s).replace(/&/g,"&amp;").replace(/</g,"&lt;")
 const R766_VISIBLE_TEXT_WHITESPACE_RE=/[\s\u00A0\u1680\u2000-\u200D\u2028\u2029\u202F\u205F\u2060\u3000\uFEFF]+/gu;
 function r766StripVisibleTextWhitespace(v){return String(v===undefined||v===null?"":v).replace(R766_VISIBLE_TEXT_WHITESPACE_RE,"").trim();}
 function normalizeText(v){return r766StripVisibleTextWhitespace(v);}
+/* R772：雲端可能回傳毫秒、數字字串或 ISO 日期；全頁只由此入口轉成可比較毫秒。 */
+function r772TimeMs(value,fallback=0){
+  if(typeof value==="number"&&Number.isFinite(value)&&value>0)return Math.trunc(value);
+  const s=norm(value);if(!s)return Number(fallback)||0;
+  if(/^\d+(?:\.\d+)?$/.test(s)){let n=Number(s);if(Number.isFinite(n)){if(n>0&&n<100000000000)n*=1000;return Math.trunc(n);}}
+  const parsed=Date.parse(s);return Number.isFinite(parsed)?parsed:(Number(fallback)||0);
+}
+function r772StableRowSignature(row){
+  const skip=new Set(["項次","pk","tableId","dbName","resourceKey"]),src=row&&typeof row==="object"?row:{};
+  const normalizeValue=(value,depth)=>{if(depth<=0)return "[depth]";if(value===null||value===undefined)return "";if(Array.isArray(value))return value.map(v=>normalizeValue(v,depth-1));if(typeof value==="object"){const out={};Object.keys(value).sort().forEach(k=>{if(!skip.has(k))out[k]=normalizeValue(value[k],depth-1);});return out;}return typeof value==="string"?normalizeText(value):value;};
+  try{return JSON.stringify(normalizeValue(src,7));}catch(_e){return String(src&&src.uid||"");}
+}
+function r772ChooseIncoming(oldRow,newRow){
+  if(!oldRow)return true;
+  const nt=r772TimeMs(newRow&&newRow.updatedAt,0),ot=r772TimeMs(oldRow&&oldRow.updatedAt,0);if(nt!==ot)return nt>ot;
+  const nr=Number(newRow&&newRow.rev||0),or=Number(oldRow&&oldRow.rev||0);if(nr!==or)return nr>or;
+  if(!!(newRow&&newRow.deleted)!==!!(oldRow&&oldRow.deleted))return !!(newRow&&newRow.deleted);
+  const nu=norm(newRow&&newRow.uid||newRow&&newRow.pk),ou=norm(oldRow&&oldRow.uid||oldRow&&oldRow.pk);if(nu!==ou)return nu.localeCompare(ou,"en",{numeric:true,sensitivity:"base"})>0;
+  return r772StableRowSignature(newRow).localeCompare(r772StableRowSignature(oldRow),"en",{numeric:true,sensitivity:"variant"})>0;
+}
 function migrateLegacyRowFields(row){
   const out={...(row||{})};
   Object.keys(LEGACY_FIELD_MAP).forEach(oldKey=>{
@@ -3314,12 +3336,12 @@ function r697OverallDocStatus(row,list,latest,latestStatus){
 function r696NormalizeExtensionRecord(raw,idx){const r={...(raw||{})};const aliases={
   "展延紀錄UID":["uid","extUid","id"],"展延次數":["seq","extensionNo"],"統包申請日期":["requestDate"],"統包申請文號":["requestDocNo"],"申請展延至":["requestedUntil"],"申請展延日數":["requestedDays"],"監造收件日期":["supervisorReceivedDate"],"監造審查狀態":["supervisorStatus","status"],"監造審查意見":["supervisorOpinion"],"監造回覆文號":["supervisorReplyDocNo"],"監造回覆日期":["supervisorReplyDate"],"前次監造回覆文號":["followupSourceReplyDocNo","sourceReplyDocNo","再展延來源回覆文號"],"前次監造回覆日期":["followupSourceReplyDate","sourceReplyDate"],"核定結果":["decisionResult"],"核准展延至":["approvedUntil"],"統包下次應送日":["contractorNextSubmitDate"],"統包實際再送日期":["actualSubmitDate"],"統包實際再送文號":["actualSubmitDocNo"],"備註":["note"]};
   Object.keys(aliases).forEach(k=>{if(!norm(r[k])){for(const a of aliases[k]){if(norm(r[a])){r[k]=r[a];break;}}}});
-  r["展延紀錄UID"]=norm(r["展延紀錄UID"])||uuid();r["展延次數"]=Number(r["展延次數"]||idx+1)||idx+1;r["監造審查天數"]=r696ReviewDays(r);r["是否逾期"]=r696OverdueText(r);r.deleted=!!r.deleted;r.updatedAt=Number(r.updatedAt||Date.now());r.rev=Number(r.rev||r.updatedAt||Date.now());if(r[R697_MAIN_FIELD_LINK_KEY])r697WriteMainFieldLink(r,r697ReadMainFieldLink(r));return r;
+  r["展延紀錄UID"]=norm(r["展延紀錄UID"])||uuid();r["展延次數"]=Number(r["展延次數"]||idx+1)||idx+1;r["監造審查天數"]=r696ReviewDays(r);r["是否逾期"]=r696OverdueText(r);r.deleted=!!r.deleted;r.updatedAt=r772TimeMs(r.updatedAt,Date.now());r.rev=Number(r.rev||r.updatedAt||Date.now());if(r[R697_MAIN_FIELD_LINK_KEY])r697WriteMainFieldLink(r,r697ReadMainFieldLink(r));return r;
 }
 function r696ExtensionHistory(row,mutate=true){let src=row&&row[R696_EXTENSION_HISTORY_KEY];if(typeof src==="string")src=safeJson(src,[]);if(!Array.isArray(src))src=Array.isArray(row&&row.extensionHistory)?row.extensionHistory:(Array.isArray(row&&row.extensions)?row.extensions:[]);const hadStoredHistory=Array.isArray(src)&&src.length>0;let list=src.map(r696NormalizeExtensionRecord);
   const hasLegacy=norm(row&&row["展延日期"]||"")||norm(row&&row["展延實際提送文號"]||"")||norm(row&&row["展延實際提送日"]||"")||norm(row&&row["展延提送狀態"]||"");
   if(!hadStoredHistory&&!list.some(r=>!r.deleted)&&hasLegacy){const main=r697MainRequestValues(row);list.push(r696NormalizeExtensionRecord({"展延次數":1,"統包申請日期":main.requestDate,"統包申請文號":main.requestDocNo,"申請展延至":main.requestedUntil,"統包下次應送日":main.requestedUntil,"統包實際再送文號":row["展延實際提送文號"]||"","統包實際再送日期":row["展延實際提送日"]||"","監造審查狀態":/已提送/.test(norm(row["展延提送狀態"]))?"已結案":"待審查",[R697_MAIN_FIELD_LINK_KEY]:{requestDate:true,requestDocNo:true,requestedUntil:true},"備註":"由舊版單次展延欄位自動轉入並連結主表"},0));}
-  list=list.map(r696NormalizeExtensionRecord).sort((a,b)=>Number(a["展延次數"]||0)-Number(b["展延次數"]||0)||Number(a.updatedAt||0)-Number(b.updatedAt||0));let seq=0;list.forEach(r=>{if(!r.deleted)r["展延次數"]=++seq;});r697LinkFirstExtensionFromMain(row,list.filter(r=>!r.deleted));if(mutate&&row)row[R696_EXTENSION_HISTORY_KEY]=list;return list;
+  list=list.map(r696NormalizeExtensionRecord).sort((a,b)=>Number(a["展延次數"]||0)-Number(b["展延次數"]||0)||r772TimeMs(a.updatedAt,0)-r772TimeMs(b.updatedAt,0));let seq=0;list.forEach(r=>{if(!r.deleted)r["展延次數"]=++seq;});r697LinkFirstExtensionFromMain(row,list.filter(r=>!r.deleted));if(mutate&&row)row[R696_EXTENSION_HISTORY_KEY]=list;return list;
 }
 function r696ActiveExtensions(row){return r696ExtensionHistory(row,true).filter(r=>!r.deleted);}
 function r696ApplyExtensionSummary(row){
@@ -3328,7 +3350,7 @@ function r696ApplyExtensionSummary(row){
   row["是否展延"]=manualFlag||(hasExtension?"是":"否");row["展延次數"]=hasHistory?String(list.length)+"次":"0次";row["現行處理文號"]=hasExtension?currentDoc:"";row["現行處理文號__url"]=hasExtension?currentUrl:"";row["現行處理文號_url"]=hasExtension?currentUrl:"";row["現行處理文號URL"]=hasExtension?currentUrl:"";row["現行處理期限"]=hasExtension?currentDeadline:"";row["最新展延狀態"]=hasHistory?status:"";row["統包下次應送日"]=latest?next:"";row["距今日數\n(展延)"]=latest?r696DistanceText(latest):"";row["展延管理"]=hasExtension?(hasHistory?"歷程（"+list.length+"）":"新增展延"):"";row["文號整體最新狀況"]=r697OverallDocStatus(row,list,latest,status);
   row["展延日期"]=latest?norm(latest["申請展延至"]):"";row["展延距今日\n天數"]=row["距今日數\n(展延)"];row["展延實際提送文號"]=latest?norm(latest["統包實際再送文號"]):"";row["展延實際提送日"]=latest?norm(latest["統包實際再送日期"]):"";row["展延提送狀態"]=latest?(norm(latest["統包實際再送日期"]||latest["統包實際再送文號"])?"已提送":"未提送"):"";return row;
 }
-function ensureRow(row){row=normalizeRowText(row||{}); r696ExtensionHistory(row,true); const now=Date.now(); if(!row.uid) row.uid=uuid(); row.pk=row.uid; row.tableId=TABLE_ID; row.dbName=DB_NAME; row.resourceKey=RESOURCE_KEY; if(!row.updatedAt) row.updatedAt=now; if(!row.rev) row.rev=Number(row.updatedAt)||now; row.deleted=!!row.deleted; COLUMNS.forEach(k=>{if(row[k]===undefined||row[k]===null) row[k]="";}); return computeRow(row);}
+function ensureRow(row){row=normalizeRowText(row||{}); r696ExtensionHistory(row,true); const now=Date.now(); if(!row.uid) row.uid=uuid(); row.pk=row.uid; row.tableId=TABLE_ID; row.dbName=DB_NAME; row.resourceKey=RESOURCE_KEY; row.updatedAt=r772TimeMs(row.updatedAt,now); if(row.createdAt)row.createdAt=r772TimeMs(row.createdAt,row.updatedAt); row.rev=Number(row.rev||row.updatedAt||now);if(!Number.isFinite(row.rev))row.rev=row.updatedAt; row.deleted=!!row.deleted; COLUMNS.forEach(k=>{if(row[k]===undefined||row[k]===null) row[k]="";}); return computeRow(row);}
 function dateNum(s){s=norm(s); if(!s) return 0; const t=Date.parse(s+"T00:00:00"); return isNaN(t)?0:t;}
 function diffDays(a,b){const A=dateNum(a),B=dateNum(b); if(!A||!B) return ""; return Math.ceil((A-B)/86400000);}
 function parseDayCountR595(v){const st=normalizeText(v); if(!st) return NaN; const m=st.match(/-?\d+/); return m?Number(m[0]):NaN;}
@@ -3537,24 +3559,22 @@ function verifyR661DetailEditStatusExtensionConsistency(){
 function r771CompareRowsDeterministic(a,b){
   const da=norm(a&&a["來文/發文日期"]||a&&a["收文日期"]),db=norm(b&&b["來文/發文日期"]||b&&b["收文日期"]);
   if(da!==db)return db.localeCompare(da);
-  const ua=Number(a&&a.updatedAt||0),ub=Number(b&&b.updatedAt||0);if(ua!==ub)return ub-ua;
+  const ua=r772TimeMs(a&&a.updatedAt,0),ub=r772TimeMs(b&&b.updatedAt,0);if(ua!==ub)return ub-ua;
   const ra=Number(a&&a.rev||0),rb=Number(b&&b.rev||0);if(ra!==rb)return rb-ra;
   const na=normalizeText(a&&a["文號"]||""),nb=normalizeText(b&&b["文號"]||"");
   const docOrder=na.localeCompare(nb,"zh-Hant",{numeric:true,sensitivity:"base"});if(docOrder)return docOrder;
-  return norm(a&&a.uid||a&&a.pk).localeCompare(norm(b&&b.uid||b&&b.pk),"en",{numeric:true,sensitivity:"base"});
+  const uidOrder=norm(a&&a.uid||a&&a.pk).localeCompare(norm(b&&b.uid||b&&b.pk),"en",{numeric:true,sensitivity:"base"});if(uidOrder)return uidOrder;
+  return r772StableRowSignature(a).localeCompare(r772StableRowSignature(b),"en",{numeric:true,sensitivity:"variant"});
 }
 function logicalKey(row){
-  // R618：本頁重複判斷唯一正式主鍵為「文號」欄；文號空白時才 fallback uid，避免跨欄位誤判重複。
+  // R618/R772：正式主鍵仍為文號；空白才 fallback uid，並由穩定決勝規則消除同版次輸入順序差異。
   const doc=normalizeText(row&&row["文號"]);
   if(doc) return "doc::"+doc.toLowerCase();
-  return "uid::"+norm(row&&row.uid);
+  return "uid::"+norm(row&&row.uid||row&&row.pk);
 }
 function dedupe(list){
   const map=new Map();
-  (Array.isArray(list)?list:[]).forEach(row=>{
-    const r=ensureRow(row),key=logicalKey(r),old=map.get(key),ts=Number(r.updatedAt||0),rev=Number(r.rev||0);
-    if(!old||ts>Number(old.updatedAt||0)||(ts===Number(old.updatedAt||0)&&rev>=Number(old.rev||0)))map.set(key,r);
-  });
+  (Array.isArray(list)?list:[]).forEach(row=>{const r=ensureRow(row),key=logicalKey(r),old=map.get(key);if(r772ChooseIncoming(old,r))map.set(key,r);});
   let seq=0;
   return Array.from(map.values()).sort(r771CompareRowsDeterministic).map(r=>{if(!r.deleted)r["項次"]=String(++seq);return r;});
 }
@@ -3712,8 +3732,8 @@ async function r711NormalizeRowsBudgeted(input){
   while(index<list.length){
     const started=r711Now();let count=0;
     while(index<list.length&&count<18&&(r711Now()-started)<8){
-      const row=ensureRow(list[index++]);const key=logicalKey(row),oldRow=map.get(key),ts=Number(row.updatedAt||0),rev=Number(row.rev||0);
-      if(!oldRow||ts>Number(oldRow.updatedAt||0)||(ts===Number(oldRow.updatedAt||0)&&rev>=Number(oldRow.rev||0)))map.set(key,row);
+      const row=ensureRow(list[index++]);const key=logicalKey(row),oldRow=map.get(key);
+      if(r772ChooseIncoming(oldRow,row))map.set(key,row);
       count++;
     }
     if(index<list.length){yields++;setStatus("整理本機資料 "+index+"/"+list.length);await r711Yield(0);}
@@ -3771,58 +3791,77 @@ function cloudPayloadR508(extra={}){
     ...extra
   };
 }
-async function cloudPostR508(endpoint,payload){
-  const url=getApiBase()+endpoint;
-  const body=JSON.stringify(cloudPayloadR508(payload||{}));
-  const tries=[
-    {name:"json-bridge",credentials:"include",headers:authHeaders({"Cache-Control":"no-cache","Pragma":"no-cache"}),body:body},
-    {name:"plain-bridge",credentials:"include",headers:simpleAuthHeaders(),body:body},
-    {name:"plain-bridge-no-credentials",credentials:"omit",headers:simpleAuthHeaders(),body:body}
-  ];
+async function r772FetchJson(method,path,payload,attemptName){
+  const url=getApiBase()+path,token=getBearer(),headers={"accept":"application/json"};
+  if(token)headers.Authorization="Bearer "+token;
+  const opts={method,credentials:"include",cache:"no-store",headers};
+  if(method!=="GET"&&method!=="HEAD"){headers["content-type"]="application/json;charset=utf-8";opts.body=JSON.stringify(payload||{});}
+  const res=await fetchTimeoutR508(url,opts,11000),data=await readResponseJson(res);
+  if(!res.ok||(data&&data.ok===false)){const err=new Error((data&&data.error?String(data.error)+":":"")+path+":"+res.status+":"+attemptName);err.status=res.status;throw err;}
+  return {data,rows:parseCloudRows(data),attempt:attemptName,status:res.status};
+}
+async function r772TryTransports(specs){
   let lastErr=null;
-  for(const tr of tries){
-    try{
-      const res=await fetchTimeoutR508(url,{method:"POST",credentials:tr.credentials,cache:"no-store",headers:tr.headers,body:tr.body},9000);
-      const data=await readResponseJson(res);
-      if(res.ok && !(data&&data.ok===false)){
-        return {data:data,rows:parseCloudRows(data),attempt:tr.name,status:res.status};
-      }
-      lastErr=new Error(endpoint+":"+res.status+":"+tr.name);
-      if(res.status===401||res.status===403) throw lastErr;
-    }catch(e){
-      lastErr=e;
-      if(/401|403/.test(String(e&&e.message||e))) break;
-    }
-  }
-  throw lastErr||new Error(endpoint+":failed");
+  for(const spec of specs){try{return await r772FetchJson(spec.method,spec.path,spec.body,spec.name);}catch(e){lastErr=e;window.__TASUN_OFFICIAL_DOCS_R772_LAST_TRANSPORT_ERROR__=String(e&&e.message||e);}}
+  throw lastErr||new Error("R772_CLOUD_TRANSPORT_FAILED");
+}
+function r772BridgeBody(extra){return cloudPayloadR508(extra||{});}
+async function r772ReadResource(resourceKey,extra={}){
+  const key=normalizeText(resourceKey||RESOURCE_KEY),encoded=encodeURIComponent(key),rt=Date.now();
+  const bridge=r772BridgeBody({...extra,resourceKey:key,key,pk:"uid",sessionBridge:"1"});
+  return r772TryTransports([
+    {name:"r772-standard-read",method:"GET",path:"/api/read?key="+encoded+"&since=0&_rt="+rt},
+    {name:"r772-legacy-pull",method:"GET",path:"/api/tasun/pull?key="+encoded+"&since=0&_rt="+rt},
+    {name:"r772-legacy-db-read",method:"GET",path:"/api/db/"+encoded+"?since=0&_rt="+rt},
+    {name:"r772-stable-v4-read",method:"POST",path:"/api/tasun/read",body:bridge}
+  ]);
+}
+function r772PayloadRows(payload){
+  const p=payload&&typeof payload==="object"?payload:{};
+  const nested=p.payload&&typeof p.payload==="object"?p.payload:{};
+  const candidate=[p.items,p.rows,p.db,nested.items,nested.rows,nested.db].find(Array.isArray);
+  return dedupe(candidate||[]);
+}
+async function r772MergeResource(resourceKey,payloadRows,extra={}){
+  const key=normalizeText(resourceKey||RESOURCE_KEY),encoded=encodeURIComponent(key),items=dedupe(payloadRows||[]),base=r772BridgeBody({...extra,resourceKey:key,key,pk:"uid",sessionBridge:"1"});
+  return r772TryTransports([
+    {name:"r772-standard-merge",method:"POST",path:"/api/merge",body:{...base,key,pk:"uid",items,rows:items,db:items}},
+    {name:"r772-legacy-query-merge",method:"POST",path:"/api/tasun/merge?key="+encoded,body:{...base,key,pk:"uid",items,rows:items,db:items}},
+    {name:"r772-legacy-db-merge",method:"POST",path:"/api/db/"+encoded+"/merge",body:{...base,key,pk:"uid",items,rows:items,db:items}},
+    {name:"r772-stable-v4-merge",method:"POST",path:"/api/tasun/merge",body:{...base,resourceKey:key,payload:{db:items,rows:items,items}}}
+  ]);
+}
+async function cloudPostR508(endpoint,payload){
+  const p=payload&&typeof payload==="object"?payload:{};
+  if(endpoint==="/api/tasun/read")return r772ReadResource(p.resourceKey||p.key||RESOURCE_KEY,p);
+  if(endpoint==="/api/tasun/merge")return r772MergeResource(p.resourceKey||p.key||RESOURCE_KEY,r772PayloadRows(p),p);
+  return r772TryTransports([{name:"r772-generic-post",method:"POST",path:endpoint,body:r772BridgeBody(p)}]);
 }
 async function cloudRead(){
-  const out=await cloudPostR508("/api/tasun/read",{resourceKey:RESOURCE_KEY,pageKey:PAGE_KEY,pageFile:PAGE_FILE,dbName:DB_NAME,tableId:TABLE_ID,sessionBridge:"1"});
-  window.__TASUN_OFFICIAL_DOCS_LAST_CLOUD_READ_ATTEMPT_R508__=out.attempt;
-  window.__TASUN_OFFICIAL_DOCS_LAST_CLOUD_READ_STATUS_R508__=out.status;
+  const out=await r772ReadResource(RESOURCE_KEY,{pageKey:PAGE_KEY,pageFile:PAGE_FILE,dbName:DB_NAME,tableId:TABLE_ID});
+  window.__TASUN_OFFICIAL_DOCS_LAST_CLOUD_READ_ATTEMPT_R508__=out.attempt;window.__TASUN_OFFICIAL_DOCS_LAST_CLOUD_READ_STATUS_R508__=out.status;window.__TASUN_OFFICIAL_DOCS_R772_READ_TRANSPORT__=out.attempt;
   return out.rows;
 }
 async function cloudMerge(list){
-  const payloadRows=dedupe(list);
-  const out=await cloudPostR508("/api/tasun/merge",{resourceKey:RESOURCE_KEY,pageKey:PAGE_KEY,pageFile:PAGE_FILE,dbName:DB_NAME,tableId:TABLE_ID,sessionBridge:"1",payload:{db:payloadRows,rows:payloadRows}});
-  window.__TASUN_OFFICIAL_DOCS_LAST_CLOUD_MERGE_ATTEMPT_R508__=out.attempt;
-  window.__TASUN_OFFICIAL_DOCS_LAST_CLOUD_MERGE_STATUS_R508__=out.status;
+  const payloadRows=dedupe(list),out=await r772MergeResource(RESOURCE_KEY,payloadRows,{pageKey:PAGE_KEY,pageFile:PAGE_FILE,dbName:DB_NAME,tableId:TABLE_ID});
+  window.__TASUN_OFFICIAL_DOCS_LAST_CLOUD_MERGE_ATTEMPT_R508__=out.attempt;window.__TASUN_OFFICIAL_DOCS_LAST_CLOUD_MERGE_STATUS_R508__=out.status;window.__TASUN_OFFICIAL_DOCS_R772_MERGE_TRANSPORT__=out.attempt;
   return out.rows&&out.rows.length?out.rows:payloadRows;
 }
 
-const R771_SYNC_RECEIPT_KEY="tasun_official_documents_roundtrip_receipt_r771_v1";
+const R772_SYNC_RECEIPT_KEY="tasun_official_documents_roundtrip_receipt_r772_v1";
 const R771_MAX_ROUNDTRIP_ATTEMPTS=3;
 let r771LifecycleBound=false,r771LifecycleTimer=0,r771LifecycleLastAt=0,r771BroadcastChannel=null;
 function r771Delay(ms){return new Promise(resolve=>setTimeout(resolve,Math.max(0,Number(ms)||0)));}
 function r771ActiveCount(list){return (Array.isArray(list)?list:[]).filter(r=>r&&!r.deleted).length;}
 function r771DatasetDigest(list){
-  const parts=dedupe(Array.isArray(list)?list:[]).map(r=>[logicalKey(r),r.deleted?"1":"0",Number(r.updatedAt||0),Number(r.rev||0),norm(r.uid||r.pk)].join("~")).sort();
+  const parts=dedupe(Array.isArray(list)?list:[]).map(r=>[logicalKey(r),r.deleted?"1":"0",r772TimeMs(r.updatedAt,0),Number(r.rev||0),norm(r.uid||r.pk),r772StableRowSignature(r)].join("~")).sort();
   let h=2166136261;const text=parts.join("||");for(let i=0;i<text.length;i++){h^=text.charCodeAt(i);h=Math.imul(h,16777619);}return (h>>>0).toString(16).padStart(8,"0")+":"+parts.length;
 }
 function r771RecordAtLeast(actual,expected){
   if(!actual||!expected)return false;
-  const au=Number(actual.updatedAt||0),eu=Number(expected.updatedAt||0),ar=Number(actual.rev||0),er=Number(expected.rev||0);
-  if(au>eu)return true;if(au<eu)return false;if(ar>er)return true;if(ar<er)return false;return !!actual.deleted===!!expected.deleted;
+  const au=r772TimeMs(actual.updatedAt,0),eu=r772TimeMs(expected.updatedAt,0),ar=Number(actual.rev||0),er=Number(expected.rev||0);
+  if(au>eu)return true;if(au<eu)return false;if(ar>er)return true;if(ar<er)return false;
+  return !!actual.deleted===!!expected.deleted&&r772StableRowSignature(actual)===r772StableRowSignature(expected);
 }
 function r771VerifyRemoteDataset(expected,remote){
   const exp=dedupe(Array.isArray(expected)?expected:[]),got=dedupe(Array.isArray(remote)?remote:[]),em=new Map(exp.map(r=>[logicalKey(r),r])),gm=new Map(got.map(r=>[logicalKey(r),r]));
@@ -3840,19 +3879,24 @@ function r771SetRoundTripState(next){
   window.__TASUN_OFFICIAL_DOCS_R771_REMOTE_ACTIVE_ROWS__=state.remoteActive;
   if(state.verified){
     const receipt={...state,pageFile:PAGE_FILE,pageKey:PAGE_KEY,resourceKey:RESOURCE_KEY,dbName:DB_NAME,tableId:TABLE_ID};
-    const text=JSON.stringify(receipt);try{localStorage.setItem(R771_SYNC_RECEIPT_KEY,text);}catch(_e){}try{sessionStorage.setItem(R771_SYNC_RECEIPT_KEY,text);}catch(_e){}
+    const text=JSON.stringify(receipt);try{localStorage.setItem(R772_SYNC_RECEIPT_KEY,text);}catch(_e){}try{sessionStorage.setItem(R772_SYNC_RECEIPT_KEY,text);}catch(_e){}
     try{if(!r771BroadcastChannel&&typeof BroadcastChannel!=="undefined")r771BroadcastChannel=new BroadcastChannel("tasun-official-documents-r771");r771BroadcastChannel&&r771BroadcastChannel.postMessage({type:"verified",receipt});}catch(_e){}
   }
   return state;
 }
 function r771ClearFalseConfirmedMarkers(){
   cloudSyncConfirmed=false;window.__TASUN_OFFICIAL_DOCS_CLOUD_CONFIRMED_R506__=false;window.__TASUN_OFFICIAL_DOCS_CLOUD_CONFIRMED_R508__=false;window.__TASUN_OFFICIAL_DOCS_CLOUD_CONFIRMED_R519__=false;
-  try{sessionStorage.removeItem(r519CloudConfirmStorageKey());localStorage.removeItem(r519CloudConfirmStorageKey());sessionStorage.removeItem(R771_SYNC_RECEIPT_KEY);localStorage.removeItem(R771_SYNC_RECEIPT_KEY);}catch(_e){}
+  try{sessionStorage.removeItem(r519CloudConfirmStorageKey());localStorage.removeItem(r519CloudConfirmStorageKey());sessionStorage.removeItem(R772_SYNC_RECEIPT_KEY);localStorage.removeItem(R772_SYNC_RECEIPT_KEY);}catch(_e){}
+}
+function r772CollectKnownLocalRows(){
+  const merged=[],seen=new Set();
+  for(const store of [localStorage,sessionStorage])for(const key of LOCAL_MIRROR_KEYS){let raw="";try{raw=store.getItem(key)||"";}catch(_e){}if(!raw)continue;const fp=r707RawFingerprint(raw);if(seen.has(fp))continue;seen.add(fp);const arr=parseCloudRows(safeJson(raw,null));if(Array.isArray(arr)&&arr.length)merged.push(...arr);}
+  const out=dedupe(merged);window.__TASUN_OFFICIAL_DOCS_R772_KNOWN_LOCAL_UNION__={keys:LOCAL_MIRROR_KEYS.slice(),payloads:seen.size,rows:out.length,active:r771ActiveCount(out),at:Date.now()};return out;
 }
 async function authoritySyncCoreR710(reason){
   const why=String(reason||"open");r771LifecycleLastAt=Date.now();setStatus("同步中");r771ClearFalseConfirmedMarkers();r771SetRoundTripState({verified:false,pending:true,reason:why,message:"同步處理中"});
   try{
-    let local=dedupe(Array.isArray(rows)?rows:[]),remote=dedupe(await cloudRead()),expected=dedupe(remote.concat(local));
+    let local=dedupe((Array.isArray(rows)?rows:[]).concat(r772CollectKnownLocalRows())),remote=dedupe(await cloudRead()),expected=dedupe(remote.concat(local));
     rows=expected;r766NormalizeAllLoadedRows("cloud-download",true);expected=dedupe(rows);rows=expected;saveLocal(false);renderAll();
     let verification=r771VerifyRemoteDataset(expected,remote),attempts=0;
     if(canWrite()){
@@ -3905,14 +3949,19 @@ function r771InstallLifecycleSync(){
 function r771RegisterSelfHeal(){
   try{const core=window.TasunSelfHealV5||window.__TASUN_SELF_HEAL_CORE__;if(!core||typeof core.register!=="function"||window.__TASUN_OFFICIAL_DOCS_R771_SELFHEAL__)return true;window.__TASUN_OFFICIAL_DOCS_R771_SELFHEAL__=true;const add=(name,check,repair)=>core.register(PAGE_KEY+":"+name,{check,repair:repair||(()=>true),verify:check,coolDownMs:9000,maxRetry:2,abortController:typeof AbortController!=="undefined"?new AbortController():null});
     add("officialDocsR771CloudRoundTripVerifiedBeforeSynced",()=>normalizeText((document.getElementById("uiSync")||{}).textContent)!=="已同步"||!!(window.__TASUN_R771_DATASET_ROUNDTRIP_STATE__&&window.__TASUN_R771_DATASET_ROUNDTRIP_STATE__.verified),()=>{r771ScheduleLifecycleSync("self-heal-roundtrip",160);return true;});
-    add("officialDocsR771MultiDeviceCountDigestReceipt",()=>{const state=window.__TASUN_R771_DATASET_ROUNDTRIP_STATE__;if(!state||!state.verified)return true;let receipt=null;try{receipt=JSON.parse(localStorage.getItem(R771_SYNC_RECEIPT_KEY)||"null");}catch(_e){}return !!(receipt&&receipt.verified&&Number(receipt.localActive)===r771ActiveCount(rows)&&Number(receipt.remoteActive)===r771ActiveCount(rows)&&receipt.digest===r771DatasetDigest(rows));},()=>{r771ScheduleLifecycleSync("self-heal-receipt",160);return true;});
+    add("officialDocsR771MultiDeviceCountDigestReceipt",()=>{const state=window.__TASUN_R771_DATASET_ROUNDTRIP_STATE__;if(!state||!state.verified)return true;let receipt=null;try{receipt=JSON.parse(localStorage.getItem(R772_SYNC_RECEIPT_KEY)||"null");}catch(_e){}return !!(receipt&&receipt.verified&&Number(receipt.localActive)===r771ActiveCount(rows)&&Number(receipt.remoteActive)===r771ActiveCount(rows)&&receipt.digest===r771DatasetDigest(rows));},()=>{r771ScheduleLifecycleSync("self-heal-receipt",160);return true;});
     add("officialDocsR771DeterministicSequenceAcrossDevices",()=>rows.filter(r=>r&&!r.deleted).every((r,i)=>String(r["項次"])===String(i+1)),()=>{rows=dedupe(rows);persistRowsToLocal(rows,false,true);renderAll();return true;});
     add("officialDocsR771LifecycleSyncBounded",()=>!!window.__TASUN_OFFICIAL_DOCS_R771_LIFECYCLE_SYNC_BOUND__&&!String(r771ScheduleLifecycleSync).includes("setInterval"),r771InstallLifecycleSync);
     add("officialDocsR771NoFalseSyncedFromOldMarker",()=>String(finalizeR519CloudConfirmedStatus).includes("roundTrip.verified!==true")&&String(publishR519CloudConfirmed).includes("roundTrip.verified!==true"));
+    add("officialDocsR772DualCloudTransport",()=>typeof r772ReadResource==="function"&&typeof r772MergeResource==="function"&&String(r772ReadResource).includes("/api/read?key=")&&String(r772ReadResource).includes("/api/tasun/read")&&String(r772MergeResource).includes("/api/merge")&&!String(r772FetchJson).includes("x-tasun-"),()=>{r771ScheduleLifecycleSync("r772-transport-repair",160);return true;});
+    add("officialDocsR772IsoTimestampNormalized",()=>r772TimeMs("2026-07-27T12:34:56.000Z",0)>0&&String(ensureRow).includes("r772TimeMs(row.updatedAt"));
+    add("officialDocsR772KnownLocalMirrorUnionBeforeUpload",()=>String(authoritySyncCoreR710).includes("r772CollectKnownLocalRows")&&LOCAL_MIRROR_KEYS.length===4);
+    add("officialDocsR772ContentDigestParity",()=>String(r771DatasetDigest).includes("r772StableRowSignature")&&String(r771RecordAtLeast).includes("r772StableRowSignature"));
     return true;
   }catch(e){console.warn("[Tasun R771] self-heal register failed",e);return false;}
 }
-window.__TASUN_OFFICIAL_DOCS_R771_SYNC_RULE__=Object.freeze({flow:"download-dedupe-merge-redownload-verify",maxRoundTripAttempts:R771_MAX_ROUNDTRIP_ATTEMPTS,verification:["logicalKey","updatedAt","rev","deleted","activeCount"],deterministicSequence:["date","updatedAt","rev","documentNumber","uid"],lifecycleTriggers:["pageshow","focus","online","visibility-visible","storage","BroadcastChannel"],coolDownMs:15000,noInfinitePolling:true});
+window.__TASUN_OFFICIAL_DOCS_R771_SYNC_RULE__=Object.freeze({flow:"download-dedupe-merge-redownload-verify",maxRoundTripAttempts:R771_MAX_ROUNDTRIP_ATTEMPTS,verification:["logicalKey","content","updatedAt","rev","deleted","activeCount"],deterministicSequence:["date","updatedAt","rev","documentNumber","uid","stableContent"],lifecycleTriggers:["pageshow","focus","online","visibility-visible","storage","BroadcastChannel"],coolDownMs:15000,noInfinitePolling:true});
+window.__TASUN_OFFICIAL_DOCS_R772_SYNC_RULE__=Object.freeze({transport:["GET /api/read","POST /api/merge","GET /api/tasun/pull","GET /api/db/:resource","POST /api/tasun/read","POST /api/tasun/merge"],headers:["accept","content-type","authorization"],timestampFormats:["milliseconds","numeric-string","ISO-8601"],knownLocalKeys:LOCAL_MIRROR_KEYS.slice(),cloudRoundTripRequired:true,maxRoundTripAttempts:R771_MAX_ROUNDTRIP_ATTEMPTS,noInfinitePolling:true});
 
 
 function setEditPickMode(on){
@@ -6918,7 +6967,7 @@ function r706CanonicalBase(row){row=row||{};const map={
  ["文號","文件編號\n(來文)","文件名稱\n(來文)"].forEach(field=>{if(!r706Url(row,field)){const legacy=field==="文號"?r706LegacyValue(row,["文號__url","收/發文附件__url","收/發文附件_url","收/發文附件URL"]):r706LegacyValue(row,r706UrlKeys(field));if(legacy)r706SetUrl(row,field,legacy);}});
  return row;
 }
-function r706NormalizeStage(raw,index,parent){const s={...(raw||{})};s["階段UID"]=r706Text(s["階段UID"]||s.uid||s.stageUid)||uuid();s["階段類型"]=r706Text(s["階段類型"]||s.type)||(index===0?R706_STAGE_START:R706_STAGE_SUPERVISOR);s["階段序號"]=Number(s["階段序號"]||s.seq||index+1)||index+1;s["來源文號"]=r706Text(s["來源文號"]||s.sourceDocNo||"");s.deleted=!!s.deleted;s.updatedAt=Number(s.updatedAt||Date.now());s.rev=Number(s.rev||s.updatedAt||Date.now());
+function r706NormalizeStage(raw,index,parent){const s={...(raw||{})};s["階段UID"]=r706Text(s["階段UID"]||s.uid||s.stageUid)||uuid();s["階段類型"]=r706Text(s["階段類型"]||s.type)||(index===0?R706_STAGE_START:R706_STAGE_SUPERVISOR);s["階段序號"]=Number(s["階段序號"]||s.seq||index+1)||index+1;s["來源文號"]=r706Text(s["來源文號"]||s.sourceDocNo||"");s.deleted=!!s.deleted;s.updatedAt=r772TimeMs(s.updatedAt,Date.now());s.rev=Number(s.rev||s.updatedAt||Date.now());
  const fields=s["階段類型"]===R706_STAGE_START?R706_BASE_FIELDS:s["階段類型"]===R706_STAGE_SUPERVISOR?R706_SUPERVISOR_FIELDS:R706_CONTRACTOR_FIELDS;fields.forEach(k=>{if(s[k]===undefined||s[k]===null)s[k]="";else if(typeof s[k]==="string")s[k]=normalizeText(s[k]);});
  if(s["階段類型"]===R706_STAGE_START&&parent){s["文號"]=r706Text(parent["文號"]);s["主旨"]=r706Text(parent["主旨"]);}
  return s;
@@ -6927,11 +6976,11 @@ function r706MigrateLegacyStages(row,list){if(list.some(s=>!s.deleted&&s["階段
  const replyNo=r706LegacyValue(row,["回覆文號\n(監造)","回覆文號 (監造)","回覆文號(監造)"]);if(replyNo){const sup=r706NormalizeStage({"階段類型":R706_STAGE_SUPERVISOR,"來源文號":prev,"文號":replyNo,"主旨":row["主旨"],"回覆日期":r706LegacyValue(row,["回覆日期\n(監造)","回覆日期 (監造)"]),"起始文件\n處理情形":r706LegacyValue(row,["處理情形"])||"已回覆","是否需要\n回覆來文":r706Yes(row["是否展延"])?"是":"否","文號__url":r706LegacyValue(row,["回覆文號\n(監造)__url","回覆文號 (監造)__url","回覆文號URL"])},seq++,row);list.push(sup);prev=replyNo;}
  let ext=row["展延歷程"];if(typeof ext==="string")try{ext=JSON.parse(ext);}catch(_e){ext=[];}if(Array.isArray(ext))ext.filter(x=>x&&!x.deleted).forEach(rec=>{const cno=r706Text(rec["統包申請文號"]||rec["統包實際再送文號"]),sno=r706Text(rec["監造回覆文號"]);if(cno){list.push(r706NormalizeStage({"階段類型":R706_STAGE_CONTRACTOR,"來源文號":prev,"文號":cno,"主旨":row["主旨"],"回覆日期\n(統包)":rec["統包申請日期"]||rec["統包實際再送日期"]||"","收文日期(監造)":rec["監造收件日期"]||"","文號__url":rec["統包申請文號__url"]||rec["統包實際再送文號__url"]||""},seq++,row));prev=cno;}if(sno){list.push(r706NormalizeStage({"階段類型":R706_STAGE_SUPERVISOR,"來源文號":prev,"文號":sno,"主旨":row["主旨"],"回覆日期":rec["監造回覆日期"]||"","起始文件\n處理情形":rec["監造審查狀態"]||"已回覆","是否需要\n回覆來文":r706Text(rec["統包實際再送文號"])?"是":"否","文號__url":rec["監造回覆文號__url"]||""},seq++,row));prev=sno;}});return list;}
 const r711StageHistoryCache=new WeakMap();
-function r711StageCacheSignature(row){const raw=row&&row[R706_STAGE_HISTORY_KEY];return{raw:raw,updatedAt:Number(row&&row.updatedAt||0),rev:Number(row&&row.rev||0),docNo:r706Text(row&&row["文號"]),subject:r706Text(row&&row["主旨"]),needReply:r706Text(row&&row["是否需回覆"])};}
+function r711StageCacheSignature(row){const raw=row&&row[R706_STAGE_HISTORY_KEY];return{raw:raw,updatedAt:r772TimeMs(row&&row.updatedAt,0),rev:Number(row&&row.rev||0),docNo:r706Text(row&&row["文號"]),subject:r706Text(row&&row["主旨"]),needReply:r706Text(row&&row["是否需回覆"])};}
 function r711StageCacheMatches(a,b){return !!(a&&b&&a.raw===b.raw&&a.updatedAt===b.updatedAt&&a.rev===b.rev&&a.docNo===b.docNo&&a.subject===b.subject&&a.needReply===b.needReply);}
 function r706StageHistory(row,mutate=true){
  r706CanonicalBase(row);const signature=r711StageCacheSignature(row),cached=row&&r711StageHistoryCache.get(row);if(cached&&r711StageCacheMatches(cached.signature,signature))return cached.list;
- let raw=row&&row[R706_STAGE_HISTORY_KEY];if(typeof raw==="string")try{raw=JSON.parse(raw);}catch(_e){raw=[];}if(!Array.isArray(raw))raw=[];let list=raw.map((x,i)=>r706NormalizeStage(x,i,row));if(!list.some(s=>!s.deleted&&s["階段類型"]===R706_STAGE_START))list.unshift(r706NormalizeStage({"階段類型":R706_STAGE_START,"文號":row["文號"],"主旨":row["主旨"]},0,row));list=r706MigrateLegacyStages(row,list).map((x,i)=>r706NormalizeStage(x,i,row)).sort((a,b)=>Number(a["階段序號"])-Number(b["階段序號"])||Number(a.updatedAt)-Number(b.updatedAt));let order=0,sup=0,con=0,previous="";list.forEach(s=>{if(s.deleted)return;s["階段序號"]=++order;if(s["階段類型"]===R706_STAGE_START){s["同類次數"]=1;s["來源文號"]="";previous=r706Text(row["文號"]);}else{if(!r706Text(s["來源文號"]))s["來源文號"]=previous;if(s["階段類型"]===R706_STAGE_SUPERVISOR)s["同類次數"]=++sup;else s["同類次數"]=++con;previous=r706Text(s["文號"])||previous;}});if(mutate&&row)row[R706_STAGE_HISTORY_KEY]=list;if(row)r711StageHistoryCache.set(row,{signature:r711StageCacheSignature(row),list:list});return list;
+ let raw=row&&row[R706_STAGE_HISTORY_KEY];if(typeof raw==="string")try{raw=JSON.parse(raw);}catch(_e){raw=[];}if(!Array.isArray(raw))raw=[];let list=raw.map((x,i)=>r706NormalizeStage(x,i,row));if(!list.some(s=>!s.deleted&&s["階段類型"]===R706_STAGE_START))list.unshift(r706NormalizeStage({"階段類型":R706_STAGE_START,"文號":row["文號"],"主旨":row["主旨"]},0,row));list=r706MigrateLegacyStages(row,list).map((x,i)=>r706NormalizeStage(x,i,row)).sort((a,b)=>Number(a["階段序號"])-Number(b["階段序號"])||r772TimeMs(a.updatedAt,0)-r772TimeMs(b.updatedAt,0));let order=0,sup=0,con=0,previous="";list.forEach(s=>{if(s.deleted)return;s["階段序號"]=++order;if(s["階段類型"]===R706_STAGE_START){s["同類次數"]=1;s["來源文號"]="";previous=r706Text(row["文號"]);}else{if(!r706Text(s["來源文號"]))s["來源文號"]=previous;if(s["階段類型"]===R706_STAGE_SUPERVISOR)s["同類次數"]=++sup;else s["同類次數"]=++con;previous=r706Text(s["文號"])||previous;}});if(mutate&&row)row[R706_STAGE_HISTORY_KEY]=list;if(row)r711StageHistoryCache.set(row,{signature:r711StageCacheSignature(row),list:list});return list;
 }
 function r706ActiveStages(row){return r706StageHistory(row,true).filter(s=>!s.deleted);}
 function r706ClosedFromStages(row,stages){if(r706No(row["是否需回覆"]))return true;const last=stages[stages.length-1];return !!(last&&last["階段類型"]===R706_STAGE_SUPERVISOR&&r706No(last["是否需要\n回覆來文"]));}
@@ -7021,9 +7070,9 @@ function r706ApplySummaryWithStages(row,stages){
 function r706ApplySummary(row){return r706ApplySummaryWithStages(row,r706ActiveStages(row));}
 const r706BaseComputeRow=computeRow;
 const r711PreparedRowCache=new WeakMap();
-function r711PreparedSignature(row){return{updatedAt:Number(row&&row.updatedAt||0),rev:Number(row&&row.rev||0),deleted:!!(row&&row.deleted),history:row&&row[R706_STAGE_HISTORY_KEY],docNo:r706Text(row&&row["文號"]),subject:r706Text(row&&row["主旨"]),date:r706Text(row&&row["來/發文\n日期"]),limit:r706Text(row&&row["處理期限(日)\n(監造)"]),needReply:r706Text(row&&row["是否需回覆"])};}
+function r711PreparedSignature(row){return{updatedAt:r772TimeMs(row&&row.updatedAt,0),rev:Number(row&&row.rev||0),deleted:!!(row&&row.deleted),history:row&&row[R706_STAGE_HISTORY_KEY],docNo:r706Text(row&&row["文號"]),subject:r706Text(row&&row["主旨"]),date:r706Text(row&&row["來/發文\n日期"]),limit:r706Text(row&&row["處理期限(日)\n(監造)"]),needReply:r706Text(row&&row["是否需回覆"])};}
 function r711PreparedMatches(a,b){return !!(a&&b&&a.updatedAt===b.updatedAt&&a.rev===b.rev&&a.deleted===b.deleted&&a.history===b.history&&a.docNo===b.docNo&&a.subject===b.subject&&a.date===b.date&&a.limit===b.limit&&a.needReply===b.needReply);}
-function r711EnsureBaseRow(row){row=normalizeRowText(row||{});r696ExtensionHistory(row,true);const now=Date.now();if(!row.uid)row.uid=uuid();row.pk=row.uid;row.tableId=TABLE_ID;row.dbName=DB_NAME;row.resourceKey=RESOURCE_KEY;if(!row.updatedAt)row.updatedAt=now;if(!row.rev)row.rev=Number(row.updatedAt)||now;row.deleted=!!row.deleted;COLUMNS.forEach(k=>{if(row[k]===undefined||row[k]===null)row[k]="";});return r706BaseComputeRow(row);}
+function r711EnsureBaseRow(row){row=normalizeRowText(row||{});r696ExtensionHistory(row,true);const now=Date.now();if(!row.uid)row.uid=uuid();row.pk=row.uid;row.tableId=TABLE_ID;row.dbName=DB_NAME;row.resourceKey=RESOURCE_KEY;row.updatedAt=r772TimeMs(row.updatedAt,now);if(row.createdAt)row.createdAt=r772TimeMs(row.createdAt,row.updatedAt);if(!row.rev)row.rev=Number(row.updatedAt)||now;row.deleted=!!row.deleted;COLUMNS.forEach(k=>{if(row[k]===undefined||row[k]===null)row[k]="";});return r706BaseComputeRow(row);}
 ensureRow=function(row){if(row&&typeof row==="object"){const signature=r711PreparedSignature(row),cached=r711PreparedRowCache.get(row);if(cached&&r711PreparedMatches(cached.signature,signature))return row;}row=r711EnsureBaseRow(row);r706CanonicalBase(row);const stages=r706ActiveStages(row);row=r706ApplySummaryWithStages(row,stages);r711PreparedRowCache.set(row,{signature:r711PreparedSignature(row)});window.__TASUN_R711_SINGLE_PASS_ROW_PREPARATION__=true;return row;};
 computeRow=function(row){row=r706BaseComputeRow(row||{});r706CanonicalBase(row);return r706ApplySummaryWithStages(row,r706ActiveStages(row));};
 function r706ActiveRows(){return (Array.isArray(rows)?rows:[]).filter(r=>r&&!r.deleted);}
@@ -8443,7 +8492,7 @@ r743RegisterStartup();
 (function(){
   "use strict";
   var PAGE_KEY="xidong-official-doc-detail";
-  var BUILD="20260727_tasun_v5_xidong_docs_r771_cross_device_count_sequence_cloud_roundtrip_release";
+  var BUILD="20260727_tasun_v5_xidong_docs_r772_dual_transport_timestamp_count_convergence_release";
   var applying=false,retryCount=0,observerInstalled=false,wrapped=false,retryTimer=0,lastApplyAt=0;var MAX_RETRY=5,APPLY_COOLDOWN=260;window.__TASUN_R707_LAYOUT_RETRY_MAX__=MAX_RETRY;
   window.__TASUN_OFFICIAL_DOCS_R641_ZONE1_SEARCH_DELETE_RESTORE_FIX__=true;
   function q(sel,root){return (root||document).querySelector(sel);} 
@@ -8611,7 +8660,7 @@ r743RegisterStartup();
   "use strict";
   if(window.__TASUN_OFFICIAL_DOCS_R683_DETAIL_STATISTICS_BUTTON__) return;
   window.__TASUN_OFFICIAL_DOCS_R683_DETAIL_STATISTICS_BUTTON__=true;
-  var BUILD="20260727_tasun_v5_xidong_docs_r771_cross_device_count_sequence_cloud_roundtrip_release", PAGE_KEY="xidong-official-doc-detail";
+  var BUILD="20260727_tasun_v5_xidong_docs_r772_dual_transport_timestamp_count_convergence_release", PAGE_KEY="xidong-official-doc-detail";
   var BUTTON_ID="btnDetailGoStatistics", TARGET="汐東文件統計表.html", LABEL="汐東文件統計表";
   function q(sel,root){return (root||document).querySelector(sel);}
   function norm(v){return v===undefined||v===null?"":String(v).trim();}
@@ -8962,7 +9011,7 @@ r743RegisterStartup();
   "use strict";
   if(window.__TASUN_OFFICIAL_DOCS_R770_MOBILE_TWO_PANE_FIRST4__)return;
   window.__TASUN_OFFICIAL_DOCS_R770_MOBILE_TWO_PANE_FIRST4__=true;
-  var BUILD="20260727_tasun_v5_xidong_docs_r771_cross_device_count_sequence_cloud_roundtrip_release";
+  var BUILD="20260727_tasun_v5_xidong_docs_r772_dual_transport_timestamp_count_convergence_release";
   var PAGE_KEY="xidong-official-doc-detail",FIXED_COUNT=4,MAX_RETRY=3,COOL_DOWN=1800;
   var state={building:false,ready:false,rebuildTimer:0,retry:0,lastBuildAt:0,renderWait:0,syncLock:false,syncRaf:0,heightRaf:0,observer:null,controller:typeof AbortController!=="undefined"?new AbortController():null,shell:null,left:null,right:null,sourceTable:null,sourceWrap:null,leftSubjectAnchor:0,leftClampRaf:0};
   function q(sel,root){return(root||document).querySelector(sel);}
@@ -9148,7 +9197,7 @@ r743RegisterStartup();
   "use strict";
   if(window.__TASUN_OFFICIAL_DOCS_R699_EXTENSION_STATUS_CURRENT_DOC_LINK_CORE__) return;
   window.__TASUN_OFFICIAL_DOCS_R699_EXTENSION_STATUS_CURRENT_DOC_LINK_CORE__=true;
-  const R699_BUILD="20260727_tasun_v5_xidong_docs_r771_cross_device_count_sequence_cloud_roundtrip_release";
+  const R699_BUILD="20260727_tasun_v5_xidong_docs_r772_dual_transport_timestamp_count_convergence_release";
   const LINK_FIELDS=["文號","收/發文附件","回覆文號\n(監造)","回覆文號 (監造)","展延實際提送文號","現行處理文號"];
   const EXT_LINK_FIELDS=["統包申請文號","監造回覆文號","統包實際再送文號"];
   function n(v){try{return normalizeText(v);}catch(_e){return v===undefined||v===null?"":String(v).trim();}}
