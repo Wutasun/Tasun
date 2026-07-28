@@ -1,4 +1,4 @@
-name: Tasun Auto Version Sync
+name: Tasun Auto Version Sync R779
 
 on:
   workflow_dispatch:
@@ -24,24 +24,35 @@ permissions:
 
 concurrency:
   group: tasun-auto-version-sync-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
+
+env:
+  TASUN_PAGES_BASE_URL: https://wutasun.github.io/Tasun
 
 jobs:
   sync-version-files:
-    name: Sync exact page entries and rebuild stamps
+    name: Atomic exact page release and Pages verification
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip tasun-version]') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
           persist-credentials: true
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      - name: Verify formal workflow path and publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .github/workflows/release-version.yml
+          test -f publish-version_tasun_project_autoscan.mjs
+          test ! -f github/workflows/release-version.yml || echo "::warning::Legacy wrong workflow path still exists and should be deleted: github/workflows/release-version.yml"
 
       - name: Resolve changed files
         id: changed
@@ -70,23 +81,73 @@ jobs:
           export TASUN_CHANGED_FILES="$(cat /tmp/tasun_changed_files.txt)"
           node publish-version_tasun_project_autoscan.mjs
 
+      - name: Validate local R779 release contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';import crypto from 'node:crypto';
+          const data=JSON.parse(fs.readFileSync('tasun-version.json','utf8'));
+          const file='汐東收發文明細表.html';
+          if(!fs.existsSync(file))process.exit(0);
+          const html=fs.readFileSync(file,'utf8');
+          const build=(html.match(/name=["']tasun-build-stamp["'][^>]+content=["']([^"']+)/i)||[])[1]||'';
+          const digest=crypto.createHash('sha256').update(html).digest('hex');
+          const aliases=['汐東收發文明細表.html','xidong-official-doc-detail','official-doc-detail'];
+          for(const alias of aliases){const e=data.pages?.[alias];if(!e||e.file!==file||e.version!==build||e.pageBuildStamp!==build||e.artifactSha256!==digest)throw new Error(`alias contract mismatch: ${alias}`);}
+          if(data.pageArtifactManifest?.[file]!==digest||data.pageBuildStamp?.[file]!==build)throw new Error('manifest contract mismatch');
+          if(fs.readFileSync('TASUN_REBUILD','utf8').trim()!==build||fs.readFileSync('TASUN_REBUILD_STAMP','utf8').trim()!==build)throw new Error('rebuild contract mismatch');
+          console.log(`Local release contract exact: ${build} ${digest}`);
+          NODE
+
       - name: Commit generated version files
         shell: bash
         run: |
           set -euo pipefail
           if git diff --quiet; then
             echo "No version changes to commit."
-            exit 0
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add tasun-version.json TASUN_REBUILD TASUN_REBUILD_STAMP
+            while IFS= read -r file; do
+              [[ -z "$file" ]] && continue
+              case "$file" in
+                *.html|*.htm) [[ -f "$file" ]] && git add -- "$file" ;;
+              esac
+            done < /tmp/tasun_changed_files.txt
+            git add .github/workflows/release-version.yml publish-version_tasun_project_autoscan.mjs
+            git commit -m "chore(tasun): atomic exact page release R779 [skip tasun-version]"
+            for attempt in 1 2 3; do
+              if git push; then break; fi
+              [[ "$attempt" == "3" ]] && exit 1
+              git pull --rebase origin "${GITHUB_REF_NAME}"
+            done
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add tasun-version.json TASUN_REBUILD TASUN_REBUILD_STAMP
-          while IFS= read -r file; do
-            [[ -z "$file" ]] && continue
-            case "$file" in
-              *.html|*.htm) [[ -f "$file" ]] && git add -- "$file" ;;
-            esac
-          done < /tmp/tasun_changed_files.txt
-          git add .github/workflows/release-version.yml publish-version_tasun_project_autoscan.mjs
-          git commit -m "chore(tasun): exact page version and artifact sync [skip tasun-version]"
-          git push
+
+      - name: Verify deployed GitHub Pages artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import crypto from 'node:crypto';
+          const base=process.env.TASUN_PAGES_BASE_URL.replace(/\/$/,'');
+          const file='汐東收發文明細表.html';
+          const aliases=['汐東收發文明細表.html','xidong-official-doc-detail','official-doc-detail'];
+          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          for(let attempt=1;attempt<=16;attempt++){
+            try{
+              const q=`?__tasun_pages_verify=${Date.now()}_${attempt}`;
+              const [vr,hr]=await Promise.all([fetch(`${base}/tasun-version.json${q}`,{cache:'no-store'}),fetch(`${base}/${encodeURIComponent(file)}${q}`,{cache:'no-store'})]);
+              if(!vr.ok||!hr.ok)throw new Error(`http version=${vr.status} html=${hr.status}`);
+              const data=await vr.json(),html=await hr.text();
+              const build=(html.match(/name=["']tasun-build-stamp["'][^>]+content=["']([^"']+)/i)||[])[1]||'';
+              const digest=crypto.createHash('sha256').update(html).digest('hex');
+              const exact=aliases.every(a=>{const e=data.pages?.[a];return e&&e.file===file&&e.version===build&&e.pageBuildStamp===build&&e.artifactSha256===digest;})&&data.pageArtifactManifest?.[file]===digest&&data.pageBuildStamp?.[file]===build;
+              if(exact){console.log(`GitHub Pages exact release confirmed: ${build} ${digest}`);process.exit(0);}
+              console.log(`Attempt ${attempt}/16 not converged: html=${build} root=${data.version||''}`);
+            }catch(e){console.log(`Attempt ${attempt}/16 failed: ${e.message}`);}
+            if(attempt<16)await sleep(15000);
+          }
+          throw new Error('GitHub Pages did not converge to the exact page entry and artifact within 4 minutes.');
+          NODE
