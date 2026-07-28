@@ -3,9 +3,7 @@ name: Tasun Auto Version Sync
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
+    branches: [main, master]
     paths:
       - "**/*.html"
       - "**/*.htm"
@@ -16,6 +14,7 @@ on:
       - "**/*.yml"
       - "**/*.yaml"
       - "**/*.txt"
+      - "TASUN_REBUILD"
       - "TASUN_REBUILD_STAMP"
       - ".github/workflows/release-version.yml"
       - "publish-version_tasun_project_autoscan.mjs"
@@ -29,15 +28,14 @@ concurrency:
 
 jobs:
   sync-version-files:
-    name: Sync tasun-version.json and TASUN_REBUILD_STAMP
+    name: Sync exact page entries and rebuild stamps
     runs-on: ubuntu-latest
-    if: ${{ !contains(github.event.head_commit.message, '[skip tasun-version]') }}
-
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip tasun-version]') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 2
           persist-credentials: true
 
       - name: Setup Node.js
@@ -45,24 +43,50 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Run Tasun version autoscan
-        run: |
-          node publish-version_tasun_project_autoscan.mjs
-
-      - name: Commit updated version files
+      - name: Resolve changed files
+        id: changed
         shell: bash
         run: |
+          set -euo pipefail
+          BEFORE="${{ github.event.before }}"
+          HEAD="${{ github.sha }}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            git diff-tree --no-commit-id --name-only -r HEAD > /tmp/tasun_changed_files.txt
+          elif [[ -n "$BEFORE" && ! "$BEFORE" =~ ^0+$ ]]; then
+            git diff --name-only "$BEFORE" "$HEAD" > /tmp/tasun_changed_files.txt
+          else
+            git diff-tree --no-commit-id --name-only -r "$HEAD" > /tmp/tasun_changed_files.txt
+          fi
+          echo "Changed files:"
+          cat /tmp/tasun_changed_files.txt
+
+      - name: Run Tasun exact page version autoscan
+        shell: bash
+        env:
+          TASUN_BEFORE_SHA: ${{ github.event.before }}
+          TASUN_HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          export TASUN_CHANGED_FILES="$(cat /tmp/tasun_changed_files.txt)"
+          node publish-version_tasun_project_autoscan.mjs
+
+      - name: Commit generated version files
+        shell: bash
+        run: |
+          set -euo pipefail
           if git diff --quiet; then
             echo "No version changes to commit."
             exit 0
           fi
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add tasun-version.json TASUN_REBUILD_STAMP
-          git add "*.html" "*.htm" "*.js" "*.mjs" "*.css" "*.json" "*.yml" "*.yaml" "*.txt" || true
-          git add .github/workflows/release-version.yml publish-version_tasun_project_autoscan.mjs || true
-
-          git commit -m "chore(tasun): auto sync tasun-version and rebuild stamp [skip tasun-version]"
+          git add tasun-version.json TASUN_REBUILD TASUN_REBUILD_STAMP
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            case "$file" in
+              *.html|*.htm) [[ -f "$file" ]] && git add -- "$file" ;;
+            esac
+          done < /tmp/tasun_changed_files.txt
+          git add .github/workflows/release-version.yml publish-version_tasun_project_autoscan.mjs
+          git commit -m "chore(tasun): exact page version and artifact sync [skip tasun-version]"
           git push
