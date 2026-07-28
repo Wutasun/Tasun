@@ -1,293 +1,78 @@
 #!/usr/bin/env node
 /**
- * Tasun v5 Auto Version Sync - R379
+ * Tasun v5 Auto Version Sync - R776
  *
- * 目的：
- * - 只要正式網頁 / 核心檔推送到 GitHub，即自動同步更新：
- *   1) tasun-version.json
- *   2) TASUN_REBUILD_STAMP
- *   3) HTML 內 tasun-build-stamp meta
- *
- * 正式規則：
- * - tasun-version.json 是唯一正式版號來源。
- * - TASUN_REBUILD_STAMP 只做 rebuild / cache breaker，不放密碼、不放 token。
- * - 不靠瀏覽器寫回 GitHub；由 GitHub Actions 執行本腳本並自動 commit。
+ * 修復重點：
+ * 1. 僅更新本次實際變更的正式 HTML，不再重寫全站所有 HTML。
+ * 2. 正式 HTML 已自行提升人工版號時保留該版號；未提升時才產生單調遞增的 auto rNNN 版號。
+ * 3. 解析 PAGE_FILE / PAGE_KEY / PAGE_ALIASES，將同頁所有 page entry 與 HTML build 同步。
+ * 4. 每一 changed page 寫入 artifactSha256，供頁面以 no-store HTML + SHA-256 精確驗證後才重載。
+ * 5. 同步 tasun-version.json、TASUN_REBUILD、TASUN_REBUILD_STAMP；不使用全站模糊 token 取代。
  */
-
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 
-const ROOT = process.cwd();
-const VERSION_FILE = "tasun-version.json";
-const REBUILD_FILE = "TASUN_REBUILD_STAMP";
+const ROOT=process.cwd();
+const VERSION_FILE="tasun-version.json";
+const REBUILD_FILE="TASUN_REBUILD";
+const REBUILD_STAMP_FILE="TASUN_REBUILD_STAMP";
+const GENERATED=new Set([VERSION_FILE,REBUILD_FILE,REBUILD_STAMP_FILE]);
+const FORMAL_EXT=new Set([".html",".htm"]);
+const CORE_FILES=new Set(["tasun-version-loader.js","tasun-core.js","tasun-boot.js","tasun-auth-v4.js","tasun-cloudwrap-v4.js","tasun-guard-v5.js","tasun-global-core.js","tasun-resources.json","worker.js","publish-version_tasun_project_autoscan.mjs",".github/workflows/release-version.yml"]);
 
-const IGNORE_DIRS = new Set([
-  ".git",
-  "node_modules",
-  ".next",
-  "dist",
-  "build",
-  ".cache",
-  ".vercel",
-  ".wrangler",
-]);
-
-const SOURCE_EXTS = new Set([
-  ".html",
-  ".htm",
-  ".js",
-  ".mjs",
-  ".css",
-  ".json",
-  ".yml",
-  ".yaml",
-  ".txt",
-]);
-
-const DIRECT_SOURCE_FILES = new Set([
-  ".github/workflows/release-version.yml",
-  "publish-version_tasun_project_autoscan.mjs",
-  "tasun-version-loader.js",
-  "tasun-core.js",
-  "tasun-boot.js",
-  "tasun-auth-v4.js",
-  "tasun-cloudwrap-v4.js",
-  "tasun-guard-v5.js",
-  "tasun-global-core.js",
-  "tasun-resources.json",
-  "worker.js",
-]);
-
-const GENERATED_FILES = new Set([
-  VERSION_FILE,
-  REBUILD_FILE,
-]);
-
-function toPosix(p) {
-  return p.split(path.sep).join("/");
+function posix(p){return p.split(path.sep).join("/");}
+function n(v){return v===undefined||v===null?"":String(v).trim();}
+function rank(v){const m=n(v).match(/r(\d+)/i);return m?Number(m[1]):0;}
+function taipeiNow(){return new Date(Date.now()+8*60*60*1000);}
+function p2(x){return String(x).padStart(2,"0");}
+function ymd(d){return `${d.getUTCFullYear()}${p2(d.getUTCMonth()+1)}${p2(d.getUTCDate())}`;}
+function iso(d){return `${d.getUTCFullYear()}-${p2(d.getUTCMonth()+1)}-${p2(d.getUTCDate())}T${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}+08:00`;}
+function stable(obj){return JSON.stringify(obj,null,2)+"\n";}
+async function exists(rel){try{await fs.access(path.join(ROOT,rel));return true;}catch{return false;}}
+async function readJson(rel){try{return JSON.parse(await fs.readFile(path.join(ROOT,rel),"utf8"));}catch{return{};}}
+async function sha256(rel){return crypto.createHash("sha256").update(await fs.readFile(path.join(ROOT,rel))).digest("hex");}
+function git(args){try{return execFileSync("git",args,{cwd:ROOT,encoding:"utf8",stdio:["ignore","pipe","ignore"]}).trim();}catch{return"";}}
+function changedFiles(){
+  const env=n(process.env.TASUN_CHANGED_FILES);let list=env?env.split(/\r?\n/):[];
+  if(!list.length){const before=n(process.env.TASUN_BEFORE_SHA);const head=n(process.env.TASUN_HEAD_SHA)||"HEAD";if(before&&!/^0+$/.test(before))list=git(["diff","--name-only",before,head]).split(/\r?\n/);else list=git(["diff-tree","--no-commit-id","--name-only","-r",head]).split(/\r?\n/);}
+  return [...new Set(list.map(posix).map(n).filter(Boolean).filter(x=>!GENERATED.has(x)))];
 }
-
-function taipeiNow() {
-  return new Date(Date.now() + 8 * 60 * 60 * 1000);
+function htmlBuild(text){const m=String(text||"").match(/<meta[^>]+name=["']tasun-build-stamp["'][^>]+content=["']([^"']+)/i)||String(text||"").match(/TASUN_REBUILD_STAMP:([^\s<]+)/);return n(m&&m[1]);}
+function pageConfig(text,rel){
+  const pick=(key)=>{const m=String(text).match(new RegExp(`"${key}"\\s*:\\s*"([^"]+)"`));return n(m&&m[1]);};
+  const aliasesMatch=String(text).match(/"PAGE_ALIASES"\s*:\s*(\[[^\]]*\])/);let aliases=[];try{aliases=aliasesMatch?JSON.parse(aliasesMatch[1]):[];}catch{}
+  const file=pick("PAGE_FILE")||rel,key=pick("PAGE_KEY")||file;
+  aliases=[file,key,...aliases].map(n).filter(Boolean);return{file,key,aliases:[...new Set(aliases)]};
 }
-
-function pad2(n) {
-  return String(n).padStart(2, "0");
+function replaceMeta(text,name,value){const re=new RegExp(`<meta\\s+name=["']${name}["']\\s+content=["'][^"']*["']\\s*/?>`,`i`);const tag=`<meta name="${name}" content="${value}" />`;return re.test(text)?text.replace(re,tag):text.replace(/<head[^>]*>/i,m=>`${m}\n${tag}`);}
+function updateHtmlBuild(text,newBuild){
+  const old=htmlBuild(text);let out=text;if(old&&old!==newBuild)out=out.split(old).join(newBuild);
+  out=replaceMeta(out,"tasun-build-stamp",newBuild);out=replaceMeta(out,"tasun-rebuild-stamp",newBuild);
+  out=out.replace(/TASUN_REBUILD_STAMP:[^\s<]+/,`TASUN_REBUILD_STAMP:${newBuild}`);return out;
 }
-
-function formatTaipeiBuildDate(d) {
-  return [
-    d.getUTCFullYear(),
-    pad2(d.getUTCMonth() + 1),
-    pad2(d.getUTCDate()),
-  ].join("");
+function previousHtmlBuild(rel){const raw=git(["show",`HEAD^:${rel}`]);return raw?htmlBuild(raw):"";}
+function maxKnownRank(current,changedBuilds){let x=rank(current.version);for(const e of Object.values(current.pages||{}))x=Math.max(x,rank(e&&e.version),rank(e&&e.pageBuildStamp),rank(e&&e.buildStamp));for(const b of changedBuilds)x=Math.max(x,rank(b));return x;}
+function releaseBuild(current,htmlInfos,allHash,date){
+  const currentRoot=n(current.version);const builds=[...new Set(htmlInfos.map(x=>x.currentBuild).filter(Boolean))];
+  const everyManualAdvanced=htmlInfos.length>0&&htmlInfos.every(x=>rank(x.currentBuild)>rank(x.previousBuild||"")&&rank(x.currentBuild)>0);
+  if(builds.length===1&&everyManualAdvanced&&currentRoot===builds[0])return builds[0];
+  const next=maxKnownRank(current,builds)+1;return `${ymd(date)}_tasun_v5_auto_r${next}_${allHash.slice(0,12)}_release`;
 }
-
-function formatTaipeiIsoText(d) {
-  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}T${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}+08:00`;
+async function main(){
+  const changed=changedFiles();const formal=[];const relevant=[];
+  for(const rel of changed){if(!(await exists(rel)))continue;const ext=path.extname(rel).toLowerCase();if(FORMAL_EXT.has(ext))formal.push(rel);if(FORMAL_EXT.has(ext)||CORE_FILES.has(rel))relevant.push(rel);}
+  if(!relevant.length){console.log("[Tasun R776] no formal page/core change; nothing to sync.");return;}
+  const current=await readJson(VERSION_FILE);const infos=[];
+  for(const rel of formal){const text=await fs.readFile(path.join(ROOT,rel),"utf8");infos.push({rel,text,currentBuild:htmlBuild(text),previousBuild:previousHtmlBuild(rel),config:pageConfig(text,rel)});}
+  const hash=crypto.createHash("sha256");for(const rel of [...relevant].sort()){hash.update(rel);hash.update("\0");hash.update(await fs.readFile(path.join(ROOT,rel)));hash.update("\0");}const allHash=hash.digest("hex");
+  const now=taipeiNow(),updatedAt=iso(now),build=releaseBuild(current,infos,allHash,now);
+  for(const info of infos){info.text=updateHtmlBuild(info.text,build);await fs.writeFile(path.join(ROOT,info.rel),info.text,"utf8");info.digest=await sha256(info.rel);}
+  const pages={...(current.pages||{})};const pageArtifactManifest={...(current.pageArtifactManifest||{})};const pageBuildStamp={...(current.pageBuildStamp||{})};
+  for(const info of infos){pageArtifactManifest[info.config.file]=info.digest;pageBuildStamp[info.config.file]=build;for(const alias of info.config.aliases){const old=pages[alias]&&typeof pages[alias]==="object"?pages[alias]:{};pages[alias]={...old,version:build,cacheV:build,buildStamp:build,pageBuildStamp:build,rebuildStamp:build,updatedAt,file:info.config.file,pageKey:alias===info.config.file?info.config.key:(old.pageKey||alias),artifactSha256:info.digest,versionAuthorityMode:"own-page-entry-only-r776-exact-network-html-sha256-gate",cacheCleanupMode:"r776-clear-old-version-lock-cache-storage-service-worker-buildstamp-memo-once-per-build",publisherWorkflowPath:".github/workflows/release-version.yml",publisherMode:"changed-page-alias-exact-update-no-global-html-rewrite"};}}
+  const next={...current,version:build,cacheV:build,buildStamp:build,rebuildStamp:build,updatedAt,autoVersionEnabled:true,versionMode:"auto-page-entry-exact",officialVersionSource:VERSION_FILE,rebuildStampFile:REBUILD_STAMP_FILE,pages,pageArtifactManifest,pageBuildStamp,selfHealChecks:[...new Set([...(Array.isArray(current.selfHealChecks)?current.selfHealChecks:[]),"raciR379EveryFormalPageOrCoreUpdateMustSyncTasunVersionJson","raciR379AutoUpdateTasunRebuildStamp","raciR379GitHubActionsAutoCommitVersionFiles","raciR776WorkflowRealDotGithubPath","raciR776ChangedPageAliasesExactBuildAndDigest","raciR776NoGlobalHtmlBuildRewrite"])],release:{...(current.release||{}),workflow:".github/workflows/release-version.yml",script:"publish-version_tasun_project_autoscan.mjs",autoCommitVersionFiles:true,skipCommitToken:"[skip tasun-version]",lastAutoSyncAt:updatedAt,changedFormalFiles:formal,changedCoreFiles:relevant.filter(x=>!formal.includes(x)),pageEntryArtifactExactGate:true,noGlobalHtmlTokenRewrite:true}};
+  await fs.writeFile(path.join(ROOT,VERSION_FILE),stable(next),"utf8");await fs.writeFile(path.join(ROOT,REBUILD_FILE),build+"\n","utf8");await fs.writeFile(path.join(ROOT,REBUILD_STAMP_FILE),build+"\n","utf8");
+  console.log(`[Tasun R776] build=${build}`);console.log(`[Tasun R776] changed pages=${formal.join(", ")||"none"}`);
 }
-
-async function exists(filePath) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function walk(dir, result = []) {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    const rel = toPosix(path.relative(ROOT, full));
-
-    if (entry.isDirectory()) {
-      if (IGNORE_DIRS.has(entry.name)) continue;
-      await walk(full, result);
-      continue;
-    }
-
-    if (!entry.isFile()) continue;
-
-    const ext = path.extname(entry.name).toLowerCase();
-    const relLower = rel.toLowerCase();
-
-    if (GENERATED_FILES.has(rel)) continue;
-    if (relLower.endsWith(".zip")) continue;
-    if (relLower.endsWith(".png") || relLower.endsWith(".jpg") || relLower.endsWith(".jpeg") || relLower.endsWith(".webp") || relLower.endsWith(".gif")) continue;
-    if (SOURCE_EXTS.has(ext) || DIRECT_SOURCE_FILES.has(rel)) {
-      result.push(rel);
-    }
-  }
-  return result.sort((a, b) => a.localeCompare(b, "zh-Hant"));
-}
-
-async function sha256File(rel) {
-  const buf = await fs.readFile(path.join(ROOT, rel));
-  return crypto.createHash("sha256").update(buf).digest("hex");
-}
-
-async function buildManifest(files) {
-  const manifest = {};
-  const hash = crypto.createHash("sha256");
-  for (const rel of files) {
-    const fileHash = await sha256File(rel);
-    manifest[rel] = fileHash;
-    hash.update(rel);
-    hash.update("\0");
-    hash.update(fileHash);
-    hash.update("\0");
-  }
-  return { manifest, allHash: hash.digest("hex") };
-}
-
-function stableStringify(obj) {
-  return JSON.stringify(obj, null, 2) + "\n";
-}
-
-async function readJsonIfExists(rel) {
-  const filePath = path.join(ROOT, rel);
-  if (!(await exists(filePath))) return {};
-  try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw);
-  } catch {
-    return {};
-  }
-}
-
-function replaceHtmlMeta(content, name, value) {
-  const escapedValue = String(value).replace(/"/g, "&quot;");
-  const metaRe = new RegExp(`<meta\\s+name=["']${name}["']\\s+content=["'][^"']*["']\\s*/?>`, "i");
-  const metaTag = `<meta name="${name}" content="${escapedValue}">`;
-  if (metaRe.test(content)) return content.replace(metaRe, metaTag);
-  if (/<head[^>]*>/i.test(content)) return content.replace(/<head[^>]*>/i, (m) => `${m}\n  ${metaTag}`);
-  return `${metaTag}\n${content}`;
-}
-
-function replaceLegacyBuildTokens(content, buildStamp) {
-  let next = content;
-
-  // 只替換明確 Tasun build token，避免誤改一般文字。
-  next = next.replace(/\b20\d{6}_tasun_v5_[A-Za-z0-9_\-]+/g, buildStamp);
-
-  // 常見全域 build 變數。
-  next = next.replace(
-    /\b(window\.)?(__TASUN_PAGE_BUILD_STAMP__|TASUN_PAGE_BUILD_STAMP|PAGE_BUILD_STAMP|RACI_BUILD_STAMP|TASUN_REBUILD_STAMP|CURRENT_BUILD|BUILD_STAMP)\s*=\s*(['"])[^'"]*\3/g,
-    (m, w = "", key, q) => `${w}${key} = ${q}${buildStamp}${q}`
-  );
-
-  // 常見 const / let / var build 變數。
-  next = next.replace(
-    /\b(const|let|var)\s+(BUILD|BUILD_STAMP|PAGE_BUILD_STAMP|RACI_BUILD_STAMP|TASUN_PAGE_BUILD_STAMP)\s*=\s*(['"])[^'"]*\3/g,
-    (m, kind, key, q) => `${kind} ${key} = ${q}${buildStamp}${q}`
-  );
-
-  return next;
-}
-
-async function updateHtmlFiles(files, buildStamp) {
-  const htmlFiles = files.filter((rel) => [".html", ".htm"].includes(path.extname(rel).toLowerCase()));
-  for (const rel of htmlFiles) {
-    const full = path.join(ROOT, rel);
-    let content = await fs.readFile(full, "utf8");
-    const before = content;
-
-    content = replaceHtmlMeta(content, "tasun-build-stamp", buildStamp);
-    content = replaceHtmlMeta(content, "tasun-cache-v", buildStamp);
-    content = replaceHtmlMeta(content, "tasun-version-mode", "auto");
-    content = replaceLegacyBuildTokens(content, buildStamp);
-
-    if (content !== before) {
-      await fs.writeFile(full, content, "utf8");
-    }
-  }
-}
-
-async function updateTextSources(files, buildStamp) {
-  const exts = new Set([".js", ".mjs", ".css", ".yml", ".yaml"]);
-  for (const rel of files) {
-    const ext = path.extname(rel).toLowerCase();
-    if (!exts.has(ext)) continue;
-    const full = path.join(ROOT, rel);
-    let content = await fs.readFile(full, "utf8");
-    const before = content;
-    content = replaceLegacyBuildTokens(content, buildStamp);
-    if (content !== before) {
-      await fs.writeFile(full, content, "utf8");
-    }
-  }
-}
-
-async function main() {
-  const files = await walk(ROOT);
-  const { manifest, allHash } = await buildManifest(files);
-  const now = taipeiNow();
-  const ymd = formatTaipeiBuildDate(now);
-  const shortHash = allHash.slice(0, 12);
-  const buildStamp = `${ymd}_tasun_v5_auto_${shortHash}`;
-  const updatedAt = formatTaipeiIsoText(now);
-
-  await updateHtmlFiles(files, buildStamp);
-  await updateTextSources(files, buildStamp);
-
-  // HTML/JS 更新後再算一次來源 hash，讓 tasun-version.json 反映最終內容。
-  const finalFiles = await walk(ROOT);
-  const finalManifestData = await buildManifest(finalFiles);
-
-  const current = await readJsonIfExists(VERSION_FILE);
-  const pageBuildStamp = { ...(current.pageBuildStamp || {}) };
-  for (const rel of finalFiles) {
-    if ([".html", ".htm"].includes(path.extname(rel).toLowerCase())) {
-      pageBuildStamp[rel] = buildStamp;
-    }
-  }
-
-  const nextVersion = {
-    ...current,
-    version: buildStamp,
-    cacheV: buildStamp,
-    buildStamp,
-    rebuildStamp: buildStamp,
-    updatedAt,
-    autoVersionEnabled: true,
-    versionMode: "auto",
-    includeCurrentPage: true,
-    officialVersionSource: "tasun-version.json",
-    rebuildStampFile: REBUILD_FILE,
-    versionSources: finalFiles,
-    sourceHash: finalManifestData.allHash,
-    sourceManifest: finalManifestData.manifest,
-    pageBuildStamp,
-    selfHealChecks: [
-      ...new Set([
-        ...(Array.isArray(current.selfHealChecks) ? current.selfHealChecks : []),
-        "raciR379EveryFormalPageOrCoreUpdateMustSyncTasunVersionJson",
-        "raciR379AutoUpdateTasunRebuildStamp",
-        "raciR379GitHubActionsAutoCommitVersionFiles",
-      ]),
-    ],
-    release: {
-      ...(current.release || {}),
-      workflow: ".github/workflows/release-version.yml",
-      script: "publish-version_tasun_project_autoscan.mjs",
-      autoCommitVersionFiles: true,
-      skipCommitToken: "[skip tasun-version]",
-      lastAutoSyncAt: updatedAt,
-    },
-  };
-
-  await fs.writeFile(path.join(ROOT, VERSION_FILE), stableStringify(nextVersion), "utf8");
-  await fs.writeFile(path.join(ROOT, REBUILD_FILE), `${buildStamp}\n`, "utf8");
-
-  console.log(`[Tasun R379] synced ${VERSION_FILE} and ${REBUILD_FILE}`);
-  console.log(`[Tasun R379] buildStamp=${buildStamp}`);
-}
-
-main().catch((err) => {
-  console.error("[Tasun R379] auto version sync failed:");
-  console.error(err);
-  process.exit(1);
-});
+main().catch(err=>{console.error("[Tasun R776] auto version sync failed",err);process.exit(1);});
