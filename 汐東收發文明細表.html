@@ -1,3 +1,4 @@
+<!-- R793：以最新 R792 為唯一修改基準，依 2026-07-29 15:21:15 雲端逐步測試報告深入修復。報告顯示 Worker 已完成 Read 200→Merge 200→再 Read 200，Console 亦無 error／warn，但頁面仍為本端17／雲端16／通道0/1；根因不是連線或 CORS，而是同步驗證仍把 Worker 的 uid 主鍵與本頁 logicalKey 去重視為永遠一一對應：本機若有兩個不同文號沿用同一 uid，D1 只會保留其中一筆；另多人或測試頁於同步期間新增雲端資料時，R792 將合法的遠端新增列判為 extra，完整 roundtrip 因而被否決並反覆顯示處理中／未完成。R793 直接整合原同步共用核心：下載後先以雲端 uid→logicalKey 所有權表檢查本端聯集，僅對跨文號 uid 衝突或回讀缺漏列建立 deterministic 新 uid，保留其餘既有 uid；缺漏列重鍵、過舊列提升 rev／updatedAt 後以同一 stable-v4 plain bridge 有界再送。回讀驗證改為先確認雲端至少包含本次應送資料，允許同步期間合法新增的遠端列，再以遠端完整聯集刷新本機，使最後本端／雲端筆數與 digest 一致。同步狀態由單一核心與 MutationObserver 值守，任何舊程式寫入多重「同步：」前綴均立即收斂為純狀態值。既已刪除的舊回覆文登錄頁正式退出 active page topology，明細頁只保留明細、登錄及統計入口。保留 UI、欄位、搜尋、權限、手機雙區、Excel、uid／rev／updatedAt／deleted、32秒終止、single-flight、AbortController、冷卻、防抖及禁止無限輪詢。 -->
 <!-- R792：以最新 R791 為唯一修改基準，依實機顯示「同步：同步處理中」及指定 R506 雲端逐步測試報告逐段核對。報告已證實正式 Worker 的 stable-v4 `/api/tasun/read`、`/api/tasun/merge` 皆可由 plain-bridge 完成 Read 200→Merge 200→再 Read 200，而 json-bridge 會 Failed to fetch；R791 卻在每次開頁先同時等待四種 API 協定及多個傳輸變體全部結束，無效路由可連續等待逾時，且 focus／pageshow／visible 於短時間重新啟動同步，使狀態長時間或反覆停在「同步處理中」。R792 直接重整原共用同步核心，不增加按鍵補丁：stable-v4 的 CORS-safe text/plain credentialed／no-cookie 變體固定優先，第一個可讀協定成功即停止探索；依固定流程完成雲端下載→本端與鏡像語意去重及中文空白正規化→本地刷新→同協定上傳→同協定回讀→logicalKey／uid／rev／updatedAt／deleted／有效筆數／digest 全一致後才顯示「已同步」。失敗時一定在 32 秒內收斂為「同步未完成(逾時)／連線失敗／待登入授權」等終止狀態，不再永久 pending；逾時的舊執行代次不可覆寫新狀態。同步狀態文字共用核心會反覆移除重複「同步：」前綴，桌機與手機只存狀態值；已驗證後兩分鐘內的 focus／pageshow／visible 不再重啟同步，生命週期同步冷卻為 60 秒。保留 uid／rev／updatedAt／deleted、最多三輪、single-flight、AbortController、節流、防抖、資料去重、既有 UI、欄位、搜尋、登入、權限、手機雙區、Excel、page entry 與已固定的 release-version.yml。 -->
 <!-- R791：以最新 R790 為唯一修改基準，依使用者實機畫面「同步：同步失敗」與 Console 錯誤數量重新追查同步傳輸層。根因一：R790 在 text/plain 回退請求重新加入 x-tasun-*、Authorization、Cache-Control 與 Pragma 等非 CORS safelist 標頭，原本 R761 可避開預檢的 plain bridge 變成必須 OPTIONS 預檢；Worker 若僅允許 content-type／authorization 或未回 Access-Control-Allow-Credentials，所有 R790 變體會在瀏覽器端被 CORS 阻擋。根因二：R790 遇到第一個 401／403 即停止，不會再嘗試 Cookie、Bearer、plain body session bridge 等其他登入傳輸。根因三：R790 將所有成功讀取的 API alias 都列為必須寫入通道，任一 alias 只讀、CORS 規則不同或 merge 未開放，就直接拋出同步失敗。R791 直接重整原共用同步核心：GET／POST 分離 Cookie、Bearer、純 text/plain 與舊 session-header 有界變體；真正 simple plain 只保留 safelist 標頭，不再觸發不必要預檢；401／403 僅記錄該變體失敗並繼續後續登入方式。雲端先聯集所有可讀協定避免資料遺失，再依 stable-v4、STANDARD v1、legacy query、legacy db 順序逐一執行同協定 merge→readback；第一個完成完整回讀驗證的協定成為本次唯一權威寫入通道，其他只讀 alias 不再阻斷同步。所有失敗變體與協定均寫入 __TASUN_OFFICIAL_DOCS_R791_SYNC_DIAGNOSTICS__ 供 Console 檢查；流程仍為開頁／上傳前／下載後／增修刪後去重與中文空白正規化，保留 uid／rev／updatedAt／deleted，最多三輪、single-flight、AbortController、冷卻、防抖且禁止無限輪詢。既有 UI、欄位、搜尋、登入、權限、手機雙區、Excel、page entry 與 release-version.yml 均不變。 -->
 <!-- R790：以最新 R789 為唯一修改基準，逐層比對目前明細頁、R761 可用傳輸方式、Cloudflare stable-v4 與 STANDARD v1 Worker 契約後，確認「本端16／雲端15／通道0/1」不是表格資料遺失，而是 R789 將四種不相容 API 契約全部盲目 fan-out，且只要任一 merge 路由成功即繼續；當實際成功讀取的是 stable-v4 `/api/tasun/read`，另一個無關或不同資料表的 merge 路由可能先回成功，而與該讀取通道配對的 `/api/tasun/merge` 未成功寫入，回讀仍為15筆。R790 不新增按鍵補丁，直接重整 R774/R789 共用同步核心：先以 R761 的 JSON／text/plain、credentials include／omit 有界序列辨識實際可用協定，再只對「成功讀取的協定」使用一一配對的精確 merge 契約；stable-v4 使用 resourceKey＋payload.db，STANDARD v1 使用 key＋pk=uid＋items，legacy query／db 使用 query resource＋rows。每一活動協定均必須完成下載→本端與鏡像去重及中文空白正規化→本地刷新→配對上傳→同一協定逐一回讀→logicalKey／uid／rev／updatedAt／deleted／active count／digest 全一致，最多三輪後才顯示已同步。輔助選項資源改用純函式正規化，不再因同步下拉選項而覆寫主表 rows。TasunSelfHealV5 新增活動協定辨識、R761 有界傳輸回退、協定讀寫配對、活動通道全數成功、輔助資源隔離、讀寫回讀收斂、冷卻、AbortController、最大重試及禁止無限輪詢檢查。既有 UI、欄位顯示、搜尋、登入、權限、手機雙區、Excel、page entry、資料欄位與主要操作邏輯不變。 -->
@@ -13,7 +14,7 @@
 <!-- R776：深入修復「根版號已到 R775，但開啟汐東收發文明細表仍顯示 R774」的反覆發布問題。實際根因不是本頁快取單一問題，而是 R775 僅更新汐東文件統計表及其三個 page entry，汐東收發文明細表 HTML 與三個 own-page aliases 仍正式停留 R774；另外現行自動發布工作流程實際存放於 github/workflows 而非 GitHub Actions 必要的 .github/workflows，故不會自動執行；舊 autoscan 又只更新 root version/pageBuildStamp 且會重寫全站 HTML build token，未同步 changed page 的 pages aliases，會持續製造 root、page entry、正式 HTML 三者不一致。R776 將本頁提升為新正式版，版本前置核心改為開頁先讀 tasun-version.json 本頁三個 aliases，再以 no-store 正式 HTML build 與 artifact SHA-256 雙重一致才重載；載入中的舊 HTML 不再先把舊 BUILD 寫回網址，網址 v/_bs 永遠反映實際載入的頁面 artifact。每版 GitHub Pages 執行一次網路刷新，並於 pageshow/focus/online/visibility-visible 有界重查；具 AbortController、冷卻、最多 3 次重試、防抖、Cache Storage／Service Worker／舊版本鎖清理且無輪詢。同步修復 .github/workflows 正確路徑及 autoscan changed-page alias 精確更新機制，避免日後其他頁發布時再讓本頁 page entry、HTML 與網址分離。UI、登入、權限、R774 雲端多傳輸同步、R770 手機雙區、桌機固定六個可見欄、資料欄位與操作邏輯均不變。 -->
 <!-- R774：依 R773 發布後桌機仍為 15 筆、手機仍為 14 筆之實機回報，再由「設備端雲端位址權威、雙傳輸實際行為、回應格式與刪除欄位型別」逐層重查。根因一：正式頁雖有 DEFAULT_API_BASE，但 getApiBase 仍優先讀取各設備 localStorage／sessionStorage 的 tasunApiBase_v1、tasunWorkerApiBase_v1、tasunD1ApiBase_v1；桌機與手機若曾保存不同 Worker 位址，會各自連到不同 D1，兩端即使都顯示已同步，資料仍可能分別為 15 與 14 筆。根因二：R772 名稱雖為雙傳輸，r772TryTransports 實際採「第一個 HTTP 成功即停止」；若標準與舊 Worker 路由同時存在但資料未收斂，或某路由回傳 200 非正式 JSON，後續真正資料路由不會再讀取，造成不同版本依第一個成功路由取得不同資料集。根因三：舊 ensureRow 以 !!row.deleted 轉換刪除狀態，字串 "0"、"false" 會被誤判為已刪除；不同 Worker／瀏覽器回傳型別不一致時可能少顯示一筆。根因四：舊資料缺少 uid 時各設備使用隨機 UUID，會使同一文號在不同設備形成不同雲端主鍵。R774 將正式 official-documents 雲端位址固定由 __TASUN_PAGE_CONFIG__.CLOUD_API_BASE 單一權威讀取，開頁及同步前有界清除設備端舊 API 位址覆寫；所有讀取路由改為平行有界探測並嚴格驗證 JSON 契約，將每個成功路由資料依 logicalKey／updatedAt／rev／deleted／內容簽章合併；寫入時只對成功讀取路由的對應 merge 契約進行 fan-out，之後逐路由回讀，所有成功路由的有效筆數、項次與 digest 均一致才可顯示「已同步」。deleted 改採明確布林正規化，缺 uid 資料依文號建立穩定 uid；同步仍為下載→本機鏡像合併→多路由上傳→逐路由回讀→本機刷新，最多 3 次、single-flight、AbortController、冷卻、防抖、錯誤警告且禁止無限輪詢。R770 手機雙區、桌機固定六個可見欄、UI、登入、權限、Excel、resourceKey／dbName／tableId 與既有資料欄位均維持不變。 -->
 <!-- R773：修復 R772 實際內容與 tasun-version.json 均已更新，但開啟後網址仍顯示 R771 的問題。根因為 R772 版本前置核心仍把「_r771=preauth-network-latest」與「r771-preauth-page-entry」寫入網址及執行標記，且 stableUrl 只刪除部分舊 _r### 參數，導致 R772 頁面本身仍可在網址列留下 R771 字樣，容易被誤判為仍在舊版；舊版快取載入後也可能沿用該參數。R773 將版本判斷收斂為本頁 page entry 與正式 HTML build exact-match，網路刷新改用無版號語意的暫時參數 _tasun_net／_rt，刷新完成即由 history.replaceState 清除；所有 _r###、_ghnet、舊 probe、舊 build stamp memo、Cache Storage 與 Service Worker 均納入有界清理。同步核心之活動 R771 執行標籤已整合更名為 R773，避免狀態、錯誤訊息、自我修復與診斷標記再顯示舊版。具 single-flight、AbortController、冷卻、最多 2 次版本探測及禁止無限輪詢；UI、登入、權限、資料、雲端同步、手機雙區、桌機固定六個可見欄及 Excel 契約不變。 -->
-<!-- TASUN_REBUILD_STAMP:20260729_tasun_v5_xidong_docs_r792_detail_fast_plain_terminal_roundtrip_release -->
+<!-- TASUN_REBUILD_STAMP:20260729_tasun_v5_xidong_docs_r793_detail_uid_collision_concurrent_union_terminal_sync_release -->
 <!DOCTYPE html>
 
 
@@ -22,15 +23,15 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>捷運汐止東湖線工程收發文明細表 · Tasun</title>
-<meta name="tasun-build-stamp" content="20260729_tasun_v5_xidong_docs_r792_detail_fast_plain_terminal_roundtrip_release" />
-<meta name="tasun-rebuild-stamp" content="20260729_tasun_v5_xidong_docs_r792_detail_fast_plain_terminal_roundtrip_release" />
+<meta name="tasun-build-stamp" content="20260729_tasun_v5_xidong_docs_r793_detail_uid_collision_concurrent_union_terminal_sync_release" />
+<meta name="tasun-rebuild-stamp" content="20260729_tasun_v5_xidong_docs_r793_detail_uid_collision_concurrent_union_terminal_sync_release" />
 <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
 <link rel="icon" href="data:," />
 
 <script id="tasun-r779-page-config">
-(function(){"use strict";var C={"BUILD":"20260729_tasun_v5_xidong_docs_r792_detail_fast_plain_terminal_roundtrip_release","PAGE_FILE":"汐東收發文明細表.html","PAGE_KEY":"xidong-official-doc-detail","VERSION_URL":"tasun-version.json","RESOURCE_KEY":"official-documents","DB_NAME":"tasun_official_documents_idb_v1","TABLE_ID":"officialDocumentTable","PAGE_ALIASES":["汐東收發文明細表.html","xidong-official-doc-detail","official-doc-detail"],"PAGE_TITLE":"捷運汐止東湖線工程收發文明細表","CLOUD_API_BASE":"https://tasun-worker.wutasun.workers.dev"};try{window.__TASUN_PAGE_CONFIG__=Object.freeze(C);}catch(_e){window.__TASUN_PAGE_CONFIG__=C;}Object.assign(window.__TASUN_GLOBALS__=window.__TASUN_GLOBALS__||{},C,{REBUILD_STAMP:C.BUILD});})();
+(function(){"use strict";var C={"BUILD":"20260729_tasun_v5_xidong_docs_r793_detail_uid_collision_concurrent_union_terminal_sync_release","PAGE_FILE":"汐東收發文明細表.html","PAGE_KEY":"xidong-official-doc-detail","VERSION_URL":"tasun-version.json","RESOURCE_KEY":"official-documents","DB_NAME":"tasun_official_documents_idb_v1","TABLE_ID":"officialDocumentTable","PAGE_ALIASES":["汐東收發文明細表.html","xidong-official-doc-detail","official-doc-detail"],"PAGE_TITLE":"捷運汐止東湖線工程收發文明細表","CLOUD_API_BASE":"https://tasun-worker.wutasun.workers.dev"};try{window.__TASUN_PAGE_CONFIG__=Object.freeze(C);}catch(_e){window.__TASUN_PAGE_CONFIG__=C;}Object.assign(window.__TASUN_GLOBALS__=window.__TASUN_GLOBALS__||{},C,{REBUILD_STAMP:C.BUILD});})();
 </script>
 <script id="tasun-r779-page-entry-version-runtime-core">
 (function(){
@@ -1606,7 +1607,7 @@ window.__TASUN_R710_DESKTOP_SKIPS_MOBILE_OBSERVERS__=!!(window.matchMedia&&windo
   "use strict";
   if(window.__TASUN_OFFICIAL_DOCS_R689_MOBILE_HEADER_COMPACT_EDIT__) return;
   window.__TASUN_OFFICIAL_DOCS_R689_MOBILE_HEADER_COMPACT_EDIT__=true;
-  var BUILD="20260729_tasun_v5_xidong_docs_r792_detail_fast_plain_terminal_roundtrip_release";
+  var BUILD="20260729_tasun_v5_xidong_docs_r793_detail_uid_collision_concurrent_union_terminal_sync_release";
   var PAGE_KEY="xidong-official-doc-detail";
   function q(sel,root){return (root||document).querySelector(sel);} 
   function qa(sel,root){return Array.prototype.slice.call((root||document).querySelectorAll(sel));}
@@ -1816,7 +1817,7 @@ window.__TASUN_R710_DESKTOP_SKIPS_MOBILE_OBSERVERS__=!!(window.matchMedia&&windo
 .r706StageTable tr[data-stage-type="統包回覆來文"] td{background:rgba(39,137,174,.16);}
 #r706StageForm{border-top:2px solid rgba(232,201,126,.42);margin-top:10px;padding-top:10px;max-height:46dvh;overflow:auto;}
 #r706StageForm.hide{display:none!important;}
-#replySection,[href*="汐東回覆文登錄表"],[data-key="official_reply_register"],[data-source-id="official_reply_register"]{display:none!important;}
+#replySection{display:none!important;}
 @media(max-width:900px){
  #officialDocumentTable{--r706-group-h:34px;min-width:3500px!important;font-size:.80rem!important;}
  #officialDocumentTable thead tr.r706GroupRow th{height:34px!important;min-height:34px!important;padding:5px 7px!important;font-size:.84rem!important;}
@@ -1956,7 +1957,7 @@ html.tasun-auth-blocked body>*:not(#tasunDirectLoginBlockerR710){visibility:hidd
   "use strict";
   if(window.__TASUN_R710_DIRECT_OPEN_LOGIN_RETURN_CORE__)return;
   window.__TASUN_R710_DIRECT_OPEN_LOGIN_RETURN_CORE__=true;window.__TASUN_REQUIRE_LOGIN__=true;window.__TASUN_DIRECT_PAGE__=true;window.__TASUN_CHILD_PAGE__=true;window.__TASUN_NO_INDEX_REDIRECT__=false;
-  var BUILD="20260729_tasun_v5_xidong_docs_r792_detail_fast_plain_terminal_roundtrip_release",PAGE_FILE="汐東收發文明細表.html",PAGE_KEY="xidong-official-doc-detail",PAGE_TITLE="捷運汐止東湖線工程收發文明細表";
+  var BUILD="20260729_tasun_v5_xidong_docs_r793_detail_uid_collision_concurrent_union_terminal_sync_release",PAGE_FILE="汐東收發文明細表.html",PAGE_KEY="xidong-official-doc-detail",PAGE_TITLE="捷運汐止東湖線工程收發文明細表";
   var TTL=12*60*60*1000,RETURN_TTL=10*60*1000,JUMP_TTL=30*60*1000,REDIRECT_LOCK_MS=20000,PENDING_DEADLINE_MS=4200;
   var SESSION_KEYS=["tasunCurrentUser_v1","tasunSessionBridge_v1","tasunSession_v1","tasunSessionLogin_v2","tasunSso_v2","tasunSso_v1","tasunAuthSession_v1","tasunCurrentUser_v2","tasunIndexUser_v1","tasunLoginUser_v1"];
   var TOKEN_KEYS=["tasunBearerToken_v1","tasunCloudToken_v1","tasunCloudToken","tasun_token","tasunToken","tasunWorkerToken","tasun_auth_token","tasun_session_token","authToken","access_token","token"];
@@ -2420,7 +2421,7 @@ html.tasun-r764-table-layout-ready #detailSection>.tableWrap{visibility:visible!
 /* R777 active app: R506～R776 穩定核心加上階段展延欄位與重複文號治理。 */
 (function(){
 "use strict";
-const BUILD="20260729_tasun_v5_xidong_docs_r792_detail_fast_plain_terminal_roundtrip_release";
+const BUILD="20260729_tasun_v5_xidong_docs_r793_detail_uid_collision_concurrent_union_terminal_sync_release";
 window.__TASUN_OFFICIAL_DOCS_R506_REPORT_FIX__="r506_report_r505_cloud_read_rows_local_hydration_fix";
 window.__TASUN_OFFICIAL_DOCS_R507_EMPTY_TABLE_VISIBLE__=true;
 window.__TASUN_OFFICIAL_DOCS_R508_CLOUD_CONFIRMED_SYNC_STATUS_FIX__=true;
@@ -2663,6 +2664,9 @@ const R696_EXTENSION_PERMISSION={
   delete:{key:"official_doc_extension_delete",roles:["admin"]}
 };
 const PAGE_ENTRIES=["汐東收發文明細表.html","汐東收發文登錄表.html","汐東文件統計表.html"];
+const R793_ACTIVE_OFFICIAL_DOC_PAGES=Object.freeze(["汐東收發文明細表.html","汐東收發文登錄表.html","汐東文件統計表.html"]);
+const R793_RETIRED_OFFICIAL_DOC_PAGE_KEYS=Object.freeze(["xidong-official-reply-register","official-reply-register"]);
+window.__TASUN_OFFICIAL_DOCS_ACTIVE_PAGES__=R793_ACTIVE_OFFICIAL_DOC_PAGES.slice();window.__TASUN_OFFICIAL_DOCS_RETIRED_PAGE_KEYS__=R793_RETIRED_OFFICIAL_DOC_PAGE_KEYS.slice();
 let rows=[];
 let r710DeferredPersistScheduled=false;
 let r710LegacyMergeScheduled=false;
@@ -2809,8 +2813,8 @@ const CLOUD_LAST_SYNC_KEY="tasun_official_docs_cloud_last_sync_at__"+PAGE_KEY;
 function formatClock(ts){try{const d=new Date(Number(ts)||Date.now());return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")+":"+String(d.getSeconds()).padStart(2,"0");}catch(_){return "";}}
 let cloudSyncConfirmed=false;
 function normalizeCloudStatusText(msg){
-  let s=norm(msg);
-  for(let i=0;i<4;i++){const next=s.replace(/^(?:同步|雲端模式)\s*[:：]\s*/,"").trim();if(next===s)break;s=next;}
+  let s=norm(msg).replace(/[\u00a0\u2007\u202f]/g," ").trim();
+  s=s.replace(/^(?:(?:同步|雲端模式)\s*[:：]\s*)+/i,"").trim();
   if(!s) return "等待同步";
   if(/同步中|處理中|checking|檢查/i.test(s)) return "同步處理中";
   if(/同步未完成|待管理者同步/i.test(s)) return s;
@@ -2843,7 +2847,15 @@ function setStatus(msg,opts={}){
   }
   el.textContent=text;
   const mobile=document.getElementById("r689MobileSync");if(mobile&&mobile.textContent!==text)mobile.textContent=text;
-  window.__TASUN_OFFICIAL_DOCS_R792_LAST_STATUS__={text,confirmed:text==="已同步"&&confirmed===true,at:Date.now()};
+  window.__TASUN_OFFICIAL_DOCS_R793_LAST_STATUS__={text,confirmed:text==="已同步"&&confirmed===true,at:Date.now()};
+  r793InstallStatusValueGuard();
+}
+let r793StatusValueObserver=null,r793StatusSanitizeQueued=false;
+function r793SanitizeStatusValueNodes(){
+  r793StatusSanitizeQueued=false;["uiSync","r689MobileSync"].forEach(id=>{const el=document.getElementById(id);if(!el)return;const clean=normalizeCloudStatusText(el.textContent);if(el.textContent!==clean)el.textContent=clean;});return true;
+}
+function r793InstallStatusValueGuard(){
+  if(r793StatusValueObserver||typeof MutationObserver==="undefined")return true;const nodes=[document.getElementById("uiSync"),document.getElementById("r689MobileSync")].filter(Boolean);if(!nodes.length)return false;r793StatusValueObserver=new MutationObserver(()=>{if(r793StatusSanitizeQueued)return;r793StatusSanitizeQueued=true;queueMicrotask(r793SanitizeStatusValueNodes);});nodes.forEach(el=>r793StatusValueObserver.observe(el,{subtree:true,childList:true,characterData:true}));r793SanitizeStatusValueNodes();window.__TASUN_OFFICIAL_DOCS_R793_STATUS_VALUE_GUARD__=true;return true;
 }
 
 function r519CloudConfirmStorageKey(){return "tasun_official_documents_cloud_confirmed_r519_v1";}
@@ -3784,14 +3796,31 @@ function r774CollectKnownLocalRows(){const merged=[],seen=new Set();for(const st
 function r792IsRunActive(runId){return Number(runId)>0&&r792ActiveSyncRunId===runId;}
 function r792AssertRun(runId,deadlineAt){if(!r792IsRunActive(runId)){const e=new Error("R792_SYNC_RUN_SUPERSEDED");e.code="R792_SUPERSEDED";throw e;}if(Date.now()>deadlineAt){const e=new Error("R792_SYNC_DEADLINE");e.code="R792_DEADLINE";throw e;}return true;}
 function r792SetStatusForRun(runId,msg,opts){if(r792IsRunActive(runId))setStatus(msg,opts||{});}
-async function r792AttemptAuthoritativeRoundTrip(expected,protocolIds,attempt,deadlineAt,runId,initialProtocolId,initialRemote){
-  const failures=[];for(const id of r792OrderProtocolIds(protocolIds)){try{r792AssertRun(runId,deadlineAt);let preRemote;if(id===initialProtocolId&&Array.isArray(initialRemote))preRemote=initialRemote;else{const pre=await cloudRead([id]);r792AssertRun(runId,deadlineAt);preRemote=pre.rows;}const candidate=r792PrepareSyncRows((Array.isArray(preRemote)?preRemote:[]).concat(expected),"r792-before-cloud-upload-"+id+"-"+attempt,RESOURCE_KEY);await cloudMerge(candidate,[id]);r792AssertRun(runId,deadlineAt);await r774Delay(attempt===1?250:attempt===2?650:1200);r792AssertRun(runId,deadlineAt);const readback=await cloudRead([id]);r792AssertRun(runId,deadlineAt);const remote=r792PrepareSyncRows(readback.rows,"r792-authoritative-readback-"+id+"-"+attempt,RESOURCE_KEY),check=r774VerifyRemoteDataset(candidate,remote);r792RecordSyncDiagnostic("protocol-roundtrip",{attempt,protocolId:id,verified:check.verified,localActive:check.expectedActive,remoteActive:check.remoteActive,missing:check.missing.slice(0,8),stale:check.stale.slice(0,8),extra:check.extra.slice(0,8)});if(check.verified){r792PreferredProtocolId=id;window.__TASUN_OFFICIAL_DOCS_R792_AUTHORITATIVE_PROTOCOL__=id;return{protocolId:id,remote,expected:candidate,check,readback};}failures.push({protocolId:id,error:"readback-mismatch",check});}catch(e){if(e&&e.code==="R792_SUPERSEDED")throw e;failures.push({protocolId:id,error:String(e&&e.message||e)});r792RecordSyncDiagnostic("protocol-roundtrip-failed",{attempt,protocolId:id,error:String(e&&e.message||e)});}}
-  const err=new Error("R792_ALL_PAIRED_PROTOCOL_ROUNDTRIPS_FAILED:"+r792OrderProtocolIds(protocolIds).join(","));err.failures=failures;throw err;
+function r793UidOwnerMap(list){const map=new Map();dedupe(Array.isArray(list)?list:[]).forEach(r=>{const uid=norm(r&&r.uid||r&&r.pk),key=logicalKey(r);if(uid&&!map.has(uid))map.set(uid,key);});return map;}
+function r793StableUidForLogicalKey(key,suffix){const base="official-doc-r793-"+r774HashText(String(key||""));return suffix?base+"-"+suffix:base;}
+function r793EnsureUidLogicalKeyUniqueness(remoteRows,input,reason){
+  const remoteOwners=r793UidOwnerMap(remoteRows),used=new Map(),source=dedupe(Array.isArray(input)?input:[]),out=[];let changed=0;
+  source.forEach(raw=>{let r=ensureRow({...raw}),key=logicalKey(r),uid=norm(r.uid||r.pk),owner=uid?remoteOwners.get(uid):"",duplicateOwner=uid?used.get(uid):"";if(!uid||(owner&&owner!==key)||(duplicateOwner&&duplicateOwner!==key)){let next=r793StableUidForLogicalKey(key),n=1;while((remoteOwners.has(next)&&remoteOwners.get(next)!==key)||(used.has(next)&&used.get(next)!==key))next=r793StableUidForLogicalKey(key,String(++n));r.uid=next;r.pk=next;const now=Date.now();r.updatedAt=Math.max(r772TimeMs(r.updatedAt,0),now);r.rev=Math.max(Number(r.rev||0)+1,r.updatedAt);uid=next;changed++;}used.set(uid,key);out.push(ensureRow(r));});
+  const normalized=dedupe(out);window.__TASUN_OFFICIAL_DOCS_R793_UID_AUTHORITY__={reason:String(reason||""),changed,total:normalized.length,active:r774ActiveCount(normalized),at:Date.now()};if(changed)r792RecordSyncDiagnostic("uid-logicalkey-rekey",window.__TASUN_OFFICIAL_DOCS_R793_UID_AUTHORITY__);return normalized;
 }
+function r793VerifyExpectedSubset(expected,remote){
+  const exp=dedupe(Array.isArray(expected)?expected:[]),got=dedupe(Array.isArray(remote)?remote:[]),em=new Map(exp.map(r=>[logicalKey(r),r])),gm=new Map(got.map(r=>[logicalKey(r),r])),missing=[],stale=[],extra=[];em.forEach((r,key)=>{const x=gm.get(key);if(!x)missing.push(key);else if(!r774RecordAtLeast(x,r))stale.push(key);});gm.forEach((_r,key)=>{if(!em.has(key))extra.push(key);});return{verified:!missing.length&&!stale.length,expected:exp,remote:got,expectedActive:r774ActiveCount(exp),remoteActive:r774ActiveCount(got),expectedTotal:exp.length,remoteTotal:got.length,missing,stale,extra,digest:r774DatasetDigest(got),exact:!missing.length&&!stale.length&&!extra.length&&r774DatasetDigest(exp)===r774DatasetDigest(got)};
+}
+function r793RepairReadbackMismatch(candidate,remote,check,attempt){
+  const missing=new Set(check&&check.missing||[]),stale=new Set(check&&check.stale||[]),remoteOwners=r793UidOwnerMap(remote),used=new Map(),now=Date.now()+Math.max(1,Number(attempt)||1);let changed=0;
+  const repaired=dedupe(candidate).map(raw=>{let r=ensureRow({...raw}),key=logicalKey(r),uid=norm(r.uid||r.pk);if(missing.has(key)){let next=r793StableUidForLogicalKey(key,"m"+Math.max(1,Number(attempt)||1)),n=1;while((remoteOwners.has(next)&&remoteOwners.get(next)!==key)||(used.has(next)&&used.get(next)!==key))next=r793StableUidForLogicalKey(key,"m"+Math.max(1,Number(attempt)||1)+"-"+(++n));r.uid=next;r.pk=next;r.updatedAt=Math.max(r772TimeMs(r.updatedAt,0),now);r.rev=Math.max(Number(r.rev||0)+1,r.updatedAt);uid=next;changed++;}else if(stale.has(key)){r.updatedAt=Math.max(r772TimeMs(r.updatedAt,0)+1,now);r.rev=Math.max(Number(r.rev||0)+1,r.updatedAt);changed++;}used.set(uid,key);return ensureRow(r);});const out=r793EnsureUidLogicalKeyUniqueness(remote,repaired,"readback-repair-"+attempt);r792RecordSyncDiagnostic("readback-repair",{attempt,changed,missing:Array.from(missing).slice(0,8),stale:Array.from(stale).slice(0,8),active:r774ActiveCount(out)});return out;
+}
+async function r792AttemptAuthoritativeRoundTrip(expected,protocolIds,attempt,deadlineAt,runId,initialProtocolId,initialRemote){
+  const failures=[];for(const id of r792OrderProtocolIds(protocolIds)){try{r792AssertRun(runId,deadlineAt);let preRemote;if(id===initialProtocolId&&Array.isArray(initialRemote))preRemote=initialRemote;else{const pre=await cloudRead([id]);r792AssertRun(runId,deadlineAt);preRemote=pre.rows;}let candidate=r793EnsureUidLogicalKeyUniqueness(preRemote,r792PrepareSyncRows((Array.isArray(preRemote)?preRemote:[]).concat(expected),"r793-before-cloud-upload-"+id+"-"+attempt,RESOURCE_KEY),"protocol-"+id+"-attempt-"+attempt);await cloudMerge(candidate,[id]);r792AssertRun(runId,deadlineAt);await r774Delay(attempt===1?250:attempt===2?650:1200);r792AssertRun(runId,deadlineAt);let readback=await cloudRead([id]);r792AssertRun(runId,deadlineAt);let remote=r792PrepareSyncRows(readback.rows,"r793-authoritative-readback-"+id+"-"+attempt,RESOURCE_KEY),check=r793VerifyExpectedSubset(candidate,remote);
+    if(!check.verified&&(check.missing.length||check.stale.length)){candidate=r793RepairReadbackMismatch(candidate,remote,check,attempt);await cloudMerge(candidate,[id]);r792AssertRun(runId,deadlineAt);await r774Delay(attempt===1?320:700);r792AssertRun(runId,deadlineAt);readback=await cloudRead([id]);r792AssertRun(runId,deadlineAt);remote=r792PrepareSyncRows(readback.rows,"r793-repaired-readback-"+id+"-"+attempt,RESOURCE_KEY);check=r793VerifyExpectedSubset(candidate,remote);}
+    r792RecordSyncDiagnostic("protocol-roundtrip",{attempt,protocolId:id,verified:check.verified,exact:check.exact,localActive:check.expectedActive,remoteActive:check.remoteActive,missing:check.missing.slice(0,8),stale:check.stale.slice(0,8),concurrentExtra:check.extra.slice(0,8)});if(check.verified){const converged=r793EnsureUidLogicalKeyUniqueness(remote,r792PrepareSyncRows(remote.concat(candidate),"r793-concurrent-cloud-union-"+id+"-"+attempt,RESOURCE_KEY),"concurrent-union-"+id);r792PreferredProtocolId=id;window.__TASUN_OFFICIAL_DOCS_R793_AUTHORITATIVE_PROTOCOL__=id;window.__TASUN_OFFICIAL_DOCS_R793_CONCURRENT_REMOTE_EXTRAS__=check.extra.slice();return{protocolId:id,remote:converged,expected:converged,check:{...check,remote:converged,remoteActive:r774ActiveCount(converged),remoteTotal:converged.length,digest:r774DatasetDigest(converged)},readback};}failures.push({protocolId:id,error:"readback-mismatch",check});}catch(e){if(e&&e.code==="R792_SUPERSEDED")throw e;failures.push({protocolId:id,error:String(e&&e.message||e)});r792RecordSyncDiagnostic("protocol-roundtrip-failed",{attempt,protocolId:id,error:String(e&&e.message||e)});}}
+  const err=new Error("R793_ALL_PAIRED_PROTOCOL_ROUNDTRIPS_FAILED:"+r792OrderProtocolIds(protocolIds).join(","));err.failures=failures;throw err;
+}
+
 async function authoritySyncCoreR710(reason,runId){
   const why=String(reason||"open"),deadlineAt=Date.now()+R792_SYNC_DEADLINE_MS;r774LifecycleLastAt=Date.now();r774ClearDeviceCloudEndpointOverrides();r792SetStatusForRun(runId,"同步中");r774ClearFalseConfirmedMarkers();r774SetRoundTripState({verified:false,pending:true,reason:why,message:"同步處理中"});window.__TASUN_OFFICIAL_DOCS_R792_SYNC_DIAGNOSTICS__=[];
   try{
-    r792AssertRun(runId,deadlineAt);const local=r792PrepareSyncRows((Array.isArray(rows)?rows:[]).concat(r774CollectKnownLocalRows()),"r792-open-local-dedupe",RESOURCE_KEY),first=await cloudRead();r792AssertRun(runId,deadlineAt);const initialProtocol=String(first.protocolId||first.protocolIds&&first.protocolIds[0]||"stable-v4"),remoteFirst=r792PrepareSyncRows(first.rows,"r792-initial-cloud-download",RESOURCE_KEY);let expected=r792PrepareSyncRows(remoteFirst.concat(local),"r792-cloud-download-local-refresh",RESOURCE_KEY),selected=null,attempts=0;
+    r792AssertRun(runId,deadlineAt);const local=r792PrepareSyncRows((Array.isArray(rows)?rows:[]).concat(r774CollectKnownLocalRows()),"r792-open-local-dedupe",RESOURCE_KEY),first=await cloudRead();r792AssertRun(runId,deadlineAt);const initialProtocol=String(first.protocolId||first.protocolIds&&first.protocolIds[0]||"stable-v4"),remoteFirst=r792PrepareSyncRows(first.rows,"r792-initial-cloud-download",RESOURCE_KEY);let expected=r793EnsureUidLogicalKeyUniqueness(remoteFirst,r792PrepareSyncRows(remoteFirst.concat(local),"r793-cloud-download-local-refresh",RESOURCE_KEY),"initial-cloud-local-union"),selected=null,attempts=0;
     rows=expected.slice();saveLocal(false);renderAll();r792AssertRun(runId,deadlineAt);
     if(canWrite()){
       let lastError=null;const protocolIds=r792OrderProtocolIds([initialProtocol,...R792_PROTOCOL_PRIORITY]);while(!selected&&attempts<R774_MAX_ROUNDTRIP_ATTEMPTS){attempts++;try{selected=await r792AttemptAuthoritativeRoundTrip(expected,protocolIds,attempts,deadlineAt,runId,initialProtocol,remoteFirst);expected=selected.expected;}catch(e){lastError=e;if(e&&e.code==="R792_SUPERSEDED")throw e;if(e&&e.code==="R792_DEADLINE")break;}}
@@ -3805,7 +3834,7 @@ async function authoritySyncCoreR710(reason,runId){
     const state=r774SetRoundTripState({verified:true,pending:false,reason:why,attempts,localActive:finalCheck.expectedActive,remoteActive:finalCheck.remoteActive,localTotal:finalCheck.expectedTotal,remoteTotal:finalCheck.remoteTotal,digest:r774DatasetDigest(rows),message:"已同步",transportCount:1,authoritativeProtocol:protocolId,readableProtocols:[protocolId],transportChecks:[{name:protocolId,verified:true,active:finalCheck.remoteActive,digest:finalCheck.digest}],diagnostics:(window.__TASUN_OFFICIAL_DOCS_R792_SYNC_DIAGNOSTICS__||[]).slice(-20)});
     cloudSyncConfirmed=true;window.__TASUN_OFFICIAL_DOCS_CLOUD_CONFIRMED_R506__=true;window.__TASUN_OFFICIAL_DOCS_CLOUD_CONFIRMED_R508__=true;window.__TASUN_OFFICIAL_DOCS_CLOUD_REMOTE_ROWS_R506__=state.remoteActive;window.__TASUN_OFFICIAL_DOCS_CLOUD_REMOTE_ROWS_R508__=state.remoteActive;window.__TASUN_OFFICIAL_DOCS_CLOUD_CONFIRMED_AT_R508__=Date.now();window.__TASUN_OFFICIAL_DOCS_R792_FAST_PLAIN_TERMINAL_ROUNDTRIP_VERIFIED__=true;publishR519CloudConfirmed({source:"authoritySync-r792-"+why,remoteRows:state.remoteActive,rows:state.localActive,digest:state.digest,apiBase:state.apiBase,transportCount:1,authoritativeProtocol:protocolId,readableProtocols:[protocolId]});r792SetStatusForRun(runId,"已同步",{confirmed:true});finalizeR519CloudConfirmedStatus("authoritySync-r792-success");return true;
   }catch(e){
-    if(!r792IsRunActive(runId)||e&&e.code==="R792_SUPERSEDED")return false;console.warn("[Tasun R792] fast plain terminal sync failed",e,window.__TASUN_OFFICIAL_DOCS_R792_SYNC_DIAGNOSTICS__);r774ClearFalseConfirmedMarkers();window.__TASUN_OFFICIAL_DOCS_CLOUD_LAST_FAILURE_AT_R519__=Date.now();const message=e&&e.code==="R792_DEADLINE"?"同步未完成(逾時)":classifyCloudError(e);r774SetRoundTripState({verified:false,pending:false,reason:why,localActive:r774ActiveCount(rows),remoteActive:Number(window.__TASUN_OFFICIAL_DOCS_R774_REMOTE_ACTIVE_ROWS__||0),digest:r774DatasetDigest(rows),message,transportCount:r774LastReadMeta&&r774LastReadMeta.protocolIds?r774LastReadMeta.protocolIds.length:0,readableProtocols:r774LastReadMeta&&r774LastReadMeta.protocolIds?r774LastReadMeta.protocolIds.slice():[],diagnostics:(window.__TASUN_OFFICIAL_DOCS_R792_SYNC_DIAGNOSTICS__||[]).slice(-20),error:String(e&&e.message||e)});r792SetStatusForRun(runId,message,{confirmed:false});renderAll();return false;
+    if(!r792IsRunActive(runId)||e&&e.code==="R792_SUPERSEDED")return false;console.warn("[Tasun R793] authoritative union sync failed",e,window.__TASUN_OFFICIAL_DOCS_R792_SYNC_DIAGNOSTICS__);r774ClearFalseConfirmedMarkers();window.__TASUN_OFFICIAL_DOCS_CLOUD_LAST_FAILURE_AT_R519__=Date.now();const message=e&&e.code==="R792_DEADLINE"?"同步未完成(逾時)":classifyCloudError(e);r774SetRoundTripState({verified:false,pending:false,reason:why,localActive:r774ActiveCount(rows),remoteActive:Number(window.__TASUN_OFFICIAL_DOCS_R774_REMOTE_ACTIVE_ROWS__||0),digest:r774DatasetDigest(rows),message,transportCount:r774LastReadMeta&&r774LastReadMeta.protocolIds?r774LastReadMeta.protocolIds.length:0,readableProtocols:r774LastReadMeta&&r774LastReadMeta.protocolIds?r774LastReadMeta.protocolIds.slice():[],diagnostics:(window.__TASUN_OFFICIAL_DOCS_R792_SYNC_DIAGNOSTICS__||[]).slice(-20),error:String(e&&e.message||e)});r792SetStatusForRun(runId,message,{confirmed:false});renderAll();return false;
   }
 }
 function authoritySync(reason){
@@ -3821,7 +3850,10 @@ function r774RegisterSelfHeal(){try{const core=window.TasunSelfHealV5||window.__
   add("officialDocsR792FirstReadableProtocolStopsDiscovery",()=>String(r774ReadResource).includes("for(const id of ids)")&&String(r774ReadResource).includes("return {data:item.data")&&!String(r774ReadResource).includes("Promise.allSettled"),()=>{r774ScheduleLifecycleSync("self-heal-r792-read",160);return true;});
   add("officialDocsR792StableV4ReportMatchedReadMergeRead",()=>{const map=new Map(r792ProtocolSpecs(RESOURCE_KEY,[]).map(p=>[p.id,p]));return map.get("stable-v4").read.path==="/api/tasun/read"&&map.get("stable-v4").merge.path==="/api/tasun/merge"&&String(r792AttemptAuthoritativeRoundTrip).includes("cloudMerge(candidate,[id])")&&String(r792AttemptAuthoritativeRoundTrip).includes("cloudRead([id])");},()=>{r774ScheduleLifecycleSync("self-heal-r792-roundtrip",160);return true;});
   add("officialDocsR792TerminalStatusDeadline",()=>R792_SYNC_DEADLINE_MS<=32000&&String(authoritySync).includes("同步未完成(逾時)")&&String(authoritySyncCoreR710).includes("pending:false"));
-  add("officialDocsR792StatusPrefixSingleValue",()=>normalizeCloudStatusText("同步：同步：同步處理中")==="同步處理中"&&normalizeCloudStatusText("同步：已同步")==="已同步");
+  add("officialDocsR793StatusPrefixSingleValue",()=>normalizeCloudStatusText("同步：同步：同步處理中")==="同步處理中"&&normalizeCloudStatusText("同步：已同步")==="已同步"&&r793InstallStatusValueGuard(),r793InstallStatusValueGuard);
+  add("officialDocsR793UidLogicalKeyOneToOne",()=>{const sample=r793EnsureUidLogicalKeyUniqueness([{uid:"same",文號:"A",updatedAt:1,rev:1,deleted:false}],[{uid:"same",文號:"A",updatedAt:1,rev:1,deleted:false},{uid:"same",文號:"B",updatedAt:2,rev:2,deleted:false}],"self-heal");return sample.length===2&&new Set(sample.map(r=>r.uid)).size===2;});
+  add("officialDocsR793ConcurrentRemoteExtraAccepted",()=>{const a={uid:"a",文號:"A",updatedAt:1,rev:1,deleted:false},b={uid:"b",文號:"B",updatedAt:2,rev:2,deleted:false};const c=r793VerifyExpectedSubset([a],[a,b]);return c.verified===true&&c.exact===false&&c.extra.length===1;});
+  add("officialDocsR793TwoPageTopologyNoReplyRegister",()=>R793_ACTIVE_OFFICIAL_DOC_PAGES.length===3&&R793_RETIRED_OFFICIAL_DOC_PAGE_KEYS.includes("xidong-official-reply-register")&&!BUTTONS.some(b=>b.key==="official_reply_register"));
   add("officialDocsR792LifecycleNoProcessingFlicker",()=>R792_LIFECYCLE_COOLDOWN_MS>=60000&&R792_RECENT_VERIFIED_MS>=120000&&String(r774ScheduleLifecycleSync).includes("pageshow|focus|visible"));
   add("officialDocsR792AuxiliaryResourceIsolation",()=>{const before=rows,prepared=r792PrepareSyncRows([{uid:"option-store",updatedAt:1,rev:1,deleted:false,fields:{a:{b:{value:"甲 乙"}}}}],"self-heal","official-document-field-options");return rows===before&&prepared.length===1&&prepared[0].fields.a.b.value==="甲乙";});
   add("officialDocsR792ConsoleDiagnostics",()=>Array.isArray(window.__TASUN_OFFICIAL_DOCS_R792_SYNC_DIAGNOSTICS__)||typeof r792RecordSyncDiagnostic==="function");
@@ -3833,10 +3865,10 @@ function r774RegisterSelfHeal(){try{const core=window.TasunSelfHealV5||window.__
   add("officialDocsR774MultiDeviceReceipt",()=>{const state=window.__TASUN_R774_DATASET_ROUNDTRIP_STATE__;if(!state||!state.verified)return true;let receipt=null;try{receipt=JSON.parse(localStorage.getItem(R774_SYNC_RECEIPT_KEY)||"null");}catch(_e){}return !!(receipt&&receipt.verified&&receipt.apiBase===CANONICAL_API_BASE&&Number(receipt.localActive)===r774ActiveCount(rows)&&Number(receipt.remoteActive)===r774ActiveCount(rows)&&receipt.digest===r774DatasetDigest(rows));},()=>{r774ScheduleLifecycleSync("self-heal-receipt",160);return true;});
   add("officialDocsR774DeterministicSequenceAcrossDevices",()=>rows.filter(r=>r&&!r774Boolean(r.deleted)).every((r,i)=>String(r["項次"])===String(i+1)),()=>{rows=dedupe(rows);persistRowsToLocal(rows,false,true);renderAll();return true;});
   add("officialDocsR774LifecycleSyncBounded",()=>!!window.__TASUN_OFFICIAL_DOCS_R774_LIFECYCLE_SYNC_BOUND__&&!String(r774ScheduleLifecycleSync).includes("setInterval"),r774InstallLifecycleSync);
-  add("officialDocsR774NoFalseSyncedFromOldMarker",()=>String(finalizeR519CloudConfirmedStatus).includes("roundTrip.verified!==true")&&String(publishR519CloudConfirmed).includes("roundTrip.verified!==true"));return true;}catch(e){console.warn("[Tasun R792] self-heal register failed",e);return false;}}
-window.__TASUN_OFFICIAL_DOCS_R791_SYNC_SUPERSEDED_BY_R792__=true;
-window.__TASUN_OFFICIAL_DOCS_R792_FAST_PLAIN_TERMINAL_SYNC_RULE__=Object.freeze({apiBase:CANONICAL_API_BASE,apiBaseAuthority:"page-config-only",reportEvidence:"R506 2026-07-29 plain-bridge read/merge/read HTTP 200 while json-bridge failed",flow:"stable-v4-plain-first-read-local-union-paired-merge-same-protocol-readback-terminal-verify-r792",protocols:{"stable-v4":"POST /api/tasun/read -> POST /api/tasun/merge payload.db","standard-v1":"fallback GET /api/read -> POST /api/merge items","legacy-query":"fallback GET /api/tasun/pull -> POST /api/tasun/merge?key rows","legacy-db":"fallback GET /api/db/:key -> POST /api/db/:key/merge rows"},transportVariants:["bridge-plain-credentialed","bridge-plain-no-cookie","cookie-json-minimal","bearer-json-no-cookie","legacy-json-session-headers"],maxRoundTripAttempts:R774_MAX_ROUNDTRIP_ATTEMPTS,syncDeadlineMs:R792_SYNC_DEADLINE_MS,lifecycleCoolDownMs:R792_LIFECYCLE_COOLDOWN_MS,verification:["logicalKey","uid","content","updatedAt","rev","deleted","activeCount","digest","singleAuthoritativeWritableProtocol","terminalStatus"],noInfinitePolling:true});
-window.__TASUN_OFFICIAL_DOCS_R774_SYNC_RULE__=window.__TASUN_OFFICIAL_DOCS_R792_FAST_PLAIN_TERMINAL_SYNC_RULE__;
+  add("officialDocsR774NoFalseSyncedFromOldMarker",()=>String(finalizeR519CloudConfirmedStatus).includes("roundTrip.verified!==true")&&String(publishR519CloudConfirmed).includes("roundTrip.verified!==true"));return true;}catch(e){console.warn("[Tasun R793] self-heal register failed",e);return false;}}
+window.__TASUN_OFFICIAL_DOCS_R792_SYNC_SUPERSEDED_BY_R793__=true;
+window.__TASUN_OFFICIAL_DOCS_R793_AUTHORITATIVE_UNION_SYNC_RULE__=Object.freeze({apiBase:CANONICAL_API_BASE,apiBaseAuthority:"page-config-only",reportEvidence:"R506 2026-07-29 15:21:15 Read/Merge/Read all 200 but UI local17/cloud16",flow:"stable-v4-plain-first-read-cloud-uid-authority-local-union-rekey-collision-paired-merge-subset-readback-concurrent-remote-union-terminal-verify-r793",activePages:R793_ACTIVE_OFFICIAL_DOC_PAGES.slice(),retiredPageKeys:R793_RETIRED_OFFICIAL_DOC_PAGE_KEYS.slice(),protocols:{"stable-v4":"POST /api/tasun/read -> POST /api/tasun/merge payload.db","standard-v1":"fallback GET /api/read -> POST /api/merge items","legacy-query":"fallback GET /api/tasun/pull -> POST /api/tasun/merge?key rows","legacy-db":"fallback GET /api/db/:key -> POST /api/db/:key/merge rows"},transportVariants:["bridge-plain-credentialed","bridge-plain-no-cookie","cookie-json-minimal","bearer-json-no-cookie","legacy-json-session-headers"],maxRoundTripAttempts:R774_MAX_ROUNDTRIP_ATTEMPTS,syncDeadlineMs:R792_SYNC_DEADLINE_MS,lifecycleCoolDownMs:R792_LIFECYCLE_COOLDOWN_MS,verification:["logicalKey","uid-owner","uid-collision-rekey","content","updatedAt","rev","deleted","expected-subset","concurrent-remote-union","activeCount","digest","terminalStatus"],noInfinitePolling:true});
+window.__TASUN_OFFICIAL_DOCS_R774_SYNC_RULE__=window.__TASUN_OFFICIAL_DOCS_R793_AUTHORITATIVE_UNION_SYNC_RULE__;queueMicrotask(r793InstallStatusValueGuard);
 function setEditPickMode(on){
   editPickMode=!!on;
   if(editPickMode && typeof setDeletePickModeR618==="function" && deletePickMode) setDeletePickModeR618(false);
@@ -7830,7 +7862,7 @@ buildImportRowsFromSheet=function(rows2d){if(!Array.isArray(rows2d)||rows2d.leng
 function r777SlotOffsets(slots){let cursor=R706_BASE_COLUMN_COUNT;return(slots||[]).map(slot=>{const start=cursor;cursor+=slot.fields.length;return{slot,start,end:cursor-1};});}
 exportExcelFile=function(){ensureXLSXLoaded().then(function(){const list=r706ActiveRows(),slots=r706StageSlots(list),offsets=r777SlotOffsets(slots),total=R706_BASE_COLUMN_COUNT+slots.reduce((sum,slot)=>sum+slot.fields.length,0),top=Array(total).fill(""),head=R706_BASE_FIELDS.slice();top[0]=R706_STAGE_START;offsets.forEach(({slot,start})=>{top[start]=slot.type+"("+slot.count+")";head.push(...slot.fields);});const aoa=[top,head];list.forEach((row,index)=>{r706ApplySummary(row);const values=R706_BASE_FIELDS.map(field=>field==="項次"?index+1:(row[field]||""));slots.forEach(slot=>{const stage=r706ActiveStages(row).find(item=>item["階段類型"]===slot.type&&Number(item["同類次數"])===slot.count);slot.fields.forEach(field=>values.push(stage?(stage[field]||""):""));});aoa.push(values);});if(!list.length)aoa.push(Array(head.length).fill(""));const ws=XLSX.utils.aoa_to_sheet(aoa);ws["!merges"]=[{s:{r:0,c:0},e:{r:0,c:R706_BASE_COLUMN_COUNT-1}}];offsets.forEach(({start,end})=>ws["!merges"].push({s:{r:0,c:start},e:{r:0,c:end}}));list.forEach((row,rowIndex)=>{const setLink=(column,url)=>{if(column<0||!url)return;const address=XLSX.utils.encode_cell({r:rowIndex+2,c:column}),cell=ws[address]||(ws[address]={t:"s",v:""});cell.l={Target:url,Tooltip:"開啟文件"};};setLink(R706_BASE_FIELDS.indexOf("文號"),r706Url(row,"文號"));setLink(R706_BASE_FIELDS.indexOf("文件編號\n(來文)"),r706Url(row,"文件編號\n(來文)"));setLink(R706_BASE_FIELDS.indexOf("文件名稱\n(來文)"),r706Url(row,"文件名稱\n(來文)"));offsets.forEach(({slot,start})=>{const stage=r706ActiveStages(row).find(item=>item["階段類型"]===slot.type&&Number(item["同類次數"])===slot.count);if(!stage)return;setLink(start+slot.fields.indexOf("文號"),r706Url(stage,"文號"));if(slot.type===R706_STAGE_CONTRACTOR){setLink(start+slot.fields.indexOf("文件編號\n(回覆)"),r706Url(stage,"文件編號\n(回覆)"));setLink(start+slot.fields.indexOf("文件名稱\n(回覆)"),r706Url(stage,"文件名稱\n(回覆)"));}});});ws["!cols"]=head.map(text=>({wch:/主旨|文件名稱/.test(text)?34:/文號|文件編號/.test(text)?22:/日期|狀況|處理情形|展延/.test(text)?16:12}));const book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,ws,"汐東收發文明細表");XLSX.writeFile(book,"汐東收發文明細表_"+today()+".xlsx");toast("已依 R777 階段展延欄位格式下載不限階段 Excel。");}).catch(()=>alert("Excel 套件載入失敗，請確認網路連線後再試。"));};
 function r712ModuleDomReady(){
-  try{const host=document.getElementById("r635EditFormMenuHost"),direct=document.getElementById("btnDirectRegisterR719"),legacy=document.querySelector(".r635ModuleLegacyAnchors"),links=legacy?legacy.querySelectorAll(".moduleBtn"):[];return !!(host&&direct&&document.getElementById("btnDetailGoStatistics")&&document.getElementById("btnDetailGoStatistics").parentElement===host&&legacy&&links.length===2&&!document.getElementById("btnEditFormMenuR635")&&!document.getElementById("r635EditFormMenuPanel")&&!document.querySelector('[href*="汐東回覆文登錄表"],[data-key="official_reply_register"]'));}catch(_e){return false;}
+  try{const host=document.getElementById("r635EditFormMenuHost"),direct=document.getElementById("btnDirectRegisterR719"),legacy=document.querySelector(".r635ModuleLegacyAnchors"),links=legacy?legacy.querySelectorAll(".moduleBtn"):[];return !!(host&&direct&&document.getElementById("btnDetailGoStatistics")&&document.getElementById("btnDetailGoStatistics").parentElement===host&&legacy&&links.length===2&&!document.getElementById("btnEditFormMenuR635")&&!document.getElementById("r635EditFormMenuPanel"));}catch(_e){return false;}
 }
 function renderModuleButtons(){
   const bar=$("#moduleBar");if(!bar)return false;if(r712ModuleRenderActive){window.__TASUN_R712_MODULE_RENDER_REENTRY_BLOCKED__=Number(window.__TASUN_R712_MODULE_RENDER_REENTRY_BLOCKED__||0)+1;return true;}
@@ -7860,7 +7892,6 @@ function renderAll(){
     r742InstallIndependentScroll();r742EnsureTwinButtons();
     updateStatus();
     r777ScheduleDuplicateScan("render-all",false);
-    document.querySelectorAll('[href*="汐東回覆文登錄表"],[data-key="official_reply_register"]').forEach(el=>el.remove());
     window.__TASUN_R712_RENDERALL_BOUNDED__=true;
     window.__TASUN_R712_RENDERALL_COUNT__=Number(window.__TASUN_R712_RENDERALL_COUNT__||0)+1;
   }catch(e){console.warn("[Tasun R712] renderAll failed",e);}
@@ -8432,7 +8463,7 @@ r743RegisterStartup();
 (function(){
   "use strict";
   var PAGE_KEY="xidong-official-doc-detail";
-  var BUILD="20260729_tasun_v5_xidong_docs_r792_detail_fast_plain_terminal_roundtrip_release";
+  var BUILD="20260729_tasun_v5_xidong_docs_r793_detail_uid_collision_concurrent_union_terminal_sync_release";
   var applying=false,retryCount=0,observerInstalled=false,wrapped=false,retryTimer=0,lastApplyAt=0;var MAX_RETRY=5,APPLY_COOLDOWN=260;window.__TASUN_R707_LAYOUT_RETRY_MAX__=MAX_RETRY;
   window.__TASUN_OFFICIAL_DOCS_R641_ZONE1_SEARCH_DELETE_RESTORE_FIX__=true;
   function q(sel,root){return (root||document).querySelector(sel);} 
@@ -8600,7 +8631,7 @@ r743RegisterStartup();
   "use strict";
   if(window.__TASUN_OFFICIAL_DOCS_R683_DETAIL_STATISTICS_BUTTON__) return;
   window.__TASUN_OFFICIAL_DOCS_R683_DETAIL_STATISTICS_BUTTON__=true;
-  var BUILD="20260729_tasun_v5_xidong_docs_r792_detail_fast_plain_terminal_roundtrip_release", PAGE_KEY="xidong-official-doc-detail";
+  var BUILD="20260729_tasun_v5_xidong_docs_r793_detail_uid_collision_concurrent_union_terminal_sync_release", PAGE_KEY="xidong-official-doc-detail";
   var BUTTON_ID="btnDetailGoStatistics", TARGET="汐東文件統計表.html", LABEL="汐東文件統計表";
   function q(sel,root){return (root||document).querySelector(sel);}
   function norm(v){return v===undefined||v===null?"":String(v).trim();}
@@ -8951,7 +8982,7 @@ r743RegisterStartup();
   "use strict";
   if(window.__TASUN_OFFICIAL_DOCS_R770_MOBILE_TWO_PANE_FIRST4__)return;
   window.__TASUN_OFFICIAL_DOCS_R770_MOBILE_TWO_PANE_FIRST4__=true;
-  var BUILD="20260729_tasun_v5_xidong_docs_r792_detail_fast_plain_terminal_roundtrip_release";
+  var BUILD="20260729_tasun_v5_xidong_docs_r793_detail_uid_collision_concurrent_union_terminal_sync_release";
   var PAGE_KEY="xidong-official-doc-detail",FIXED_COUNT=4,MAX_RETRY=3,COOL_DOWN=1800;
   var state={building:false,ready:false,rebuildTimer:0,retry:0,lastBuildAt:0,renderWait:0,syncLock:false,syncRaf:0,heightRaf:0,observer:null,controller:typeof AbortController!=="undefined"?new AbortController():null,shell:null,left:null,right:null,sourceTable:null,sourceWrap:null,leftSubjectAnchor:0,leftClampRaf:0};
   function q(sel,root){return(root||document).querySelector(sel);}
@@ -9137,7 +9168,7 @@ r743RegisterStartup();
   "use strict";
   if(window.__TASUN_OFFICIAL_DOCS_R699_EXTENSION_STATUS_CURRENT_DOC_LINK_CORE__) return;
   window.__TASUN_OFFICIAL_DOCS_R699_EXTENSION_STATUS_CURRENT_DOC_LINK_CORE__=true;
-  const R699_BUILD="20260729_tasun_v5_xidong_docs_r792_detail_fast_plain_terminal_roundtrip_release";
+  const R699_BUILD="20260729_tasun_v5_xidong_docs_r793_detail_uid_collision_concurrent_union_terminal_sync_release";
   const LINK_FIELDS=["文號","收/發文附件","回覆文號\n(監造)","回覆文號 (監造)","展延實際提送文號","現行處理文號"];
   const EXT_LINK_FIELDS=["統包申請文號","監造回覆文號","統包實際再送文號"];
   function n(v){try{return normalizeText(v);}catch(_e){return v===undefined||v===null?"":String(v).trim();}}
