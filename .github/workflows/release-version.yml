@@ -1,1 +1,321 @@
+name: Tasun R925 Exact Release No-Downgrade
 
+"on":
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - "**/*.html"
+      - "**/*.htm"
+      - "**/*.js"
+      - "**/*.mjs"
+      - "**/*.css"
+      - "**/*.json"
+      - "**/*.yml"
+      - "**/*.yaml"
+      - "**/*.txt"
+      - "TASUN_REBUILD"
+      - "TASUN_REBUILD_STAMP"
+      - ".github/workflows/release-version.yml"
+      - "publish-version_tasun_project_autoscan.mjs"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  actions: read
+
+concurrency:
+  group: tasun-r925-exact-pages-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TASUN_PAGES_BASE_URL: https://wutasun.github.io/Tasun
+
+jobs:
+  prepare:
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message || '', '[skip tasun-version]') }}
+    name: Validate monotonic release and package exact artifact
+    runs-on: ubuntu-latest
+    outputs:
+      release_build: ${{ steps.contract.outputs.build }}
+    steps:
+      - name: Checkout repository with release history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enforce historical highest-R release floor
+        id: floor
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { execFileSync } from "node:child_process";
+          const rank = v => Number((String(v || "").match(/r(\d+)/i) || [0,0])[1] || 0);
+          const git = args => execFileSync("git", args, {encoding:"utf8", stdio:["ignore","pipe","ignore"]}).trim();
+          const current = JSON.parse(fs.readFileSync("tasun-version.json","utf8"));
+          const currentBuild = String(current.version || "").trim();
+          const currentRank = rank(currentBuild);
+          let best = {rank: currentRank, build: currentBuild, sha: process.env.GITHUB_SHA || "HEAD"};
+          let shas = [];
+          try { shas = git(["log","-n","80","--format=%H","--","tasun-version.json"]).split(/\r?\n/).filter(Boolean); } catch {}
+          for (const sha of shas) {
+            try {
+              const data = JSON.parse(git(["show",`${sha}:tasun-version.json`]));
+              const build = String(data.version || "").trim();
+              const r = rank(build);
+              if (r > best.rank) best = {rank:r, build, sha};
+            } catch {}
+          }
+          const downgrade = currentRank > 0 && best.rank > currentRank;
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `downgrade=${downgrade ? "true" : "false"}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `floor_sha=${best.sha}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `floor_build=${best.build}\n`);
+          console.log(JSON.stringify({currentBuild,currentRank,historicalFloor:best,downgrade}));
+          NODE
+
+      - name: Restore formal six files when an older release was uploaded
+        if: steps.floor.outputs.downgrade == 'true'
+        shell: bash
+        env:
+          FLOOR_SHA: ${{ steps.floor.outputs.floor_sha }}
+        run: |
+          set -euo pipefail
+          echo "::warning::Older Tasun release upload detected. Restoring the historical highest-R formal release before Pages deployment."
+          git checkout "$FLOOR_SHA" -- \
+            "汐東收發文明細表.html" \
+            "汐東收發文登錄表.html" \
+            "汐東文件統計表.html" \
+            tasun-version.json \
+            TASUN_REBUILD \
+            TASUN_REBUILD_STAMP
+
+      - name: Retire legacy publication path and require real workflow path
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f github/workflows/release-version.yml
+          rm -f release-version.yml
+          rm -f .nojekyll
+          test -f .github/workflows/release-version.yml
+          test -f publish-version_tasun_project_autoscan.mjs
+
+      - name: Resolve changed formal and core files
+        shell: bash
+        run: |
+          set -euo pipefail
+          BEFORE="${{ github.event.before }}"
+          HEAD="${{ github.sha }}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            git diff-tree --no-commit-id --name-only -r HEAD > /tmp/tasun_changed_files.txt || true
+          elif [[ -n "${BEFORE:-}" && ! "$BEFORE" =~ ^0+$ ]]; then
+            git diff --name-only "$BEFORE" "$HEAD" > /tmp/tasun_changed_files.txt || true
+          else
+            git diff-tree --no-commit-id --name-only -r "$HEAD" > /tmp/tasun_changed_files.txt || true
+          fi
+          git diff --name-only >> /tmp/tasun_changed_files.txt || true
+          {
+            cat /tmp/tasun_changed_files.txt
+            printf '%s\n' \
+              "汐東收發文明細表.html" \
+              "汐東收發文登錄表.html" \
+              "汐東文件統計表.html" \
+              ".github/workflows/release-version.yml"
+          } | awk 'NF && !seen[$0]++' > /tmp/tasun_changed_files_expanded.txt
+          mv /tmp/tasun_changed_files_expanded.txt /tmp/tasun_changed_files.txt
+          cat /tmp/tasun_changed_files.txt
+
+      - name: Run Tasun exact page version autoscan
+        shell: bash
+        env:
+          TASUN_BEFORE_SHA: ${{ github.event.before }}
+          TASUN_HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          export TASUN_CHANGED_FILES="$(cat /tmp/tasun_changed_files.txt)"
+          node publish-version_tasun_project_autoscan.mjs
+
+      - name: Validate final three-page release contract
+        id: contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import crypto from "node:crypto";
+          const data = JSON.parse(fs.readFileSync("tasun-version.json", "utf8"));
+          const root = String(data.version || "").trim();
+          const rebuild = String(data.rebuildStamp || data.buildStamp || root).trim();
+          const pages = [
+            ["汐東收發文明細表.html", ["汐東收發文明細表.html", "xidong-official-doc-detail", "official-doc-detail"]],
+            ["汐東收發文登錄表.html", ["汐東收發文登錄表.html", "xidong-official-doc-register", "official-doc-register"]],
+            ["汐東文件統計表.html", ["汐東文件統計表.html", "xidong-official-doc-statistics", "official-doc-statistics"]]
+          ];
+          if (!root || root !== rebuild) throw new Error("root version/rebuild mismatch");
+          if (fs.readFileSync("TASUN_REBUILD", "utf8").trim() !== rebuild) throw new Error("TASUN_REBUILD mismatch");
+          if (fs.readFileSync("TASUN_REBUILD_STAMP", "utf8").trim() !== rebuild) throw new Error("TASUN_REBUILD_STAMP mismatch");
+          for (const [file, aliases] of pages) {
+            const bytes = fs.readFileSync(file);
+            const html = bytes.toString("utf8");
+            const build = (html.match(/name=["']tasun-build-stamp["'][^>]+content=["']([^"']+)/i)
+              || html.match(/TASUN_REBUILD_STAMP:([^\s<]+)/) || [])[1] || "";
+            const digest = crypto.createHash("sha256").update(bytes).digest("hex");
+            if (build !== root) throw new Error(`${file}: HTML build mismatch`);
+            for (const alias of aliases) {
+              const entry = data.pages?.[alias];
+              const entryDigest = entry?.artifactSha256 || entry?.pageArtifactSha256 || entry?.sha256 || entry?.digest;
+              if (!entry || entry.file !== file || entry.version !== build || entry.pageBuildStamp !== build || entryDigest !== digest) {
+                throw new Error(`${file}: alias mismatch ${alias}`);
+              }
+            }
+            const mf = data.pageArtifactManifest?.[file];
+            const mfDigest = typeof mf === "string" ? mf : (mf?.sha256 || mf?.artifactSha256 || mf?.pageArtifactSha256 || mf?.htmlSha256 || mf?.digest);
+            const pb = typeof data.pageBuildStamp === "string" ? data.pageBuildStamp : data.pageBuildStamp?.[file];
+            if (mfDigest !== digest || pb !== build) throw new Error(`${file}: page manifest mismatch`);
+            console.log(`${file}: ${build} ${digest}`);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `build=${root}\n`);
+          NODE
+
+      - name: Commit generated version files and legacy cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            "汐東收發文明細表.html" \
+            "汐東收發文登錄表.html" \
+            "汐東文件統計表.html" \
+            tasun-version.json \
+            TASUN_REBUILD \
+            TASUN_REBUILD_STAMP \
+            .github/workflows/release-version.yml \
+            publish-version_tasun_project_autoscan.mjs
+          git add -A -- .nojekyll github/workflows/release-version.yml release-version.yml || true
+          if git diff --cached --quiet; then
+            echo "No generated changes to commit."
+          else
+            git commit -m "chore(tasun): R925 exact no-downgrade release [skip tasun-version]"
+            for attempt in 1 2 3; do
+              if git push; then break; fi
+              [[ "$attempt" == "3" ]] && exit 1
+              git pull --rebase origin "${GITHUB_REF_NAME}"
+            done
+          fi
+
+      - name: Select GitHub Actions as Pages publishing source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --method PUT \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/${GITHUB_REPOSITORY}/pages" \
+            -f build_type=workflow
+
+      - name: Prepare exact static Pages artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf _site
+          mkdir -p _site
+          rsync -a ./ _site/ \
+            --exclude ".git/" \
+            --exclude ".github/" \
+            --exclude "github/" \
+            --exclude "_site/" \
+            --exclude "tasun-api/" \
+            --exclude "node_modules/" \
+            --exclude ".nojekyll" \
+            --exclude "*.zip" \
+            --exclude "*.sql" \
+            --exclude "wrangler.toml" \
+            --exclude "publish-version*.mjs" \
+            --exclude "release-version.yml"
+          test -f _site/index.html
+          test -f _site/tasun-version.json
+          test -f "_site/汐東收發文明細表.html"
+          test -f "_site/汐東收發文登錄表.html"
+          test -f "_site/汐東文件統計表.html"
+          if find _site -type f -size +100M -print -quit | grep -q .; then
+            echo "::error::Pages artifact contains a file larger than 100 MB."
+            exit 1
+          fi
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload exact static Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy exact R925 artifact
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  verify:
+    name: Verify deployed R925 build and page entries
+    needs: [prepare, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify deployed three-page release
+        shell: bash
+        env:
+          EXPECTED_BUILD: ${{ needs.prepare.outputs.release_build }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const base = "https://wutasun.github.io/Tasun";
+          const expected = process.env.EXPECTED_BUILD;
+          const files = [
+            ["汐東收發文明細表.html", ["汐東收發文明細表.html", "xidong-official-doc-detail", "official-doc-detail"]],
+            ["汐東收發文登錄表.html", ["汐東收發文登錄表.html", "xidong-official-doc-register", "official-doc-register"]],
+            ["汐東文件統計表.html", ["汐東文件統計表.html", "xidong-official-doc-statistics", "official-doc-statistics"]]
+          ];
+          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+          const encodePath = file => file.split("/").map(encodeURIComponent).join("/");
+          for (let attempt = 1; attempt <= 24; attempt++) {
+            try {
+              const nonce = `?__tasun_actions_verify=${Date.now()}_${attempt}`;
+              const vr = await fetch(`${base}/tasun-version.json${nonce}`, { cache: "no-store" });
+              if (!vr.ok) throw new Error(`version HTTP ${vr.status}`);
+              const manifest = await vr.json();
+              if (manifest.version !== expected || manifest.rebuildStamp !== expected) throw new Error(`manifest still ${manifest.version || "missing"}`);
+              let exact = true;
+              for (const [file, aliases] of files) {
+                const response = await fetch(`${base}/${encodePath(file)}${nonce}`, { cache: "no-store" });
+                if (!response.ok) { exact = false; break; }
+                const html = await response.text();
+                const build = (html.match(/name=["']tasun-build-stamp["'][^>]+content=["']([^"']+)/i)
+                  || html.match(/TASUN_REBUILD_STAMP:([^\s<]+)/) || [])[1] || "";
+                if (build !== expected) { exact = false; break; }
+                if (!aliases.every(alias => manifest.pages?.[alias]?.version === expected && manifest.pages?.[alias]?.pageBuildStamp === expected && manifest.pages?.[alias]?.file === file)) { exact = false; break; }
+              }
+              if (exact) { console.log(`GitHub Pages exact R925 release confirmed: ${expected}`); process.exit(0); }
+            } catch (error) { console.log(`Attempt ${attempt}/24: ${error.message}`); }
+            if (attempt < 24) await sleep(10000);
+          }
+          throw new Error(`GitHub Pages did not converge to ${expected} within the bounded verification window.`);
+          NODE
