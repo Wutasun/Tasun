@@ -1,0 +1,116 @@
+name: ChatGPT R949 manager stage drilldown build
+
+on:
+  push:
+    branches:
+      - chatgpt-r949-manager-stage-drilldown
+    paths:
+      - '.chatgpt/chatgpt_r949_patch.py'
+      - '.github/workflows/chatgpt-r949-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PYTHONUTF8: '1'
+
+jobs:
+  build-r949:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: chatgpt-r949-manager-stage-drilldown
+          fetch-depth: 0
+
+      - name: Normalize legacy manifest map containers
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          p=Path('tasun-version.json')
+          d=json.loads(p.read_text(encoding='utf-8'))
+          for k in ('pages','pageArtifactManifest'):
+              if not isinstance(d.get(k),dict): d[k]={}
+          if not isinstance(d.get('pageBuildStamp'),dict): d['pageBuildStamp']={}
+          p.write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          PY
+
+      - name: Run R949 patch
+        run: python .chatgpt/chatgpt_r949_patch.py
+
+      - name: Validate HTML scripts with Node
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re, subprocess, tempfile, sys
+          files=['汐東文件管理表.html','汐東收發文明細表.html','汐東收發文登錄表.html','汐東文件統計表.html']
+          total=0
+          for f in files:
+              text=Path(f).read_text(encoding='utf-8')
+              scripts=re.findall(r'<script\b[^>]*>(.*?)</script>',text,re.I|re.S)
+              ok=0
+              for i,src in enumerate(scripts,1):
+                  if not src.strip():
+                      continue
+                  p=Path(tempfile.gettempdir())/f'r949_{abs(hash(f))}_{i}.js'
+                  p.write_text(src,encoding='utf-8')
+                  r=subprocess.run(['node','--check',str(p)],capture_output=True,text=True)
+                  if r.returncode:
+                      print(f'SYNTAX_FAIL {f} script#{i}',file=sys.stderr)
+                      print(r.stderr,file=sys.stderr)
+                      raise SystemExit(1)
+                  ok+=1
+              total+=ok
+              print(f'HTML_SCRIPT_SYNTAX_OK {f}: {ok}/{len(scripts)}')
+          print(f'HTML_SCRIPT_SYNTAX_TOTAL_OK {total}')
+          PY
+
+      - name: Validate R949 invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'R949_PENDING_SUPERVISOR_REPLY_LABEL="待監造回覆"' 汐東文件管理表.html
+          grep -q 'data-r949-summary-trigger' 汐東文件管理表.html
+          grep -q 'r949StageOnly' 汐東文件管理表.html
+          grep -q 'tasun_r855_duplicate_jump_intent_v1' 汐東文件管理表.html
+          grep -q '_r853stageuid' 汐東文件管理表.html
+          grep -q 'docManagerR949NoInfinitePolling' 汐東文件管理表.html
+          ! grep -q '20260721_tasun_v5_xidong_docs_r737_manager_three_zone_coordinated_color_visual_release' 汐東文件管理表.html
+          unzip -t 'Tasun_R949_文件管理表待監造回覆_階段統計明細_文號定位修正版.zip'
+
+      - name: Commit generated R949 files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'chatgpt-r949-builder'
+          git config user.email 'actions@users.noreply.github.com'
+          git add 汐東文件管理表.html 汐東收發文明細表.html 汐東收發文登錄表.html 汐東文件統計表.html tasun-version.json TASUN_REBUILD TASUN_REBUILD_STAMP R949_深入修復摘要.txt 'Tasun_R949_文件管理表待監造回覆_階段統計明細_文號定位修正版.zip'
+          if git diff --cached --quiet; then
+            echo 'No generated changes to commit.'
+          else
+            git commit -m 'R949 manager pending supervisor stage drilldown [skip tasun-version]'
+            git push origin HEAD:chatgpt-r949-manager-stage-drilldown
+          fi
+
+      - name: Upload R949 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tasun_R949_manager_stage_drilldown
+          path: |
+            汐東文件管理表.html
+            汐東收發文明細表.html
+            汐東收發文登錄表.html
+            汐東文件統計表.html
+            tasun-version.json
+            TASUN_REBUILD
+            TASUN_REBUILD_STAMP
+            R949_深入修復摘要.txt
+            Tasun_R949_文件管理表待監造回覆_階段統計明細_文號定位修正版.zip
+          if-no-files-found: error
+          retention-days: 7
