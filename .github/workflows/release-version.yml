@@ -69,6 +69,18 @@ jobs:
             exit 1
           fi
 
+      - name: Require preconfigured GitHub Actions Pages source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          build_type="$(gh api "repos/${GITHUB_REPOSITORY}/pages" --jq '.build_type')"
+          if [[ "$build_type" != "workflow" ]]; then
+            echo "::error::An administrator must first select Settings > Pages > Build and deployment > Source > GitHub Actions. This release token does not change repository settings."
+            exit 1
+          fi
+
       - name: Enforce historical highest-R release floor
         id: floor
         shell: bash
@@ -134,13 +146,13 @@ jobs:
           HEAD="${{ github.sha }}"
           : > /tmp/tasun_changed_files.txt
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            git diff-tree --no-commit-id --name-only -r HEAD >> /tmp/tasun_changed_files.txt || true
+            git -c core.quotePath=false diff-tree --no-commit-id --name-only -r HEAD >> /tmp/tasun_changed_files.txt || true
           elif [[ -n "${BEFORE:-}" && ! "$BEFORE" =~ ^0+$ ]]; then
-            git diff --name-only "$BEFORE" "$HEAD" >> /tmp/tasun_changed_files.txt || true
+            git -c core.quotePath=false diff --name-only "$BEFORE" "$HEAD" >> /tmp/tasun_changed_files.txt || true
           else
-            git diff-tree --no-commit-id --name-only -r "$HEAD" >> /tmp/tasun_changed_files.txt || true
+            git -c core.quotePath=false diff-tree --no-commit-id --name-only -r "$HEAD" >> /tmp/tasun_changed_files.txt || true
           fi
-          git diff --name-only >> /tmp/tasun_changed_files.txt || true
+          git -c core.quotePath=false diff --name-only >> /tmp/tasun_changed_files.txt || true
           awk 'NF && !seen[$0]++' /tmp/tasun_changed_files.txt > /tmp/tasun_changed_files.unique
           mv /tmp/tasun_changed_files.unique /tmp/tasun_changed_files.txt
           cat /tmp/tasun_changed_files.txt
@@ -188,29 +200,19 @@ jobs:
             TASUN_REBUILD_STAMP \
             .github/workflows/release-version.yml \
             publish-version_tasun_project_autoscan.mjs
-          git add -A -- .nojekyll github/workflows/release-version.yml release-version.yml || true
+          for retired in .nojekyll github/workflows/release-version.yml release-version.yml; do
+            if git ls-files --error-unmatch "$retired" >/dev/null 2>&1; then
+              git add -u -- "$retired"
+            fi
+          done
           if git diff --cached --quiet; then
             echo "No generated release changes to commit."
           else
             git commit -m "chore(tasun): ${RELEASE_BUILD} exact auto release [skip tasun-version]"
-            for attempt in 1 2 3; do
-              if git push; then break; fi
-              [[ "$attempt" == "3" ]] && exit 1
-              git pull --rebase origin "${GITHUB_REF_NAME}"
-            done
+            # Never rebase an already verified artifact onto concurrent source changes.
+            # A rejected push stops deployment; the newer push runs its own release.
+            git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
-
-      - name: Select GitHub Actions as Pages publishing source
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh api --method PUT \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "repos/${GITHUB_REPOSITORY}/pages" \
-            -f build_type=workflow
 
       - name: Prepare exact static Pages artifact
         shell: bash
@@ -225,6 +227,8 @@ jobs:
             --exclude "_site/" \
             --exclude "tasun-api/" \
             --exclude "node_modules/" \
+            --exclude "tests/" \
+            --exclude "docs/superpowers/" \
             --exclude ".nojekyll" \
             --exclude "*.zip" \
             --exclude "*.sql" \
@@ -245,7 +249,7 @@ jobs:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
         with:
-          enablement: true
+          enablement: false
 
       - name: Upload exact static Pages artifact
         uses: actions/upload-pages-artifact@v4
