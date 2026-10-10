@@ -22,3 +22,7 @@ The workflow now reads the setting and stops with a setup instruction before gen
 - #1 adds only a blank file at `github/workflows/release-version.yml`. Use `.github/workflows/release-version.yml`.
 - #3's R641 version-writer retirement and R994 check correction are already present in R1139. Do not reapply its R1035 manifest.
 - #2's manager features already exist; its duplicate-stage jump review is tracked by the separate stage-jump repair. Do not run the R949 patch/build workflow.
+
+## Merge review follow-up (2026-10-10)
+
+The publisher now repairs missing/stale secondary HTML markers even when the primary build already matches. It preserves correct tag formatting and limits stamp-comment replacement to actual HTML comments, avoiding JavaScript parser corruption. Regression checks run again after disposable generation so generated pages must parse. Four new release tests reproduce these edge cases; the combined release/stage suite passes 38 tests on generated artifacts.

@@ -101,3 +101,21 @@ test('conflicting manually advanced builds fail without overwriting files',t=>{
 test('artifact manifest size is verified as well as alias size',t=>{
  const f=fixture(t),v=f.read();v.pageArtifactManifest[files[0]].sizeBytes=1;f.write('tasun-version.json',JSON.stringify(v));assert.notEqual(f.run(['--verify-only']).status,0);
 });
+for (const missing of [false,true]) test(`same primary build repairs ${missing?'missing':'stale'} secondary marker`,t=>{
+ const f=fixture(t),file=files[0],original=fs.readFileSync(path.join(f.dir,file),'utf8');
+ f.write(file,original.replace(/<meta name="tasun-rebuild-stamp"[^>]*>/,missing?'':'<meta name="tasun-rebuild-stamp" content="stale" />'));
+ const r=f.run([],'tasun-version.json');assert.equal(r.status,0,r.stderr);
+ assert.ok(fs.readFileSync(path.join(f.dir,file),'utf8').includes(`<meta name="tasun-rebuild-stamp" content="${build}" />`));assertRelease(f);
+});
+test('verify rejects contradictory embedded markers even with matching artifact digests',t=>{
+ const f=fixture(t),file=files[0],s=fs.readFileSync(path.join(f.dir,file),'utf8').replace(/<meta name="tasun-rebuild-stamp"[^>]*>/,'<meta name="tasun-rebuild-stamp" content="stale" />');f.write(file,s);
+ const v=f.read();for(const e of [...Object.values(v.pages).filter(e=>e.file===file),v.pageArtifactManifest[file]]){for(const k of ['sha256','artifactSha256','pageArtifactSha256','htmlSha256','digest'])e[k]=sha(s);e.bytes=Buffer.byteLength(s);}f.write('tasun-version.json',JSON.stringify(v));
+ assert.notEqual(f.run(['--verify-only']).status,0);
+});
+
+test('normalization preserves embedded marker parser and repairs actual stamp comments',t=>{
+ const f=fixture(t),file=files[0],parser=String.raw`<script>const marker=/TASUN_REBUILD_STAMP:([^\s<]+)/;</script>`;
+ fs.appendFileSync(path.join(f.dir,file),parser+'<!-- TASUN_REBUILD_STAMP:stale -->');
+ const r=f.run([],'tasun-version.json');assert.equal(r.status,0,r.stderr);
+ const s=fs.readFileSync(path.join(f.dir,file),'utf8');assert.ok(s.includes(parser));assert.ok(s.includes('<!-- TASUN_REBUILD_STAMP:'+build+' -->'));
+});

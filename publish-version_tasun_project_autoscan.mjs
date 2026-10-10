@@ -62,11 +62,11 @@ function pageConfig(text,rel){
   const file=pick("PAGE_FILE")||rel,key=pick("PAGE_KEY")||file;
   aliases=[file,key,...aliases].map(n).filter(Boolean);return{file,key,aliases:[...new Set(aliases)]};
 }
-function replaceMeta(text,name,value){const re=new RegExp(`<meta\\s+name=["']${name}["']\\s+content=["'][^"']*["']\\s*/?>`,`i`);const tag=`<meta name="${name}" content="${value}" />`;return re.test(text)?text.replace(re,tag):text.replace(/<head[^>]*>/i,m=>`${m}\n${tag}`);}
+function replaceMeta(text,name,value){const re=new RegExp(`<meta\\s+name=["']${name}["']\\s+content=["'][^"']*["']\\s*/?>`,`i`);const tag=`<meta name="${name}" content="${value}" />`;return re.test(text)?text.replace(re,matched=>matched.match(/content=["']([^"']*)/)?.[1]===value?matched:tag):text.replace(/<head[^>]*>/i,m=>`${m}\n${tag}`);}
 function updateHtmlBuild(text,newBuild){
-  const old=htmlBuild(text);if(old===newBuild)return text;let out=text;if(old&&old!==newBuild)out=out.split(old).join(newBuild);
+  const old=htmlBuild(text);let out=text;if(old&&old!==newBuild)out=out.split(old).join(newBuild);
   out=replaceMeta(out,"tasun-build-stamp",newBuild);out=replaceMeta(out,"tasun-rebuild-stamp",newBuild);
-  out=out.replace(/TASUN_REBUILD_STAMP:[^\s<]+/,`TASUN_REBUILD_STAMP:${newBuild}`);return out;
+  out=out.replace(/(<!--\s*TASUN_REBUILD_STAMP:)[^\s<]+(?=\s*-->)/g,(_,prefix)=>prefix+newBuild);return out;
 }
 function previousHtmlBuild(rel){const raw=git(["show",`HEAD^:${rel}`]);return raw?htmlBuild(raw):"";}
 function maxKnownRank(current,changedBuilds){let x=rank(current.version);for(const e of Object.values(current.pages||{}))x=Math.max(x,rank(e&&e.version),rank(e&&e.pageBuildStamp),rank(e&&e.buildStamp));for(const b of changedBuilds)x=Math.max(x,rank(b));return x;}
@@ -100,6 +100,9 @@ async function verifyRelease(current){
   for(const file of DOCUMENT_PAGES){
     const text=await fs.readFile(path.join(ROOT,file),"utf8"),digest=await sha256(file),config=pageConfig(text,file);
     require(htmlBuild(text)===build,`html_build_mismatch:${file}`);
+    const secondary=text.match(/<meta[^>]+name=["']tasun-rebuild-stamp["'][^>]+content=["']([^"']+)/i);
+    require(secondary?.[1]===build,`html_rebuild_mismatch:${file}`);
+    for(const marker of text.matchAll(/<!--\s*TASUN_REBUILD_STAMP:([^\s<]+?)(?=\s*-->)/g))require(marker[1]===build,`html_comment_mismatch:${file}`);
     for(const alias of aliasesFor(current,config)){
       const entry=current.pages?.[alias];require(entry&&entry.file===file,`alias_missing:${alias}`);
       for(const key of BUILD_KEYS)require(entry[key]===build,`alias_build:${alias}:${key}`);
