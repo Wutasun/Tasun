@@ -129,3 +129,59 @@ test('R1144 statistics automatic current baseline retires R1138 historical leaf'
   assert.match(src, /R1144\|r1144/, 'statistics current baseline must recognize R1144');
   assert.doesNotMatch(src, /R1138\|r1138/, 'R1138 must not remain an automatic current baseline');
 });
+
+
+test('R1144 public scroll bridge exposes control operations, not exact-commit internals', () => {
+  assert.match(detail, /markGeometryDirty:r1144MarkGeometryDirty,requestGeometry:r1113RequestGeometry/);
+  assert.doesNotMatch(detail, /requestExactGeometry:r1065RequestExactGeometry/);
+  assert.doesNotMatch(detail, /commitExactGeometryIfIdle:r1065CommitExactGeometryIfIdle/);
+  assert.doesNotMatch(detail, /cancelPendingGeometry:r1103CancelPendingGeometry,r1113MeasureGeometry/);
+});
+
+test('R1144 current SelfHeal leaf is public-bridge-only and historical compatibility auto-run is retired', () => {
+  const src = extractFunction(detail, 'r1113RegisterCurrentSelfHeal');
+  for (const forbidden of ['r990WidthFieldLabel(', 'r1065RequestExactGeometry(', 'r1065CommitExactGeometryIfIdle(', 'r1012RefreshPostCommitGeometry(', 'r1113RequestGeometry(']) {
+    assert.equal(src.includes(forbidden), false, 'current SelfHeal must not invoke private geometry symbol ' + forbidden);
+  }
+  assert.match(src, /officialDocsR1144AuthorityConvergence/);
+  assert.match(src, /__TASUN_ACTIVE_SCROLL_API__/);
+  assert.match(detail, /R1113_COMPATIBILITY_SELFHEAL_NAMES=new Set\(\)/);
+});
+
+test('R1144 native vertical scroll is isolated from exact geometry scheduling', () => {
+  const src = extractFunction(detail, 'bindStage');
+  const scrollAt = src.indexOf('addEventListener("scroll"');
+  const wheelAt = src.indexOf('addEventListener("wheel"', scrollAt);
+  assert.ok(scrollAt >= 0 && wheelAt > scrollAt);
+  const verticalScroll = src.slice(scrollAt, wheelAt);
+  assert.doesNotMatch(verticalScroll, /requestGeometry|requestExactGeometry|r1113RequestGeometry|r1065RequestExactGeometry|commitExactGeometry/i);
+});
+
+test('R1144 warm handoff is exact same-resource/build, mutation-free and bounded to 120 seconds', () => {
+  assert.match(detail, /R1139_WARM_HANDOFF_TTL_MS=120000/);
+  const intent = extractFunction(detail, 'r1139WarmIntentForCurrentPage');
+  assert.match(intent, /x\.resourceKey!==RESOURCE_KEY/);
+  assert.match(intent, /x\.build!==BUILD/);
+  assert.match(intent, /R1139_WARM_HANDOFF_TTL_MS/);
+  const validated = extractFunction(detail, 'r1139WarmHandoffValidated');
+  assert.match(validated, /r1092ReadLocalMutation\(\)/);
+  assert.match(validated, /r1139RowMetadataStamp\(rows\)/);
+  assert.match(validated, /verifiedReceiptAt/);
+});
+
+test('R1144 manager historical checks are diagnostic-only; one current convergence leaf auto-registers', () => {
+  const src = extractFunction(manager, 'registerSelfHeal');
+  assert.match(src, /__TASUN_R1144_MANAGER_HISTORICAL_SELFHEAL_AUTO_RETIRED__=true/);
+  assert.match(src, /docManagerR1144AuthorityConvergence/);
+  const registrations = [...src.matchAll(/core\.register\(/g)].length;
+  assert.equal(registrations, 1, 'manager function must auto-register only the R1144 current leaf');
+});
+
+test('R1144 register and statistics current baseline no longer auto-run R1138', () => {
+  const reg = extractFunction(register, 'currentBaseline');
+  const stat = extractFunction(stats, 'currentBaseline');
+  for (const src of [reg, stat]) {
+    assert.match(src, /R1144\|r1144/);
+    assert.doesNotMatch(src, /R1138\|r1138/);
+  }
+});
