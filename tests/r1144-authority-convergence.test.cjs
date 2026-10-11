@@ -9,8 +9,11 @@ const ROOT = path.resolve(__dirname, '..');
 const read = name => fs.readFileSync(path.join(ROOT, name), 'utf8');
 
 function extractFunction(source, name) {
-  const marker = 'function ' + name;
-  const start = source.indexOf(marker);
+  const plain = 'function ' + name;
+  const asyncMarker = 'async function ' + name;
+  const asyncStart = source.indexOf(asyncMarker);
+  const plainStart = source.indexOf(plain);
+  const start = asyncStart >= 0 ? asyncStart : plainStart;
   assert.notEqual(start, -1, 'missing function ' + name);
   const open = source.indexOf('{', start);
   let depth = 0, quote = '', esc = false, line = false, block = false;
@@ -59,9 +62,15 @@ test('R1144 manager current SelfHeal has no cross-IIFE lifecycle private referen
 });
 
 test('R1144 intentional artifact AbortError is quiet cancellation, not failure retry', () => {
-  const src = extractFunction(register, 'converge');
-  assert.match(src, /AbortError[\s\S]{0,260}(cancel|supersed)/i, 'AbortError must terminate as cancellation/supersession');
-  assert.doesNotMatch(src, /AbortError[\s\S]{0,180}html_probe_timeout/i, 'AbortError must not be classified as html probe timeout failure');
+  const src = extractFunction(register, 'probe');
+  assert.match(src, /e&&e\.name===\"AbortError\"[\s\S]{0,420}(cancel|supersed)/i, 'AbortError must terminate as cancellation/supersession');
+  const abortAt = src.indexOf('e&&e.name===\"AbortError\"');
+  const warnAt = src.indexOf('console.warn', abortAt);
+  const retryAt = src.indexOf('scheduleRetry', abortAt);
+  const returnAt = src.indexOf('return false', abortAt);
+  assert.ok(abortAt >= 0 && returnAt > abortAt, 'AbortError branch must return terminally');
+  assert.ok(warnAt === -1 || returnAt < warnAt, 'AbortError cancellation must return before warning');
+  assert.ok(retryAt === -1 || returnAt < retryAt, 'AbortError cancellation must return before retry scheduling');
 });
 
 test('R1144 only scheduler owns exact sizing', () => {
@@ -99,7 +108,7 @@ test('R1144 no polling in formal current critical paths', () => {
   const blocks = [
     extractFunction(detail, 'r1113RegisterCurrentSelfHeal'),
     extractFunction(detail, 'r1113RequestGeometry'),
-    extractFunction(register, 'converge'),
+    extractFunction(register, 'probe'),
     extractFunction(manager, 'registerSelfHeal')
   ];
   for (const src of blocks) assert.doesNotMatch(src, /setInterval\s*\(/, 'critical path must not poll');
@@ -112,4 +121,11 @@ test('R1144 four pages preserve one formal data contract identity fields', () =>
       assert.ok(src.includes(field), name + ' must retain ' + field);
     }
   }
+});
+
+
+test('R1144 statistics automatic current baseline retires R1138 historical leaf', () => {
+  const src = extractFunction(stats, 'currentBaseline');
+  assert.match(src, /R1144\|r1144/, 'statistics current baseline must recognize R1144');
+  assert.doesNotMatch(src, /R1138\|r1138/, 'R1138 must not remain an automatic current baseline');
 });
