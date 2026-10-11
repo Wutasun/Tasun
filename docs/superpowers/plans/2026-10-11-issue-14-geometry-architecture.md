@@ -3,7 +3,7 @@
 Date: 2026-10-11  
 Requirement: GitHub Issue #14 — `[REQ] Geometry dirty scheduling and retry convergence`  
 Functional R-number: NOT ASSIGNED  
-Status: ARCHITECTURE APPROVED / WRITTEN SPEC IN PROGRESS / NO IMPLEMENTATION AUTHORITY
+Status: ARCHITECTURE APPROVED / WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD AUTHORIZED
 
 ## 1. Baseline authority
 
@@ -247,7 +247,11 @@ Architecture status:
 
 Written spec:
 
-- [ ] completed after architecture approval
-- [ ] explicitly approved by user
+- [x] completed after architecture approval
+- [x] explicitly approved by user on 2026-10-11
 
-Architecture is approved. Implementation/TDD remains unauthorized until the written spec is completed and explicitly approved by the user.
+Implementation / TDD:
+
+- [x] authorized by user on 2026-10-11
+
+Written-spec approval is complete and implementation/TDD was authorized. Issue #14 has since completed implementation, formal release, deployed verification, and closure; closure evidence remains in Issue #14 and repository history.

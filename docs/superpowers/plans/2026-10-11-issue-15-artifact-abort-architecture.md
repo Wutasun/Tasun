@@ -3,7 +3,7 @@
 Date: 2026-10-11  
 Requirement: GitHub Issue #15 — `[REQ] Distinguish artifact supersession AbortError from timeout retry`  
 Functional R-number: NOT ASSIGNED  
-Status: ARCHITECTURE APPROVED / WRITTEN SPEC IN PROGRESS / NO IMPLEMENTATION AUTHORITY
+Status: ARCHITECTURE APPROVED / WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD AUTHORIZED
 
 ## 1. Baseline authority
 
@@ -352,11 +352,11 @@ Architecture:
 
 Written spec:
 
-- [ ] completed after architecture approval
-- [ ] explicitly approved by user
+- [x] completed after architecture approval
+- [x] explicitly approved by user on 2026-10-11
 
 Implementation/TDD:
 
-- [ ] authorized only after written spec approval
+- [x] authorized by user on 2026-10-11
 
-Architecture is approved. Implementation/TDD remains unauthorized until the written spec is completed and explicitly approved by the user.
+Written-spec approval is complete and implementation/TDD was authorized. Issue #15 has since completed implementation, formal release, deployed verification, and closure; closure evidence remains in Issue #15 and repository history.

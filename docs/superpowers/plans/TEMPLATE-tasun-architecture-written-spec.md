@@ -285,6 +285,24 @@ TBD.
 
 Only after both approvals are explicit may implementation / TDD begin.
 
+### Approval-state synchronization rule
+
+Explicit user approval is the governance decision authority. The architecture document and written spec are paired projections of that same decision.
+
+When the written spec receives explicit user approval, the **same governance PR/commit** must update all paired approval projections before merge:
+
+- written-spec status and approval checkbox;
+- paired architecture document status header;
+- paired architecture document written-spec approval checkbox;
+- paired architecture document implementation-authorization statement;
+- PR / Issue status text when present.
+
+Architecture and written-spec approval gates must agree before merge.
+
+Do not merge a written-spec approval record if its paired architecture document still carries an earlier gate state.
+
+After the synchronized approval record is merged to `main`, create the implementation branch from the latest current `main` and continue the RED → GREEN workflow.
+
 ## 17. Implementation handoff
 
 When approved:
