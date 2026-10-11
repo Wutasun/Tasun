@@ -87,6 +87,7 @@ test('Issue #14 HeavyLane rejection preserves dirty geometry until lane completi
   assert.match(lane,/owner!==["']geometry["']/,'geometry must not recursively hand off itself');
   assert.match(lane,/__TASUN_R1113_GEOMETRY_DIRTY__\?\.pending===true/,'lane completion must inspect the canonical dirty obligation');
   assert.match(lane,/Promise\.resolve\(\)\.then/,'lane completion handoff must be event-driven, not polling');
-  assert.match(lane,/r1113RequestGeometry\s*\(/,'lane completion must re-enter the existing scheduler');
+  assert.match(lane,/__TASUN_ACTIVE_SCROLL_API__\?\.requestGeometry\?\.\s*\(/,'lane completion must re-enter geometry through the public bridge');
+  assert.doesNotMatch(lane,/\br1113RequestGeometry\s*\(/,'application IIFE must not reach into the later R990 private scheduler symbol');
   assert.doesNotMatch(lane,/setInterval\s*\(/,'lane completion handoff must not poll');
 });
