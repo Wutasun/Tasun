@@ -82,7 +82,15 @@ assignees: ""
 
 -
 
-## 10. 驗收標準 / Acceptance criteria
+## 10. 發布影響 / Release impact
+
+請說明本需求是否會修改 release-triggering files、是否需要正式 Exact Auto Release，以及是否需要四頁 build sequence / SHA 驗證。
+
+若無，填「無」。
+
+-
+
+## 11. 驗收標準 / Acceptance criteria
 
 請用可驗證方式描述完成條件。
 
@@ -90,7 +98,7 @@ assignees: ""
 - [ ]
 - [ ]
 
-## 11. 重現資料 / 證據
+## 12. 重現資料 / 證據
 
 可附：
 
@@ -103,7 +111,7 @@ assignees: ""
 
 -
 
-## 12. Architecture gate
+## 13. Architecture gate
 
 此區由需求明確後再填寫。
 
@@ -114,7 +122,7 @@ assignees: ""
 - Failure / abort / retry behavior:
 - Duplicate-authority prevention:
 
-## 13. Written spec approval
+## 14. Written spec approval
 
 - [ ] Architecture 已核准
 - [ ] Written spec 已完成
