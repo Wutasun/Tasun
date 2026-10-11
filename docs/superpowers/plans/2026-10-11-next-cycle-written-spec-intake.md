@@ -6,13 +6,15 @@ Status: INTAKE ONLY / NOT APPROVED / NO IMPLEMENTATION AUTHORITY
 
 ## 1. Locked baseline
 
-All future functional work must start from:
+The R1144 closure code-baseline trace point is:
 
 `main @ 82b563a8902cc5aade20ba1eb7f2bcd3302d4e2e`
 
-This baseline contains the completed R1144 closure record and remains aligned with the last verified formal release.
+This trace point contains the completed R1144 closure record and remains aligned with the last verified formal release.
 
-No implementation branch may use an older work branch as its authority.
+For every future functional cycle, create the implementation branch from the **latest current `main` at the moment the written spec is approved**. Do not branch from the historical trace-point SHA when `main` has advanced through documentation-only governance commits.
+
+No implementation branch may use an older work branch, merged feature branch, or historical PR branch as its authority.
 
 ## 2. Fixed project rules
 
