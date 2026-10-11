@@ -3,7 +3,7 @@
 Date: 2026-10-11  
 Requirement: GitHub Issue #14 — `[REQ] Geometry dirty scheduling and retry convergence`  
 Functional R-number: NOT ASSIGNED  
-Status: DRAFT / RECOMMENDED ARCHITECTURE ONLY / NOT APPROVED / NO IMPLEMENTATION AUTHORITY
+Status: ARCHITECTURE APPROVED / WRITTEN SPEC IN PROGRESS / NO IMPLEMENTATION AUTHORITY
 
 ## 1. Baseline authority
 
@@ -100,7 +100,7 @@ Assessment: reject.
 
 ## 5. Recommended architecture
 
-**Recommend Option B.**
+**Option B — APPROVED by user on 2026-10-11.**
 
 Core rule:
 
@@ -243,11 +243,11 @@ Do not modify unrelated UI/data/cloud logic.
 
 Architecture status:
 
-- [ ] user approved Option B
+- [x] user approved Option B
 
 Written spec:
 
 - [ ] completed after architecture approval
 - [ ] explicitly approved by user
 
-Until architecture is explicitly approved, no implementation/TDD branch is authorized.
+Architecture is approved. Implementation/TDD remains unauthorized until the written spec is completed and explicitly approved by the user.
