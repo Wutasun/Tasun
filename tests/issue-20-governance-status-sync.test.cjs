@@ -18,19 +18,23 @@ const APPROVED_STATUS='Status: ARCHITECTURE APPROVED / WRITTEN SPEC APPROVED / I
 
 test('Issue #20 keeps Issue #14 architecture approval projection synchronized',()=>{
   assert.ok(issue14Spec.includes('Status: WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD AUTHORIZED'));
+  assert.ok(issue14Spec.includes('- [x] explicitly approved by user on 2026-10-11'));
+  assert.ok(issue14Spec.includes('- [x] authorized by user on 2026-10-11'));
   assert.ok(issue14Arch.includes(APPROVED_STATUS));
   assert.ok(issue14Arch.includes('- [x] completed after architecture approval'));
   assert.ok(issue14Arch.includes('- [x] explicitly approved by user on 2026-10-11'));
-  assert.ok(issue14Arch.includes('IMPLEMENTATION-TDD AUTHORIZED'));
+  assert.ok(issue14Arch.includes('- [x] authorized by user on 2026-10-11'));
   assert.ok(!issue14Arch.includes('Implementation/TDD remains unauthorized until the written spec is completed'));
 });
 
 test('Issue #20 keeps Issue #15 architecture approval projection synchronized',()=>{
   assert.ok(issue15Spec.includes('Status: WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD AUTHORIZED'));
+  assert.ok(issue15Spec.includes('- [x] explicitly approved by user on 2026-10-11'));
+  assert.ok(issue15Spec.includes('- [x] authorized by user on 2026-10-11'));
   assert.ok(issue15Arch.includes(APPROVED_STATUS));
   assert.ok(issue15Arch.includes('- [x] completed after architecture approval'));
   assert.ok(issue15Arch.includes('- [x] explicitly approved by user on 2026-10-11'));
-  assert.ok(issue15Arch.includes('IMPLEMENTATION-TDD AUTHORIZED'));
+  assert.ok(issue15Arch.includes('- [x] authorized by user on 2026-10-11'));
   assert.ok(!issue15Arch.includes('Implementation/TDD remains unauthorized until the written spec is completed'));
 });
 
