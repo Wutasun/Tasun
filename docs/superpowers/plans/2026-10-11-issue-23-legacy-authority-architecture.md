@@ -3,7 +3,7 @@
 Date: 2026-10-11  
 Requirement: GitHub Issue #23 — `[REQ] Retire dormant legacy release and version-loader authorities`  
 Functional R-number: NOT ASSIGNED  
-Status: DRAFT / NOT APPROVED / NO IMPLEMENTATION AUTHORITY
+Status: ARCHITECTURE APPROVED / WRITTEN SPEC IN PROGRESS / NO IMPLEMENTATION AUTHORITY
 
 ## 1. Baseline authority
 
@@ -276,15 +276,15 @@ After merge:
 
 Architecture:
 
-- [ ] explicitly approved by user
+- [x] explicitly approved by user on 2026-10-11
 
 Written spec:
 
-- [ ] completed after architecture approval
+- [x] completed after architecture approval
 - [ ] explicitly approved by user
 
 Implementation / TDD:
 
 - [ ] authorized only after written spec approval
 
-Until explicit user architecture approval, this remains a draft and no implementation authority exists.
+Architecture Option A is approved. The written spec is now complete but remains awaiting explicit user approval; implementation/TDD is not authorized until that approval is recorded.
