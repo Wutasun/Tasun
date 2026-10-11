@@ -4,7 +4,7 @@ Date: 2026-10-11
 Requirement: GitHub Issue #23 — `[REQ] Retire dormant legacy release and version-loader authorities`  
 Architecture: Option A APPROVED  
 Functional R-number: NOT ASSIGNED  
-Status: WRITTEN SPEC AWAITING USER APPROVAL / NO IMPLEMENTATION AUTHORITY
+Status: WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD AUTHORIZED
 
 ## 1. Implementation objective
 
@@ -317,10 +317,10 @@ Architecture:
 Written spec:
 
 - [x] completed after architecture approval
-- [ ] explicitly approved by user
+- [x] explicitly approved by user on 2026-10-11
 
 Implementation / TDD:
 
-- [ ] authorized only after explicit written-spec approval
+- [x] authorized by user on 2026-10-11
 
-Until the user explicitly approves this written spec, implementation/TDD remains unauthorized.
+Implementation/TDD is authorized after this synchronized governance PR is merged to `main`; the implementation branch must then be created from the latest current `main`.
