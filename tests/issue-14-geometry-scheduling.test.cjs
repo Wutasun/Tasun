@@ -78,14 +78,15 @@ test('Issue #14 interaction preemption preserves dirty geometry through the publ
 });
 
 
-test('Issue #14 HeavyLane rejection retains one bounded scheduler obligation',()=>{
+test('Issue #14 HeavyLane rejection preserves dirty geometry until lane completion',()=>{
   const req=extractFunction(detail,'r1113RequestGeometry');
   assert.match(req,/const scheduled=r1113HeavyLaneSchedule\s*\(/,'requestGeometry must inspect HeavyLane admission');
-  assert.match(req,/if\s*\(!scheduled\)\s*\{r1144DeferRejectedGeometry\s*\(why\)/,'rejected geometry must create a bounded handoff');
-  const src=extractFunction(detail,'r1144DeferRejectedGeometry');
-  assert.match(src,/r1144GeometryRejectAttempts>=3/,'lane-reject retries must have a hard bound');
-  assert.match(src,/setTimeout\s*\(/,'lane rejection may use the shared bounded handoff timer');
-  assert.match(src,/r1113RequestGeometry\s*\(/,'lane-reject handoff must re-enter the existing scheduler');
-  assert.doesNotMatch(src,/setInterval\s*\(/,'lane-reject handoff must not poll');
-  assert.doesNotMatch(src,/r1065CommitExactGeometryIfIdle\s*\(/,'lane-reject handoff must not become an exact-commit authority');
+  assert.match(req,/lane-reject-await-completion/,'rejected geometry must remain an explicit pending obligation');
+  assert.doesNotMatch(detail,/r1144DeferRejectedGeometry/,'fixed retry chains must be retired in favor of lane completion');
+  const lane=extractFunction(detail,'r1113HeavyLaneSchedule');
+  assert.match(lane,/owner!==["']geometry["']/,'geometry must not recursively hand off itself');
+  assert.match(lane,/__TASUN_R1113_GEOMETRY_DIRTY__\?\.pending===true/,'lane completion must inspect the canonical dirty obligation');
+  assert.match(lane,/Promise\.resolve\(\)\.then/,'lane completion handoff must be event-driven, not polling');
+  assert.match(lane,/r1113RequestGeometry\s*\(/,'lane completion must re-enter the existing scheduler');
+  assert.doesNotMatch(lane,/setInterval\s*\(/,'lane completion handoff must not poll');
 });
