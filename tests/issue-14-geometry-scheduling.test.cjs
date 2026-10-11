@@ -76,3 +76,16 @@ test('Issue #14 interaction preemption preserves dirty geometry through the publ
   assert.match(src,/deferGeometryAfterInteraction\?\.\(/,'dirty geometry must receive a quiet handoff after preemption');
   assert.match(detail,/deferGeometryAfterInteraction:r1144DeferGeometry/,'the public bridge must expose only the control-level quiet handoff');
 });
+
+
+test('Issue #14 HeavyLane rejection retains one bounded scheduler obligation',()=>{
+  const req=extractFunction(detail,'r1113RequestGeometry');
+  assert.match(req,/const scheduled=r1113HeavyLaneSchedule\s*\(/,'requestGeometry must inspect HeavyLane admission');
+  assert.match(req,/if\s*\(!scheduled\)\s*\{r1144DeferRejectedGeometry\s*\(why\)/,'rejected geometry must create a bounded handoff');
+  const src=extractFunction(detail,'r1144DeferRejectedGeometry');
+  assert.match(src,/r1144GeometryRejectAttempts>=3/,'lane-reject retries must have a hard bound');
+  assert.match(src,/setTimeout\s*\(/,'lane rejection may use the shared bounded handoff timer');
+  assert.match(src,/r1113RequestGeometry\s*\(/,'lane-reject handoff must re-enter the existing scheduler');
+  assert.doesNotMatch(src,/setInterval\s*\(/,'lane-reject handoff must not poll');
+  assert.doesNotMatch(src,/r1065CommitExactGeometryIfIdle\s*\(/,'lane-reject handoff must not become an exact-commit authority');
+});
