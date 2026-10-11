@@ -3,7 +3,7 @@
 Date: 2026-10-11  
 Requirement: GitHub Issue #38 — `[REQ] Retire dormant Tasun Security v3 repository mutators`  
 Functional R-number: NOT ASSIGNED  
-Status: ARCHITECTURE APPROVED / WRITTEN SPEC IN PROGRESS / NO IMPLEMENTATION AUTHORITY
+Status: ARCHITECTURE APPROVED / WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD AUTHORIZED
 
 ## 1. Baseline
 
@@ -264,10 +264,10 @@ Architecture:
 Written spec:
 
 - [x] completed after architecture approval
-- [ ] explicitly approved by user
+- [x] explicitly approved by user on 2026-10-11
 
 Implementation / TDD:
 
-- [ ] authorized only after written spec approval
+- [x] authorized by user on 2026-10-11
 
-Architecture Option A is approved. The written spec is now being established in the same governance PR; implementation/TDD remains unauthorized until explicit written-spec approval.
+Architecture Option A and the written spec are approved. Implementation/TDD is authorized after this synchronized governance PR is merged to `main`.
