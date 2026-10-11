@@ -60,8 +60,19 @@ test('Issue #14 bounded deferral re-enters the single scheduler and remains life
   assert.doesNotMatch(src,/r1065CommitExactGeometryIfIdle\s*\(/,'deferral must never become an exact-commit authority');
 });
 
-test('Issue #14 retry state is coalesced to one bounded timer',()=>{
+test('Issue #14 retry state is event-driven, coalesced, and bounded per activity stamp',()=>{
   assert.match(detail,/r1144GeometryRetryTimer/,'one bounded retry timer must exist');
   const src=extractFunction(detail,'r1144DeferGeometry');
-  assert.match(src,/if\s*\(r1144GeometryRetryTimer\)return true/,'duplicate deferrals must coalesce behind the active timer');
+  assert.match(src,/activityAt===r1144GeometryRetryActivityAt/,'duplicate deferrals for the same activity stamp must coalesce');
+  assert.match(src,/activityAt===r1144GeometryRetryFiredActivityAt\)return false/,'a fired activity stamp must not self-rearm indefinitely');
+  assert.match(src,/latestActivityAt!==firedActivityAt/,'new user activity may move the quiet deadline without polling');
+  assert.doesNotMatch(src,/setInterval\s*\(/,'quiet handoff must remain non-polling');
+});
+
+test('Issue #14 interaction preemption preserves dirty geometry through the public bridge',()=>{
+  const src=extractFunction(detail,'markUserActivity');
+  assert.match(src,/cancelPendingGeometry\?\.\(/,'interaction still cancels stale pending geometry first');
+  assert.match(src,/snapshotGeometryStatus\?\.\(/,'interaction checks the public dirty state');
+  assert.match(src,/deferGeometryAfterInteraction\?\.\(/,'dirty geometry must receive a quiet handoff after preemption');
+  assert.match(detail,/deferGeometryAfterInteraction:r1144DeferGeometry/,'the public bridge must expose only the control-level quiet handoff');
 });
