@@ -3,7 +3,7 @@
 Date: 2026-10-11  
 Requirement: GitHub Issue #35 — `[REQ] Retire dormant tasun-login-v2 authentication authority`  
 Functional R-number: NOT ASSIGNED  
-Status: DRAFT / NOT APPROVED / NO IMPLEMENTATION AUTHORITY
+Status: ARCHITECTURE APPROVED / WRITTEN SPEC IN PROGRESS / NO IMPLEMENTATION AUTHORITY
 
 ## 1. Baseline
 
@@ -226,15 +226,15 @@ No HTML/auth-core/version-manifest change is expected.
 
 Architecture:
 
-- [ ] explicitly approved by user
+- [x] explicitly approved by user on 2026-10-11
 
 Written spec:
 
-- [ ] completed after architecture approval
+- [x] completed after architecture approval
 - [ ] explicitly approved by user
 
 Implementation / TDD:
 
 - [ ] authorized only after written spec approval
 
-Until explicit user approval, this remains a draft with no implementation authority.
+Architecture Option A is approved. The written spec is now being established in the same governance PR; implementation/TDD remains unauthorized until explicit written-spec approval.
