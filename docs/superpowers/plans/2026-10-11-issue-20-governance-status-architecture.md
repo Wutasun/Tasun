@@ -3,7 +3,7 @@
 Date: 2026-10-11  
 Requirement: GitHub Issue #20 — `[REQ] Synchronize architecture approval status with written spec and closure`  
 Functional R-number: NOT ASSIGNED  
-Status: DRAFT / RECOMMENDED ARCHITECTURE ONLY / NOT APPROVED / NO IMPLEMENTATION AUTHORITY
+Status: ARCHITECTURE APPROVED / WRITTEN SPEC IN PROGRESS / NO IMPLEMENTATION AUTHORITY
 
 ## 1. Baseline authority
 
@@ -151,7 +151,7 @@ Assessment: reject.
 
 ## 6. Recommended architecture
 
-**Option B — repair current projections + durable same-change synchronization rule.**
+**Option B — repair current projections + durable same-change synchronization rule — APPROVED by user on 2026-10-11.**
 
 Core rule:
 
@@ -318,7 +318,7 @@ After repair, prove:
 
 Architecture:
 
-- [ ] user approved Option B
+- [x] user approved Option B on 2026-10-11
 
 Written spec:
 
@@ -329,4 +329,4 @@ Implementation:
 
 - [ ] authorized only after written-spec approval
 
-Until architecture is explicitly approved, no governance implementation branch/change is authorized beyond this architecture draft.
+Architecture is approved. Governance implementation remains unauthorized until the written spec is completed and explicitly approved by the user.
