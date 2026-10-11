@@ -363,9 +363,10 @@
     return{ok:true,entry:first,aliases:list};
   }
   function htmlBuild(text){var s=String(text||""),m=s.match(/<meta[^>]+name=["']tasun-build-stamp["'][^>]+content=["']([^"']+)/i)||s.match(/TASUN_REBUILD_STAMP:([^\s<]+)/);return n(m&&m[1]);}
+  function artifactAbortError(cause,label,originalError){var err=new Error((label||"artifact")+"_"+String(cause||"failure"));err.name=cause==="timeout"?"TimeoutError":String(originalError&&originalError.name||"AbortError");err.tasunArtifactAbortCause=String(cause||"");if(originalError){try{err.originalErrorName=String(originalError.name||"");err.originalErrorMessage=String(originalError.message||originalError);}catch(_e){}}return err;}
   async function fetchBuffer(url,timeoutMs,label){
-    var ctl=typeof AbortController!=="undefined"?new AbortController():null,t=ctl?setTimeout(function(){try{var err=typeof DOMException==="function"?new DOMException((label||"fetch")+"_timeout","TimeoutError"):new Error((label||"fetch")+"_timeout");err.name="TimeoutError";ctl.abort(err);}catch(_e){try{ctl.abort();}catch(__e){}}},timeoutMs||PROBE_TIMEOUT):0;
-    try{var u=new URL(url,location.href);u.searchParams.set("__tasun_r782_network",String(Date.now())+"_"+Math.random().toString(16).slice(2));var r=await fetch(u.toString(),{cache:"no-store",credentials:"same-origin",signal:ctl?ctl.signal:void 0});if(!r.ok)throw new Error((label||"fetch")+"_http_"+r.status);var buffer=await r.arrayBuffer();return{buffer:buffer,text:new TextDecoder("utf-8").decode(buffer),url:r.url||u.toString()};}finally{if(t)clearTimeout(t);}
+    var ctl=typeof AbortController!=="undefined"?new AbortController():null,timedOut=false,t=ctl?setTimeout(function(){timedOut=true;try{ctl.abort(artifactAbortError("timeout",label));}catch(_e){try{ctl.abort();}catch(__e){}}},timeoutMs||PROBE_TIMEOUT):0;
+    try{var u=new URL(url,location.href);u.searchParams.set("__tasun_r782_network",String(Date.now())+"_"+Math.random().toString(16).slice(2));var r=await fetch(u.toString(),{cache:"no-store",credentials:"same-origin",signal:ctl?ctl.signal:void 0});if(!r.ok)throw new Error((label||"fetch")+"_http_"+r.status);var buffer=await r.arrayBuffer();return{buffer:buffer,text:new TextDecoder("utf-8").decode(buffer),url:r.url||u.toString()};}catch(e){if(timedOut)throw artifactAbortError("timeout",label,e);if(e&&e.tasunArtifactAbortCause)throw e;throw e;}finally{if(t)clearTimeout(t);}
   }
   async function sha256Hex(buffer){if(!(window.crypto&&window.crypto.subtle&&typeof window.crypto.subtle.digest==="function"))throw new Error("sha256_unavailable");var d=await window.crypto.subtle.digest("SHA-256",buffer);return Array.from(new Uint8Array(d)).map(function(b){return b.toString(16).padStart(2,"0");}).join("");}
   function commitExactUrl(entry){
@@ -396,7 +397,7 @@
       if(older(entry.version,BUILD)){state.lastError="manifest-older-than-embedded";if(!state.gateReleased)releaseGate("embedded-newer-manifest-not-downgraded",{version:BUILD,build:BUILD},false);return false;}
       commitExactUrl(entry);releaseGate("exact-current-artifact",entry,true);state.attempt=0;return true;
     }catch(e){
-      if(e&&e.name==="AbortError"){state.status="cancelled-superseded";state.lastError="";state.attempt=Math.max(0,state.attempt-1);clearTimeout(state.retryTimer);state.retryTimer=0;window.__TASUN_REGISTER_R1144_ARTIFACT_CANCELLATION__={status:"cancelled",reason:"superseded",at:Date.now(),scalarOnly:true};return false;}
+      if(e&&e.tasunArtifactAbortCause==="superseded"){state.status="cancelled-superseded";state.lastError="";state.attempt=Math.max(0,state.attempt-1);clearTimeout(state.retryTimer);state.retryTimer=0;window.__TASUN_REGISTER_R1144_ARTIFACT_CANCELLATION__={status:"cancelled",reason:"superseded",at:Date.now(),scalarOnly:true};return false;}
       state.lastError=String(e&&e.message||e);window.__TASUN_REGISTER_R782_ARTIFACT_GATE_ERROR__={message:state.lastError,attempt:state.attempt,at:Date.now()};console.warn("[Tasun R782] exact artifact probe failed",state.lastError);
       if((mustConverge||!state.gateReleased)&&state.attempt<MAX_RETRY){scheduleRetry(state.lastError);return false;}
       if(!state.gateReleased)releaseGate("bounded-embedded-fallback",{version:BUILD,build:BUILD},false);return false;
