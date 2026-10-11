@@ -50,8 +50,12 @@ test('Issue #14 bounded deferral re-enters the single scheduler and remains life
   const src=extractFunction(detail,'r1144DeferGeometry');
   assert.match(src,/setTimeout\s*\(/,'deferral should be bounded rather than polling');
   assert.match(src,/r1113RequestGeometry\s*\(/,'deferred work must re-enter the existing single scheduler');
+  assert.match(src,/__TASUN_R1122_LIFECYCLE_API__/,'deferred work must use the public lifecycle bridge');
+  assert.match(src,/snapshot\s*\?\.\s*\(/,'deferred work must snapshot lifecycle state through the bridge');
+  assert.match(src,/refreshAuthContext\s*\?\.\s*\(/,'deferred work may refresh auth only through the bridge');
   assert.match(src,/lifecycleEpoch|epoch/,'deferred work must capture/check lifecycle epoch');
   assert.match(src,/authRevision/,'deferred work must capture/check auth revision');
+  assert.doesNotMatch(src,/\br1122LifecycleState\b|\br1122RefreshAuthContext\b/,'deferred work must not cross IIFE boundaries into private lifecycle symbols');
   assert.doesNotMatch(src,/setInterval\s*\(/,'deferral must never poll');
   assert.doesNotMatch(src,/r1065CommitExactGeometryIfIdle\s*\(/,'deferral must never become an exact-commit authority');
 });
