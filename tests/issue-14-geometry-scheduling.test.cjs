@@ -9,7 +9,7 @@ const ROOT=path.resolve(__dirname,'..');
 const detail=fs.readFileSync(path.join(ROOT,'汐東收發文明細表.html'),'utf8');
 
 function extractFunction(source,name){
-  const markers=['async function '+name,'function '+name];
+  const markers=['async function '+name+'(','function '+name+'('];
   let start=-1;
   for(const marker of markers){const i=source.indexOf(marker);if(i>=0&&(start<0||i<start))start=i;}
   assert.notEqual(start,-1,'missing function '+name);
