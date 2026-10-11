@@ -61,18 +61,17 @@ test('R1144 manager current SelfHeal has no cross-IIFE lifecycle private referen
   assert.doesNotMatch(src, /=>clearLocks\(\)/, 'manager SelfHeal must not directly repair through private clearLocks');
 });
 
-test('R1144 intentional artifact AbortError is quiet cancellation, not failure retry', () => {
+test('R1144 intentional artifact supersession is quiet cancellation, not failure retry', () => {
   const src = extractFunction(register, 'probe');
-  assert.match(src, /e&&e\.name===\"AbortError\"[\s\S]{0,420}(cancel|supersed)/i, 'AbortError must terminate as cancellation/supersession');
-  const abortAt = src.indexOf('e&&e.name===\"AbortError\"');
+  assert.match(src, /tasunArtifactAbortCause===\"superseded\"[\s\S]{0,420}(cancel|supersed)/i, 'explicit supersession must terminate as quiet cancellation');
+  const abortAt = src.indexOf('tasunArtifactAbortCause===\"superseded\"');
   const warnAt = src.indexOf('console.warn', abortAt);
   const retryAt = src.indexOf('scheduleRetry', abortAt);
   const returnAt = src.indexOf('return false', abortAt);
-  assert.ok(abortAt >= 0 && returnAt > abortAt, 'AbortError branch must return terminally');
-  assert.ok(warnAt === -1 || returnAt < warnAt, 'AbortError cancellation must return before warning');
-  assert.ok(retryAt === -1 || returnAt < retryAt, 'AbortError cancellation must return before retry scheduling');
+  assert.ok(abortAt >= 0 && returnAt > abortAt, 'supersession branch must return terminally');
+  assert.ok(warnAt === -1 || returnAt < warnAt, 'supersession cancellation must return before warning');
+  assert.ok(retryAt === -1 || returnAt < retryAt, 'supersession cancellation must return before retry scheduling');
 });
-
 test('R1144 only scheduler owns exact sizing', () => {
   assert.equal(count(detail, 'forceExactSizing:true'), 0, 'direct forceExactSizing callers must be retired; scheduler owns exact sizing');
   const scheduler = extractFunction(detail, 'r1113RequestGeometry');
