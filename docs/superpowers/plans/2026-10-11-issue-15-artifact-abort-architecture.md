@@ -3,7 +3,7 @@
 Date: 2026-10-11  
 Requirement: GitHub Issue #15 — `[REQ] Distinguish artifact supersession AbortError from timeout retry`  
 Functional R-number: NOT ASSIGNED  
-Status: DRAFT / RECOMMENDED ARCHITECTURE ONLY / NOT APPROVED / NO IMPLEMENTATION AUTHORITY
+Status: ARCHITECTURE APPROVED / WRITTEN SPEC IN PROGRESS / NO IMPLEMENTATION AUTHORITY
 
 ## 1. Baseline authority
 
@@ -146,7 +146,7 @@ Assessment: reject.
 
 ## 6. Recommended architecture
 
-**Recommend Option B — producer-owned typed abort cause propagation.**
+**Option B — producer-owned typed abort cause propagation — APPROVED by user on 2026-10-11.**
 
 Core rule:
 
@@ -348,7 +348,7 @@ Automatic release sequence numbers remain release identity only and must not be 
 
 Architecture:
 
-- [ ] user approved Option B
+- [x] user approved Option B on 2026-10-11
 
 Written spec:
 
@@ -359,4 +359,4 @@ Implementation/TDD:
 
 - [ ] authorized only after written spec approval
 
-Until architecture is explicitly approved, no implementation/TDD branch is authorized.
+Architecture is approved. Implementation/TDD remains unauthorized until the written spec is completed and explicitly approved by the user.
