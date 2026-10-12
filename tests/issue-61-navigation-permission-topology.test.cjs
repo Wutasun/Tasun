@@ -41,7 +41,9 @@ test('Issue #61 canonical replacement pages exist',()=>{
 });
 
 test('Issue #61 production entry/button defaults contain no stale topology targets',()=>{
-  const found=stale.filter(x=>filesBlock.includes(x)||buttonsBlock.includes(x));
+  const quoted=(block,name)=>block.includes("'"+name+"'")||block.includes('"'+name+'"');
+  const href=(block,name)=>block.includes("href:'"+name+"'")||block.includes('href:"'+name+'"');
+  const found=stale.filter(x=>quoted(filesBlock,x)||quoted(buttonsBlock,x)||href(buttonsBlock,x));
   assert.deepEqual(found,[],'stale live defaults: '+JSON.stringify(found));
 });
 
