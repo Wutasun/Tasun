@@ -3,7 +3,7 @@
 Status: **APPROVED**
 Functional R-number: **NOT ASSIGNED**
 Approval: user explicitly approved **Option A** on 2026-10-12.
-Implementation authority: **NO — written spec approval still required**
+Implementation authority: **YES — implementation/TDD authorized after governance PR merge**
 
 ## 1. Baseline
 
@@ -226,6 +226,6 @@ If post-merge autoscan unexpectedly increments releaseSequence:
 
 - [x] Architecture Option A approved by user on 2026-10-12
 - [x] Written spec completed after architecture approval
-- [ ] Written spec explicitly approved by user
+- [x] Written spec explicitly approved by user on 2026-10-12
 
 Implementation/TDD is not authorized until the required approval gates are satisfied.
