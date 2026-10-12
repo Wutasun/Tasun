@@ -124,3 +124,22 @@ test('Issue #44 retains existing transport/sync authority and no polling',()=>{
   assert.ok(!functionBody(REGISTER,'r950LeaveRegisterForSavedDetail').includes('setInterval'));
   assert.ok(!functionBody(DETAIL,'r1058TargetVisible').includes('setInterval'));
 });
+
+
+test('Issue #44 released register projections invalidate combo stamps and warm again on resume',()=>{
+  const stamp=functionBody(REGISTER,'r953RegisterProjectionStamp');
+  const release=functionBody(REGISTER,'r953ReleaseRegisterProjectionCaches');
+  assert.ok(stamp.includes('r953RegisterReleaseEpoch'),
+    'prepared combo stamp must include a release epoch');
+  assert.ok(release.includes('r953RegisterReleaseEpoch++'),
+    'releasing shared caches must invalidate every retained combo prepared stamp');
+  assert.ok(REGISTER.includes('function r953ResumeRegisterProjectionCaches'),
+    'resume helper must exist inside the R953 projection authority');
+  const resume=functionBody(REGISTER,'r953ResumeRegisterProjectionCaches');
+  assert.ok(resume.includes('querySelectorAll')&&resume.includes('r715Combo'),
+    'resume helper must discover currently rendered combos');
+  assert.ok(resume.includes('r953ScheduleRegisterComboPreparation'),
+    'visible resume must cooperatively prepare stale combos instead of scanning on click');
+  assert.ok(REGISTER.includes('document.visibilityState==="visible"')&&REGISTER.includes('r953ResumeRegisterProjectionCaches("visibility-visible")'),
+    'visibility resume must schedule prepared projections after hidden-cache release');
+});
