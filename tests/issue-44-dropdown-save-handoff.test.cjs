@@ -72,6 +72,14 @@ test('Issue #44 register warm-up discovers actual visible combo fields',()=>{
     'register warm-up must not be hard-coded to only docNo and subject');
 });
 
+test('Issue #44 register direction changes invalidate only dependent prepared projections',()=>{
+  const build=functionBody(REGISTER,'buildRegisterForm');
+  assert.ok(build.includes('r953InvalidateRegisterFieldProjection("上階文號"'),
+    'source-direction change must invalidate the parent-document prepared projection');
+  assert.ok(build.includes('r953InvalidateRegisterFieldProjection("文號"'),
+    'own-direction change must invalidate document-number prepared projections');
+});
+
 test('Issue #44 register combo open never runs semantic full-row source synchronously',()=>{
   const combo=functionBody(REGISTER,'r715CreateCombo');
   assert.ok(!combo.includes('if(opening){') || !combo.includes('render("");'),
