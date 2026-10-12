@@ -5,7 +5,7 @@ Issue: #73 — `[REQ] Retire orphan legacy root resources.json manifest`
 Baseline main: `d426bf83b20759a4c9e408501a465eb19a91f1fd`  
 Formal build: `20261012_tasun_v5_xidong_docs_r1154_425da05a1ae8_release`  
 Release sequence: `1154`  
-Status: ARCHITECTURE PROPOSAL / NO IMPLEMENTATION AUTHORITY
+Status: ARCHITECTURE OPTION A APPROVED / WRITTEN SPEC IN PROGRESS / NO IMPLEMENTATION AUTHORITY
 
 ## 1. Problem
 
@@ -75,7 +75,7 @@ Repository-owned current runtime and release authority converge on `tasun-resour
 
 ## 6. Scope boundary
 
-If Option A is approved, architecture scope is limited to:
+Approved Option A scope is limited to:
 - delete `resources.json`;
 - add one focused regression test.
 
@@ -106,7 +106,11 @@ The normal Exact Auto Release pipeline decides whether the deletion is release-r
 This Issue inherits:
 `docs/superpowers/TASUN-AUTO-PROGRESSION-GOVERNANCE.md`
 
-Architecture drafting is automatic. Implementation remains blocked at **Gate A** until explicit architecture approval.
+Architecture Option A was explicitly approved by the user on 2026-10-12.
 
-Recommended decision:
-`核准 Issue #73 方案 A 架構，開始 written spec`
+Current gate:
+- [x] architecture Option A approved
+- [ ] written spec explicitly approved
+- [ ] implementation / TDD authorized
+
+Written spec drafting may proceed automatically. Implementation remains blocked until the written spec is explicitly approved and the synchronized governance record is merged to `main`.
