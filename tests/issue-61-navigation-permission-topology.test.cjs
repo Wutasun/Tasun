@@ -54,6 +54,16 @@ test('Issue #61 auth-table resource entries contain no stale topology targets',(
   assert.deepEqual(found,[],'stale resource entries: '+JSON.stringify(found));
 });
 
+
+test('Issue #61 canonical replacements remain registered in navigation authority',()=>{
+  for(const name of ['汐東收發文明細表.html','汐東收發文登錄表.html','捷運汐東線事項記錄.html']){
+    assert.ok(filesBlock.includes("'"+name+"'")||filesBlock.includes('"'+name+'"'),name+' must remain in DEFAULT_ENTRY_FILES');
+  }
+  const entries=resources?.resources?.['tasun-auth-table']?.entries;
+  assert.ok(Array.isArray(entries),'tasun-auth-table entries must remain an array');
+  assert.ok(entries.includes('捷運汐東線事項記錄.html'),'canonical record page must remain in auth-table resource entries');
+});
+
 test('Issue #61 examples/comments are not production targets',()=>{
   for(const example of ['xx.html','yy.html','新頁面.html']){
     assert.equal(filesBlock.includes(example),false,example+' must not be in DEFAULT_ENTRY_FILES');
