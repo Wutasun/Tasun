@@ -3,7 +3,7 @@
 Status: **APPROVED — OPTION A2**  
 Functional R-number: **NOT ASSIGNED**  
 Approval: user explicitly approved **Option A2** on 2026-10-12.  
-Implementation authority: **PAUSED pending amended written-spec approval**
+Implementation authority: **YES — implementation/TDD resumes after governance PR merge**
 
 ## 1. Why the approved architecture must be amended
 
@@ -171,7 +171,7 @@ Require:
 
 - [x] **Issue #51 Option A2 architecture amendment explicitly approved on 2026-10-12**
 - [x] amended written spec synchronized
-- [ ] amended written spec explicitly approved
-- [ ] implementation/TDD resumes
+- [x] amended written spec explicitly approved on 2026-10-12
+- [x] implementation/TDD authorized to resume after governance PR merge
 
 Until approval, PR #53 stays draft and must not merge.
