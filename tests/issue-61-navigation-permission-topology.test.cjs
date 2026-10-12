@@ -101,12 +101,29 @@ test('Issue #61 persisted routes normalize pathname while preserving query or ha
   assert.match(splitBlock,/path\+\(preserveSuffix===false\?'':parts\.suffix\)/);
   const migrationBlock=block(perm,'function migrateIssue61PersistedTopology(){','function applyIssue61TopologyConvergence(){');
   assert.match(migrationBlock,/normalizeIssue61Target\(href,true\)/);
-  assert.match(migrationBlock,/delete routes\[k\]/);
-  assert.match(migrationBlock,/setRouteStorageObject\(routes\)/);
+  assert.match(migrationBlock,/ISSUE61_RETIRED_ENTRIES\.has\(rawKey\)/);
+  assert.match(migrationBlock,/ISSUE61_ENTRY_ALIASES\[rawKey\]\|\|rawKey/);
+  assert.match(migrationBlock,/canonicalExists/);
+  assert.match(migrationBlock,/setRouteStorageObject\(nextRoutes\)/);
 });
 
 
 
+
+
+test('Issue #61 dynamic button normalization preserves unrelated query and hash suffixes',()=>{
+  const runtimeBlock=block(perm,'function applyIssue61TopologyConvergence(){','function applyR709ManagedPermissionDefinitions()');
+  assert.match(runtimeBlock,/normalizeIssue61Target\(row\.href\|\|'',true\)/);
+  assert.doesNotMatch(runtimeBlock,/const href=normalizeFile\(row\.href/);
+});
+
+test('Issue #61 persisted route keys normalize aliases and retire all classified stale identities',()=>{
+  const migrationBlock=block(perm,'function migrateIssue61PersistedTopology(){','function applyIssue61TopologyConvergence(){');
+  assert.match(migrationBlock,/ISSUE61_RETIRED_ENTRIES\.has\(rawKey\)/);
+  assert.match(migrationBlock,/const normalizedKey=ISSUE61_ENTRY_ALIASES\[rawKey\]\|\|rawKey/);
+  assert.match(migrationBlock,/Object\.prototype\.hasOwnProperty\.call\(routes,normalizedKey\)/);
+  assert.match(migrationBlock,/nextRoutes\[normalizedKey\]=finalHref/);
+});
 
 test('Issue #61 persisted navigation buttons normalize hrefs without resetting administrator metadata',()=>{
   const migrationBlock=block(perm,'function migrateIssue61PersistedTopology(){','function applyIssue61TopologyConvergence(){');
