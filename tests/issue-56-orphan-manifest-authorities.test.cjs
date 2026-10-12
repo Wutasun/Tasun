@@ -55,7 +55,7 @@ test('Issue #56 A2 preserves tasun-api source but retires its non-deployed page 
 
 test('Issue #56 A2 deployment-surface guard matches the formal Pages workflow',()=>{
   const workflow=fs.readFileSync(path.join(ROOT,'.github/workflows/release-version.yml'),'utf8');
-  assert.match(workflow,/--exclude\\s+["']tasun-api\\\/["']/,'formal Pages workflow must still exclude tasun-api/; topology drift requires architecture review');
+  assert.match(workflow,/--exclude\s+["']tasun-api\/["']/,'formal Pages workflow must still exclude tasun-api/; topology drift requires architecture review');
   const invalid=[];
   for(const [key,entry] of Object.entries(MANIFEST.pages||{})){
     const file=entry&&typeof entry==='object'&&typeof entry.file==='string'?entry.file.trim():'';
