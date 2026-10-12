@@ -4,6 +4,8 @@ const fs=require('node:fs');
 const path=require('node:path');
 const test=require('node:test');
 const assert=require('node:assert/strict');
+const os=require('node:os');
+const {spawnSync}=require('node:child_process');
 
 const ROOT=path.resolve(__dirname,'..');
 const MANIFEST=JSON.parse(fs.readFileSync(path.join(ROOT,'tasun-version.json'),'utf8'));
@@ -68,4 +70,41 @@ test('Issue #56 preserves canonical formal four-page authorities',()=>{
     assert.equal(entry.version,MANIFEST.version);
     assert.equal(entry.releaseSequence,MANIFEST.releaseSequence);
   }
+});
+
+test('Issue #56 metadata-only publisher preserves formal identity and does not restore orphan authorities',t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'tasun-issue56-'));
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const mkdir=rel=>fs.mkdirSync(path.join(dir,rel),{recursive:true});
+  const copy=rel=>{mkdir(path.dirname(rel));fs.copyFileSync(path.join(ROOT,rel),path.join(dir,rel));};
+
+  for(const rel of [
+    'publish-version_tasun_project_autoscan.mjs',
+    'tasun-version.json',
+    'TASUN_REBUILD',
+    'TASUN_REBUILD_STAMP',
+    '.github/workflows/release-version.yml',
+    '汐東收發文明細表.html',
+    '汐東收發文登錄表.html',
+    '汐東文件統計表.html',
+    '汐東文件管理表.html'
+  ]) copy(rel);
+
+  const before=JSON.parse(fs.readFileSync(path.join(dir,'tasun-version.json'),'utf8'));
+  for(const [key] of ORPHANS) assert.equal(Object.hasOwn(before.pages||{},key),false,key+' must already be retired before publisher verification');
+  const beforeBuild=before.version;
+  const beforeSequence=before.releaseSequence;
+
+  const r=spawnSync(process.execPath,['publish-version_tasun_project_autoscan.mjs'],{
+    cwd:dir,
+    encoding:'utf8',
+    env:{...process.env,TASUN_CHANGED_FILES:'tasun-version.json',TASUN_BEFORE_SHA:'',TASUN_HEAD_SHA:''}
+  });
+
+  assert.equal(r.status,0,r.stdout+'\n'+r.stderr);
+  const after=JSON.parse(fs.readFileSync(path.join(dir,'tasun-version.json'),'utf8'));
+  assert.equal(after.version,beforeBuild,'metadata-only cleanup must keep the formal build');
+  assert.equal(after.releaseSequence,beforeSequence,'metadata-only cleanup must keep releaseSequence');
+  for(const [key] of ORPHANS) assert.equal(Object.hasOwn(after.pages||{},key),false,key+' must not be restored by publisher');
+  assert.match(r.stdout,/read-only four-page release verification passed:/);
 });
