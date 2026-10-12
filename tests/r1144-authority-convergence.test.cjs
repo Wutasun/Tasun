@@ -131,7 +131,9 @@ test('R1144 statistics automatic current baseline retires R1138 historical leaf'
 
 
 test('R1144 public scroll bridge exposes control operations, not exact-commit internals', () => {
-  assert.match(detail, /markGeometryDirty:r1144MarkGeometryDirty,requestGeometry:r1113RequestGeometry/);
+  assert.match(detail, /markGeometryDirty:r1144MarkGeometryDirty/);
+  assert.match(detail, /markGeometryClean/);
+  assert.match(detail, /requestGeometry:r1113RequestGeometry/);
   assert.doesNotMatch(detail, /requestExactGeometry:r1065RequestExactGeometry/);
   assert.doesNotMatch(detail, /commitExactGeometryIfIdle:r1065CommitExactGeometryIfIdle/);
   assert.doesNotMatch(detail, /cancelPendingGeometry:r1103CancelPendingGeometry,r1113MeasureGeometry/);
