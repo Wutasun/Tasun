@@ -1725,26 +1725,81 @@ function safeJsonParse(s, fallback){
 
 
 
+  const ISSUE61_ENTRY_ALIASES={
+    '收發文明細表.html':'汐東收發文明細表.html',
+    '收發文登錄表.html':'汐東收發文登錄表.html',
+    '捷運汐東線記事.html':'捷運汐東線事項記錄.html'
+  };
+  const ISSUE61_RETIRED_ENTRIES=new Set([
+    '回覆文登錄表.html',
+    '汐東回覆文登錄表.html',
+    '捷運汐止東湖線-查驗管控表.html',
+    '捷運汐東線審查文件管制查詢表-水環組.html',
+    '捷運汐東線審查文件管制登錄表-水環組.html',
+    '捷運汐東線審查文件管制表-水環組.html'
+  ]);
+  function issue61SplitTarget(raw){
+    const value=stripInvisibles(raw);
+    if(!value)return {path:'',suffix:''};
+    const m=value.match(/^([^?#]*)([?#].*)?$/);
+    return {path:String(m&&m[1]||value).trim(),suffix:String(m&&m[2]||'')};
+  }
+  function normalizeIssue61Target(raw,preserveSuffix){
+    const value=stripInvisibles(raw);
+    if(!value)return '';
+    if(/^https?:\/\//i.test(value))return value;
+    const parts=issue61SplitTarget(value);
+    if(!parts.path)return '';
+    if(ISSUE61_RETIRED_ENTRIES.has(parts.path))return '';
+    const path=ISSUE61_ENTRY_ALIASES[parts.path]||parts.path;
+    return path+(preserveSuffix===false?'':parts.suffix);
+  }
+  function migrateIssue61PersistedTopology(){
+    try{
+      if(!permMatrix||typeof permMatrix!=='object')permMatrix={users:{}};
+      if(!permMatrix.users||typeof permMatrix.users!=='object')permMatrix.users={};
+      Object.keys(permMatrix.users).forEach(function(user){
+        const u=permMatrix.users[user];
+        if(!u||typeof u!=='object')return;
+        Object.keys(ISSUE61_ENTRY_ALIASES).forEach(function(oldEntry){
+          if(!u[oldEntry]||typeof u[oldEntry]!=='object')return;
+          const canonical=ISSUE61_ENTRY_ALIASES[oldEntry];
+          const target=(u[canonical]&&typeof u[canonical]==='object')?u[canonical]:(u[canonical]={});
+          Object.keys(u[oldEntry]).forEach(function(k){
+            if(!Object.prototype.hasOwnProperty.call(target,k))target[k]=u[oldEntry][k];
+          });
+          delete u[oldEntry];
+        });
+        ISSUE61_RETIRED_ENTRIES.forEach(function(entry){delete u[entry];});
+      });
+      savePermMatrix();
+
+      const selectedRaw=localStorage.getItem(ENTRY_SELECTED_KEY)||'';
+      if(selectedRaw){
+        let selected=stripInvisibles(selectedRaw);
+        if((selected.startsWith('"')&&selected.endsWith('"'))||(selected.startsWith("'")&&selected.endsWith("'")))selected=selected.slice(1,-1).trim();
+        try{const parsed=JSON.parse(selected);if(typeof parsed==='string'&&parsed.trim())selected=parsed.trim();}catch(_e){}
+        const normalized=normalizeIssue61Target(selected,false);
+        const nextSelected=normalized||'index.html';
+        if(nextSelected!==selected)localStorage.setItem(ENTRY_SELECTED_KEY,nextSelected);
+      }
+
+      const routes=getRouteStorageObject();
+      let routeChanged=false;
+      Object.keys(routes).forEach(function(k){
+        const href=stripInvisibles(routes[k]);
+        const normalized=normalizeIssue61Target(href,true);
+        if(href&&!normalized){delete routes[k];routeChanged=true;return;}
+        if(normalized&&normalized!==href){routes[k]=normalized;routeChanged=true;}
+        if(k==='official_reply_register'||k==='汐東回覆文登錄表.html'){delete routes[k];routeChanged=true;}
+      });
+      if(routeChanged)setRouteStorageObject(routes);
+      window.__TASUN_ISSUE61_PERSISTED_TOPOLOGY_MIGRATED__=true;
+    }catch(e){console.warn('Issue #61 persisted topology migration failed',e);}
+  }
+
   function applyIssue61TopologyConvergence(){
-    const aliases={
-      '收發文明細表.html':'汐東收發文明細表.html',
-      '收發文登錄表.html':'汐東收發文登錄表.html',
-      '捷運汐東線記事.html':'捷運汐東線事項記錄.html'
-    };
-    const retired=new Set([
-      '回覆文登錄表.html',
-      '汐東回覆文登錄表.html',
-      '捷運汐止東湖線-查驗管控表.html',
-      '捷運汐東線審查文件管制查詢表-水環組.html',
-      '捷運汐東線審查文件管制登錄表-水環組.html',
-      '捷運汐東線審查文件管制表-水環組.html'
-    ]);
-    const normalizeFile=(raw)=>{
-      const file=stripInvisibles(raw);
-      if(!file)return '';
-      if(retired.has(file))return '';
-      return aliases[file]||file;
-    };
+    const normalizeFile=(raw)=>normalizeIssue61Target(raw,false);
     dynEntryFiles=dynEntryFiles.map(normalizeFile).filter(Boolean);
     const nextButtons={};
     Object.keys(dynEntryButtons||{}).forEach(function(rawKey){
@@ -1775,18 +1830,6 @@ function safeJsonParse(s, fallback){
     ensure({key:'xidong_inspection_control',sourceId:'xidong_inspection_control',name:'施工查驗管控表',href:'捷運汐止東湖線-施工查驗管控表.html',target:''});
     ensure({key:'xidong_material_inspection_control',sourceId:'xidong_material_inspection_control',name:'材料查驗管控表',href:'捷運汐止東湖線-材料查驗管控表.html',target:''});
 
-    try{
-      const routes=getRouteStorageObject();
-      let changed=false;
-      Object.keys(routes).forEach(function(k){
-        const href=stripInvisibles(routes[k]);
-        const normalized=normalizeFile(href);
-        if(href&&!normalized){delete routes[k];changed=true;return;}
-        if(normalized&&normalized!==href){routes[k]=normalized;changed=true;}
-        if(k==='official_reply_register'||k==='汐東回覆文登錄表.html'){delete routes[k];changed=true;}
-      });
-      if(changed)setRouteStorageObject(routes);
-    }catch(_e){}
     window.__TASUN_ISSUE61_TOPOLOGY_CONVERGED__=true;
   }
 
@@ -2069,7 +2112,9 @@ function safeJsonParse(s, fallback){
       const parsed = JSON.parse(s);
       if(typeof parsed === 'string' && parsed.trim()) s = parsed.trim();
     }catch(_e){}
-    currentEntry = s || 'index.html';
+    const normalized = normalizeIssue61Target(s,false);
+    currentEntry = normalized || 'index.html';
+    if(currentEntry !== s) localStorage.setItem(ENTRY_SELECTED_KEY,currentEntry);
   }
   function saveSelectedEntry(v){
     currentEntry = stripInvisibles(v) || 'index.html';
@@ -3372,6 +3417,7 @@ function safeJsonParse(s, fallback){
     current.role = String(current.role || current.level || 'read');
 
     loadPermMatrix();
+    migrateIssue61PersistedTopology();
     migrateR709ManagedPagePermissions();
 
     current.role = getEffectiveRole();
