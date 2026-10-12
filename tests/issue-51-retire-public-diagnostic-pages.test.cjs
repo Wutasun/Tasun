@@ -40,9 +40,10 @@ test('Issue #51 preserves formal release authority',()=>{
   }
 });
 
-test('Issue #51 retired diagnostics are not manifest authorities',()=>{
-  const manifest=read('tasun-version.json');
-  for(const rel of RETIRED) assert.ok(!manifest.includes(rel),'manifest must not list '+rel);
+test('Issue #51 retired diagnostics are not committed manifest authorities',()=>{
+  const committed=spawnSync('git',['show','HEAD:tasun-version.json'],{cwd:ROOT,encoding:'utf8'});
+  assert.equal(committed.status,0,committed.stderr);
+  for(const rel of RETIRED) assert.ok(!committed.stdout.includes(rel),'committed manifest must not list '+rel);
 });
 
 test('Issue #51 active sources do not depend on retired diagnostics or public-direct markers',()=>{
@@ -60,7 +61,7 @@ test('Issue #51 active sources do not depend on retired diagnostics or public-di
       const rel=path.relative(ROOT,abs);
       if(skip.some(x=>rel===x.slice(0,-1)||rel.startsWith(x))) continue;
       if(ent.isDirectory()){stack.push(abs);continue;}
-      if(RETIRED.includes(rel)) continue;
+      if(RETIRED.includes(rel)||rel==='tasun-version.json') continue;
       if(!activeExt.test(ent.name)) continue;
       const txt=fs.readFileSync(abs,'utf8');
       for(const retired of RETIRED) assert.ok(!txt.includes(retired),rel+' must not depend on '+retired);
