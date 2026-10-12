@@ -4,8 +4,8 @@ Date: 2026-10-12
 Issue: #64 — `[REQ] Retire orphan cloud-page v1 sidecar authority`  
 Approved architecture: **Option A**  
 Functional R-number: **NOT ASSIGNED**  
-Status: **WRITTEN SPEC COMPLETE / APPROVAL REQUIRED**  
-Implementation authority: **BLOCKED pending explicit written-spec approval and governance PR #65 merge**
+Status: **WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD AUTHORIZED**  
+Implementation authority: **AUTHORIZED after governance PR #65 merge**
 
 ## 1. Objective
 
@@ -337,7 +337,7 @@ Before closing Issue #64, record:
 
 - [x] Option A architecture explicitly approved by user on 2026-10-12
 - [x] written spec completed
-- [ ] written spec explicitly approved by user
-- [ ] implementation / TDD authorized
+- [x] written spec explicitly approved by user on 2026-10-12
+- [x] implementation / TDD authorized after governance PR #65 merge
 
 **No production deletion is authorized until the written spec is explicitly approved and governance PR #65 is merged.**
