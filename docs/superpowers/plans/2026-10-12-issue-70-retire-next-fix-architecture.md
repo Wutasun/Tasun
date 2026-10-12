@@ -4,7 +4,7 @@ Date: 2026-10-12
 Issue: #70 — `[REQ] Retire no-op tasun-next-fix bootstrap marker`  
 Baseline main: `cd00217307e33f5509d1835d3fc57dd7b0f9badd`  
 Formal build: `20261012_tasun_v5_xidong_docs_r1153_1a82f9970b1a_release`  
-Status: ARCHITECTURE OPTION A APPROVED / WRITTEN SPEC IN PROGRESS / NO IMPLEMENTATION AUTHORITY
+Status: ARCHITECTURE OPTION A APPROVED / WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD AUTHORIZED
 
 ## 1. Problem
 
@@ -104,9 +104,9 @@ Because `index.html` is in scope, the normal exact-release pipeline may legitima
 ## 8. Approval record
 
 - [x] Option A architecture explicitly approved by user on 2026-10-12
-- [ ] written spec explicitly approved
-- [ ] implementation / TDD authorized
+- [x] written spec explicitly approved by user on 2026-10-12
+- [x] implementation / TDD authorized after governance PR merge
 
-Implementation remains blocked until the written spec is explicitly approved and the synchronized governance record is merged to `main`.
+Written spec is explicitly approved. Implementation / TDD is authorized after this synchronized governance record is merged to `main`.
 
 This Issue follows the project-wide rule in `docs/superpowers/TASUN-AUTO-PROGRESSION-GOVERNANCE.md`.
