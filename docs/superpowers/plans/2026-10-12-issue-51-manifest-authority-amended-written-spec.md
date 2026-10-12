@@ -4,7 +4,7 @@ Date: 2026-10-12
 Requirement: GitHub Issue #51 — `[REQ] Retire publicly deployed legacy cloud diagnostic pages`  
 Architecture amendment: **Option A2 APPROVED**  
 Functional R-number: **NOT ASSIGNED**  
-Status: **AMENDED WRITTEN SPEC COMPLETE / AWAITING USER APPROVAL / IMPLEMENTATION PAUSED**
+Status: **AMENDED WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD AUTHORIZED**
 
 ## 1. Purpose of this amended spec
 
@@ -463,10 +463,10 @@ Architecture amendment:
 Amended written spec:
 
 - [x] completed after Option A2 approval
-- [ ] explicitly approved by user
+- [x] explicitly approved by user on 2026-10-12
 
 Implementation / TDD:
 
-- [ ] resumes only after amended written-spec approval and governance PR #54 merge
+- [x] resumes after governance PR #54 merge
 
 PR #53 remains draft until the gate above is satisfied.
