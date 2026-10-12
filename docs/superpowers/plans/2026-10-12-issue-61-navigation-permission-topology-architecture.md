@@ -1,6 +1,6 @@
 # Issue #61 — Navigation / Permission Target Topology Architecture
 
-Status: **ARCHITECTURE PROPOSAL / APPROVAL REQUIRED**
+Status: **OPTION A ARCHITECTURE APPROVED / WRITTEN SPEC IN PROGRESS**
 
 Issue: #61  
 Baseline main: `adc510e80ca52b6affa4302b6e726e12c188ec56`  
@@ -203,7 +203,7 @@ Stop and amend architecture if implementation tracing finds any of the following
 Architecture approval authorizes only written-spec drafting.
 
 Implementation remains blocked until:
-- [ ] Option A architecture explicitly approved;
+- [x] Option A architecture explicitly approved by user on 2026-10-12;
 - [ ] written spec completed;
 - [ ] written spec explicitly approved;
 - [ ] governance PR merged.
