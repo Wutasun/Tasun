@@ -4,7 +4,7 @@ Date: 2026-10-12
 Issue: #70 — `[REQ] Retire no-op tasun-next-fix bootstrap marker`  
 Approved architecture: **Option A**  
 Functional R-number: **NOT ASSIGNED**  
-Status: **WRITTEN SPEC COMPLETE / PENDING EXPLICIT APPROVAL / NO IMPLEMENTATION AUTHORITY**
+Status: **WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD AUTHORIZED AFTER GOVERNANCE MERGE**
 
 ## 1. Objective
 
@@ -312,7 +312,7 @@ Only the defined mandatory gates and failure boundaries stop progression.
 
 - [x] Option A architecture explicitly approved by user on 2026-10-12
 - [x] written spec completed
-- [ ] written spec explicitly approved by user
-- [ ] implementation / TDD authorized
+- [x] written spec explicitly approved by user on 2026-10-12
+- [x] implementation / TDD authorized after governance PR merge
 
-**Next mandatory gate: explicit written-spec approval.**
+**Written-spec gate passed. After governance PR merge, continue automatically under the project-wide automatic progression rule.**
