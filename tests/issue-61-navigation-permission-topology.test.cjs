@@ -106,6 +106,18 @@ test('Issue #61 persisted routes normalize pathname while preserving query or ha
 });
 
 
+
+test('Issue #61 document-manager configured inspection controls remain visible in permission UI',()=>{
+  const refreshBlock=block(perm,'async function refreshEntryButtonsBySelection(){','function renderHeaders(){');
+  assert.match(refreshBlock,/entry === '汐東文件管理表\.html'/);
+  assert.match(refreshBlock,/const merged = configured\.map/);
+  assert.match(refreshBlock,/if\(!exists\)merged\.push/);
+  assert.match(refreshBlock,/btnMeta = merged/);
+  const defaultsBlock=block(perm,"'汐東文件管理表.html': [","'汐東收發文明細表.html': [");
+  assert.match(defaultsBlock,/xidong_inspection_control/);
+  assert.match(defaultsBlock,/xidong_material_inspection_control/);
+});
+
 test('Issue #61 cloud download and conflict retry reapply persisted topology migration',()=>{
   const cloudBlock=block(perm,'async function cloudDownload(token, opt = {}){','async function doUploadOnce(token){');
   const cloudAssign=cloudBlock.indexOf('permMatrix = remote.permMatrix');
