@@ -76,6 +76,35 @@ test('Issue #61 retired reply route cleanup remains owned by document manager',(
 });
 
 
+
+test('Issue #61 persisted permission aliases migrate without overwriting canonical permissions',()=>{
+  const runtimeBlock=block(perm,'function migrateIssue61PersistedTopology(){','function applyIssue61TopologyConvergence(){');
+  assert.match(runtimeBlock,/Object\.keys\(ISSUE61_ENTRY_ALIASES\)/);
+  assert.match(runtimeBlock,/hasOwnProperty\.call\(target,k\)/);
+  assert.match(runtimeBlock,/delete u\[oldEntry\]/);
+  assert.match(runtimeBlock,/ISSUE61_RETIRED_ENTRIES\.forEach/);
+  assert.match(runtimeBlock,/savePermMatrix\(\)/);
+});
+
+test('Issue #61 persisted selected entry is normalized before rendering',()=>{
+  const loadBlock=block(perm,'function loadSelectedEntry(){','function saveSelectedEntry');
+  assert.match(loadBlock,/normalizeIssue61Target\(s,false\)/);
+  assert.match(loadBlock,/ENTRY_SELECTED_KEY/);
+  const migrationBlock=block(perm,'function migrateIssue61PersistedTopology(){','function applyIssue61TopologyConvergence(){');
+  assert.match(migrationBlock,/localStorage\.getItem\(ENTRY_SELECTED_KEY\)/);
+  assert.match(migrationBlock,/nextSelected=normalized\|\|'index\.html'/);
+});
+
+test('Issue #61 persisted routes normalize pathname while preserving query or hash suffixes',()=>{
+  const splitBlock=block(perm,'function issue61SplitTarget(raw){','function migrateIssue61PersistedTopology(){');
+  assert.match(splitBlock,/\(\[\?#\]\.\*\)\?/);
+  assert.match(splitBlock,/path\+\(preserveSuffix===false\?'':parts\.suffix\)/);
+  const migrationBlock=block(perm,'function migrateIssue61PersistedTopology(){','function applyIssue61TopologyConvergence(){');
+  assert.match(migrationBlock,/normalizeIssue61Target\(href,true\)/);
+  assert.match(migrationBlock,/delete routes\[k\]/);
+  assert.match(migrationBlock,/setRouteStorageObject\(routes\)/);
+});
+
 test('Issue #61 active topology materializer cannot restore retired targets',()=>{
   const runtimeBlock=block(perm,'function applyIssue61TopologyConvergence(){','function applyR709ManagedPermissionDefinitions()');
   for(const name of ['回覆文登錄表.html','汐東回覆文登錄表.html','捷運汐止東湖線-查驗管控表.html','捷運汐東線審查文件管制查詢表-水環組.html','捷運汐東線審查文件管制登錄表-水環組.html','捷運汐東線審查文件管制表-水環組.html']){
