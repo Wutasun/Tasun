@@ -1,6 +1,6 @@
 # Issue #67 — Retire Orphan Legacy Dropbox Store Authority
 
-Status: **ARCHITECTURE PROPOSAL / APPROVAL REQUIRED**
+Status: **OPTION A ARCHITECTURE APPROVED / WRITTEN SPEC IN PROGRESS**
 
 Issue: #67  
 Baseline main: `702c1ba5eae351e3646ebf7bdefa0238ecb78a3d`  
@@ -157,4 +157,4 @@ Return to architecture if:
 
 **Approve Option A — delete the verified-unreferenced `tasun-store-dropbox.js` authority and add regression protection, while leaving the current Tasun v5 cloud chain unchanged.**
 
-Implementation remains blocked until architecture and written-spec gates are explicitly approved.
+Option A architecture was explicitly approved by the user on 2026-10-12. Implementation remains blocked until the written-spec gate is explicitly approved.
