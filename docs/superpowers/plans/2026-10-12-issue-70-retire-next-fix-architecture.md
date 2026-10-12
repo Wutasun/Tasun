@@ -4,7 +4,7 @@ Date: 2026-10-12
 Issue: #70 — `[REQ] Retire no-op tasun-next-fix bootstrap marker`  
 Baseline main: `cd00217307e33f5509d1835d3fc57dd7b0f9badd`  
 Formal build: `20261012_tasun_v5_xidong_docs_r1153_1a82f9970b1a_release`  
-Status: ARCHITECTURE PROPOSAL / NO IMPLEMENTATION AUTHORITY
+Status: ARCHITECTURE OPTION A APPROVED / WRITTEN SPEC IN PROGRESS / NO IMPLEMENTATION AUTHORITY
 
 ## 1. Problem
 
@@ -74,13 +74,13 @@ This avoids any change to loader surfaces but preserves a no-op global and unnec
 
 ## 5. Recommendation
 
-**Recommend Option A.**
+**Option A — approved by user on 2026-10-12.**
 
 The marker is active only as a loaded no-op artifact. Retirement is narrower and more deterministic than continuing to preserve an unused compatibility surface.
 
 ## 6. Scope boundary
 
-Authorized architecture scope, if Option A is approved:
+Approved architecture scope:
 - delete `tasun-next-fix.js`;
 - remove exactly its three loader calls;
 - add one focused regression test.
@@ -101,9 +101,12 @@ If any real consumer is discovered, stop and amend architecture.
 
 Because `index.html` is in scope, the normal exact-release pipeline may legitimately classify the change as release-relevant. No manual version mutation is authorized; actual publisher behavior must be accepted from the normal workflow and verified post-merge.
 
-## 8. Decision
+## 8. Approval record
 
-- Option A — retire marker and loader calls: **recommended**
-- Option B — retain dormant marker
+- [x] Option A architecture explicitly approved by user on 2026-10-12
+- [ ] written spec explicitly approved
+- [ ] implementation / TDD authorized
 
-Implementation remains blocked pending explicit architecture approval, followed by written spec and explicit written-spec approval.
+Implementation remains blocked until the written spec is explicitly approved and the synchronized governance record is merged to `main`.
+
+This Issue follows the project-wide rule in `docs/superpowers/TASUN-AUTO-PROGRESSION-GOVERNANCE.md`.
