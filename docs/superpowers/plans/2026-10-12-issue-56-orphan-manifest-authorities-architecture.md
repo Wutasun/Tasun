@@ -2,9 +2,10 @@
 
 Date: 2026-10-12  
 Requirement: GitHub Issue #56 — `[REQ] Retire orphan manifest page authorities`  
-Status: **PROPOSED / NOT APPROVED**  
+Status: **APPROVED — OPTION A**  
 Functional R-number: **NOT ASSIGNED**  
-Implementation authority: **NO — architecture approval required**
+Architecture approval: **user explicitly approved Option A on 2026-10-12**  
+Implementation authority: **NO — written-spec approval still required**
 
 ## 1. Problem statement
 
@@ -158,7 +159,7 @@ Do not recreate a missing file or edit a supported page as an implementation wor
 
 ## 10. Approval gate
 
-- [ ] Architecture Option A explicitly approved
+- [x] Architecture Option A explicitly approved by user on 2026-10-12
 - [ ] Written spec completed after architecture approval
 - [ ] Written spec explicitly approved
 - [ ] Implementation/TDD authorized
