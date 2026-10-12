@@ -4,8 +4,8 @@ Date: 2026-10-12
 Requirement: GitHub Issue #56 — `[REQ] Retire orphan manifest page authorities`  
 Approved amendment architecture: **Option A2**  
 Functional R-number: **NOT ASSIGNED**  
-Status: **AMENDED WRITTEN SPEC COMPLETE / APPROVAL REQUIRED**  
-Implementation authority: **BLOCKED pending explicit amended written-spec approval**
+Status: **AMENDED WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD AUTHORIZED**  
+Implementation authority: **AUTHORIZED after governance PR #59 merge**
 
 ## 1. Objective
 
@@ -410,7 +410,7 @@ Issue #56 may close only when all are true:
 - [x] original implementation merged and verified;
 - [x] Option A2 architecture amendment explicitly approved;
 - [x] A2 amended written spec completed;
-- [ ] A2 amended written spec explicitly approved;
+- [x] A2 amended written spec explicitly approved;
 - [ ] A2 RED evidence recorded;
 - [ ] exactly `pages["tasun-api/index.html"]` retired;
 - [ ] deployment-surface regression GREEN;
@@ -436,10 +436,10 @@ Architecture amendment:
 Amended written spec:
 
 - [x] completed after A2 approval
-- [ ] explicitly approved by user
+- [x] explicitly approved by user
 
 Implementation / TDD:
 
-- [ ] authorized only after explicit amended written-spec approval
+- [x] authorized by user on 2026-10-12; execution resumes after governance PR #59 merge
 
-**No A2 production mutation is authorized until the amended written spec is explicitly approved.**
+**A2 production mutation is authorized after governance PR #59 is merged; execution remains RED-first.**
