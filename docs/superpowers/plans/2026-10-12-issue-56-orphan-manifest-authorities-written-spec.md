@@ -4,7 +4,7 @@ Date: 2026-10-12
 Requirement: GitHub Issue #56 — `[REQ] Retire orphan manifest page authorities`  
 Approved architecture: **Option A**  
 Functional R-number: **NOT ASSIGNED**  
-Status: **WRITTEN SPEC COMPLETE / AWAITING USER APPROVAL / NO IMPLEMENTATION AUTHORITY**
+Status: **WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD AUTHORIZED**
 
 ## 1. Objective
 
@@ -462,10 +462,10 @@ Architecture:
 Written spec:
 
 - [x] completed after architecture approval
-- [ ] explicitly approved by user
+- [x] explicitly approved by user on 2026-10-12
 
 Implementation / TDD:
 
-- [ ] authorized only after explicit written-spec approval and governance PR #57 merge
+- [x] authorized by user on 2026-10-12; implementation resumes after governance PR #57 merge
 
 No production change is authorized until the written-spec approval gate is satisfied.
