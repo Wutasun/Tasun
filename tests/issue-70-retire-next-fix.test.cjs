@@ -7,7 +7,11 @@ const ROOT=path.resolve(__dirname,'..');
 const retiredFile='tasun-next-fix.js';
 const retiredGlobal='__TASUN_NEXT_FIX__';
 const loaderFiles=['index.html','inline.js','tasun-api/index.html'];
-const supportedOrder=['tasun-cloudwrap-v4.js','tasun-auth-v4.js','tasun-guard-v5.js'];
+const supportedLoaderCalls=[
+  "loadOnce('tasun-cloudwrap-v4', window.__withV('tasun-cloudwrap-v4.js'))",
+  "loadOnce('tasun-auth-v4', window.__withV('tasun-auth-v4.js'))",
+  "loadOnce('tasun-guard-v5', window.__withV('tasun-guard-v5.js'))"
+];
 
 function walk(dir){
   const out=[];
@@ -47,9 +51,9 @@ test('Issue #70 live runtime sources contain no retired file/global references',
 test('Issue #70 supported bootstrap loader chain remains present and ordered',()=>{
   for(const file of loaderFiles){
     const text=fs.readFileSync(path.join(ROOT,file),'utf8');
-    const positions=supportedOrder.map(name=>text.indexOf(name));
-    for(let i=0;i<supportedOrder.length;i++){
-      assert.notEqual(positions[i],-1,file+' must retain '+supportedOrder[i]);
+    const positions=supportedLoaderCalls.map(call=>text.indexOf(call));
+    for(let i=0;i<supportedLoaderCalls.length;i++){
+      assert.notEqual(positions[i],-1,file+' must retain executable '+supportedLoaderCalls[i]);
     }
     assert.ok(positions[0] < positions[1] && positions[1] < positions[2],
       file+' must preserve cloudwrap -> auth -> guard order');
