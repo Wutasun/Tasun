@@ -179,6 +179,18 @@ test('Issue #61 active topology materializer cannot restore retired targets',()=
   assert.match(helperBlock,/捷運汐東線記事\.html':'捷運汐東線事項記錄\.html/);
 });
 
+test('Issue #61 post-load migration seeds material permission for auth union matrix users',()=>{
+  const migration=block(perm,'function migrateIssue61PersistedTopology(){','function applyIssue61TopologyConvergence(){');
+  assert.match(migration,/const issue61Users=new Set\(Object\.keys\(permMatrix\.users\)\)/);
+  assert.match(migration,/\(Array\.isArray\(auth\)\?auth:\[\]\)\.forEach/);
+  assert.match(migration,/issue61Users\.add\(k\)/);
+  assert.match(migration,/permMatrix\.users\[user\]\|\|\(permMatrix\.users\[user\]=\{\}\)/);
+  assert.match(migration,/hasOwnProperty\.call\(docEntry,'xidong_material_inspection_control'\)/);
+  assert.match(migration,/hasOwnProperty\.call\(docKeyEntry,'xidong_material_inspection_control'\)/);
+  assert.match(migration,/docEntry\.xidong_material_inspection_control=true/);
+  assert.match(migration,/docKeyEntry\.xidong_material_inspection_control=true/);
+});
+
 test('Issue #61 material inspection permission is initialized for existing users',()=>{
   const migration=block(perm,'function migrateInspectionControlR561PermMatrix(){','migrateInspectionControlR561PermMatrix();');
   assert.match(migration,/MATERIAL_INSPECTION_KEY\s*=\s*'xidong_material_inspection_control'/);
