@@ -1,10 +1,10 @@
 # Issue #44 — Written Specification
 ## Eliminate dropdown critical-path rescans and preserve saved-detail handoff
 
-Status: **WRITTEN SPEC COMPLETE — AWAITING USER APPROVAL**
+Status: **WRITTEN SPEC APPROVED — IMPLEMENTATION/TDD AUTHORIZED AFTER GOVERNANCE MERGE**
 Architecture: **Option A approved**
 Functional R-number: **NOT ASSIGNED**
-Implementation authority: **NO**
+Implementation authority: **YES AFTER GOVERNANCE PR MERGE**
 
 ## 1. Authoritative baseline
 
@@ -564,7 +564,7 @@ Current state:
 - [x] Requirement intake recorded — Issue #44
 - [x] Architecture Option A approved
 - [x] Written spec completed
-- [ ] **User explicitly approves written spec**
-- [ ] Implementation / TDD authorized
+- [x] **User explicitly approved written spec on 2026-10-12**
+- [x] Implementation / TDD authorized after governance PR merge
 
-**Do not enter implementation/TDD until the user explicitly approves this written spec.**
+**User approval is recorded. Enter implementation/TDD only after the synchronized governance PR is merged to `main`, and branch from the then-latest `main`.**
