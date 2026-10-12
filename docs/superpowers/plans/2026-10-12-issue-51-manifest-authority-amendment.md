@@ -1,8 +1,9 @@
 # Issue #51 — Architecture Amendment: retire live manifest authority for deleted diagnostics
 
-Status: **PROPOSED / APPROVAL REQUIRED**  
+Status: **APPROVED — OPTION A2**  
 Functional R-number: **NOT ASSIGNED**  
-Implementation authority: **PAUSED pending amendment approval**
+Approval: user explicitly approved **Option A2** on 2026-10-12.  
+Implementation authority: **PAUSED pending amended written-spec approval**
 
 ## 1. Why the approved architecture must be amended
 
@@ -168,8 +169,9 @@ Require:
 
 ## 9. Approval gate
 
-- [ ] **Issue #51 Option A2 architecture amendment explicitly approved**
-- [ ] amended written spec synchronized and explicitly approved
+- [x] **Issue #51 Option A2 architecture amendment explicitly approved on 2026-10-12**
+- [x] amended written spec synchronized
+- [ ] amended written spec explicitly approved
 - [ ] implementation/TDD resumes
 
 Until approval, PR #53 stays draft and must not merge.
