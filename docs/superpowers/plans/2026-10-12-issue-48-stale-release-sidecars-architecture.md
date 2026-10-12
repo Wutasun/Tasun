@@ -1,8 +1,9 @@
 # Issue #48 — Unmanaged Stale Deployed Release Sidecars Architecture
 
-Status: **PROPOSED / NOT APPROVED**
+Status: **APPROVED**
 Functional R-number: **NOT ASSIGNED**
-Implementation authority: **NO — architecture approval required**
+Approval: user explicitly approved **Option A** on 2026-10-12.
+Implementation authority: **NO — written spec approval still required**
 
 ## 1. Baseline
 
@@ -223,8 +224,8 @@ If post-merge autoscan unexpectedly increments releaseSequence:
 
 ## 11. Approval gate
 
-- [ ] Architecture Option A approved by user
-- [ ] Written spec completed after architecture approval
+- [x] Architecture Option A approved by user on 2026-10-12
+- [x] Written spec completed after architecture approval
 - [ ] Written spec explicitly approved by user
 
 Implementation/TDD is not authorized until the required approval gates are satisfied.
