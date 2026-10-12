@@ -105,6 +105,25 @@ test('Issue #61 persisted routes normalize pathname while preserving query or ha
   assert.match(migrationBlock,/setRouteStorageObject\(routes\)/);
 });
 
+
+test('Issue #61 cloud download and conflict retry reapply persisted topology migration',()=>{
+  const cloudBlock=block(perm,'async function cloudDownload(token, opt = {}){','async function doUploadOnce(token){');
+  const cloudAssign=cloudBlock.indexOf('permMatrix = remote.permMatrix');
+  const cloudMigrate=cloudBlock.indexOf('migrateIssue61PersistedTopology();');
+  const cloudR709=cloudBlock.indexOf('migrateR709ManagedPagePermissions();');
+  assert.ok(cloudAssign>=0,'cloudDownload must accept remote permMatrix');
+  assert.ok(cloudMigrate>cloudAssign,'Issue #61 migration must run after remote permMatrix assignment');
+  assert.ok(cloudR709>cloudMigrate,'Issue #61 migration must run before R709 defaults');
+
+  const uploadBlock=block(perm,'async function saveAndUpload(token){','// 按鍵名稱設定（保留）');
+  const merge=uploadBlock.indexOf('mergePermMatrix(localSnap.permMatrix);');
+  const retryMigrate=uploadBlock.indexOf('migrateIssue61PersistedTopology();',merge);
+  const retryR709=uploadBlock.indexOf('migrateR709ManagedPagePermissions();',merge);
+  assert.ok(merge>=0,'upload conflict retry must merge local permission snapshot');
+  assert.ok(retryMigrate>merge,'Issue #61 migration must rerun after conflict merge');
+  assert.ok(retryR709>retryMigrate,'R709 defaults must run after Issue #61 conflict migration');
+});
+
 test('Issue #61 active topology materializer cannot restore retired targets',()=>{
   const runtimeBlock=block(perm,'function applyIssue61TopologyConvergence(){','function applyR709ManagedPermissionDefinitions()');
   for(const name of ['回覆文登錄表.html','汐東回覆文登錄表.html','捷運汐止東湖線-查驗管控表.html','捷運汐東線審查文件管制查詢表-水環組.html','捷運汐東線審查文件管制登錄表-水環組.html','捷運汐東線審查文件管制表-水環組.html']){
