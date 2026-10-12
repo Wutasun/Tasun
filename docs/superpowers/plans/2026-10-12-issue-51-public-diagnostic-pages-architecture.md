@@ -1,8 +1,9 @@
 # Issue #51 — Publicly Deployed Legacy Cloud Diagnostic Pages Architecture
 
-Status: **PROPOSED / NOT APPROVED**
+Status: **APPROVED**
 Functional R-number: **NOT ASSIGNED**
-Implementation authority: **NO — architecture approval required**
+Approval: user explicitly approved **Option A** on 2026-10-12.
+Implementation authority: **NO — written spec approval still required**
 
 ## 1. Baseline
 
@@ -286,8 +287,8 @@ If there is a real business requirement for interactive diagnostics:
 
 ## 13. Approval gate
 
-- [ ] Architecture Option A approved by user
-- [ ] Written spec completed after architecture approval
+- [x] Architecture Option A approved by user on 2026-10-12
+- [x] Written spec completed after architecture approval
 - [ ] Written spec explicitly approved by user
 
 Implementation/TDD is not authorized until required approval gates are satisfied.
