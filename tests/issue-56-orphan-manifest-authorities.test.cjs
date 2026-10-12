@@ -55,16 +55,16 @@ test('Issue #56 A2 preserves tasun-api source but retires its non-deployed page 
 
 test('Issue #56 A2 deployment-surface guard matches the active Pages rsync command',()=>{
   const workflow=fs.readFileSync(path.join(ROOT,'.github/workflows/release-version.yml'),'utf8');
-  const lines=workflow.split(/\\r?\\n/);
-  const start=lines.findIndex(line=>/^\\s*rsync\\s+-a\\s+\\.\\/\\s+_site\\/\\s+\\\\\\s*$/.test(line));
-  assert.notEqual(start,-1,'active Pages rsync command must remain discoverable; topology drift requires architecture review');
+  const lines=workflow.split(/\r?\n/);
+  const rsyncStart=lines.findIndex(line=>line.trim().startsWith('rsync -a ./ _site/'));
+  assert.notEqual(rsyncStart,-1,'active Pages rsync command must remain discoverable; topology drift requires architecture review');
   const excludes=[];
-  for(let i=start+1;i<lines.length;i++){
+  for(let i=rsyncStart+1;i<lines.length;i++){
     const line=lines[i];
-    if(!/^\\s+--exclude\\s+/.test(line)) break;
-    excludes.push(line);
+    if(!line.trim().startsWith('--exclude ')) break;
+    excludes.push(line.trim());
   }
-  assert.ok(excludes.some(line=>/^\\s+--exclude\\s+["']tasun-api\\/["'](?:\\s+\\\\)?\\s*$/.test(line)),'active Pages rsync command must exclude tasun-api/; topology drift requires architecture review');
+  assert.ok(excludes.some(line=>line.startsWith('--exclude "tasun-api/"')||line.startsWith("--exclude 'tasun-api/'")),'active Pages rsync command must exclude tasun-api/; topology drift requires architecture review');
   const invalid=[];
   for(const [key,entry] of Object.entries(MANIFEST.pages||{})){
     const file=entry&&typeof entry==='object'&&typeof entry.file==='string'?entry.file.trim():'';
