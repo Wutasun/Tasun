@@ -23,7 +23,7 @@ function isLive(p){
   if(r.startsWith('docs/')) return false;
   if(r.startsWith('tests/')) return false;
   if(/\.(txt|md)$/i.test(r)) return false;
-  return /\.(html?|js|mjs|cjs|json|ya?ml)$/i.test(r);
+  return /\.(html?|js|mjs|cjs|json|ya?ml|toml)$/i.test(r);
 }
 
 test('Issue #67 legacy Dropbox store file is retired',()=>{
