@@ -75,6 +75,20 @@ test('Issue #61 retired reply route cleanup remains owned by document manager',(
   assert.match(manager,/retired=\[[^\]]*official_reply_register[^\]]*汐東回覆文登錄表\.html/s);
 });
 
+
+test('Issue #61 active topology materializer cannot restore retired targets',()=>{
+  const runtimeBlock=block(perm,'function applyIssue61TopologyConvergence(){','function applyR709ManagedPermissionDefinitions()');
+  for(const name of ['回覆文登錄表.html','汐東回覆文登錄表.html','捷運汐止東湖線-查驗管控表.html','捷運汐東線審查文件管制查詢表-水環組.html','捷運汐東線審查文件管制登錄表-水環組.html','捷運汐東線審查文件管制表-水環組.html']){
+    const appearsAsOutput=runtimeBlock.includes("href:'"+name+"'")||runtimeBlock.includes('href:"'+name+'"')||runtimeBlock.includes("push('"+name+"')")||runtimeBlock.includes('push("'+name+'")');
+    assert.equal(appearsAsOutput,false,name+' must not be materialized by active topology convergence');
+  }
+  assert.match(runtimeBlock,/捷運汐止東湖線-施工查驗管控表\.html/);
+  assert.match(runtimeBlock,/捷運汐止東湖線-材料查驗管控表\.html/);
+  assert.match(runtimeBlock,/汐東收發文明細表\.html/);
+  assert.match(runtimeBlock,/汐東收發文登錄表\.html/);
+  assert.match(runtimeBlock,/捷運汐東線事項記錄\.html/);
+});
+
 test('Issue #61 current split inspection pages remain represented',()=>{
   assert.equal(exists('捷運汐止東湖線-施工查驗管控表.html'),true);
   assert.equal(exists('捷運汐止東湖線-材料查驗管控表.html'),true);
