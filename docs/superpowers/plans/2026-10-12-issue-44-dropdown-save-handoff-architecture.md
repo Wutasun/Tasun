@@ -3,7 +3,7 @@
 Status: **APPROVED**
 Approval: user explicitly approved **Option A** on 2026-10-12.
 Functional R-number: **NOT ASSIGNED**
-Implementation authority: **NO — written spec approval still required**
+Implementation authority: **YES — implementation/TDD authorized after governance PR merge**
 
 ## 1. Baseline
 
@@ -259,6 +259,6 @@ Implementation is release-triggering because it modifies formal HTML pages:
 Architecture option A: **APPROVED**.
 
 Next gate:
-- written spec must be completed;
-- user must explicitly approve the written spec;
-- only then may implementation/TDD begin.
+- written spec completed;
+- user explicitly approved the written spec on 2026-10-12;
+- implementation/TDD is authorized after the synchronized governance PR is merged to `main`.
