@@ -1,6 +1,6 @@
 # Issue #64 — Retire Orphan Cloud Page v1 Sidecar Authority
 
-Status: **ARCHITECTURE PROPOSAL / APPROVAL REQUIRED**
+Status: **OPTION A ARCHITECTURE APPROVED / WRITTEN SPEC IN PROGRESS**
 
 Issue: #64  
 Baseline main: `bff489872d7bf7ffb223b31c824ec65ef2c2318d`  
@@ -173,4 +173,4 @@ Return to architecture if:
 
 **Approve Option A — delete both verified-unreferenced Cloud Page v1 sidecars and add regression protection, while leaving the current Tasun v5 cloud authority chain unchanged.**
 
-Implementation remains blocked until architecture and written-spec gates are explicitly approved.
+Option A architecture was explicitly approved by the user on 2026-10-12. Implementation remains blocked until the written-spec gate is explicitly approved.
