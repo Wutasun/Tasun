@@ -47,12 +47,21 @@ for(const [key,file] of ORPHANS){
   });
 }
 
-test('Issue #56 accepts valid nested tasun-api/index.html authority',()=>{
+test('Issue #56 A2 preserves tasun-api source but retires its non-deployed page authority',()=>{
   const files=repositoryFiles();
-  assert.equal(files.has('tasun-api/index.html'),true,'nested control file must exist');
-  const entry=MANIFEST.pages?.['tasun-api/index.html'];
-  assert.ok(entry,'nested manifest authority must remain');
-  assert.equal(entry.file,'tasun-api/index.html');
+  assert.equal(files.has('tasun-api/index.html'),true,'tasun-api/index.html repository source must remain');
+  assert.equal(Object.hasOwn(MANIFEST.pages||{},'tasun-api/index.html'),false,'tasun-api/index.html must not remain a public Pages authority while tasun-api/ is excluded from deployment');
+});
+
+test('Issue #56 A2 deployment-surface guard matches the formal Pages workflow',()=>{
+  const workflow=fs.readFileSync(path.join(ROOT,'.github/workflows/release-version.yml'),'utf8');
+  assert.match(workflow,/--exclude\\s+["']tasun-api\\\/["']/,'formal Pages workflow must still exclude tasun-api/; topology drift requires architecture review');
+  const invalid=[];
+  for(const [key,entry] of Object.entries(MANIFEST.pages||{})){
+    const file=entry&&typeof entry==='object'&&typeof entry.file==='string'?entry.file.trim():'';
+    if(file.startsWith('tasun-api/')) invalid.push({key,file});
+  }
+  assert.deepEqual(invalid,[],'manifest contains non-deployed Pages authorities: '+JSON.stringify(invalid));
 });
 
 test('Issue #56 preserves canonical formal four-page authorities',()=>{
@@ -92,6 +101,7 @@ test('Issue #56 metadata-only publisher preserves formal identity and does not r
 
   const before=JSON.parse(fs.readFileSync(path.join(dir,'tasun-version.json'),'utf8'));
   for(const [key] of ORPHANS) assert.equal(Object.hasOwn(before.pages||{},key),false,key+' must already be retired before publisher verification');
+  assert.equal(Object.hasOwn(before.pages||{},'tasun-api/index.html'),false,'tasun-api/index.html authority must already be retired before publisher verification');
   const beforeBuild=before.version;
   const beforeSequence=before.releaseSequence;
 
@@ -106,5 +116,6 @@ test('Issue #56 metadata-only publisher preserves formal identity and does not r
   assert.equal(after.version,beforeBuild,'metadata-only cleanup must keep the formal build');
   assert.equal(after.releaseSequence,beforeSequence,'metadata-only cleanup must keep releaseSequence');
   for(const [key] of ORPHANS) assert.equal(Object.hasOwn(after.pages||{},key),false,key+' must not be restored by publisher');
+  assert.equal(Object.hasOwn(after.pages||{},'tasun-api/index.html'),false,'publisher must not restore tasun-api/index.html authority');
   assert.match(r.stdout,/read-only four-page release verification passed:/);
 });
