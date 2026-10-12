@@ -107,6 +107,17 @@ test('Issue #61 persisted routes normalize pathname while preserving query or ha
 
 
 
+
+test('Issue #61 persisted navigation buttons normalize hrefs without resetting administrator metadata',()=>{
+  const migrationBlock=block(perm,'function migrateIssue61PersistedTopology(){','function applyIssue61TopologyConvergence(){');
+  assert.match(migrationBlock,/localStorage\.getItem\(NAV_KEY\)/);
+  assert.match(migrationBlock,/const row=Object\.assign\(\{\},raw\)/);
+  assert.match(migrationBlock,/normalizeIssue61Target\(href,true\)/);
+  assert.match(migrationBlock,/if\(!normalized\)\{navChanged=true;return null;\}/);
+  assert.match(migrationBlock,/row\.href=normalized/);
+  assert.match(migrationBlock,/localStorage\.setItem\(NAV_KEY,JSON\.stringify\(nextNav\)\)/);
+});
+
 test('Issue #61 document-manager configured inspection controls remain visible in permission UI',()=>{
   const refreshBlock=block(perm,'async function refreshEntryButtonsBySelection(){','function renderHeaders(){');
   assert.match(refreshBlock,/entry === '汐東文件管理表\.html'/);
