@@ -2,9 +2,9 @@
 
 Date: 2026-10-12  
 Requirement: GitHub Issue #56 — `[REQ] Retire orphan manifest page authorities`  
-Status: **PROPOSED / APPROVAL REQUIRED**  
+Status: **APPROVED — OPTION A2**  
 Functional R-number: **NOT ASSIGNED**  
-Implementation authority: **PAUSED pending amendment approval**
+Implementation authority: **BLOCKED pending amended written-spec approval**
 
 ## 1. Why the approved written spec cannot close yet
 
@@ -103,13 +103,7 @@ Expected final manifest page count: `41`.
 
 Modify the release workflow/package logic to include `tasun-api/index.html` while still excluding backend source such as `tasun-api/worker.js`.
 
-This changes the public deployment surface and requires:
-
-- security review of the page;
-- selective packaging logic;
-- release-workflow changes;
-- new public-route verification;
-- ongoing support ownership.
+This changes the public deployment surface and requires security review, selective packaging logic, release-workflow changes, new public-route verification, and ongoing support ownership.
 
 ### Option C2 — allow manifest page authorities for non-deployed files
 
@@ -117,36 +111,35 @@ Relax the Issue #56 artifact invariant and document `tasun-api/index.html` as a 
 
 This leaves deployed `tasun-version.json.pages` describing a page the deployed site cannot serve, weakening manifest/page authority semantics.
 
-## 5. Recommendation
+## 5. Approved architecture
 
-**Recommend Option A2.**
+**Option A2 is explicitly approved by the user on 2026-10-12.**
 
 Rationale:
 
 - the directory is intentionally excluded from Pages;
 - no active public runtime consumer requires this page authority;
-- the repository source and its tests can remain unchanged;
+- the repository source and its tests remain unchanged;
 - no workflow/security surface expansion is needed;
 - deployed manifest becomes exact: every remaining page authority resolves to an artifact file;
-- only one additional manifest key must be retired;
-- the formal build/releaseSequence can remain unchanged through metadata-only release behavior.
+- only one additional manifest key is retired;
+- the formal build/releaseSequence remain unchanged through metadata-only release behavior.
 
 ## 6. Revised TDD contract
 
-After explicit amendment architecture approval and amended written-spec approval:
+After amended written-spec approval:
 
 1. branch from then-current latest `main`;
-2. preserve all Issue #56 existing GREEN tests;
-3. change the nested-control expectation:
-   - repository source `tasun-api/index.html` must still exist;
-   - `manifest.pages["tasun-api/index.html"]` must be absent;
-4. add/adjust deployment-surface regression so manifest page files under currently excluded Pages directories are rejected;
-5. RED must prove the current manifest still contains the non-deployed authority;
-6. GREEN removes exactly `pages["tasun-api/index.html"]`;
-7. semantic manifest diff must prove exactly one key removal relative to the post-Issue-56 baseline;
-8. repository `tasun-api/index.html` blob must remain unchanged;
-9. workflow must remain unchanged;
-10. full regression + disposable exact-release + independent review must pass.
+2. preserve all Issue #56 existing GREEN behavior except the obsolete nested-authority expectation;
+3. repository source `tasun-api/index.html` must still exist;
+4. `manifest.pages["tasun-api/index.html"]` must be absent;
+5. deployment-surface regression must reject manifest page files under currently excluded Pages directories;
+6. RED must prove the current manifest still contains the non-deployed authority;
+7. GREEN removes exactly `pages["tasun-api/index.html"]`;
+8. semantic manifest diff must prove exactly one key removal relative to the post-Issue-56 baseline;
+9. repository `tasun-api/index.html` blob remains unchanged;
+10. workflow remains unchanged;
+11. full regression + disposable exact-release + independent review must pass.
 
 ## 7. Release contract
 
@@ -182,9 +175,12 @@ Do not expose `tasun-api/` publicly as a workaround.
 
 ## 9. Approval gate
 
-- [ ] Option A2 architecture amendment explicitly approved
-- [ ] amended written spec completed
+- [x] Option A2 architecture amendment explicitly approved by user on 2026-10-12
+- [x] amended written spec completed
 - [ ] amended written spec explicitly approved
 - [ ] implementation/TDD resumed
+
+Amended written spec:
+`docs/superpowers/plans/2026-10-12-issue-56-pages-deployment-authority-amended-written-spec.md`
 
 Issue #56 remains open until the post-merge artifact invariant is satisfied.
