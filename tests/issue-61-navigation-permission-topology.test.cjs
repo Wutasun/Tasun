@@ -113,9 +113,11 @@ test('Issue #61 active topology materializer cannot restore retired targets',()=
   }
   assert.match(runtimeBlock,/捷運汐止東湖線-施工查驗管控表\.html/);
   assert.match(runtimeBlock,/捷運汐止東湖線-材料查驗管控表\.html/);
-  assert.match(runtimeBlock,/汐東收發文明細表\.html/);
-  assert.match(runtimeBlock,/汐東收發文登錄表\.html/);
-  assert.match(runtimeBlock,/捷運汐東線事項記錄\.html/);
+  assert.match(runtimeBlock,/normalizeIssue61Target\(raw,false\)/);
+  const helperBlock=block(perm,'const ISSUE61_ENTRY_ALIASES={','function migrateIssue61PersistedTopology(){');
+  assert.match(helperBlock,/收發文明細表\.html':'汐東收發文明細表\.html/);
+  assert.match(helperBlock,/收發文登錄表\.html':'汐東收發文登錄表\.html/);
+  assert.match(helperBlock,/捷運汐東線記事\.html':'捷運汐東線事項記錄\.html/);
 });
 
 test('Issue #61 current split inspection pages remain represented',()=>{
