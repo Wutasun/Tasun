@@ -53,9 +53,18 @@ test('Issue #56 A2 preserves tasun-api source but retires its non-deployed page 
   assert.equal(Object.hasOwn(MANIFEST.pages||{},'tasun-api/index.html'),false,'tasun-api/index.html must not remain a public Pages authority while tasun-api/ is excluded from deployment');
 });
 
-test('Issue #56 A2 deployment-surface guard matches the formal Pages workflow',()=>{
+test('Issue #56 A2 deployment-surface guard matches the active Pages rsync command',()=>{
   const workflow=fs.readFileSync(path.join(ROOT,'.github/workflows/release-version.yml'),'utf8');
-  assert.match(workflow,/--exclude\s+["']tasun-api\/["']/,'formal Pages workflow must still exclude tasun-api/; topology drift requires architecture review');
+  const lines=workflow.split(/\\r?\\n/);
+  const start=lines.findIndex(line=>/^\\s*rsync\\s+-a\\s+\\.\\/\\s+_site\\/\\s+\\\\\\s*$/.test(line));
+  assert.notEqual(start,-1,'active Pages rsync command must remain discoverable; topology drift requires architecture review');
+  const excludes=[];
+  for(let i=start+1;i<lines.length;i++){
+    const line=lines[i];
+    if(!/^\\s+--exclude\\s+/.test(line)) break;
+    excludes.push(line);
+  }
+  assert.ok(excludes.some(line=>/^\\s+--exclude\\s+["']tasun-api\\/["'](?:\\s+\\\\)?\\s*$/.test(line)),'active Pages rsync command must exclude tasun-api/; topology drift requires architecture review');
   const invalid=[];
   for(const [key,entry] of Object.entries(MANIFEST.pages||{})){
     const file=entry&&typeof entry==='object'&&typeof entry.file==='string'?entry.file.trim():'';
