@@ -4,8 +4,8 @@ Date: 2026-10-12
 Issue: #61 — `[REQ] Converge stale navigation and permission targets to deployed page topology`  
 Approved architecture: **Option A**  
 Functional R-number: **NOT ASSIGNED**  
-Status: **WRITTEN SPEC COMPLETE / APPROVAL REQUIRED**  
-Implementation authority: **BLOCKED pending explicit written-spec approval and governance PR #62 merge**
+Status: **WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD AUTHORIZED**  
+Implementation authority: **AUTHORIZED after governance PR #62 merge**
 
 ## 1. Objective
 
@@ -438,7 +438,7 @@ Before closing Issue #61, record:
 
 - [x] Option A architecture explicitly approved by user on 2026-10-12
 - [x] written spec completed
-- [ ] written spec explicitly approved by user
-- [ ] implementation / TDD authorized
+- [x] written spec explicitly approved by user on 2026-10-12
+- [x] implementation / TDD authorized after governance PR #62 merge
 
 **No production mutation is authorized until the written spec is explicitly approved and governance PR #62 is merged.**
