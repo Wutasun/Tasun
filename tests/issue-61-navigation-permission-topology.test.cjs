@@ -179,6 +179,15 @@ test('Issue #61 active topology materializer cannot restore retired targets',()=
   assert.match(helperBlock,/捷運汐東線記事\.html':'捷運汐東線事項記錄\.html/);
 });
 
+test('Issue #61 material inspection permission is initialized for existing users',()=>{
+  const migration=block(perm,'function migrateInspectionControlR561PermMatrix(){','migrateInspectionControlR561PermMatrix();');
+  assert.match(migration,/MATERIAL_INSPECTION_KEY\s*=\s*'xidong_material_inspection_control'/);
+  assert.match(migration,/docEntry\[MATERIAL_INSPECTION_KEY\]\s*===\s*undefined/);
+  assert.match(migration,/docKeyEntry\[MATERIAL_INSPECTION_KEY\]\s*===\s*undefined/);
+  assert.match(migration,/docEntry\[MATERIAL_INSPECTION_KEY\]\s*=\s*true/);
+  assert.match(migration,/docKeyEntry\[MATERIAL_INSPECTION_KEY\]\s*=\s*true/);
+});
+
 test('Issue #61 current split inspection pages remain represented',()=>{
   assert.equal(exists('捷運汐止東湖線-施工查驗管控表.html'),true);
   assert.equal(exists('捷運汐止東湖線-材料查驗管控表.html'),true);
