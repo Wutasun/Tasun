@@ -80,7 +80,7 @@ test('Issue #48 cleanup-only deleted sidecars do not advance formal release iden
   const r=spawnSync(process.execPath,['publish-version_tasun_project_autoscan.mjs'],{
     cwd:dir,
     encoding:'utf8',
-    env:{...process.env,TASUN_CHANGED_FILES:'TASUN_REBUILD.txt\\nSHA256SUMS.txt'}
+    env:{...process.env,TASUN_CHANGED_FILES:'TASUN_REBUILD.txt\nSHA256SUMS.txt'}
   });
   assert.equal(r.status,0,r.stderr);
   assert.match(r.stdout,/no formal page\/core\/manifest change; nothing to sync\./);
