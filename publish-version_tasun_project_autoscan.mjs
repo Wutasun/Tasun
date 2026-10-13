@@ -32,10 +32,45 @@ const SIZE_KEYS=["bytes","pageBytes","sizeBytes","artifactBytes"];
 const VERIFY_ONLY=process.argv.includes("--verify-only");
 const GENERATED=new Set([VERSION_FILE,REBUILD_FILE,REBUILD_STAMP_FILE]);
 const FORMAL_EXT=new Set([".html",".htm"]);
+const DEPLOY_EXCLUDED_PREFIXES=["tasun-api/"];
 const CORE_FILES=new Set(["tasun-version-loader.js","tasun-core.js","tasun-boot.js","tasun-auth-v4.js","tasun-cloudwrap-v4.js","tasun-guard-v5.js","tasun-global-core.js","tasun-resources.json","worker.js","publish-version_tasun_project_autoscan.mjs",WORKFLOW_FILE]);
 
 function posix(p){return p.split(path.sep).join("/");}
 function n(v){return v===undefined||v===null?"":String(v).trim();}
+function isDeploymentExcluded(rel){const p=posix(n(rel)).replace(/^\.\/+/, "");return DEPLOY_EXCLUDED_PREFIXES.some(prefix=>p.startsWith(prefix));}
+function hasDeploymentExcludedAuthority(manifest){
+  if(Object.entries(manifest.pages||{}).some(([key,entry])=>isDeploymentExcluded(key)||(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file)))) return true;
+  if(Object.entries(manifest.pageArtifactManifest||{}).some(([key,entry])=>isDeploymentExcluded(key)||(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file)))) return true;
+  return Object.keys(manifest.pageBuildStamp||{}).some(isDeploymentExcluded);
+}
+function metadataFastPathComplete(manifest){
+  if(!n(manifest.updatedAt)||manifest.autoVersionEnabled!==true) return false;
+  if(manifest.officialVersionSource!==VERSION_FILE||manifest.rebuildStampFile!==REBUILD_STAMP_FILE) return false;
+  if(!manifest.release||typeof manifest.release!=="object") return false;
+  if(manifest.release.workflow!==WORKFLOW_FILE||manifest.release.script!=="publish-version_tasun_project_autoscan.mjs") return false;
+  if(manifest.release.autoCommitVersionFiles!==true||manifest.release.skipCommitToken!=="[skip tasun-version]"||!n(manifest.release.lastAutoSyncAt)) return false;
+  if(manifest.release.allFileAliasesExactGate!==true||!Array.isArray(manifest.release.changedFormalFiles)||!Array.isArray(manifest.release.changedCoreFiles)) return false;
+  const formal=new Set(DOCUMENT_PAGES);
+  const completeCommon=entry=>{
+    if(!entry||typeof entry!=="object") return false;
+    if(!n(entry.file)||!n(entry.updatedAt)||!(Number(entry.releaseSequence)>0)) return false;
+    for(const key of BUILD_KEYS) if(!n(entry[key])) return false;
+    for(const key of DIGEST_KEYS) if(!n(entry[key])) return false;
+    if(!(Number.isFinite(Number(entry.sizeBytes))&&Number(entry.sizeBytes)>0)) return false;
+    return true;
+  };
+  for(const entry of Object.values(manifest.pages||{})){
+    if(!entry||typeof entry!=="object"||!formal.has(n(entry.file))) continue;
+    if(!completeCommon(entry)) return false;
+    if(!n(entry.pageKey)) return false;
+    if(entry.officialVersionSource!==VERSION_FILE||entry.publisherWorkflowPath!==WORKFLOW_FILE) return false;
+  }
+  for(const file of DOCUMENT_PAGES){
+    const entry=manifest.pageArtifactManifest?.[file];
+    if(!completeCommon(entry)||n(entry.file)!==file) return false;
+  }
+  return true;
+}
 function rank(v){const m=n(v).match(/r(\d+)/i);return m?Number(m[1]):0;}
 function taipeiNow(){return new Date(Date.now()+8*60*60*1000);}
 function p2(x){return String(x).padStart(2,"0");}
@@ -127,18 +162,38 @@ async function main(){
   const current=await readJson(VERSION_FILE);
   if(VERIFY_ONLY){await verifyRelease(current);return;}
   const changed=changedFiles(),relevant=[];
-  for(const rel of changed){if(await exists(rel)&&(FORMAL_EXT.has(path.extname(rel).toLowerCase())||CORE_FILES.has(rel)||GENERATED.has(rel)))relevant.push(rel);}
-  if(!relevant.length){console.log("[Tasun] no formal page/core/manifest change; nothing to sync.");return;}
+  for(const rel of changed){const isHtml=FORMAL_EXT.has(path.extname(rel).toLowerCase());if(await exists(rel)&&((isHtml&&!isDeploymentExcluded(rel))||CORE_FILES.has(rel)||GENERATED.has(rel)))relevant.push(rel);}
+  const needsDeploymentCleanup=hasDeploymentExcludedAuthority(current);
+  if(!relevant.length&&!needsDeploymentCleanup){console.log("[Tasun] no formal page/core/manifest change; nothing to sync.");return;}
+  const metadataOnly=!relevant.length||relevant.every(rel=>GENERATED.has(rel));
+  if(metadataOnly){
+    const next={...current,pages:{...(current.pages||{})},pageArtifactManifest:{...(current.pageArtifactManifest||{})},pageBuildStamp:typeof current.pageBuildStamp==="object"?{...current.pageBuildStamp}:{}};
+    for(const [key,entry] of Object.entries(next.pages)) if(isDeploymentExcluded(key)||(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file))) delete next.pages[key];
+    for(const [key,entry] of Object.entries(next.pageArtifactManifest)) if(isDeploymentExcluded(key)||(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file))) delete next.pageArtifactManifest[key];
+    for(const key of Object.keys(next.pageBuildStamp)) if(isDeploymentExcluded(key)) delete next.pageBuildStamp[key];
+    if(metadataFastPathComplete(next)){
+      try{
+        await verifyRelease(next);
+        await atomicWrite(VERSION_FILE,stable(next));
+        return;
+      }catch{
+        // Other release metadata still needs the existing full repair path.
+      }
+    }
+  }
   // The existing deployment gate requires the four document pages to be one artifact.
   const formal=[...new Set([...DOCUMENT_PAGES,...relevant.filter(rel=>FORMAL_EXT.has(path.extname(rel).toLowerCase()))])];
   const infos=[];
   for(const rel of formal){const text=await fs.readFile(path.join(ROOT,rel),"utf8");infos.push({rel,text,currentBuild:htmlBuild(text),previousBuild:previousHtmlBuild(rel),config:pageConfig(text,rel)});}
   const hash=crypto.createHash("sha256");for(const rel of [...relevant].sort()){hash.update(rel);hash.update("\0");hash.update(await fs.readFile(path.join(ROOT,rel)));hash.update("\0");}
-  const now=taipeiNow(),updatedAt=iso(now),metadataOnly=relevant.every(rel=>GENERATED.has(rel));
+  const now=taipeiNow(),updatedAt=iso(now);
   const build=metadataOnly?n(current.version):releaseBuild(current,infos.filter(info=>relevant.includes(info.rel)),hash.digest("hex"),now);
   if(!rank(build))throw new Error("unparseable_release_build");
   for(const info of infos){info.text=updateHtmlBuild(info.text,build);info.digest=crypto.createHash("sha256").update(info.text).digest("hex");}
   const pages={...(current.pages||{})},pageArtifactManifest={...(current.pageArtifactManifest||{})},pageBuildStamp=typeof current.pageBuildStamp==="object"?{...current.pageBuildStamp}:{};
+  for(const [key,entry] of Object.entries(pages)) if(isDeploymentExcluded(key)||(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file))) delete pages[key];
+  for(const [key,entry] of Object.entries(pageArtifactManifest)) if(isDeploymentExcluded(key)||(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file))) delete pageArtifactManifest[key];
+  for(const key of Object.keys(pageBuildStamp)) if(isDeploymentExcluded(key)) delete pageBuildStamp[key];
   for(const info of infos){
     for(const alias of aliasesFor(current,info.config))pages[alias]={...exactEntry(pages[alias],info,build,updatedAt),pageKey:pages[alias]?.pageKey||info.config.key,officialVersionSource:VERSION_FILE,publisherWorkflowPath:WORKFLOW_FILE};
     pageArtifactManifest[info.config.file]=exactEntry(pageArtifactManifest[info.config.file],info,build,updatedAt);
