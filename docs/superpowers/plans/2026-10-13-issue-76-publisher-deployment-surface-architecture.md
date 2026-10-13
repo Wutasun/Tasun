@@ -4,7 +4,7 @@ Date: 2026-10-13
 Issue: #76 — `[REQ] Prevent exact publisher from restoring non-deployed tasun-api page authority`  
 Baseline main: `15355f24f0673ec958095bf9e0e8abb27f4be08c`  
 Current formal build: `20261012_tasun_v5_xidong_docs_r1154_425da05a1ae8_release`  
-Status: BLOCKER ARCHITECTURE OPTION A APPROVED / WRITTEN SPEC IN PROGRESS / NO IMPLEMENTATION AUTHORITY
+Status: BLOCKER ARCHITECTURE OPTION A APPROVED / WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD AUTHORIZED
 
 ## 1. Confirmed regression
 
@@ -89,7 +89,7 @@ Per `docs/superpowers/TASUN-AUTO-PROGRESSION-GOVERNANCE.md`, Architecture Option
 
 Current gate:
 - [x] Architecture Option A approved
-- [ ] Written spec explicitly approved
-- [ ] Implementation / TDD authorized
+- [x] Written spec explicitly approved by user on 2026-10-13
+- [x] Implementation / TDD authorized after governance PR merge
 
-Written spec drafting may proceed automatically. Implementation remains blocked until Gate B is explicitly approved and the synchronized governance record is merged to `main`.
+Written spec is explicitly approved. Implementation / TDD is authorized after this synchronized governance record is merged to `main`.
