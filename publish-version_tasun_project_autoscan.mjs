@@ -38,6 +38,19 @@ const CORE_FILES=new Set(["tasun-version-loader.js","tasun-core.js","tasun-boot.
 function posix(p){return p.split(path.sep).join("/");}
 function n(v){return v===undefined||v===null?"":String(v).trim();}
 function isDeploymentExcluded(rel){const p=posix(n(rel)).replace(/^\.\/+/, "");return DEPLOY_EXCLUDED_PREFIXES.some(prefix=>p.startsWith(prefix));}
+function metadataFastPathComplete(manifest){
+  const formal=new Set(DOCUMENT_PAGES);
+  for(const entry of Object.values(manifest.pages||{})){
+    if(!entry||typeof entry!=="object"||!formal.has(n(entry.file))) continue;
+    if(!(Number.isFinite(Number(entry.sizeBytes))&&Number(entry.sizeBytes)>0)) return false;
+    if(entry.officialVersionSource!==VERSION_FILE||entry.publisherWorkflowPath!==WORKFLOW_FILE) return false;
+  }
+  for(const file of DOCUMENT_PAGES){
+    const entry=manifest.pageArtifactManifest?.[file];
+    if(!entry||typeof entry!=="object"||!(Number.isFinite(Number(entry.sizeBytes))&&Number(entry.sizeBytes)>0)) return false;
+  }
+  return true;
+}
 function rank(v){const m=n(v).match(/r(\d+)/i);return m?Number(m[1]):0;}
 function taipeiNow(){return new Date(Date.now()+8*60*60*1000);}
 function p2(x){return String(x).padStart(2,"0");}
@@ -137,12 +150,14 @@ async function main(){
     for(const [key,entry] of Object.entries(next.pages)) if(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file)) delete next.pages[key];
     for(const [key,entry] of Object.entries(next.pageArtifactManifest)) if(isDeploymentExcluded(key)||(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file))) delete next.pageArtifactManifest[key];
     for(const key of Object.keys(next.pageBuildStamp)) if(isDeploymentExcluded(key)) delete next.pageBuildStamp[key];
-    try{
-      await verifyRelease(next);
-      await atomicWrite(VERSION_FILE,stable(next));
-      return;
-    }catch{
-      // Other release metadata still needs the existing full repair path.
+    if(metadataFastPathComplete(next)){
+      try{
+        await verifyRelease(next);
+        await atomicWrite(VERSION_FILE,stable(next));
+        return;
+      }catch{
+        // Other release metadata still needs the existing full repair path.
+      }
     }
   }
   // The existing deployment gate requires the four document pages to be one artifact.
