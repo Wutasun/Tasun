@@ -144,6 +144,7 @@ async function main(){
   for(const file of Object.keys(pageArtifactManifest))if(!isPublicPagePath(file))delete pageArtifactManifest[file];
   for(const file of Object.keys(pageBuildStamp))if(!isPublicPagePath(file))delete pageBuildStamp[file];
   for(const info of infos){
+    if(!isPublicPagePath(info.config.file))continue;
     for(const alias of aliasesFor(current,info.config))pages[alias]={...exactEntry(pages[alias],info,build,updatedAt),pageKey:pages[alias]?.pageKey||info.config.key,officialVersionSource:VERSION_FILE,publisherWorkflowPath:WORKFLOW_FILE};
     pageArtifactManifest[info.config.file]=exactEntry(pageArtifactManifest[info.config.file],info,build,updatedAt);
     pageBuildStamp[info.config.file]=build;
