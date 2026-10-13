@@ -173,12 +173,14 @@ Protect current session markers and values:
 
 Assert:
 - routing uses `location.replace(...)`;
-- version source selection preserves the exact current first-nonempty precedence:
-  1. URL query parameter `v`;
+- version source selection preserves the exact current raw-JavaScript `||` precedence **before normalization**:
+  1. raw URL query parameter `v`;
   2. `window.__CACHE_V`;
   3. `window.TASUN_APP_VER`;
   4. `window.APP_VER`;
-- each fallback source is independently covered so removal or reordering fails the contract;
+- the first truthy raw source is selected, and only then passed through `norm(...)` / trimming;
+- a whitespace-only truthy raw source therefore blocks later fallbacks, normalizes to empty, and results in no propagated `v`; this quirk is part of the current locked behavior for Issue #99 and must be characterized rather than corrected;
+- each source and the raw-truthy-before-normalization ordering are independently covered so removal or reordering fails the contract;
 - version is propagated via `out.searchParams.set('v', v)` when the resolved version is non-empty;
 - cache-busting query `_` is always added before redirect;
 - no new window-opening/navigation mechanism replaces the current `location.replace(...)` redirect contract.
