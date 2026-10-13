@@ -22,6 +22,14 @@ function walk(dir=ROOT,rel=''){
   return out;
 }
 function read(rel){return fs.readFileSync(path.join(ROOT,rel),'utf8');}
+function executableContent(text){
+  return String(text)
+    .replace(/<!--[\s\S]*?-->/g,'')
+    .replace(/\/\*[\s\S]*?\*\//g,'')
+    .split(/\r?\n/)
+    .filter(line=>!line.trimStart().startsWith('//'))
+    .join('\n');
+}
 
 test('Issue #73 Contract A: retired root resources.json is absent',()=>{
   assert.equal(fs.existsSync(path.join(ROOT,'resources.json')),false,'legacy root resources.json must be retired');
@@ -29,7 +37,7 @@ test('Issue #73 Contract A: retired root resources.json is absent',()=>{
 
 test('Issue #73 Contract B: live source has zero standalone resources.json consumers',()=>{
   const hits=[];
-  for(const rel of walk()) if(STANDALONE_RESOURCES.test(read(rel))) hits.push(rel);
+  for(const rel of walk()) if(STANDALONE_RESOURCES.test(executableContent(read(rel)))) hits.push(rel);
   assert.deepEqual(hits,[],'live source must not consume standalone root resources.json');
 });
 
