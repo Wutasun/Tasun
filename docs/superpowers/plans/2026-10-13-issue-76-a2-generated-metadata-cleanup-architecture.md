@@ -6,7 +6,7 @@ Base architecture: Option A
 Baseline main: `614a5f57282e38aa3661e9ad94e7d8b1beef74f0`  
 Current formal build: `20261012_tasun_v5_xidong_docs_r1154_425da05a1ae8_release`  
 Release sequence: `1154`  
-Status: A2 ARCHITECTURE AMENDMENT PROPOSAL / GATE C / IMPLEMENTATION PAUSED
+Status: A2 ARCHITECTURE AMENDMENT APPROVED / AMENDED WRITTEN SPEC IN PROGRESS / IMPLEMENTATION PAUSED
 
 ## 1. Why amendment is required
 
@@ -104,8 +104,13 @@ This preserves the single-authority rule:
 
 This is a Gate C architecture amendment.
 
-Implementation remains paused until explicit approval.
+A2 architecture amendment was explicitly approved by the user on 2026-10-13.
 
-Recommended decision:
+Current gate:
+- [x] Original Option A architecture approved
+- [x] Original written spec approved
+- [x] A2 architecture amendment approved
+- [ ] Amended written spec explicitly approved
+- [ ] Implementation / TDD authorized to resume
 
-`核准 Issue #76 方案 A2 架構修正，開始 amended written spec`
+Implementation remains paused until the amended written spec is explicitly approved and synchronized governance is merged to `main`.
