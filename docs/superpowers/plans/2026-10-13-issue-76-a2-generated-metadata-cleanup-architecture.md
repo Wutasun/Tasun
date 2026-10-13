@@ -6,7 +6,7 @@ Base architecture: Option A
 Baseline main: `614a5f57282e38aa3661e9ad94e7d8b1beef74f0`  
 Current formal build: `20261012_tasun_v5_xidong_docs_r1154_425da05a1ae8_release`  
 Release sequence: `1154`  
-Status: A2 ARCHITECTURE AMENDMENT APPROVED / AMENDED WRITTEN SPEC IN PROGRESS / IMPLEMENTATION PAUSED
+Status: A2 ARCHITECTURE AMENDMENT APPROVED / AMENDED WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD RESUME AUTHORIZED
 
 ## 1. Why amendment is required
 
@@ -110,7 +110,7 @@ Current gate:
 - [x] Original Option A architecture approved
 - [x] Original written spec approved
 - [x] A2 architecture amendment approved
-- [ ] Amended written spec explicitly approved
-- [ ] Implementation / TDD authorized to resume
+- [x] Amended written spec explicitly approved by user on 2026-10-13
+- [x] Implementation / TDD authorized to resume after governance PR merge
 
-Implementation remains paused until the amended written spec is explicitly approved and synchronized governance is merged to `main`.
+Amended written spec is explicitly approved. Implementation / TDD is authorized to resume after this synchronized governance record is merged to `main`.
