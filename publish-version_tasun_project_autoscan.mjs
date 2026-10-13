@@ -137,9 +137,13 @@ async function main(){
     for(const [key,entry] of Object.entries(next.pages)) if(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file)) delete next.pages[key];
     for(const [key,entry] of Object.entries(next.pageArtifactManifest)) if(isDeploymentExcluded(key)||(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file))) delete next.pageArtifactManifest[key];
     for(const key of Object.keys(next.pageBuildStamp)) if(isDeploymentExcluded(key)) delete next.pageBuildStamp[key];
-    await atomicWrite(VERSION_FILE,stable(next));
-    await verifyRelease(next);
-    return;
+    try{
+      await verifyRelease(next);
+      await atomicWrite(VERSION_FILE,stable(next));
+      return;
+    }catch{
+      // Other release metadata still needs the existing full repair path.
+    }
   }
   // The existing deployment gate requires the four document pages to be one artifact.
   const formal=[...new Set([...DOCUMENT_PAGES,...relevant.filter(rel=>FORMAL_EXT.has(path.extname(rel).toLowerCase()))])];
@@ -147,7 +151,7 @@ async function main(){
   for(const rel of formal){const text=await fs.readFile(path.join(ROOT,rel),"utf8");infos.push({rel,text,currentBuild:htmlBuild(text),previousBuild:previousHtmlBuild(rel),config:pageConfig(text,rel)});}
   const hash=crypto.createHash("sha256");for(const rel of [...relevant].sort()){hash.update(rel);hash.update("\0");hash.update(await fs.readFile(path.join(ROOT,rel)));hash.update("\0");}
   const now=taipeiNow(),updatedAt=iso(now);
-  const build=releaseBuild(current,infos.filter(info=>relevant.includes(info.rel)),hash.digest("hex"),now);
+  const build=metadataOnly?n(current.version):releaseBuild(current,infos.filter(info=>relevant.includes(info.rel)),hash.digest("hex"),now);
   if(!rank(build))throw new Error("unparseable_release_build");
   for(const info of infos){info.text=updateHtmlBuild(info.text,build);info.digest=crypto.createHash("sha256").update(info.text).digest("hex");}
   const pages={...(current.pages||{})},pageArtifactManifest={...(current.pageArtifactManifest||{})},pageBuildStamp=typeof current.pageBuildStamp==="object"?{...current.pageBuildStamp}:{};
