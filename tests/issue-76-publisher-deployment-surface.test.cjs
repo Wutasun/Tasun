@@ -149,6 +149,54 @@ test('Issue #76 publisher rejects excluded PAGE_FILE declared by a deployable so
   );
 });
 
+
+test('Issue #76 publisher filters excluded PAGE_ALIASES and stale excluded alias keys',t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'tasun-issue76-alias-'));
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+
+  for(const rel of [
+    'publish-version_tasun_project_autoscan.mjs',
+    'tasun-version.json',
+    'TASUN_REBUILD',
+    'TASUN_REBUILD_STAMP',
+    '.github/workflows/release-version.yml',
+    '汐東收發文明細表.html',
+    '汐東收發文登錄表.html',
+    '汐東文件統計表.html',
+    '汐東文件管理表.html'
+  ]) copyFixture(dir,rel);
+
+  const manifest=readJson('tasun-version.json',dir);
+  cleanForbiddenMetadata(manifest);
+  manifest.pages=manifest.pages||{};
+  manifest.pages['nested/tasun-api/stale-alias']={
+    ...(manifest.pages['汐東收發文明細表.html']||{}),
+    file:'汐東收發文明細表.html'
+  };
+  fs.writeFileSync(path.join(dir,'tasun-version.json'),JSON.stringify(manifest,null,2)+'\n');
+
+  const source='public-alias-config.html';
+  fs.writeFileSync(
+    path.join(dir,source),
+    '<!doctype html><html><head><meta name="tasun-build-stamp" content="'+manifest.version+'"></head><body><script>const PAGE={"PAGE_FILE":"public-alias-config.html","PAGE_KEY":"public-alias-config","PAGE_ALIASES":["nested/tasun-api/index.html","public-alias"]};</script></body></html>\n'
+  );
+
+  const r=spawnSync(process.execPath,['publish-version_tasun_project_autoscan.mjs'],{
+    cwd:dir,
+    encoding:'utf8',
+    env:{...process.env,TASUN_CHANGED_FILES:source,TASUN_BEFORE_SHA:'',TASUN_HEAD_SHA:''}
+  });
+  assert.equal(r.status,0,r.stdout+'\n'+r.stderr);
+
+  const after=readJson('tasun-version.json',dir);
+  assert.deepEqual(
+    Object.keys(after.pages||{}).filter(isForbiddenPath),
+    [],
+    'excluded PAGE_ALIASES and stale excluded alias keys must not remain in pages'
+  );
+  assert.ok(after.pages?.['public-alias'],'public alias must remain publishable');
+});
+
 test('Issue #76 active Pages packaging excludes tasun-api source directory',()=>{
   const workflow=fs.readFileSync(path.join(ROOT,'.github/workflows/release-version.yml'),'utf8');
   assert.match(workflow,/--exclude\s+["']tasun-api\/["']/,'active Pages packaging must continue excluding tasun-api/');
