@@ -13,7 +13,7 @@ const supported=[
   'inline.js',
   'tasun-api/index.html'
 ];
-const standalone=/(^|[^A-Za-z0-9_-])resources\.json(?=$|[^A-Za-z0-9_.-])/;
+const standaloneQuoted=/(['\"])resources\.json\1/;
 
 function walk(dir){
   const out=[];
