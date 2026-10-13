@@ -50,6 +50,11 @@ test('Issue #76 publisher cannot reintroduce tasun-api page authority when sourc
   }
   if(manifest.pageArtifactManifest) delete manifest.pageArtifactManifest['tasun-api/index.html'];
   if(manifest.pageBuildStamp&&typeof manifest.pageBuildStamp==='object') delete manifest.pageBuildStamp['tasun-api/index.html'];
+
+  const formal='汐東收發文明細表.html';
+  manifest.pages['tasun-api/rogue.html']={...manifest.pages[formal],file:formal};
+  manifest.pageArtifactManifest['tasun-api/rogue.html']={...manifest.pageArtifactManifest[formal],file:formal};
+  manifest.pageBuildStamp['tasun-api/rogue.html']=manifest.version;
   fs.writeFileSync(path.join(dir,'tasun-version.json'),JSON.stringify(manifest,null,2)+'\n');
 
   const r=spawnSync(process.execPath,['publish-version_tasun_project_autoscan.mjs'],{
@@ -63,6 +68,9 @@ test('Issue #76 publisher cannot reintroduce tasun-api page authority when sourc
   assert.deepEqual(forbiddenAuthorities(after),[],'publisher must not restore tasun-api page authority');
   assert.equal(Object.hasOwn(after.pageArtifactManifest||{},'tasun-api/index.html'),false,'publisher must not add tasun-api artifact manifest');
   assert.equal(Object.hasOwn(after.pageBuildStamp||{},'tasun-api/index.html'),false,'publisher must not add tasun-api page build stamp');
+  assert.equal(Object.hasOwn(after.pages||{},'tasun-api/rogue.html'),false,'publisher must remove excluded authority keys even when entry.file looks public');
+  assert.equal(Object.hasOwn(after.pageArtifactManifest||{},'tasun-api/rogue.html'),false,'publisher must remove excluded artifact keys');
+  assert.equal(Object.hasOwn(after.pageBuildStamp||{},'tasun-api/rogue.html'),false,'publisher must remove excluded build-stamp keys');
 
   for(const file of ['汐東收發文明細表.html','汐東收發文登錄表.html','汐東文件統計表.html','汐東文件管理表.html']){
     assert.ok(after.pages?.[file],file+' formal authority must remain');
