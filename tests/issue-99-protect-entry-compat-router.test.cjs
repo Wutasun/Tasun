@@ -24,25 +24,27 @@ function routerScript(){
   assert.ok(m,'entry.html must retain the Tasun direct-router script');
   return m[1];
 }
-function storage(seed={},throws=false){
+function storage(seed={},failOps=[]){
   const map=new Map(Object.entries(seed));
+  const fail=new Set(failOps);
   return {
-    getItem(k){ if(throws) throw new Error('SecurityError'); return map.has(k)?map.get(k):null; },
-    setItem(k,v){ if(throws) throw new Error('SecurityError'); map.set(k,String(v)); },
-    removeItem(k){ if(throws) throw new Error('SecurityError'); map.delete(k); }
+    getItem(k){ if(fail.has('get')) throw new Error('SecurityError'); return map.has(k)?map.get(k):null; },
+    setItem(k,v){ if(fail.has('set')) throw new Error('SecurityError'); map.set(k,String(v)); },
+    removeItem(k){ if(fail.has('remove')) throw new Error('SecurityError'); map.delete(k); }
   };
 }
 function runEntry({
   href='https://example.test/entry.html',
   session={},
   local={},
-  storageThrows=false,
+  sessionFailOps=[],
+  localFailOps=[],
   globals={},
   now=1700000000000
 }={}){
   const replaced=[];
-  const sessionStorage=storage(session,storageThrows);
-  const localStorage=storage(local,storageThrows);
+  const sessionStorage=storage(session,sessionFailOps);
+  const localStorage=storage(local,localFailOps);
   const location={
     href,
     get hash(){ return new URL(this.href).hash; },
@@ -77,8 +79,6 @@ test('Issue #99 Contract A: entry compatibility router remains present and auto-
   const source=entrySource();
   assert.match(source,/id=["']tasun-entry-direct-router-r162["']/);
   assert.match(source,/window\.__TASUN_ENTRY_GO__\s*=\s*go/);
-  assert.match(source,/\bgo\(\);\s*\}\)\(\);/,'router must auto-run on page load');
-
   const result=runEntry();
   assert.equal(typeof result.ctx.__TASUN_ENTRY_GO__,'function','go must remain externally exposed');
   assert.equal(targetName(result),DEFAULT_PAGE,'direct load must automatically route');
@@ -93,8 +93,13 @@ test('Issue #99 Contract B: target selection, normalization, legacy remap, and c
     '捷運汐止東湖線統包工程-資料明細表.html',
     'index.html'
   ];
-  const source=entrySource();
-  for(const name of allowlisted) assert.ok(source.includes(name),name+' must remain in allowlist source');
+  const script=routerScript();
+  const allowBlock=(script.match(/var\s+ALLOW\s*=\s*\{([\s\S]*?)\};/)||[])[1]||'';
+  for(const name of allowlisted){
+    const escaped=name.replace(/[.*+?^${}()|[\]\\]/g,'\\  const source=entrySource();
+  for(const name of allowlisted) assert.ok(source.includes(name),name+' must remain in allowlist source');');
+    assert.match(allowBlock,new RegExp("['\\\"]"+escaped+"['\\\"]\\s*:\\s*true"),name+' must remain an enabled own entry in ALLOW');
+  }
 
   assert.equal(targetName(runEntry({href:'https://example.test/entry.html?next=index.html'})),'index.html');
   assert.equal(targetName(runEntry({href:'https://example.test/entry.html?to='+encodeURIComponent('捷運汐東線事項記錄.html')})),'捷運汐東線事項記錄.html');
@@ -103,7 +108,12 @@ test('Issue #99 Contract B: target selection, normalization, legacy remap, and c
   assert.equal(
     targetName(runEntry({href:'https://example.test/entry.html?next=index.html&to='+encodeURIComponent('捷運汐東線事項記錄.html')+'&page='+encodeURIComponent('捷運汐東線權責分工精簡版.html')})),
     'index.html',
-    'query alias precedence must remain next → to → page'
+    'query alias precedence must keep next highest'
+  );
+  assert.equal(
+    targetName(runEntry({href:'https://example.test/entry.html?to='+encodeURIComponent('捷運汐東線事項記錄.html')+'&page=index.html'})),
+    '捷運汐東線事項記錄.html',
+    'query alias precedence must keep to above page'
   );
   assert.equal(
     targetName(runEntry({href:'https://example.test/entry.html?next=%20&to=index.html#next='+encodeURIComponent('捷運汐東線權責分工精簡版.html')})),
@@ -111,15 +121,22 @@ test('Issue #99 Contract B: target selection, normalization, legacy remap, and c
     'truthy whitespace next suppresses later query aliases, normalizes empty, then permits hash fallback'
   );
 
+  assert.match(script,/sessionStorage\.getItem\('tasun_entry_next_v1'\)/,'stored-routing branch must still read session tasun_entry_next_v1');
+  assert.match(script,/sessionStorage\.getItem\('tasun_next_path_v1'\)/,'stored-routing branch must still read session tasun_next_path_v1');
+  assert.match(script,/localStorage\.getItem\('tasun_entry_next_v1'\)/,'stored-routing branch must still read local tasun_entry_next_v1');
+  assert.match(script,/localStorage\.getItem\('tasun_next_path_v1'\)/,'stored-routing branch must still read local tasun_next_path_v1');
   assert.equal(
     targetName(runEntry({session:{tasun_entry_next_v1:'index.html'}})),
     DEFAULT_PAGE,
     'go() must bridge/clean storage hints before pickTarget(), leaving storage-only routing ineffective'
   );
-  assert.equal(targetName(runEntry({href:'https://example.test/entry.html#next=index.html'})),'index.html','hash next remains effective');
+  for(const alias of ['next','to','page']){
+    assert.equal(targetName(runEntry({href:'https://example.test/entry.html#'+alias+'=index.html'})),'index.html','hash '+alias+' remains effective');
+  }
 
-  const doubleEncoded=encodeURIComponent(encodeURIComponent('index.html'));
-  assert.equal(targetName(runEntry({href:'https://example.test/entry.html?next='+doubleEncoded})),'index.html','multiply encoded target must decode deeply');
+  const encodedTarget='捷運汐東線事項記錄.html';
+  const doubleEncoded=encodeURIComponent(encodeURIComponent(encodedTarget));
+  assert.equal(targetName(runEntry({href:'https://example.test/entry.html?next='+doubleEncoded})),encodedTarget,'multiply encoded target must decode deeply');
   const urlTarget=encodeURIComponent('https://legacy.example/path/to/index.html?x=1#frag');
   assert.equal(targetName(runEntry({href:'https://example.test/entry.html?next='+urlTarget})),'index.html','URL/path input must normalize to final basename');
 
@@ -162,17 +179,42 @@ test('Issue #99 Contract C: session bridge propagation, cleanup, markers, and st
   assert.equal(result.sessionStorage.getItem('tasunIndexSession_v1'),'1');
   assert.equal(result.sessionStorage.getItem('tasunIndexSessionAuthed_v2'),'1');
 
-  const localFirst=runEntry({local:{tasunCurrentUser_v1:'LOCAL-FIRST'},session:{tasunSessionBridge_v1:'SESSION-LATER'}});
+  for(let i=0;i<BRIDGE_KEYS.length;i++){
+    const session={};
+    const local={};
+    for(let j=i;j<BRIDGE_KEYS.length;j++){
+      session[BRIDGE_KEYS[j]]='SESSION-'+j;
+      local[BRIDGE_KEYS[j]]='LOCAL-'+j;
+    }
+    const precedence=runEntry({session,local});
+    const expected='SESSION-'+i;
+    for(const key of BRIDGE_KEYS){
+      assert.equal(precedence.sessionStorage.getItem(key),expected,'bridge precedence must select earliest populated key: '+BRIDGE_KEYS[i]);
+      assert.equal(precedence.localStorage.getItem(key),expected,'bridge fan-out must preserve earliest populated key: '+BRIDGE_KEYS[i]);
+    }
+  }
+  const localOnly=runEntry({local:{tasunCurrentUser_v1:'LOCAL-FIRST'},session:{tasunSessionBridge_v1:'SESSION-LATER'}});
   for(const key of BRIDGE_KEYS){
-    assert.equal(localFirst.sessionStorage.getItem(key),'LOCAL-FIRST','key-order precedence must beat later-key session value');
-    assert.equal(localFirst.localStorage.getItem(key),'LOCAL-FIRST','same found value must fan out to both stores');
+    assert.equal(localOnly.sessionStorage.getItem(key),'LOCAL-FIRST','within the earliest key, local fallback must beat later keys');
+    assert.equal(localOnly.localStorage.getItem(key),'LOCAL-FIRST','same local-found value must fan out to both stores');
   }
 
-  const throwing=runEntry({
-    href:'https://example.test/entry.html#next=index.html',
-    storageThrows:true
-  });
-  assert.equal(targetName(throwing),'index.html','storage exceptions must not prevent hash routing and location.replace');
+  for(const op of ['get','set','remove']){
+    const opts={href:'https://example.test/entry.html#next=index.html'};
+    if(op==='get'){
+      opts.sessionFailOps=['get'];
+      opts.localFailOps=['get'];
+    }else if(op==='set'){
+      opts.session={tasunCurrentUser_v1:'USER'};
+      opts.sessionFailOps=['set'];
+      opts.localFailOps=['set'];
+    }else{
+      opts.sessionFailOps=['remove'];
+      opts.localFailOps=['remove'];
+    }
+    const throwing=runEntry(opts);
+    assert.equal(targetName(throwing),'index.html','storage '+op+' failure must not prevent hash routing and location.replace');
+  }
 });
 
 test('Issue #99 Contract D: redirect, version precedence/normalization, and timestamp cache busting remain intact',()=>{
