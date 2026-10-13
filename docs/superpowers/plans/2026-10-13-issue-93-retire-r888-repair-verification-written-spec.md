@@ -3,7 +3,8 @@
 Date: 2026-10-13  
 Issue: #93 — `[REQ] Retire stale R888 repair verification report`  
 Approved architecture: **Option A**  
-Implementation baseline at specification time: `efa6499eae0c514d08c1bd5b931d58a334d7a850`  
+Pre-spec main baseline: `efa6499eae0c514d08c1bd5b931d58a334d7a850`
+Implementation comparison baseline: **the `main` SHA immediately after this written-spec PR is merged**  
 Formal build at specification time: `20261013_tasun_v5_xidong_docs_r1155_6496a23cb51e_release`  
 Release sequence at specification time: `1155`  
 Status: **WRITTEN SPEC DRAFTED / IMPLEMENTATION-TDD NOT YET AUTHORIZED**
@@ -196,7 +197,7 @@ Focused Issue #93 tests must tolerate legitimate disposable release progression 
 
 ## 10. Semantic diff gate
 
-Compare the final implementation branch against the implementation baseline.
+Compare the final implementation branch against the post-spec `main` implementation baseline (the `main` SHA immediately after this written-spec PR is merged). The written-spec file itself is therefore part of baseline and must not appear as implementation scope.
 
 Allowed changed paths only:
 - deleted `汐東收發文三頁_R888_修復驗證報告.txt`;
@@ -275,7 +276,8 @@ Before closing, record:
 
 - architecture approval date;
 - written-spec approval date;
-- implementation baseline SHA;
+- pre-spec main baseline SHA;
+- post-spec implementation comparison baseline SHA;
 - RED tests-only commit SHA;
 - RED workflow run ID and test counts;
 - expected RED failure evidence;
