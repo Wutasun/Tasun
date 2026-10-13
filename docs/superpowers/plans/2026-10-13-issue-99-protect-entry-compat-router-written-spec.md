@@ -89,10 +89,11 @@ The first RED commit must intentionally include one protection assertion expecte
 
 The failure must be caused by the test demanding an explicit protection marker/contract artifact that does not yet exist in the test suite, not by changing `entry.html`.
 
-Recommended pattern:
-- Contract A/B/C characterize current `entry.html` behavior and pass;
-- Contract D asserts the repository now contains the new Issue #99 compatibility protection test/marker in its finalized form and intentionally fails in the RED commit;
-- GREEN is achieved by completing only the focused test file itself.
+Required RED pattern:
+- Contracts A/B/C/D characterize current `entry.html` behavior and must pass in RED;
+- separate Contract E — protection-completion marker — intentionally fails in the RED commit because the focused test is not yet finalized;
+- GREEN is achieved by completing only the focused test file itself so Contract E passes;
+- Contract E must not duplicate or replace any runtime characterization contract.
 
 The RED design must not require or incentivize a production edit merely to make the test fail.
 
@@ -119,15 +120,24 @@ Assert the current routing surface includes:
   - `捷運汐止東湖線統包工程-資料明細表.html`
   - `index.html`;
 - query aliases `next`, `to`, `page`;
-- stored routing inputs from both `sessionStorage` and `localStorage`, including the current keys `tasun_entry_next_v1` and `tasun_next_path_v1`;
-- hash routing input matching `next`, `to`, or `page`;
-- precedence/order of routing inputs remains current-compatible: URL query first, then stored routing hints, then hash fallback;
-- a valid allowlisted target supplied through each supported channel resolves to that target;
-- fallback to default target when requested basename is not allowlisted.
+- stored-routing read logic remains present in `pickTarget()` for both `sessionStorage` and `localStorage`, including `tasun_entry_next_v1` and `tasun_next_path_v1`;
+- hash routing input matching `next`, `to`, or `page` remains present;
+- runtime execution order remains current-compatible: `go()` calls `bridge()` before `pickTarget()`;
+- `bridge()` removes `tasun_entry_next_v1` and `tasun_next_path_v1` from both stores before `pickTarget()` executes;
+- therefore, in the current externally executed flow, a storage-only routing hint is cleared before target selection and falls through to the default target, while a hash fallback can still be used after storage cleanup;
+- query routing remains highest externally effective priority because query values are read directly by `pickTarget()` after `bridge()`;
+- fallback to default target remains when no effective request resolves to an allowed/remapped target.
 
-The focused test must exercise or statically characterize all three supported input channels separately so deletion of the storage branch or hash branch cannot pass merely because the same key/alias strings still appear elsewhere.
+The focused test must characterize both the presence of the stored-routing branch and the actual end-to-end ordering that currently makes those stored hints ineffective after `bridge()` cleanup. It must not falsely assert that storage-only hints currently route externally.
 
-This Issue protects the existing allowlist and input channels; it does not authorize adding/removing destinations or changing precedence.
+Also protect the current legacy remapping branch before allowlist fallback:
+- any decoded request containing `汐東工程管理表` is forced to `汐東工程管理表.html`;
+- any decoded request containing `捷運汐止東湖線` is forced to `汐東工程管理表.html`;
+- any decoded request containing `捷運汐東線管理` is forced to `汐東工程管理表.html`;
+- this remapping occurs before the `ALLOW[b]` fallback check;
+- therefore even allowlisted filenames whose decoded request contains `捷運汐止東湖線` are currently remapped to the default page rather than resolving to themselves.
+
+This Issue protects the existing allowlist, actual execution order, stored-branch presence, hash/query behavior, and legacy remapping. It does not authorize adding/removing destinations, changing the ordering, or fixing the stored-routing quirk.
 
 ### Contract C — session bridge compatibility remains intact
 
@@ -168,8 +178,8 @@ Assert:
 ## 7. RED acceptance
 
 The RED run must show:
-- all characterization assertions that describe current production behavior pass;
-- exactly the deliberately incomplete Issue #99 protection-completion assertion fails;
+- Contracts A/B/C/D — all characterization assertions that describe current production behavior — pass;
+- exactly Contract E, the deliberately incomplete Issue #99 protection-completion assertion, fails;
 - all pre-existing tests remain green;
 - no production file differs from baseline.
 
