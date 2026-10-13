@@ -8,7 +8,7 @@ Blocker for: **Issue #73**
 Governance baseline: `614a5f57282e38aa3661e9ad94e7d8b1beef74f0`  
 Formal build before implementation: `20261012_tasun_v5_xidong_docs_r1154_425da05a1ae8_release`  
 Release sequence before implementation: `1154`  
-Status: **AMENDED WRITTEN SPEC COMPLETE / PENDING EXPLICIT APPROVAL / IMPLEMENTATION PAUSED**
+Status: **AMENDED WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD RESUME AUTHORIZED AFTER GOVERNANCE MERGE**
 
 ## 1. Purpose of this amendment
 
@@ -347,11 +347,7 @@ Current gate:
 - [x] Original written spec approved
 - [x] A2 architecture amendment explicitly approved by user on 2026-10-13
 - [x] Amended written spec drafted
-- [ ] Amended written spec explicitly approved
-- [ ] Implementation / TDD authorized to resume
+- [x] Amended written spec explicitly approved by user on 2026-10-13
+- [x] Implementation / TDD authorized to resume after governance PR merge
 
-**Next mandatory gate: explicit amended written-spec approval.**
-
-Recommended decision:
-
-`Issue #76 amended written spec 核准，繼續 implementation / TDD`
+**Amended written-spec gate passed. After governance PR merge, continue automatically under the project-wide automatic progression rule.**
