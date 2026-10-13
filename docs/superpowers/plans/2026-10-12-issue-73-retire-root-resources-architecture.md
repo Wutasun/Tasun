@@ -5,7 +5,7 @@ Issue: #73 — `[REQ] Retire orphan legacy root resources.json manifest`
 Baseline main: `d426bf83b20759a4c9e408501a465eb19a91f1fd`  
 Formal build: `20261012_tasun_v5_xidong_docs_r1154_425da05a1ae8_release`  
 Release sequence: `1154`  
-Status: ARCHITECTURE OPTION A APPROVED / WRITTEN SPEC IN PROGRESS / NO IMPLEMENTATION AUTHORITY
+Status: ARCHITECTURE OPTION A APPROVED / WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD AUTHORIZED
 
 ## 1. Problem
 
@@ -110,7 +110,7 @@ Architecture Option A was explicitly approved by the user on 2026-10-12.
 
 Current gate:
 - [x] architecture Option A approved
-- [ ] written spec explicitly approved
-- [ ] implementation / TDD authorized
+- [x] written spec explicitly approved by user on 2026-10-13
+- [x] implementation / TDD authorized after governance PR merge
 
-Written spec drafting may proceed automatically. Implementation remains blocked until the written spec is explicitly approved and the synchronized governance record is merged to `main`.
+Written spec is explicitly approved. Implementation / TDD is authorized after this synchronized governance record is merged to `main`.
