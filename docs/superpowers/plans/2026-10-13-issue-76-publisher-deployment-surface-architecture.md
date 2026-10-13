@@ -4,7 +4,7 @@ Date: 2026-10-13
 Issue: #76 — `[REQ] Prevent exact publisher from restoring non-deployed tasun-api page authority`  
 Baseline main: `15355f24f0673ec958095bf9e0e8abb27f4be08c`  
 Current formal build: `20261012_tasun_v5_xidong_docs_r1154_425da05a1ae8_release`  
-Status: BLOCKER ARCHITECTURE PROPOSAL / NO IMPLEMENTATION AUTHORITY
+Status: BLOCKER ARCHITECTURE OPTION A APPROVED / WRITTEN SPEC IN PROGRESS / NO IMPLEMENTATION AUTHORITY
 
 ## 1. Confirmed regression
 
@@ -29,7 +29,7 @@ The deployment workflow still excludes `tasun-api/`, so publication authority an
 
 ## 3. Option A — deployment-surface-aware publisher normalization
 
-Recommended.
+Approved by user on 2026-10-13.
 
 Change the exact publisher so that:
 1. HTML under deployment-excluded paths such as `tasun-api/` is not promoted into formal page-manifest authority;
@@ -85,8 +85,11 @@ The publisher change itself is a core release-relevant change, so normal Exact A
 
 This blocker exists because Issue #73 crossed a verified failure boundary.
 
-Per `docs/superpowers/TASUN-AUTO-PROGRESSION-GOVERNANCE.md`, implementation stops at Gate A pending explicit architecture approval.
+Per `docs/superpowers/TASUN-AUTO-PROGRESSION-GOVERNANCE.md`, Architecture Option A was explicitly approved by the user on 2026-10-13.
 
-Recommended decision:
+Current gate:
+- [x] Architecture Option A approved
+- [ ] Written spec explicitly approved
+- [ ] Implementation / TDD authorized
 
-`核准 Issue #76 方案 A 架構，開始 written spec`
+Written spec drafting may proceed automatically. Implementation remains blocked until Gate B is explicitly approved and the synchronized governance record is merged to `main`.
