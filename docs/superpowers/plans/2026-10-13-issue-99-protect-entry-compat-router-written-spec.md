@@ -122,13 +122,21 @@ Assert the current routing surface includes:
   - `捷運汐止東湖線統包工程-資料庫.html`
   - `捷運汐止東湖線統包工程-資料明細表.html`
   - `index.html`;
-- query aliases `next`, `to`, `page`;
+- query aliases preserve exact current raw `||` precedence before normalization: `next` → `to` → `page`;
+- the first truthy raw alias suppresses later aliases even if it later normalizes to empty;
+- therefore a whitespace-only truthy `next` suppresses valid `to` / `page`, then after normalization may allow the later hash/default fallback rather than falling through to another query alias;
 - stored-routing read logic remains present in `pickTarget()` for both `sessionStorage` and `localStorage`, including `tasun_entry_next_v1` and `tasun_next_path_v1`;
 - hash routing input matching `next`, `to`, or `page` remains present;
 - runtime execution order remains current-compatible: `go()` calls `bridge()` before `pickTarget()`;
 - `bridge()` removes `tasun_entry_next_v1` and `tasun_next_path_v1` from both stores before `pickTarget()` executes;
 - therefore, in the current externally executed flow, a storage-only routing hint is cleared before target selection and falls through to the default target, while a hash fallback can still be used after storage cleanup;
 - query routing remains highest externally effective priority because query values are read directly by `pickTarget()` after `bridge()`;
+- routing normalization through `decodeDeep()` / `basename()` remains behaviorally intact:
+  - repeated percent-decoding is supported until stable/current decode limit behavior is reached;
+  - HTTP(S) authority/path inputs are reduced to their path target;
+  - query/hash fragments are stripped from target normalization;
+  - the final path component/basename is selected for allowlist/remap evaluation;
+  - encoded hash targets, multiply encoded filenames, and URL/path inputs containing an allowlisted basename must continue to resolve according to current behavior;
 - fallback to default target remains when no effective request resolves to an allowed/remapped target.
 
 The focused test must characterize both the presence of the stored-routing branch and the actual end-to-end ordering that currently makes those stored hints ineffective after `bridge()` cleanup. It must not falsely assert that storage-only hints currently route externally.
@@ -182,7 +190,8 @@ Assert:
 - a whitespace-only truthy raw source therefore blocks later fallbacks, normalizes to empty, and results in no propagated `v`; this quirk is part of the current locked behavior for Issue #99 and must be characterized rather than corrected;
 - each source and the raw-truthy-before-normalization ordering are independently covered so removal or reordering fails the contract;
 - version is propagated via `out.searchParams.set('v', v)` when the resolved version is non-empty;
-- cache-busting query `_` is always added before redirect;
+- cache-busting query `_` is always set from the current `Date.now()`-derived navigation timestamp before redirect;
+- the focused contract must reject a constant/static cache-buster and demonstrate that separate navigations/timestamps can produce different `_` values;
 - no new window-opening/navigation mechanism replaces the current `location.replace(...)` redirect contract.
 
 ## 7. RED acceptance
