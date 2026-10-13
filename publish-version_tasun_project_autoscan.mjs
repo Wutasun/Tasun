@@ -83,7 +83,7 @@ function releaseBuild(current,htmlInfos,allHash,date){
 function aliasesFor(current,config){
   const aliases=new Set([...config.aliases,...(DOCUMENT_ALIASES[config.file]||[])]);
   for(const [alias,entry] of Object.entries(current.pages||{}))if(entry&&typeof entry==="object"&&n(entry.file)===config.file)aliases.add(alias);
-  return [...aliases];
+  return [...aliases].filter(isPublicPagePath);
 }
 function exactEntry(old,info,build,updatedAt){
   const out={...(old&&typeof old==="object"?old:{}),file:info.config.file,updatedAt,releaseSequence:rank(build)};
@@ -140,7 +140,7 @@ async function main(){
   if(!rank(build))throw new Error("unparseable_release_build");
   for(const info of infos){info.text=updateHtmlBuild(info.text,build);info.digest=crypto.createHash("sha256").update(info.text).digest("hex");}
   const pages={...(current.pages||{})},pageArtifactManifest={...(current.pageArtifactManifest||{})},pageBuildStamp=typeof current.pageBuildStamp==="object"?{...current.pageBuildStamp}:{};
-  for(const [alias,entry] of Object.entries(pages))if(entry&&typeof entry==="object"&&!isPublicPagePath(entry.file))delete pages[alias];
+  for(const [alias,entry] of Object.entries(pages))if(!isPublicPagePath(alias)||(entry&&typeof entry==="object"&&!isPublicPagePath(entry.file)))delete pages[alias];
   for(const file of Object.keys(pageArtifactManifest))if(!isPublicPagePath(file))delete pageArtifactManifest[file];
   for(const file of Object.keys(pageBuildStamp))if(!isPublicPagePath(file))delete pageBuildStamp[file];
   for(const info of infos){
