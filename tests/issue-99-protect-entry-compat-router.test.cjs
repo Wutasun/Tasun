@@ -96,11 +96,12 @@ test('Issue #99 Contract B: target selection, normalization, legacy remap, and c
   const script=routerScript();
   const allowBlock=(script.match(/var\s+ALLOW\s*=\s*\{([\s\S]*?)\};/)||[])[1]||'';
   for(const name of allowlisted){
-    const entryA="'"+name+"': true";
-    const entryB='"'+name+'": true';
-    const compact=allowBlock.replace(/\s+/g,' ');
+    const quotedSingle="'"+name+"'";
+    const quotedDouble='"'+name+'"';
+    const entries=allowBlock.split(',').map(x=>x.trim());
     assert.ok(
-      compact.includes(entryA)||compact.includes(entryB),
+      entries.some(x=>x.startsWith(quotedSingle)||x.startsWith(quotedDouble)) &&
+      entries.some(x=>(x.startsWith(quotedSingle)||x.startsWith(quotedDouble)) && /:\s*true\s*$/.test(x)),
       name+' must remain an enabled own entry in ALLOW'
     );
   }
@@ -139,8 +140,9 @@ test('Issue #99 Contract B: target selection, normalization, legacy remap, and c
   }
 
   const encodedTarget='捷運汐東線事項記錄.html';
-  const doubleEncoded=encodeURIComponent(encodeURIComponent(encodedTarget));
-  assert.equal(targetName(runEntry({href:'https://example.test/entry.html?next='+doubleEncoded})),encodedTarget,'multiply encoded target must decode deeply');
+  let deeplyEncoded=encodedTarget;
+  for(let i=0;i<5;i++) deeplyEncoded=encodeURIComponent(deeplyEncoded);
+  assert.equal(targetName(runEntry({href:'https://example.test/entry.html?next='+deeplyEncoded})),encodedTarget,'multiply encoded target must exercise repeated decodeDeep iterations');
   const urlTarget=encodeURIComponent('https://legacy.example/path/to/index.html?x=1#frag');
   assert.equal(targetName(runEntry({href:'https://example.test/entry.html?next='+urlTarget})),'index.html','URL/path input must normalize to final basename');
 
@@ -170,7 +172,12 @@ test('Issue #99 Contract C: session bridge propagation, cleanup, markers, and st
       tasun_next_path_v1:'index.html',
       tasun_child_jump_lock_v1:'1'
     },
-    local:{tasunCurrentUser_v1:'LOCAL-SECOND'}
+    local:{
+      tasunCurrentUser_v1:'LOCAL-SECOND',
+      tasun_entry_next_v1:'index.html',
+      tasun_next_path_v1:'index.html',
+      tasun_child_jump_lock_v1:'1'
+    }
   });
   for(const key of BRIDGE_KEYS){
     assert.equal(result.sessionStorage.getItem(key),'SESSION-FIRST',key+' must receive bridge value in sessionStorage');
@@ -244,6 +251,15 @@ test('Issue #99 Contract D: redirect, version precedence/normalization, and time
     now:105
   });
   assert.equal(redirectedUrl(whitespace).searchParams.has('v'),false,'truthy raw whitespace query v must block fallback then normalize empty');
+
+  const cacheWhitespace=runEntry({globals:{__CACHE_V:' ',TASUN_APP_VER:'TASUN',APP_VER:'APP'},now:106});
+  assert.equal(redirectedUrl(cacheWhitespace).searchParams.has('v'),false,'truthy raw whitespace __CACHE_V must block later globals then normalize empty');
+
+  const tasunWhitespace=runEntry({globals:{__CACHE_V:'',TASUN_APP_VER:' ',APP_VER:'APP'},now:107});
+  assert.equal(redirectedUrl(tasunWhitespace).searchParams.has('v'),false,'truthy raw whitespace TASUN_APP_VER must block APP_VER then normalize empty');
+
+  const appWhitespace=runEntry({globals:{__CACHE_V:'',TASUN_APP_VER:'',APP_VER:' '},now:108});
+  assert.equal(redirectedUrl(appWhitespace).searchParams.has('v'),false,'truthy raw whitespace APP_VER must normalize empty');
 
   const first=runEntry({now:111});
   const second=runEntry({now:222});
