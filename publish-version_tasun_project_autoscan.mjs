@@ -38,6 +38,11 @@ const CORE_FILES=new Set(["tasun-version-loader.js","tasun-core.js","tasun-boot.
 function posix(p){return p.split(path.sep).join("/");}
 function n(v){return v===undefined||v===null?"":String(v).trim();}
 function isDeploymentExcluded(rel){const p=posix(n(rel)).replace(/^\.\/+/, "");return DEPLOY_EXCLUDED_PREFIXES.some(prefix=>p.startsWith(prefix));}
+function hasDeploymentExcludedAuthority(manifest){
+  if(Object.entries(manifest.pages||{}).some(([key,entry])=>isDeploymentExcluded(key)||(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file)))) return true;
+  if(Object.entries(manifest.pageArtifactManifest||{}).some(([key,entry])=>isDeploymentExcluded(key)||(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file)))) return true;
+  return Object.keys(manifest.pageBuildStamp||{}).some(isDeploymentExcluded);
+}
 function metadataFastPathComplete(manifest){
   if(!n(manifest.updatedAt)||manifest.autoVersionEnabled!==true) return false;
   if(manifest.officialVersionSource!==VERSION_FILE||manifest.rebuildStampFile!==REBUILD_STAMP_FILE) return false;
@@ -158,11 +163,12 @@ async function main(){
   if(VERIFY_ONLY){await verifyRelease(current);return;}
   const changed=changedFiles(),relevant=[];
   for(const rel of changed){const isHtml=FORMAL_EXT.has(path.extname(rel).toLowerCase());if(await exists(rel)&&((isHtml&&!isDeploymentExcluded(rel))||CORE_FILES.has(rel)||GENERATED.has(rel)))relevant.push(rel);}
-  if(!relevant.length){console.log("[Tasun] no formal page/core/manifest change; nothing to sync.");return;}
-  const metadataOnly=relevant.every(rel=>GENERATED.has(rel));
+  const needsDeploymentCleanup=hasDeploymentExcludedAuthority(current);
+  if(!relevant.length&&!needsDeploymentCleanup){console.log("[Tasun] no formal page/core/manifest change; nothing to sync.");return;}
+  const metadataOnly=!relevant.length||relevant.every(rel=>GENERATED.has(rel));
   if(metadataOnly){
     const next={...current,pages:{...(current.pages||{})},pageArtifactManifest:{...(current.pageArtifactManifest||{})},pageBuildStamp:typeof current.pageBuildStamp==="object"?{...current.pageBuildStamp}:{}};
-    for(const [key,entry] of Object.entries(next.pages)) if(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file)) delete next.pages[key];
+    for(const [key,entry] of Object.entries(next.pages)) if(isDeploymentExcluded(key)||(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file))) delete next.pages[key];
     for(const [key,entry] of Object.entries(next.pageArtifactManifest)) if(isDeploymentExcluded(key)||(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file))) delete next.pageArtifactManifest[key];
     for(const key of Object.keys(next.pageBuildStamp)) if(isDeploymentExcluded(key)) delete next.pageBuildStamp[key];
     if(metadataFastPathComplete(next)){
@@ -185,7 +191,7 @@ async function main(){
   if(!rank(build))throw new Error("unparseable_release_build");
   for(const info of infos){info.text=updateHtmlBuild(info.text,build);info.digest=crypto.createHash("sha256").update(info.text).digest("hex");}
   const pages={...(current.pages||{})},pageArtifactManifest={...(current.pageArtifactManifest||{})},pageBuildStamp=typeof current.pageBuildStamp==="object"?{...current.pageBuildStamp}:{};
-  for(const [key,entry] of Object.entries(pages)) if(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file)) delete pages[key];
+  for(const [key,entry] of Object.entries(pages)) if(isDeploymentExcluded(key)||(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file))) delete pages[key];
   for(const [key,entry] of Object.entries(pageArtifactManifest)) if(isDeploymentExcluded(key)||(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file))) delete pageArtifactManifest[key];
   for(const key of Object.keys(pageBuildStamp)) if(isDeploymentExcluded(key)) delete pageBuildStamp[key];
   for(const info of infos){
