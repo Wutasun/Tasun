@@ -95,10 +95,14 @@ test('Issue #76 metadata-only fast path falls back when formal metadata is incom
   const file='汐東收發文明細表.html';
   const manifest=readJson('tasun-version.json',dir);
   delete manifest.updatedAt;
+  delete manifest.autoVersionEnabled;
   delete manifest.officialVersionSource;
   delete manifest.rebuildStampFile;
   delete manifest.release.workflow;
   delete manifest.release.lastAutoSyncAt;
+  delete manifest.release.allFileAliasesExactGate;
+  delete manifest.release.changedFormalFiles;
+  delete manifest.release.changedCoreFiles;
   delete manifest.pages[file].sizeBytes;
   delete manifest.pages[file].officialVersionSource;
   delete manifest.pages[file].publisherWorkflowPath;
@@ -117,10 +121,14 @@ test('Issue #76 metadata-only fast path falls back when formal metadata is incom
 
   const after=readJson('tasun-version.json',dir);
   assert.ok(after.updatedAt,'metadata repair must restore root updatedAt');
+  assert.equal(after.autoVersionEnabled,true);
   assert.equal(after.officialVersionSource,'tasun-version.json');
   assert.equal(after.rebuildStampFile,'TASUN_REBUILD_STAMP');
   assert.equal(after.release.workflow,'.github/workflows/release-version.yml');
   assert.ok(after.release.lastAutoSyncAt,'metadata repair must restore release lastAutoSyncAt');
+  assert.equal(after.release.allFileAliasesExactGate,true);
+  assert.ok(Array.isArray(after.release.changedFormalFiles),'metadata repair must restore changedFormalFiles');
+  assert.ok(Array.isArray(after.release.changedCoreFiles),'metadata repair must restore changedCoreFiles');
   assert.ok(Number(after.pages[file].sizeBytes)>0,'metadata repair must restore page sizeBytes');
   assert.equal(after.pages[file].officialVersionSource,'tasun-version.json');
   assert.equal(after.pages[file].publisherWorkflowPath,'.github/workflows/release-version.yml');
