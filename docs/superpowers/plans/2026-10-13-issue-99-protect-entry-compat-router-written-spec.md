@@ -101,12 +101,15 @@ The RED design must not require or incentivize a production edit merely to make 
 
 The final focused regression must protect at least the following.
 
-### Contract A — entry surface remains present
+### Contract A — entry surface remains present and auto-executes
 
 Assert:
 - root `entry.html` exists;
 - it is an HTML file;
-- it contains the Tasun entry router script.
+- it contains the Tasun entry router script;
+- the router exposes `window.__TASUN_ENTRY_GO__ = go` as currently implemented;
+- evaluating/loading the entry script automatically invokes the router through the unconditional terminal `go();` call;
+- deleting the automatic invocation while leaving `go()` defined must fail this contract, because direct navigation to `entry.html` must continue to bridge and redirect without an external caller.
 
 ### Contract B — target routing contract remains intact
 
@@ -170,10 +173,15 @@ Protect current session markers and values:
 
 Assert:
 - routing uses `location.replace(...)`;
-- version propagation checks query `v` and current version globals;
-- version is propagated via `out.searchParams.set('v', ...)` when present;
-- cache-busting query `_` is added;
-- no new window-opening/navigation mechanism replaces the current redirect contract.
+- version source selection preserves the exact current first-nonempty precedence:
+  1. URL query parameter `v`;
+  2. `window.__CACHE_V`;
+  3. `window.TASUN_APP_VER`;
+  4. `window.APP_VER`;
+- each fallback source is independently covered so removal or reordering fails the contract;
+- version is propagated via `out.searchParams.set('v', v)` when the resolved version is non-empty;
+- cache-busting query `_` is always added before redirect;
+- no new window-opening/navigation mechanism replaces the current `location.replace(...)` redirect contract.
 
 ## 7. RED acceptance
 
