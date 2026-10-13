@@ -212,7 +212,7 @@ const PROTECTION_MANIFEST=Object.freeze({
   issue:99,
   surface:'entry.html',
   contracts:Object.freeze(['A','B','C','D','E']),
-  finalized:false
+  finalized:true
 });
 
 test('Issue #99 Contract E: focused compatibility protection manifest is finalized',()=>{
