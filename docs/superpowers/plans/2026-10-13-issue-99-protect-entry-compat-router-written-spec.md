@@ -137,7 +137,11 @@ Assert the current routing surface includes:
   - query/hash fragments are stripped from target normalization;
   - the final path component/basename is selected for allowlist/remap evaluation;
   - encoded hash targets, multiply encoded filenames, and URL/path inputs containing an allowlisted basename must continue to resolve according to current behavior;
-- fallback to default target remains when no effective request resolves to an allowed/remapped target.
+- allowlist lookup preserves the current ordinary-object semantics of `ALLOW`:
+  - ordinary missing basenames fall back to the default target;
+  - inherited `Object.prototype` keys such as `constructor` and `toString` are truthy through property lookup and therefore are currently treated as allowed by `if (!ALLOW[b])` even though they are not enumerated own keys;
+  - this inherited-property quirk must be characterized as current locked behavior for Issue #99, not silently corrected;
+- fallback to default target remains for ordinary non-allowlisted/non-remapped basenames, subject to the inherited-property exception above.
 
 The focused test must characterize both the presence of the stored-routing branch and the actual end-to-end ordering that currently makes those stored hints ineffective after `bridge()` cleanup. It must not falsely assert that storage-only hints currently route externally.
 
@@ -176,6 +180,12 @@ Protect current cleanup keys and behavior:
 Protect current session markers and values:
 - `tasunIndexSession_v1` is set to `1` in `sessionStorage`;
 - `tasunIndexSessionAuthed_v2` is set to `1` in `sessionStorage`.
+
+Protect storage fault isolation:
+- storage access inside `bridge()` remains guarded so `getItem`, `setItem`, or `removeItem` failures do not abort entry routing;
+- the storage-read branch inside `pickTarget()` remains guarded so a throwing `sessionStorage` / `localStorage` access does not abort routing;
+- with storage access throwing (for example a `SecurityError`-like condition), the router must still continue to hash/default target resolution and reach `location.replace(...)`;
+- this fault-tolerance behavior is part of the compatibility contract and must be exercised by the focused test.
 
 ### Contract D — redirect/version behavior remains intact
 
