@@ -97,7 +97,10 @@ test('Issue #76 metadata-only fast path falls back when formal metadata is incom
   delete manifest.pages[file].sizeBytes;
   delete manifest.pages[file].officialVersionSource;
   delete manifest.pages[file].publisherWorkflowPath;
+  delete manifest.pages[file].pageKey;
+  delete manifest.pages[file].updatedAt;
   delete manifest.pageArtifactManifest[file].sizeBytes;
+  delete manifest.pageArtifactManifest[file].updatedAt;
   fs.writeFileSync(path.join(dir,'tasun-version.json'),JSON.stringify(manifest,null,2)+'\n');
 
   const r=spawnSync(process.execPath,['publish-version_tasun_project_autoscan.mjs'],{
@@ -111,5 +114,8 @@ test('Issue #76 metadata-only fast path falls back when formal metadata is incom
   assert.ok(Number(after.pages[file].sizeBytes)>0,'metadata repair must restore page sizeBytes');
   assert.equal(after.pages[file].officialVersionSource,'tasun-version.json');
   assert.equal(after.pages[file].publisherWorkflowPath,'.github/workflows/release-version.yml');
+  assert.ok(after.pages[file].pageKey,'metadata repair must restore pageKey');
+  assert.ok(after.pages[file].updatedAt,'metadata repair must restore page updatedAt');
   assert.ok(Number(after.pageArtifactManifest[file].sizeBytes)>0,'metadata repair must restore artifact sizeBytes');
+  assert.ok(after.pageArtifactManifest[file].updatedAt,'metadata repair must restore artifact updatedAt');
 });
