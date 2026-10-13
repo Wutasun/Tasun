@@ -117,29 +117,44 @@ Assert the current routing surface includes:
   - `捷運汐東線事項記錄.html`
   - `捷運汐止東湖線統包工程-資料庫.html`
   - `捷運汐止東湖線統包工程-資料明細表.html`
-  - `index.html`
+  - `index.html`;
 - query aliases `next`, `to`, `page`;
+- stored routing inputs from both `sessionStorage` and `localStorage`, including the current keys `tasun_entry_next_v1` and `tasun_next_path_v1`;
+- hash routing input matching `next`, `to`, or `page`;
+- precedence/order of routing inputs remains current-compatible: URL query first, then stored routing hints, then hash fallback;
+- a valid allowlisted target supplied through each supported channel resolves to that target;
 - fallback to default target when requested basename is not allowlisted.
 
-This Issue protects the existing allowlist; it does not authorize adding/removing destinations.
+The focused test must exercise or statically characterize all three supported input channels separately so deletion of the storage branch or hash branch cannot pass merely because the same key/alias strings still appear elsewhere.
+
+This Issue protects the existing allowlist and input channels; it does not authorize adding/removing destinations or changing precedence.
 
 ### Contract C — session bridge compatibility remains intact
 
-Protect current session bridge key set:
+Protect current session bridge source-key order:
 - `tasunCurrentUser_v1`
 - `tasunSessionBridge_v1`
 - `tasunSession_v1`
 - `tasunSso_v2`
 - `tasunSso_v1`
 
-Protect current cleanup keys:
+The test must characterize the current bridge algorithm, not merely key-name presence:
+- the router searches the above keys in the current precedence order;
+- it reads from `sessionStorage` first and then `localStorage` for each key;
+- the first non-empty value becomes the bridge source;
+- when a bridge value is found, that same value is written to **every** bridge key in both `sessionStorage` and `localStorage`;
+- removal of either storage-scope fan-out must fail the contract;
+- reordering the source-key precedence must fail unless the written spec is amended.
+
+Protect current cleanup keys and behavior:
 - `tasun_next_path_v1`
 - `tasun_entry_next_v1`
 - `tasun_child_jump_lock_v1`
+- each is removed from both `sessionStorage` and `localStorage`.
 
-Protect current session markers:
-- `tasunIndexSession_v1`
-- `tasunIndexSessionAuthed_v2`
+Protect current session markers and values:
+- `tasunIndexSession_v1` is set to `1` in `sessionStorage`;
+- `tasunIndexSessionAuthed_v2` is set to `1` in `sessionStorage`.
 
 ### Contract D — redirect/version behavior remains intact
 
