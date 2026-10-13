@@ -96,8 +96,11 @@ test('Issue #99 Contract B: target selection, normalization, legacy remap, and c
   const script=routerScript();
   const allowBlock=(script.match(/var\s+ALLOW\s*=\s*\{([\s\S]*?)\};/)||[])[1]||'';
   for(const name of allowlisted){
+    const escaped=name.replace(/[.*+?^${}()|[\]\\]/g,'\\  for(const name of allowlisted){
     const escaped=name.replace(/[.*+?^${}()|[\]\\]/g,'\\  const source=entrySource();
   for(const name of allowlisted) assert.ok(source.includes(name),name+' must remain in allowlist source');');
+    assert.match(allowBlock,new RegExp("['\\\"]"+escaped+"['\\\"]\\s*:\\s*true"),name+' must remain an enabled own entry in ALLOW');
+  }');
     assert.match(allowBlock,new RegExp("['\\\"]"+escaped+"['\\\"]\\s*:\\s*true"),name+' must remain an enabled own entry in ALLOW');
   }
 
