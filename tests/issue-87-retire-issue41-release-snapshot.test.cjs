@@ -53,8 +53,9 @@ test('Issue #87 Contract B: current release authority remains present',()=>{
   const version=JSON.parse(read('tasun-version.json'));
   const build=String(version.version||version.build||'');
   const seq=Number(version.releaseSequence??version.release?.releaseSequence);
-  assert.match(build,/r1155_/i,'implementation baseline must still be formal R1155');
-  assert.equal(seq,1155,'implementation baseline releaseSequence must remain 1155');
+  assert.match(build,/r\d+_/i,'tasun-version.json must retain a formal release build identity');
+  assert.equal(Number.isFinite(seq),true,'releaseSequence must remain numeric');
+  assert.equal(seq>=1155,true,'releaseSequence must not regress below the approved R1155 implementation baseline');
 });
 
 test('Issue #87 Contract C: no live consumer of stale snapshot exists',()=>{
