@@ -35,7 +35,7 @@ const FORMAL_EXT=new Set([".html",".htm"]);
 const CORE_FILES=new Set(["tasun-version-loader.js","tasun-core.js","tasun-boot.js","tasun-auth-v4.js","tasun-cloudwrap-v4.js","tasun-guard-v5.js","tasun-global-core.js","tasun-resources.json","worker.js","publish-version_tasun_project_autoscan.mjs",WORKFLOW_FILE]);
 
 function posix(p){return p.split(path.sep).join("/");}
-function isPublicPagePath(rel){const p=posix(n(rel));return !p.startsWith("tasun-api/");}
+function isPublicPagePath(rel){const p=posix(n(rel));return !p.split("/").includes("tasun-api");}
 function n(v){return v===undefined||v===null?"":String(v).trim();}
 function rank(v){const m=n(v).match(/r(\d+)/i);return m?Number(m[1]):0;}
 function taipeiNow(){return new Date(Date.now()+8*60*60*1000);}
