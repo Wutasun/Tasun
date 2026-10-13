@@ -73,3 +73,43 @@ test('Issue #76 active Pages packaging excludes tasun-api source directory',()=>
   const workflow=fs.readFileSync(path.join(ROOT,'.github/workflows/release-version.yml'),'utf8');
   assert.match(workflow,/--exclude\s+["']tasun-api\/["']/,'active Pages packaging must continue excluding tasun-api/');
 });
+
+test('Issue #76 metadata-only fast path falls back when formal metadata is incomplete',t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'tasun-issue76-incomplete-'));
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const mkdir=rel=>fs.mkdirSync(path.dirname(path.join(dir,rel)),{recursive:true});
+  const copy=rel=>{mkdir(rel);fs.copyFileSync(path.join(ROOT,rel),path.join(dir,rel));};
+
+  for(const rel of [
+    'publish-version_tasun_project_autoscan.mjs',
+    'tasun-version.json',
+    'TASUN_REBUILD',
+    'TASUN_REBUILD_STAMP',
+    '.github/workflows/release-version.yml',
+    '汐東收發文明細表.html',
+    '汐東收發文登錄表.html',
+    '汐東文件統計表.html',
+    '汐東文件管理表.html'
+  ]) copy(rel);
+
+  const file='汐東收發文明細表.html';
+  const manifest=readJson('tasun-version.json',dir);
+  delete manifest.pages[file].sizeBytes;
+  delete manifest.pages[file].officialVersionSource;
+  delete manifest.pages[file].publisherWorkflowPath;
+  delete manifest.pageArtifactManifest[file].sizeBytes;
+  fs.writeFileSync(path.join(dir,'tasun-version.json'),JSON.stringify(manifest,null,2)+'\n');
+
+  const r=spawnSync(process.execPath,['publish-version_tasun_project_autoscan.mjs'],{
+    cwd:dir,
+    encoding:'utf8',
+    env:{...process.env,TASUN_CHANGED_FILES:'tasun-version.json',TASUN_BEFORE_SHA:'',TASUN_HEAD_SHA:''}
+  });
+  assert.equal(r.status,0,r.stdout+'\n'+r.stderr);
+
+  const after=readJson('tasun-version.json',dir);
+  assert.ok(Number(after.pages[file].sizeBytes)>0,'metadata repair must restore page sizeBytes');
+  assert.equal(after.pages[file].officialVersionSource,'tasun-version.json');
+  assert.equal(after.pages[file].publisherWorkflowPath,'.github/workflows/release-version.yml');
+  assert.ok(Number(after.pageArtifactManifest[file].sizeBytes)>0,'metadata repair must restore artifact sizeBytes');
+});
