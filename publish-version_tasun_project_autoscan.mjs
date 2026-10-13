@@ -32,10 +32,12 @@ const SIZE_KEYS=["bytes","pageBytes","sizeBytes","artifactBytes"];
 const VERIFY_ONLY=process.argv.includes("--verify-only");
 const GENERATED=new Set([VERSION_FILE,REBUILD_FILE,REBUILD_STAMP_FILE]);
 const FORMAL_EXT=new Set([".html",".htm"]);
+const DEPLOY_EXCLUDED_PREFIXES=["tasun-api/"];
 const CORE_FILES=new Set(["tasun-version-loader.js","tasun-core.js","tasun-boot.js","tasun-auth-v4.js","tasun-cloudwrap-v4.js","tasun-guard-v5.js","tasun-global-core.js","tasun-resources.json","worker.js","publish-version_tasun_project_autoscan.mjs",WORKFLOW_FILE]);
 
 function posix(p){return p.split(path.sep).join("/");}
 function n(v){return v===undefined||v===null?"":String(v).trim();}
+function isDeploymentExcluded(rel){const p=posix(n(rel)).replace(/^\.\/+/, "");return DEPLOY_EXCLUDED_PREFIXES.some(prefix=>p.startsWith(prefix));}
 function rank(v){const m=n(v).match(/r(\d+)/i);return m?Number(m[1]):0;}
 function taipeiNow(){return new Date(Date.now()+8*60*60*1000);}
 function p2(x){return String(x).padStart(2,"0");}
@@ -127,7 +129,7 @@ async function main(){
   const current=await readJson(VERSION_FILE);
   if(VERIFY_ONLY){await verifyRelease(current);return;}
   const changed=changedFiles(),relevant=[];
-  for(const rel of changed){if(await exists(rel)&&(FORMAL_EXT.has(path.extname(rel).toLowerCase())||CORE_FILES.has(rel)||GENERATED.has(rel)))relevant.push(rel);}
+  for(const rel of changed){const isHtml=FORMAL_EXT.has(path.extname(rel).toLowerCase());if(await exists(rel)&&((isHtml&&!isDeploymentExcluded(rel))||CORE_FILES.has(rel)||GENERATED.has(rel)))relevant.push(rel);}
   if(!relevant.length){console.log("[Tasun] no formal page/core/manifest change; nothing to sync.");return;}
   // The existing deployment gate requires the four document pages to be one artifact.
   const formal=[...new Set([...DOCUMENT_PAGES,...relevant.filter(rel=>FORMAL_EXT.has(path.extname(rel).toLowerCase()))])];
@@ -139,6 +141,9 @@ async function main(){
   if(!rank(build))throw new Error("unparseable_release_build");
   for(const info of infos){info.text=updateHtmlBuild(info.text,build);info.digest=crypto.createHash("sha256").update(info.text).digest("hex");}
   const pages={...(current.pages||{})},pageArtifactManifest={...(current.pageArtifactManifest||{})},pageBuildStamp=typeof current.pageBuildStamp==="object"?{...current.pageBuildStamp}:{};
+  for(const [key,entry] of Object.entries(pages)) if(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file)) delete pages[key];
+  for(const [key,entry] of Object.entries(pageArtifactManifest)) if(isDeploymentExcluded(key)||(entry&&typeof entry==="object"&&isDeploymentExcluded(entry.file))) delete pageArtifactManifest[key];
+  for(const key of Object.keys(pageBuildStamp)) if(isDeploymentExcluded(key)) delete pageBuildStamp[key];
   for(const info of infos){
     for(const alias of aliasesFor(current,info.config))pages[alias]={...exactEntry(pages[alias],info,build,updatedAt),pageKey:pages[alias]?.pageKey||info.config.key,officialVersionSource:VERSION_FILE,publisherWorkflowPath:WORKFLOW_FILE};
     pageArtifactManifest[info.config.file]=exactEntry(pageArtifactManifest[info.config.file],info,build,updatedAt);
