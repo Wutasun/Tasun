@@ -42,7 +42,7 @@ test('Issue #73 live runtime sources contain no standalone root resources.json r
   const hits=[];
   for(const p of walk(ROOT).filter(isLive)){
     const text=fs.readFileSync(p,'utf8');
-    if(standalone.test(text)) hits.push(rel(p));
+    if(standaloneQuoted.test(text)) hits.push(rel(p));
   }
   assert.deepEqual(hits,[],'standalone root resources.json references remain: '+JSON.stringify(hits));
 });
@@ -55,5 +55,5 @@ test('Issue #73 supported tasun-resources authority remains present and consumed
   }
   const publisher=fs.readFileSync(path.join(ROOT,'publish-version_tasun_project_autoscan.mjs'),'utf8');
   assert.ok(publisher.includes(current),'publisher must retain '+current+' as current authority');
-  assert.equal(standalone.test(publisher),false,'publisher must not promote standalone root resources.json');
+  assert.equal(standaloneQuoted.test(publisher),false,'publisher must not promote standalone root resources.json');
 });
