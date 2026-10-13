@@ -40,14 +40,23 @@ function n(v){return v===undefined||v===null?"":String(v).trim();}
 function isDeploymentExcluded(rel){const p=posix(n(rel)).replace(/^\.\/+/, "");return DEPLOY_EXCLUDED_PREFIXES.some(prefix=>p.startsWith(prefix));}
 function metadataFastPathComplete(manifest){
   const formal=new Set(DOCUMENT_PAGES);
+  const completeCommon=entry=>{
+    if(!entry||typeof entry!=="object") return false;
+    if(!n(entry.file)||!n(entry.updatedAt)||!(Number(entry.releaseSequence)>0)) return false;
+    for(const key of BUILD_KEYS) if(!n(entry[key])) return false;
+    for(const key of DIGEST_KEYS) if(!n(entry[key])) return false;
+    if(!(Number.isFinite(Number(entry.sizeBytes))&&Number(entry.sizeBytes)>0)) return false;
+    return true;
+  };
   for(const entry of Object.values(manifest.pages||{})){
     if(!entry||typeof entry!=="object"||!formal.has(n(entry.file))) continue;
-    if(!(Number.isFinite(Number(entry.sizeBytes))&&Number(entry.sizeBytes)>0)) return false;
+    if(!completeCommon(entry)) return false;
+    if(!n(entry.pageKey)) return false;
     if(entry.officialVersionSource!==VERSION_FILE||entry.publisherWorkflowPath!==WORKFLOW_FILE) return false;
   }
   for(const file of DOCUMENT_PAGES){
     const entry=manifest.pageArtifactManifest?.[file];
-    if(!entry||typeof entry!=="object"||!(Number.isFinite(Number(entry.sizeBytes))&&Number(entry.sizeBytes)>0)) return false;
+    if(!completeCommon(entry)||n(entry.file)!==file) return false;
   }
   return true;
 }
