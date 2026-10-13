@@ -6,7 +6,7 @@ Approved architecture: **Option A**
 Implementation baseline before governance merge: `d426bf83b20759a4c9e408501a465eb19a91f1fd`  
 Formal build at specification time: `20261012_tasun_v5_xidong_docs_r1154_425da05a1ae8_release`  
 Release sequence at specification time: `1154`  
-Status: **WRITTEN SPEC COMPLETE / PENDING EXPLICIT APPROVAL / NO IMPLEMENTATION AUTHORITY**
+Status: **WRITTEN SPEC APPROVED / IMPLEMENTATION-TDD AUTHORIZED AFTER GOVERNANCE MERGE**
 
 ## 1. Goal
 
@@ -287,11 +287,7 @@ Current gate:
 
 - [x] Architecture Option A explicitly approved by user on 2026-10-12
 - [x] Written spec drafted
-- [ ] Written spec explicitly approved by user
-- [ ] Implementation / TDD authorized
+- [x] Written spec explicitly approved by user on 2026-10-13
+- [x] Implementation / TDD authorized after governance PR merge
 
-**Next mandatory gate: explicit written-spec approval.**
-
-Recommended decision:
-
-`Issue #73 written spec 核准，進入 implementation / TDD`
+**Written-spec gate passed. After governance PR merge, continue automatically under the project-wide automatic progression rule.**
