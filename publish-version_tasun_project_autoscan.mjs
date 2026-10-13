@@ -39,6 +39,11 @@ function posix(p){return p.split(path.sep).join("/");}
 function n(v){return v===undefined||v===null?"":String(v).trim();}
 function isDeploymentExcluded(rel){const p=posix(n(rel)).replace(/^\.\/+/, "");return DEPLOY_EXCLUDED_PREFIXES.some(prefix=>p.startsWith(prefix));}
 function metadataFastPathComplete(manifest){
+  if(!n(manifest.updatedAt)) return false;
+  if(manifest.officialVersionSource!==VERSION_FILE||manifest.rebuildStampFile!==REBUILD_STAMP_FILE) return false;
+  if(!manifest.release||typeof manifest.release!=="object") return false;
+  if(manifest.release.workflow!==WORKFLOW_FILE||manifest.release.script!=="publish-version_tasun_project_autoscan.mjs") return false;
+  if(manifest.release.autoCommitVersionFiles!==true||manifest.release.skipCommitToken!=="[skip tasun-version]"||!n(manifest.release.lastAutoSyncAt)) return false;
   const formal=new Set(DOCUMENT_PAGES);
   const completeCommon=entry=>{
     if(!entry||typeof entry!=="object") return false;
