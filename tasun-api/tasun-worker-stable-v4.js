@@ -141,6 +141,7 @@ export default {
 
       if (path === "/api/tasun/merge") {
         if (request.method !== "POST") return json({ ok:false, error:"METHOD" }, 405, cors);
+        if (!["admin","write"].includes(me.r)) return json({ ok:false, error:"FORBIDDEN" }, 403, cors);
         const body = await request.json().catch(() => ({}));
         const resourceKey = String(body.resourceKey || "").trim();
         const payload = body.payload || {};
@@ -232,12 +233,18 @@ function corsHeaders(request, env){
 }
 
 // ---- Auth helpers (simple HMAC token) ----
+function configuredAuthSecret(env){
+  const secret=env&&typeof env.AUTH_SECRET==="string"?env.AUTH_SECRET:"";
+  if(secret.length<32) throw new Error("AUTH_SECRET_NOT_CONFIGURED");
+  return secret;
+}
+
 async function signToken(env, payload){
   const header = { alg:"HS256", typ:"TJWT" };
   const h = b64url(JSON.stringify(header));
   const p = b64url(JSON.stringify(payload));
   const msg = h + "." + p;
-  const sig = await hmacSha256B64Url(env.AUTH_SECRET || "dev-secret", msg);
+  const sig = await hmacSha256B64Url(configuredAuthSecret(env), msg);
   return msg + "." + sig;
 }
 
@@ -247,7 +254,7 @@ async function verifyToken(env, token){
   if (parts.length !== 3) return null;
   const [h,p,sig] = parts;
   const msg = h + "." + p;
-  const expect = await hmacSha256B64Url(env.AUTH_SECRET || "dev-secret", msg);
+  const expect = await hmacSha256B64Url(configuredAuthSecret(env), msg);
   if (sig !== expect) return null;
   let payload = null;
   try { payload = JSON.parse(atobUrl(p)); } catch(e) { return null; }
