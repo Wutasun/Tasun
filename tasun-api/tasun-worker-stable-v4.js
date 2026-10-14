@@ -268,6 +268,12 @@ async function requireAuth(request, env){
   const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
   const me = await verifyToken(env, token);
   if (!me) return { ok:false, error:"UNAUTH" };
+  // Signed token identifies the user; current DB user/role remains authoritative.
+  // Permission downgrades and disabled accounts take effect on the next API call.
+  const user = await getUser(env, me.u);
+  if (!user || !user.enabled) return { ok:false, error:"UNAUTH" };
+  const roleOverride = await getAuth(env, me.u);
+  me.r = String(roleOverride?.role || user.role || "read");
   return { ok:true, me };
 }
 

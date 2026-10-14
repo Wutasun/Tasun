@@ -28,6 +28,9 @@ test('R1157 real Worker role guard and fail-closed signing (isolated D1)',async 
   await t.test('read must be denied',async()=>{const r=await merge('forbidden-read',read);assert.equal(r.status,403);assert.ok(!(await readback()).body.rows.some(x=>x.uid==='forbidden-read'));});
   await t.test('unknown role must be denied',async()=>{assert.equal((await merge('other',other)).status,403);});
   await t.test('anonymous merge must be denied',async()=>{assert.equal((await merge('anon','')).status,401);});
+  await t.test('downgraded writer token cannot merge',async()=>{db.prepare("UPDATE tasun_users SET role='read' WHERE username='write-ci'").run();try{const r=await merge('revoked-writer',write);assert.equal(r.status,403,JSON.stringify(r.body));assert.ok(!(await readback()).body.rows.some(x=>x.uid==='revoked-writer'));}finally{db.prepare("UPDATE tasun_users SET role='write' WHERE username='write-ci'").run();}});
+  await t.test('disabled user token is rejected immediately',async()=>{db.prepare("UPDATE tasun_users SET enabled=0 WHERE username='read-ci'").run();try{assert.equal((await post('/api/tasun/me',{},read)).status,401);}finally{db.prepare("UPDATE tasun_users SET enabled=1 WHERE username='read-ci'").run();}});
+  await t.test('auth-role override immediately revokes stale admin privilege',async()=>{db.prepare("INSERT INTO tasun_auth(username,role,updatedAt) VALUES(?,?,?)").run('admin-ci','read',Date.now());try{assert.equal((await merge('revoked-admin',admin)).status,403);}finally{db.prepare("DELETE FROM tasun_auth WHERE username='admin-ci'").run();}});
   await t.test('missing auth secret refuses login',async()=>{const secret=env.AUTH_SECRET;delete env.AUTH_SECRET;try{assert.notEqual((await post('/api/tasun/login',{username:'read-ci',password})).status,200)}finally{env.AUTH_SECRET=secret}});
  }finally{db.close();fs.rmSync(folder,{recursive:true,force:true})}
 });
