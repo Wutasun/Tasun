@@ -14,7 +14,7 @@ export default {
     // ---- CORS ----
     const cors = corsHeaders(request, env);
     if (request.method === "OPTIONS") {
-      return new Response("", { status: 204, headers: cors });
+      return new Response(null, { status: 204, headers: cors });
     }
 
     try {
@@ -35,11 +35,13 @@ export default {
         const pass_hash = await sha256Hex(password);
         if (pass_hash !== user.pass_hash) return json({ ok:false, error:"BAD_CRED" }, 401, cors);
 
+        // A migrated D1 identity is mandatory. Never issue pre-migration tokens.
+        if (!validSessionVersion(user.session_version)) return json({ ok:false, error:"UNAUTH" }, 401, cors);
         const auth = await getAuth(env, username);
         const role = (auth?.role || user.role || "read");
 
         const exp = Date.now() + 8 * 60 * 60 * 1000; // 8 hours browser session token
-        const token = await signToken(env, { u: username, r: role, exp });
+        const token = await signToken(env, { u: username, r: role, exp, sv: user.session_version, tv: 2 });
 
         return json({ ok:true, user: username, role, exp, token }, 200, cors);
       }
@@ -221,14 +223,19 @@ function json(obj, status=200, headers={}) {
 function corsHeaders(request, env){
   const origin = request.headers.get("Origin") || "";
   const allowList = (env.CORS_ALLOW_ORIGINS || "https://wutasun.github.io").split(",").map(s=>s.trim()).filter(Boolean);
-  const allow = allowList.includes("*") ? "*" : (allowList.includes(origin) ? origin : allowList[0] || "");
+  // Credentialed browsers require an exact, explicitly trusted Origin.
+  // Unknown Origins must not inherit an unrelated allowed Origin or a wildcard.
+  const allowed = !!origin && allowList.includes(origin);
   const h = {
-    "Access-Control-Allow-Origin": allow || "*",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Access-Control-Allow-Headers": "content-type,authorization",
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin",
   };
+  if (allowed) {
+    h["Access-Control-Allow-Origin"] = origin;
+    h["Access-Control-Allow-Credentials"] = "true";
+  }
   return h;
 }
 
@@ -258,8 +265,10 @@ async function verifyToken(env, token){
   if (sig !== expect) return null;
   let payload = null;
   try { payload = JSON.parse(atobUrl(p)); } catch(e) { return null; }
-  if (!payload || !payload.u || !payload.r) return null;
-  if (payload.exp && Date.now() > Number(payload.exp)) return null;
+  if (!payload || typeof payload.u !== "string" || !payload.u ||
+      typeof payload.r !== "string" || !payload.r || payload.tv !== 2 ||
+      !validSessionVersion(payload.sv) || typeof payload.exp !== "number" ||
+      !Number.isFinite(payload.exp) || payload.exp <= Date.now()) return null;
   return payload;
 }
 
@@ -271,10 +280,22 @@ async function requireAuth(request, env){
   // Signed token identifies the user; current DB user/role remains authoritative.
   // Permission downgrades and disabled accounts take effect on the next API call.
   const user = await getUser(env, me.u);
-  if (!user || !user.enabled) return { ok:false, error:"UNAUTH" };
+  if (!user || !user.enabled || !validSessionVersion(user.session_version) ||
+      !sameSessionVersion(me.sv, user.session_version)) return { ok:false, error:"UNAUTH" };
   const roleOverride = await getAuth(env, me.u);
   me.r = String(roleOverride?.role || user.role || "read");
   return { ok:true, me };
+}
+
+function validSessionVersion(s){
+  return typeof s === "string" && /^[a-f0-9]{32}$/.test(s);
+}
+// Both inputs are validated, fixed-size ASCII; no early return based on the bytes.
+function sameSessionVersion(a,b){
+  if (!validSessionVersion(a) || !validSessionVersion(b)) return false;
+  let difference=0;
+  for (let i=0;i<32;i++) difference |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return difference === 0;
 }
 
 function b64url(s){
@@ -310,7 +331,17 @@ async function sha256Hex(str){
 }
 
 async function getUser(env, username){
-  const r = await env.DB.prepare("SELECT username, pass_hash, role, enabled FROM tasun_users WHERE username=?").bind(username).first();
+  // Fail closed if the revocation triggers are missing or migration is incomplete.
+  const guard = await env.DB.prepare(`
+    SELECT COUNT(*) AS installed FROM sqlite_master
+    WHERE type='trigger' AND name IN (
+      'tr_r1157_sv_users_insert', 'tr_r1157_sv_users_update',
+      'tr_r1157_sv_auth_insert', 'tr_r1157_sv_auth_update',
+      'tr_r1157_sv_auth_delete'
+    )
+  `).first();
+  if (!guard || Number(guard.installed) !== 5) return null;
+  const r = await env.DB.prepare("SELECT username, pass_hash, role, enabled, session_version FROM tasun_users WHERE username=?").bind(username).first();
   return r || null;
 }
 async function getAuth(env, username){
