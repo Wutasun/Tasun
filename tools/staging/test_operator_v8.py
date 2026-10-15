@@ -22,15 +22,20 @@ class FakeWrangler:
         text=' '.join(args)
         if self.fail_on and self.fail_on in text:raise op.Stop('simulated command failure')
         if args[-1]=='whoami':return 'Logged in'
-        if args[3:6]==['d1','list','--json']:return json.dumps(self.d1)
-        if args[3:6]==['pages','project','list']:return json.dumps(self.pages)
-        if args[3:5]==['d1','create']:
+        if args[4:7]==['d1','list','--json']:return json.dumps(self.d1)
+        if args[4:7]==['pages','project','list']:return json.dumps(self.pages)
+        if args[4:6]==['d1','create']:
             self.d1.append({'name':op.DB_NAME,'uuid':self.uuid});return 'Created'
-        if args[3:6]==['pages','project','create']:
+        if args[4:7]==['pages','project','create']:
             self.pages.append({'name':op.PAGES_NAME});return 'Created'
         raise AssertionError(args)
 
 class V8Tests(unittest.TestCase):
+    def setUp(self):
+        self.worker_check=mock.patch.object(core,'read_pinned_worker_candidate',return_value=b'approved-worker-mock')
+        self.worker_check.start()
+    def tearDown(self):
+        self.worker_check.stop()
     def args(self, root, mode='provision', **overrides):
         vals=dict(mode=mode,workers_subdomain='example-account',source=str(root/'source.zip'),
                   output=str(root/'candidate'),confirm_create='CREATE_NEW_EMPTY_STAGING_ONLY')
@@ -88,7 +93,7 @@ class V8Tests(unittest.TestCase):
             with mock.patch.object(core,'source_files',return_value=('release',{'version':'release'},{})),\
                  mock.patch.object(op,'verify_source_checksum',return_value={'tracked_files':157,'hashes_verified':156}):
                 with self.assertRaises(op.Stop):op.execute(self.args(root),fake)
-            self.assertFalse(any(x[3:6]==['pages','project','create'] for x in fake.calls))
+            self.assertFalse(any(x[4:7]==['pages','project','create'] for x in fake.calls))
         finally:d.cleanup()
     def test_09_valid_staging_creates_only_empty_d1_and_pages(self):
         d,root=self.make();fake=FakeWrangler()
@@ -102,8 +107,8 @@ class V8Tests(unittest.TestCase):
             self.assertFalse(r['cloud_worker_deployed'])
             self.assertFalse(r['secrets_configured'])
             self.assertTrue(build.called)
-            self.assertEqual(len([x for x in fake.calls if x[3:5]==['d1','create']]),1)
-            self.assertEqual(len([x for x in fake.calls if x[3:6]==['pages','project','create']]),1)
+            self.assertEqual(len([x for x in fake.calls if x[4:6]==['d1','create']]),1)
+            self.assertEqual(len([x for x in fake.calls if x[4:7]==['pages','project','create']]),1)
             self.assertFalse(any(any(term in y for term in ('deploy','secret','execute','delete')) for x in fake.calls for y in x))
             self.assertTrue((root/'candidate_provision_journal.json').is_file())
         finally:d.cleanup()

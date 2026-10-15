@@ -13,6 +13,9 @@ PROD_URL='https://' + PROD_HOST
 PROD_DB='ecb1ff1d-eb3d-4fe8-ba2c-8b7cc884bd84'
 PR_HEAD='69c0327a1158a2dfb757c5a3808f5f55495c0c37'
 PR_WORKER_SHA256='a7998eaeaa5aa648fb198e3f0b8da526f1dc1eb000b556a1ef47b49941e8b8e2'
+# This immutable source pin is not the Stage Worker to deploy after Gate 3-B.
+STAGING_WORKER_REVIEW_HEAD='f54b5f3629c19d2c47f0ca30521ff43fc9bee7f2'
+STAGING_WORKER_SHA256='48f14b3a94bec082b900ea8003a1d5491629b8e03299617e4284e3e46f83400f'
 PR_REGISTER_SHA256='d32ecc76ea59d38c69ec2d7cd68d665a893d9721c44b06110671154181041e84'
 PR_VERSION_SHA256='a38370a28088b4e4f6dd15e1d37ba10cf55b2b25d5f5031840b9c483d86990d7'
 REGISTER='汐東收發文登錄表.html'
@@ -26,6 +29,18 @@ BUILD_FIELDS=('version','cacheV','buildStamp','pageBuildStamp','rebuildStamp')
 
 
 def fail(message): raise ValueError(message)
+
+def read_pinned_worker_candidate(path):
+    # Never substitute the immutable, pre-Session-Version release ZIP Worker.
+    if not path:
+        fail('latest approved PR Worker file required; old immutable source Worker cannot be deployed')
+    candidate=pathlib.Path(path)
+    if not candidate.is_file() or candidate.is_symlink():
+        fail('approved Worker must be a regular, non-symlink local file')
+    raw=candidate.read_bytes()
+    if hashlib.sha256(raw).hexdigest()!=STAGING_WORKER_SHA256:
+        fail('BLOCKED: latest Session Version Worker SHA-256 mismatch')
+    return raw
 
 def origin(value,kind,demo=False):
     u=urlsplit(value or '')
@@ -106,6 +121,9 @@ def injection(text,worker):
 def build(args):
     source=pathlib.Path(args.source).resolve()
     old_build,version,files=source_files(source, enforce_pr_pins=not (args.demo and args.fixture_only))
+    # The original source ZIP stays immutable; only the isolated Staging Worker is upgraded.
+    staged_worker=(files[WORKER] if args.demo else
+                   read_pinned_worker_candidate(getattr(args,'worker_candidate',None)))
     if args.demo:
         site='https://tasun-stage-demo.pages.dev'
         worker='https://tasun-stage-demo.workers.dev'
@@ -157,7 +175,7 @@ def build(args):
     v['release']['stagingWorker']=worker
     v['release']['notFormalRelease']=True
     (st_site/'tasun-version.json').write_text(json.dumps(v,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
-    (st_worker/'tasun-worker-stable-v4.js').write_bytes(files[WORKER])
+    (st_worker/'tasun-worker-stable-v4.js').write_bytes(staged_worker)
     (st_worker/'schema_v4.sql').write_bytes(files[SCHEMA])
     (st_worker/'wrangler.staging.toml').write_text('''# R1157 STAGING-ONLY; never use the formal wrangler.toml
 name = "tasun-worker-staging"
@@ -175,6 +193,8 @@ database_id = "'''+d1+'''"
 ''',encoding='utf-8')
     state={'status':'DEMO_NOT_DEPLOYABLE' if args.demo else 'AWAITING_CLOUDFLARE_RESOURCE_VERIFICATION',
            'source_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),
+           'staging_worker_source_head':(None if args.demo else STAGING_WORKER_REVIEW_HEAD),
+           'staging_worker_sha256':hashlib.sha256(staged_worker).hexdigest(),
            'github_pr':102,'github_pr_head':PR_HEAD,
            'source_commit_pins_verified':not(args.demo and args.fixture_only),
            'source_version':old_build,'staging_build':stage_build,
@@ -191,7 +211,8 @@ database_id = "'''+d1+'''"
 
 if __name__=='__main__':
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--source',required=True,help='R1157 original full ZIP')
+    ap.add_argument('--source',required=True,help='R1157 original immutable full ZIP')
+    ap.add_argument('--worker-candidate',help='Latest approved PR #102 Session Version Worker JS file (verified SHA)')
     ap.add_argument('--output',required=True,help='EMPTY destination directory')
     ap.add_argument('--site');ap.add_argument('--worker');ap.add_argument('--d1')
     ap.add_argument('--confirm-independent',action='store_true')

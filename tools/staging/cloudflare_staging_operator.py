@@ -33,6 +33,9 @@ WORKER_NAME = 'tasun-worker-staging'
 PAGES_NAME = 'tasun-r1157-staging'
 # Windows uses npx.cmd; Unix-based CI/operators use the npx executable.
 NPX = 'npx.cmd' if os.name == 'nt' else 'npx'
+# Explicit exact version, never remote package installation with authenticated credentials.
+WRANGLER_PACKAGE = 'wrangler@4.151.0'
+WRANGLER_CLI_ARGS = [NPX, '--offline', '--no-install', WRANGLER_PACKAGE]
 UUID = re.compile(r'^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$')
 SUBDOMAIN = re.compile(r'^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$')
 
@@ -141,6 +144,14 @@ def execute(args: argparse.Namespace, runner: Callable = call) -> dict:
         raise Stop('unknown mode')
     if args.confirm_create != 'CREATE_NEW_EMPTY_STAGING_ONLY':
         raise Stop('explicit --confirm-create CREATE_NEW_EMPTY_STAGING_ONLY required')
+    # A provision-only utility must never create cloud resources and then discover it
+    # cannot produce a safe Session Version staging candidate.
+    import prepare_r1157_staging as core
+    candidate_path=getattr(args,'worker_candidate',None)
+    try:
+        core.read_pinned_worker_candidate(candidate_path)
+    except (ValueError,OSError) as exc:
+        raise Stop('Staging Worker candidate blocked before cloud access: '+str(exc)) from exc
     source = Path(args.source or '').resolve()
     if not source.is_file() or source.suffix.lower() != '.zip':
         raise Stop('source ZIP must exist and have .zip extension')
@@ -154,7 +165,6 @@ def execute(args: argparse.Namespace, runner: Callable = call) -> dict:
         raise Stop('existing provision journal; refusing to create additional resources')
     # The V7 generator is the source pin authority. Pre-flight the entire candidate
     # BEFORE touching any Cloudflare resources with demo names, but *real* source pins.
-    import prepare_r1157_staging as core
     build, version, files = core.source_files(source, enforce_pr_pins=True)
     integrity = verify_source_checksum(files)
     if core.PR_HEAD != PR_COMMIT:
@@ -162,16 +172,16 @@ def execute(args: argparse.Namespace, runner: Callable = call) -> dict:
     if build != version['version']:
         raise Stop('version file inconsistent')
     # Authentication check and the two no-collision checks precede any write.
-    runner([NPX, '--yes', 'wrangler', 'whoami'])
-    d1_before = resources_from_json(runner([NPX,'--yes','wrangler','d1','list','--json']), 'D1')
-    pages_before = resources_from_json(runner([NPX,'--yes','wrangler','pages','project','list','--json']), 'Pages')
+    runner(WRANGLER_CLI_ARGS + [ 'whoami'])
+    d1_before = resources_from_json(runner(WRANGLER_CLI_ARGS + ['d1','list','--json']), 'D1')
+    pages_before = resources_from_json(runner(WRANGLER_CLI_ARGS + ['pages','project','list','--json']), 'Pages')
     if any(x.get('name') == DB_NAME for x in d1_before):
         raise Stop('staging D1 name already exists; NOT reusing/deleting it; contact operator for reconciliation')
     if any(pages_project_name(x) == PAGES_NAME for x in pages_before):
         raise Stop('staging Pages name already exists; NOT overwriting it')
     # A new resource is intentionally created only after a fully verified source ZIP.
-    runner([NPX,'--yes','wrangler','d1','create',DB_NAME,'--location','apac'])
-    after = resources_from_json(runner([NPX,'--yes','wrangler','d1','list','--json']), 'D1')
+    runner(WRANGLER_CLI_ARGS + ['d1','create',DB_NAME,'--location','apac'])
+    after = resources_from_json(runner(WRANGLER_CLI_ARGS + ['d1','list','--json']), 'D1')
     fresh_uuid = find_new_d1(after)
     if any(str(x.get('uuid') or x.get('id') or '').lower() == fresh_uuid for x in d1_before):
         raise Stop('staging D1 ID existed before create; refusing to reuse')
@@ -179,13 +189,14 @@ def execute(args: argparse.Namespace, runner: Callable = call) -> dict:
     journal.write_text(json.dumps({'state':'D1_CREATED_PAGES_PENDING','d1_name':DB_NAME,
                                    'd1_uuid':fresh_uuid,'source_commit':PR_COMMIT,
                                    'no_secret_stored':True},ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
-    runner([NPX,'--yes','wrangler','pages','project','create',PAGES_NAME,'--production-branch','staging'])
-    pages_after = resources_from_json(runner([NPX,'--yes','wrangler','pages','project','list','--json']), 'Pages')
+    runner(WRANGLER_CLI_ARGS + ['pages','project','create',PAGES_NAME,'--production-branch','staging'])
+    pages_after = resources_from_json(runner(WRANGLER_CLI_ARGS + ['pages','project','list','--json']), 'Pages')
     if sum(pages_project_name(x) == PAGES_NAME for x in pages_after) != 1:
         raise Stop('Pages project not uniquely discoverable; do not attempt deployment')
     # Generate only the offline candidate staging config and verify it.
     argv = argparse.Namespace(source=str(source),output=str(out),site=site,worker=worker,
-                              d1=fresh_uuid,confirm_independent=True,demo=False,fixture_only=False)
+                              d1=fresh_uuid,confirm_independent=True,demo=False,fixture_only=False,
+                              worker_candidate=candidate_path)
     state = core.build(argv)
     import verify_r1157_staging as verify
     verified = verify.verify(out)
@@ -206,7 +217,8 @@ def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--mode',choices=['plan','provision'],default='plan')
     ap.add_argument('--workers-subdomain',required=True,help='Real account workers.dev subdomain, not an entire URL')
-    ap.add_argument('--source',help='GitHub ZIP for PR #102 exact commit')
+    ap.add_argument('--source',help='R1157 immutable source ZIP')
+    ap.add_argument('--worker-candidate',help='PR #102 approved Session Version Worker JS, pinned by SHA')
     ap.add_argument('--output',help='New empty output directory')
     ap.add_argument('--confirm-create',default='',help='Exact string CREATE_NEW_EMPTY_STAGING_ONLY required for writes')
     args=ap.parse_args()

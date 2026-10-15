@@ -1,4 +1,4 @@
-﻿import json
+import json
 import unittest
 import argparse
 import tempfile
@@ -10,6 +10,11 @@ import verify_r1157_staging as verify
 from test_operator_v8 import FakeWrangler
 
 class PagesJSONRegression(unittest.TestCase):
+    def setUp(self):
+        self.worker_check=mock.patch.object(core,'read_pinned_worker_candidate',return_value=b'approved-worker-mock')
+        self.worker_check.start()
+    def tearDown(self):
+        self.worker_check.stop()
     def check_name(self, payload):
         records = op.resources_from_json(
             json.dumps(payload), 'Pages'
@@ -76,7 +81,7 @@ class PagesJSONRegression(unittest.TestCase):
         class DisplayNameWrangler(FakeWrangler):
             def __call__(self, args, cwd=None):
                 answer = super().__call__(args,cwd)
-                if args[3:6] == ['pages','project','create']:
+                if args[4:7] == ['pages','project','create']:
                     self.pages[-1] = {'Project Name':op.PAGES_NAME}
                 return answer
         with tempfile.TemporaryDirectory() as d:
