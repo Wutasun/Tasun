@@ -1,0 +1,7 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const root=path.resolve(__dirname,'..'),register=fs.readFileSync(path.join(root,'汐東收發文登錄表.html'),'utf8'),detail=fs.readFileSync(path.join(root,'汐東收發文明細表.html'),'utf8');
+test('R1157 session save verifies actual persisted generation',()=>{const s=register.slice(register.indexOf('async function r1061CommitTransportFirst('),register.indexOf('function r1058SetSaveButtonBusy('));assert.match(s,/primaryState\.sessionFallback===true/);assert.match(s,/readback\.raw===canonical/);assert.match(s,/r1063VerifySavedIdentity\(readback\.rows,target\)/);assert.match(s,/session-primary-unavailable/);});
+test('R1157 detail merges unconfirmed cross-page save into canonical source',()=>{assert.ok(detail.includes('r1151PendingSave=r1061ReadSaveTransport()'));assert.ok(detail.includes('r1061MergeSaveTransport((Array.isArray(rows)?rows:[]).concat(r774CollectKnownLocalRows())'));});
+test('R1157 visible render cannot discard unverified transport',()=>{const a=detail.indexOf('function r1083FinalizeTransportAfterVisibleRender('),e=detail.indexOf('function r1058ReadNavigationEnvelope(');assert.ok(a>=0&&e>a);assert.ok(!detail.slice(a,e).includes('r1061ConsumeSaveTransport('));});
+test('R1157 Readback is the only terminal consuming pending transport',()=>{assert.ok(detail.includes('r1061ConsumeSaveTransport(pending,"r1151-verified-readback")'));assert.ok(detail.includes('r1092ClearLocalMutation("verified-readback")'));});

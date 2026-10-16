@@ -32,7 +32,7 @@ const SIZE_KEYS=["bytes","pageBytes","sizeBytes","artifactBytes"];
 const VERIFY_ONLY=process.argv.includes("--verify-only");
 const GENERATED=new Set([VERSION_FILE,REBUILD_FILE,REBUILD_STAMP_FILE]);
 const FORMAL_EXT=new Set([".html",".htm"]);
-const CORE_FILES=new Set(["tasun-version-loader.js","tasun-core.js","tasun-boot.js","tasun-auth-v4.js","tasun-cloudwrap-v4.js","tasun-guard-v5.js","tasun-global-core.js","tasun-resources.json","worker.js","publish-version_tasun_project_autoscan.mjs",WORKFLOW_FILE]);
+const CORE_FILES=new Set(["tasun-version-loader.js","tasun-core.js","tasun-boot.js","tasun-auth-v4.js","tasun-cloudwrap-v4.js","tasun-guard-v5.js","tasun-global-core.js","tasun-resources.json","worker.js","tasun-api/tasun-worker-stable-v4.js","publish-version_tasun_project_autoscan.mjs",WORKFLOW_FILE]);
 
 function posix(p){return String(p).replace(/\\/g,"/").split(path.sep).join("/");}
 function isPublicPagePath(rel){const p=posix(n(rel));return !p.split("/").includes("tasun-api");}
