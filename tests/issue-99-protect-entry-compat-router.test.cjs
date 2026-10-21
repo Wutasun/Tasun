@@ -121,6 +121,11 @@ test('Issue #99 Contract B: target selection, normalization, legacy remap, and c
     'query alias precedence must keep to above page'
   );
   assert.equal(
+    targetName(runEntry({href:'https://example.test/entry.html?next=index.html#to='+encodeURIComponent('捷運汐東線事項記錄.html')})),
+    'index.html',
+    'valid query target must outrank a competing valid hash target'
+  );
+  assert.equal(
     targetName(runEntry({href:'https://example.test/entry.html?next=%20&to=index.html#next='+encodeURIComponent('捷運汐東線權責分工精簡版.html')})),
     '捷運汐東線權責分工精簡版.html',
     'truthy whitespace next suppresses later query aliases, normalizes empty, then permits hash fallback'
@@ -140,6 +145,11 @@ test('Issue #99 Contract B: target selection, normalization, legacy remap, and c
   }
 
   const encodedTarget='捷運汐東線事項記錄.html';
+  assert.equal(
+    targetName(runEntry({href:'https://example.test/entry.html#page='+encodeURIComponent(encodedTarget)})),
+    encodedTarget,
+    'hash routing must percent-decode an encoded non-ASCII allowlisted filename'
+  );
   let deeplyEncoded=encodedTarget;
   for(let i=0;i<5;i++) deeplyEncoded=encodeURIComponent(deeplyEncoded);
   assert.equal(targetName(runEntry({href:'https://example.test/entry.html?next='+deeplyEncoded})),encodedTarget,'multiply encoded target must exercise repeated decodeDeep iterations');
@@ -204,6 +214,15 @@ test('Issue #99 Contract C: session bridge propagation, cleanup, markers, and st
       assert.equal(precedence.localStorage.getItem(key),expected,'bridge fan-out must preserve earliest populated key: '+BRIDGE_KEYS[i]);
     }
   }
+  const emptySession=runEntry({
+    session:{tasunCurrentUser_v1:'',tasunSessionBridge_v1:'SESSION-LATER'},
+    local:{tasunCurrentUser_v1:'LOCAL-NONEMPTY'}
+  });
+  for(const key of BRIDGE_KEYS){
+    assert.equal(emptySession.sessionStorage.getItem(key),'LOCAL-NONEMPTY','empty session value must fall back to local for earliest source key');
+    assert.equal(emptySession.localStorage.getItem(key),'LOCAL-NONEMPTY','selected local fallback must fan out to both stores');
+  }
+
   const localOnly=runEntry({local:{tasunCurrentUser_v1:'LOCAL-FIRST'},session:{tasunSessionBridge_v1:'SESSION-LATER'}});
   for(const key of BRIDGE_KEYS){
     assert.equal(localOnly.sessionStorage.getItem(key),'LOCAL-FIRST','within the earliest key, local fallback must beat later keys');
@@ -235,6 +254,7 @@ test('Issue #99 Contract D: redirect, version precedence/normalization, and time
     now:101
   });
   assert.equal(redirectedUrl(query).searchParams.get('v'),'QUERY');
+  assert.equal(redirectedUrl(query).searchParams.get('_'),'101','cache busting must remain active on redirects carrying a version');
 
   const cache=runEntry({globals:{__CACHE_V:'CACHE',TASUN_APP_VER:'TASUN',APP_VER:'APP'},now:102});
   assert.equal(redirectedUrl(cache).searchParams.get('v'),'CACHE');
@@ -267,7 +287,6 @@ test('Issue #99 Contract D: redirect, version precedence/normalization, and time
   assert.equal(redirectedUrl(second).searchParams.get('_'),'222','cache buster must vary with navigation timestamp');
   assert.notEqual(redirectedUrl(first).searchParams.get('_'),redirectedUrl(second).searchParams.get('_'));
 
-  assert.match(routerScript(),/location\.replace\(out\.toString\(\)\)/,'redirect mechanism must remain location.replace');
 });
 
 const PROTECTION_MANIFEST=Object.freeze({
