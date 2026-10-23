@@ -36,7 +36,7 @@ export default {
         if (pass_hash !== user.pass_hash) return json({ ok:false, error:"BAD_CRED" }, 401, cors);
 
         const auth = await getAuth(env, username);
-        const role = (auth?.role || user.role || "read");
+        const role = permittedRole(auth?.role || user.role);
 
         const exp = Date.now() + 8 * 60 * 60 * 1000; // 8 hours browser session token
         const token = await signToken(env, { u: username, r: role, exp });
@@ -141,38 +141,74 @@ export default {
 
       if (path === "/api/tasun/merge") {
         if (request.method !== "POST") return json({ ok:false, error:"METHOD" }, 405, cors);
-        const body = await request.json().catch(() => ({}));
-        const resourceKey = String(body.resourceKey || "").trim();
-        const payload = body.payload || {};
-        const db = Array.isArray(payload.db) ? payload.db : [];
-        if (!resourceKey) return json({ ok:false, error:"BAD_INPUT" }, 400, cors);
 
-        let count = 0;
+        // Re-evaluate the effective server-side role and enabled status on each
+        // write: the signed login token may predate a role change or revocation.
+        const user = await getUser(env, me.u);
+        if (!user || !user.enabled) return json({ ok:false, error:"FORBIDDEN" }, 403, cors);
+        const auth = await getAuth(env, me.u);
+        const role = permittedRole(auth?.role || user.role);
+        if (role !== "write" && role !== "admin") {
+          return json({ ok:false, error:"FORBIDDEN" }, 403, cors);
+        }
+
+        const body = await request.json().catch(() => null);
+        if (!isRecord(body)) return json({ ok:false, error:"BAD_INPUT" }, 400, cors);
+        const resourceKey = typeof body.resourceKey === "string" ? body.resourceKey.trim() : "";
+        const payload = body.payload;
+        if (!resourceKey || !isRecord(payload) || !Array.isArray(payload.db)) {
+          return json({ ok:false, error:"BAD_INPUT" }, 400, cors);
+        }
+        const db = payload.db;
+        if (db.length > 500) return json({ ok:false, error:"BAD_INPUT" }, 400, cors);
+        if (!db.length) return json({ ok:true, count:0 }, 200, cors);
+
+        // Entire batch is checked before any INSERT or UPDATE is attempted.
+        const normalized = [];
+        const seen = new Set();
         const now = Date.now();
-
-        // Transaction-like batch
         for (const item of db) {
-          if (!item) continue;
-          const uid = String(item.uid || "").trim();
-          if (!uid) continue;
-
-          const updatedAt = Number(item.updatedAt || now);
-          const rev = Number(item.rev || 1);
-          const deleted = item.deleted ? 1 : 0;
-
-          // store "data" as JSON without control fields
+          if (!isRecord(item) || typeof item.uid !== "string") {
+            return json({ ok:false, error:"BAD_INPUT" }, 400, cors);
+          }
+          const uid = item.uid.trim();
+          if (!uid || seen.has(uid)) return json({ ok:false, error:"BAD_INPUT" }, 400, cors);
+          seen.add(uid);
+          if (item.deleted !== undefined && item.deleted !== true && item.deleted !== false && item.deleted !== 0 && item.deleted !== 1) {
+            return json({ ok:false, error:"BAD_INPUT" }, 400, cors);
+          }
+          const deleted = item.deleted === true || item.deleted === 1 ? 1 : 0;
+          if (deleted && role !== "admin") return json({ ok:false, error:"FORBIDDEN" }, 403, cors);
+          const updatedAt = item.updatedAt == null ? now : Number(item.updatedAt);
+          const rev = item.rev == null ? 1 : Number(item.rev);
+          if (!Number.isSafeInteger(updatedAt) || updatedAt <= 0 || !Number.isSafeInteger(rev) || rev <= 0) {
+            return json({ ok:false, error:"BAD_INPUT" }, 400, cors);
+          }
           const clone = { ...item };
           delete clone.resourceKey;
-          // keep uid in data for client convenience
-          // strip control fields if present
           delete clone.updatedAt;
           delete clone.rev;
           delete clone.deleted;
+          normalized.push({ uid, deleted, updatedAt, rev, data:JSON.stringify(clone) });
+        }
 
-          const data = JSON.stringify(clone);
+        // No non-admin mutation of a previously deleted row is permitted.
+        // Restoration of tombstones is not granted by the available G1 summary;
+        // fail closed for everyone until separately authorized.
+        for (const item of normalized) {
+          const prior = await env.DB.prepare(
+            "SELECT deleted FROM tasun_rows WHERE resourceKey=? AND uid=?"
+          ).bind(resourceKey, item.uid).first();
+          if (prior && Number(prior.deleted) === 1) {
+            if (item.deleted !== 1) return json({ ok:false, error:"FORBIDDEN" }, 403, cors);
+            if (role !== "admin") return json({ ok:false, error:"FORBIDDEN" }, 403, cors);
+          }
+        }
 
-          // Upsert with conflict check: only overwrite when incoming is newer OR rev higher
-          await env.DB.prepare(`
+        // Cloudflare D1 batch is transactional: if a statement fails, the batch
+        // is rolled back rather than allowing a partially persisted merge.
+        // Preserve the existing API shape and newer-timestamp/revision policy.
+        const statements = normalized.map(item => env.DB.prepare(`
             INSERT INTO tasun_rows(resourceKey, uid, data, updatedAt, rev, deleted)
             VALUES(?, ?, ?, ?, ?, ?)
             ON CONFLICT(resourceKey, uid) DO UPDATE SET
@@ -196,12 +232,9 @@ export default {
                 WHEN excluded.updatedAt = tasun_rows.updatedAt AND excluded.rev >= tasun_rows.rev THEN excluded.deleted
                 ELSE tasun_rows.deleted
               END
-          `).bind(resourceKey, uid, data, updatedAt, rev, deleted).run();
-
-          count++;
-        }
-
-        return json({ ok:true, count }, 200, cors);
+        `).bind(resourceKey, item.uid, item.data, item.updatedAt, item.rev, item.deleted));
+        await env.DB.batch(statements);
+        return json({ ok:true, count:normalized.length }, 200, cors);
       }
 
       return json({ ok:false, error:"NOT_FOUND", path }, 404, cors);
@@ -210,6 +243,17 @@ export default {
     }
   }
 };
+
+function isRecord(value){
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function permittedRole(value){
+  const role = String(value || "").trim().toLowerCase();
+  return role === "admin" || role === "write" ? role : "read";
+}
+function validAuthSecret(env){
+  return !!env && typeof env.AUTH_SECRET === "string" && env.AUTH_SECRET.length >= 32 && env.AUTH_SECRET.trim().length >= 32;
+}
 
 function json(obj, status=200, headers={}) {
   const h = new Headers(headers);
@@ -233,21 +277,22 @@ function corsHeaders(request, env){
 
 // ---- Auth helpers (simple HMAC token) ----
 async function signToken(env, payload){
+  if (!validAuthSecret(env)) throw new Error("AUTH_CONFIGURATION");
   const header = { alg:"HS256", typ:"TJWT" };
   const h = b64url(JSON.stringify(header));
   const p = b64url(JSON.stringify(payload));
   const msg = h + "." + p;
-  const sig = await hmacSha256B64Url(env.AUTH_SECRET || "dev-secret", msg);
+  const sig = await hmacSha256B64Url(env.AUTH_SECRET, msg);
   return msg + "." + sig;
 }
 
 async function verifyToken(env, token){
-  if (!token || typeof token !== "string") return null;
+  if (!validAuthSecret(env) || !token || typeof token !== "string") return null;
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const [h,p,sig] = parts;
   const msg = h + "." + p;
-  const expect = await hmacSha256B64Url(env.AUTH_SECRET || "dev-secret", msg);
+  const expect = await hmacSha256B64Url(env.AUTH_SECRET, msg);
   if (sig !== expect) return null;
   let payload = null;
   try { payload = JSON.parse(atobUrl(p)); } catch(e) { return null; }
