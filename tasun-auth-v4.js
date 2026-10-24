@@ -206,8 +206,15 @@
 
   function setCurrent(user){ return setSessionState(user, ''); }
 
+  function clearLogoutAuthStorage(){
+    // Only authenticated session data: preserve application records and page settings.
+    var keys = ['tasunBearerToken_v1','tasunCloudToken_v1','tasunCloudToken','tasunCloudToken_v1__index','tasunCloudToken_v1__auth-table','tasunCloudToken_v1__sxdh-notes','tasun_token','tasunToken','tasunWorkerToken','tasun_auth_token','tasun_session_token','tasunAccessToken_v1','tasunAuthToken_v1','tasunSessionToken_v1','authToken','access_token','token','x-api-key','tasunApiKey_v1'].concat(['tasunCurrentUser_v1','tasunCurrentUser_v2','tasunSession_v1','tasunSessionBridge_v1','tasunSessionLogin_v2','tasunAuthSession_v1','tasunIndexUser_v1','tasunIndexSession_v1','tasunIndexSessionAuthed_v2','tasunIndexLoginVerifiedAt_v1','tasunIndexLoginVerifiedUser_v1','tasunSso_v1','tasunSso_v2','tasunSsoTab_v1']);
+    keys.forEach(removeBoth);
+    clearLegacyPasswordCache();
+  }
   function logout(){
     clearSessionState();
+    clearLogoutAuthStorage();
     try{
       var apiBase=norm(global.TASUN_API_BASE||'');
       if(apiBase){
