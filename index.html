@@ -3604,9 +3604,59 @@ body:not(.locked) #loginOverlay{display:none!important;}
         }catch(e){ return false; }
       }
       function tryRestoreLogin(){
-        // index.html 必須先顯示登入表，不能靠既有 cookie / session / 廣播自動跳過登入。
-        // 子頁若需要 SSO，仍由子頁自己的守門程式處理。
-        return false;
+        // R1156 isolated fix: R739 manager -> index, single-use same-tab handoff ONLY.
+        // A URL flag alone, a persisted identity alone, or a stored Token is insufficient.
+        const markerKey = 'tasun_manager_home_return_r739';
+        try{
+          const url = new URL(location.href);
+          if(url.searchParams.get('from') !== 'manager-home-r739' ||
+             url.searchParams.get('_resumeSession') !== '1' ||
+             url.searchParams.has('_forceLogin')) return false;
+          // This is the R739 location.replace fallback from the trusted manager page.
+          const source = new URL(document.referrer || '', location.href);
+          const filename = decodeURIComponent(source.pathname.split('/').pop() || '');
+          if(!document.referrer || source.origin !== location.origin ||
+             filename !== '汐東工程管理表.html') return false;
+          const raw = sessionStorage.getItem(markerKey);
+          // Consume before validating, so malformed or stale handoffs cannot be replayed.
+          try{ sessionStorage.removeItem(markerKey); }catch(_e){}
+          try{ localStorage.removeItem(markerKey); }catch(_e){}
+          if(!raw) return false;
+          const mark = JSON.parse(raw);
+          const now = Date.now();
+          const at = Number(mark && mark.at);
+          const requestAt = Number(url.searchParams.get('_rt'));
+          if(!mark || mark.ok !== true ||
+             mark.from !== '汐東工程管理表.html' || mark.to !== 'index.html' ||
+             mark.mode !== 'history-restore' ||
+             !Number.isFinite(at) || !Number.isFinite(requestAt) ||
+             at <= 0 || requestAt <= 0 ||
+             now < at || now - at > 60000 ||
+             Math.abs(requestAt - at) > 15000 || now - requestAt > 60000) return false;
+          // R739 preserves the current session and verification fields before returning.
+          const user = String(mark.user || '').trim();
+          const role = String(mark.role || '').trim().toLowerCase();
+          const verifiedAt = Number(sessionStorage.getItem('tasunIndexLoginVerifiedAt_v1'));
+          const verifiedUser = String(sessionStorage.getItem('tasunIndexLoginVerifiedUser_v1') || '').trim();
+          const sess = getSession();
+          if(!user || !['admin','write','read'].includes(role) ||
+             !sess || sess.user !== user || String(sess.role || '').toLowerCase() !== role ||
+             verifiedUser !== user || !Number.isFinite(verifiedAt) ||
+             verifiedAt <= 0 || verifiedAt > now || now - verifiedAt > 60000 ||
+             sessionStorage.getItem(INDEX_SESSION_KEY) !== '1' ||
+             sessionStorage.getItem(CHILD_INDEX_SESSION_KEY) !== '1') return false;
+          const matched = AUTH_TABLE.find(function(row){
+            return String(row.username || '').trim() === user;
+          });
+          if(!matched || String(matched.level || matched.role || '').toLowerCase() !== role) return false;
+          applyUser(Object.assign({}, matched, {level:role}), {skipBroadcast:true});
+          // Strip replayable routing flags after consuming the one-time handoff.
+          try{
+            ['_resumeSession','_rt'].forEach(function(key){ url.searchParams.delete(key); });
+            history.replaceState(null, '', url.toString());
+          }catch(_e){}
+          return true;
+        }catch(_e){ return false; }
       }
       function showLogin(msg){
         try{ clearSession({ silent:true }); }catch(e){}
@@ -4353,7 +4403,7 @@ body:not(.locked) #loginOverlay{display:none!important;}
       buildMainButtonsDOM();
       updateReleaseButtonVisibility();
       bindStableCalibrator();
-      showLogin();
+      if(!tryRestoreLogin()) showLogin();
       if(zenImg) zenImg.addEventListener('load', () => { scheduleAll(); }, { once:false });
       requestAnimationFrame(() => { document.body.classList.remove('booting'); scheduleAll(); runStableCalibrator('raf'); onFontsReady(() => { scheduleAll(); runStableCalibrator('fonts'); }); setTimeout(() => { scheduleAll(); runStableCalibrator('t120'); }, 120); setTimeout(() => { scheduleAll(); runStableCalibrator('t320'); }, 320); });
 
