@@ -47,7 +47,18 @@ export default {
       // ---- Require auth for below endpoints ----
       const session = await requireAuth(request, env);
       if (!session.ok) return json({ ok:false, error: session.error }, 401, cors);
-      const me = session.me;
+
+      // A valid signed token authenticates an identity, not permanent access.
+      // Recheck disablement and role on EVERY protected request. Use the lower
+      // permission of the signed token and current account role, so promotion
+      // cannot silently escalate an already issued read-only token.
+      const currentUser = await getUser(env, session.me.u);
+      if (!currentUser || Number(currentUser.enabled) !== 1) {
+        return json({ ok:false, error:"FORBIDDEN" }, 403, cors);
+      }
+      const currentAuth = await getAuth(env, session.me.u);
+      const currentRole = permittedRole(currentAuth?.role || currentUser.role);
+      const me = { ...session.me, r: intersectRoles(session.me.r, currentRole) };
 
       if (path === "/api/tasun/me") {
         return json({ ok:true, user: me.u, role: me.r, exp: me.exp }, 200, cors);
@@ -142,12 +153,8 @@ export default {
       if (path === "/api/tasun/merge") {
         if (request.method !== "POST") return json({ ok:false, error:"METHOD" }, 405, cors);
 
-        // Re-evaluate the effective server-side role and enabled status on each
-        // write: the signed login token may predate a role change or revocation.
-        const user = await getUser(env, me.u);
-        if (!user || !user.enabled) return json({ ok:false, error:"FORBIDDEN" }, 403, cors);
-        const auth = await getAuth(env, me.u);
-        const role = permittedRole(auth?.role || user.role);
+        // The same fresh, non-escalating role rule applies to every operation.
+        const role = me.r;
         if (role !== "write" && role !== "admin") {
           return json({ ok:false, error:"FORBIDDEN" }, 403, cors);
         }
@@ -250,6 +257,12 @@ function isRecord(value){
 function permittedRole(value){
   const role = String(value || "").trim().toLowerCase();
   return role === "admin" || role === "write" ? role : "read";
+}
+function intersectRoles(tokenRole, currentRole){
+  const levels = { read:0, write:1, admin:2 };
+  const token = permittedRole(tokenRole);
+  const current = permittedRole(currentRole);
+  return levels[token] <= levels[current] ? token : current;
 }
 function validAuthSecret(env){
   return !!env && typeof env.AUTH_SECRET === "string" && env.AUTH_SECRET.length >= 32 && env.AUTH_SECRET.trim().length >= 32;
