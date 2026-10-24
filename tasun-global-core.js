@@ -6,6 +6,20 @@
   var INDEX_SESSION_KEY = 'tasunIndexSession_v1';
   var SESSION_BRIDGE_KEY = 'tasunSessionBridge_v1';
   var LAST_PASS_KEY = 'tasunLastLoginPass_v1';
+  function clearLegacyPasswordCache(){
+    var prefix='tasunLastLoginPass_v1';
+    for(var j=0;j<2;j++){
+      try{
+        var s=j===0?global.sessionStorage:global.localStorage;
+        for(var i=s.length-1;i>=0;i--){
+          var k=s.key(i);
+          if(k===prefix||(k&&k.indexOf(prefix+'__')===0))s.removeItem(k);
+        }
+      }catch(_e){}
+    }
+  }
+  clearLegacyPasswordCache();
+
   var ROUTES_KEY = 'tasunNavRoutes_v1';
   var BUTTONS_KEY = 'tasunNavButtons_v1';
   var AUTH_KEY = 'tasunAuthTable_v1';
@@ -63,7 +77,7 @@
     if(row.token) mirrorToken(row.token);
     return true;
   }
-  function setLastPass(pass){ pass = norm(pass); if(pass){ writeSession(LAST_PASS_KEY, pass); writeLocal(LAST_PASS_KEY, pass); } }
+  function setLastPass(_pass){ clearLegacyPasswordCache(); } // compatibility: never persist credentials
   function bridgeAuth(user, token, pass){
     var row = normalizeUserLike(user || getCurrentUser(), 'bridge');
     if(!row) return false;

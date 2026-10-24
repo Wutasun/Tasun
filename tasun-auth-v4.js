@@ -11,6 +11,20 @@
   var INDEX_SESSION_KEY='tasunIndexSession_v1';
   var NEXT_KEY='tasun_next_path_v1';
   var LAST_PASS_KEY='tasunLastLoginPass_v1';
+  function clearLegacyPasswordCache(){
+    var prefix='tasunLastLoginPass_v1';
+    for(var j=0;j<2;j++){
+      try{
+        var s=j===0?global.sessionStorage:global.localStorage;
+        for(var i=s.length-1;i>=0;i--){
+          var k=s.key(i);
+          if(k===prefix||(k&&k.indexOf(prefix+'__')===0))s.removeItem(k);
+        }
+      }catch(_e){}
+    }
+  }
+  clearLegacyPasswordCache();
+
   var INDEX_VERIFIED_AT_KEY='tasunIndexLoginVerifiedAt_v1';
   var INDEX_VERIFIED_USER_KEY='tasunIndexLoginVerifiedUser_v1';
   var TOKEN_KEYS=[
@@ -80,7 +94,7 @@
       write(sessionStorage,INDEX_VERIFIED_AT_KEY,String(Date.now())); write(localStorage,INDEX_VERIFIED_AT_KEY,String(Date.now()));
       write(sessionStorage,INDEX_VERIFIED_USER_KEY,row.user); write(localStorage,INDEX_VERIFIED_USER_KEY,row.user);
       mirrorToken(row.token);
-      if(keepPass){ write(sessionStorage,LAST_PASS_KEY,keepPass); write(localStorage,LAST_PASS_KEY,keepPass); }
+      clearLegacyPasswordCache(); // API signature retained, but keepPass is never stored
     }else{
       [CURRENT_KEY,SESSION_KEY,SESSION_BRIDGE_KEY,INDEX_SESSION_KEY,LAST_PASS_KEY,INDEX_VERIFIED_AT_KEY,INDEX_VERIFIED_USER_KEY].forEach(removeBoth);
       mirrorToken('');
