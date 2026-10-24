@@ -24,6 +24,9 @@ export default {
 
       if (path === "/api/tasun/login") {
         if (request.method !== "POST") return json({ ok:false, error:"METHOD" }, 405, cors);
+        // Never substitute the legacy SESSION_SECRET for AUTH_SECRET.
+        // Fail before any D1 credential lookup, without exposing binding values.
+        if (!validAuthSecret(env)) return json({ ok:false, error:"AUTH_CONFIGURATION" }, 503, cors);
         const body = await request.json().catch(() => ({}));
         const username = String(body.username || "").trim();
         const password = String(body.password || "");
