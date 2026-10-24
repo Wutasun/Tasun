@@ -2,6 +2,22 @@
 <!-- TASUN_REBUILD_STAMP:index_v20260420_goldzen_authority_r41 2026-04-20 11:25:00 (github-pages-html-network-refresh-on-open-single-global-entry-triple-check-version-rebuild-remote-stabilizer-authority-clean) -->
 <html lang="zh-Hant">
 <head>
+<script id="tasun-legacy-password-cache-clean-v1">
+(function(){
+  'use strict';
+  // Delete only historical password-cache keys, not user, session, token, or business data.
+  var prefix = 'tasunLastLoginPass_v1';
+  for(var j = 0; j < 2; j++){
+    try{
+      var store = j === 0 ? window.sessionStorage : window.localStorage;
+      for(var i = store.length - 1; i >= 0; i--){
+        var key = store.key(i);
+        if(key === prefix || (key && key.indexOf(prefix + '__') === 0)) store.removeItem(key);
+      }
+    }catch(_ignored){}
+  }
+})();
+</script>
   <!-- Tasun v5 FINAL：版本/快取由 tasun-version.json 控制；腳本改為動態帶 v 載入 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -3056,13 +3072,32 @@ main.hero,
         }catch(_e){}
         broadcastAuthState('login', { user: user.username, role: record.role });
       }
+      function clearLogoutAuthStorage(){
+        // Logout-only: remove known authentication state, never business rows/settings.
+        const keys = ['tasunBearerToken_v1','tasunCloudToken_v1','tasunCloudToken','tasunCloudToken_v1__index','tasunCloudToken_v1__auth-table','tasunCloudToken_v1__sxdh-notes','tasun_token','tasunToken','tasunWorkerToken','tasun_auth_token','tasun_session_token','tasunAccessToken_v1','tasunAuthToken_v1','tasunSessionToken_v1','authToken','access_token','token','x-api-key','tasunApiKey_v1'].concat(['tasunCurrentUser_v1','tasunCurrentUser_v2','tasunSession_v1','tasunSessionBridge_v1','tasunSessionLogin_v2','tasunAuthSession_v1','tasunIndexUser_v1','tasunIndexSession_v1','tasunIndexSessionAuthed_v2','tasunIndexLoginVerifiedAt_v1','tasunIndexLoginVerifiedUser_v1','tasunSso_v1','tasunSso_v2','tasunSsoTab_v1']);
+        for(const key of keys){
+          try{ sessionStorage.removeItem(key); }catch(_e){}
+          try{ localStorage.removeItem(key); }catch(_e){}
+        }
+        // Include any per-user legacy password aliases created before this fix.
+        for(const store of [sessionStorage, localStorage]){
+          try{
+            for(let i=store.length-1;i>=0;i--){
+              const key=store.key(i);
+              if(key==='tasunLastLoginPass_v1' || (key && key.startsWith('tasunLastLoginPass_v1__'))){
+                store.removeItem(key);
+              }
+            }
+          }catch(_e){}
+        }
+      }
       function clearSession(opts){
         const silent = !!(opts && opts.silent);
         try{ sessionStorage.removeItem(SESSION_KEY); sessionStorage.removeItem(INDEX_SESSION_KEY); sessionStorage.removeItem(CHILD_INDEX_SESSION_KEY); sessionStorage.removeItem(CURRENT_KEY); }catch(e){}
         try{ localStorage.removeItem(CHILD_INDEX_SESSION_KEY); }catch(_e){}
         clearCookieSession();
         clearSSO();
-        if(!silent) broadcastAuthState('logout', null);
+        if(!silent){ clearLogoutAuthStorage(); broadcastAuthState('logout', null); }
       }
       function getSession(){
         const obj = safeJsonParse(sessionStorage.getItem(SESSION_KEY) || 'null', null);
@@ -3207,18 +3242,7 @@ main.hero,
             }
           }
 
-          var pass = '';
-          try{
-            pass = String(sessionStorage.getItem('tasunLastLoginPass_v1__' + username) || localStorage.getItem('tasunLastLoginPass_v1__' + username) || sessionStorage.getItem('tasunLastLoginPass_v1') || localStorage.getItem('tasunLastLoginPass_v1') || '').trim();
-          }catch(_e){}
-          if(pass){
-            try{ sessionStorage.setItem('tasunLastLoginPass_v1', pass); }catch(_e){}
-            try{ localStorage.setItem('tasunLastLoginPass_v1', pass); }catch(_e){}
-            if(username){
-              try{ sessionStorage.setItem('tasunLastLoginPass_v1__' + username, pass); }catch(_e){}
-              try{ localStorage.setItem('tasunLastLoginPass_v1__' + username, pass); }catch(_e){}
-            }
-          }
+          // Keep existing user/session/token bridge; never copy a saved password.
 
           try{ sessionStorage.setItem('tasun_next_path_v1', target); }catch(_e){}
           try{ localStorage.setItem('tasun_next_path_v1', target); }catch(_e){}
@@ -4135,12 +4159,7 @@ main.hero,
           try{ sessionStorage.setItem('tasunIndexSession_v1', '1'); }catch(e){}
           try{ localStorage.setItem('tasunIndexSession_v1', '1'); }catch(e){}
 
-          if(p){
-            try{ sessionStorage.setItem('tasunLastLoginPass_v1', p); }catch(e){}
-            try{ localStorage.setItem('tasunLastLoginPass_v1', p); }catch(e){}
-            try{ sessionStorage.setItem('tasunLastLoginPass_v1__' + u, p); }catch(e){}
-            try{ localStorage.setItem('tasunLastLoginPass_v1__' + u, p); }catch(e){}
-          }
+          // Password remains in the login handler only for this one credential exchange.
 
           return true;
         }catch(err){

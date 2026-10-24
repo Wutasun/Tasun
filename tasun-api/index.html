@@ -2,6 +2,22 @@
 <!-- TASUN_REBUILD_STAMP:index_v52c 2026-03-27 00:00:00 (single-source-admin-auth-only + worker-token-bridge + child-page-sso-fix) -->
 <html lang="zh-Hant">
 <head>
+<script id="tasun-legacy-password-cache-clean-v1">
+(function(){
+  'use strict';
+  // Delete only historical password-cache keys, not user, session, token, or business data.
+  var prefix = 'tasunLastLoginPass_v1';
+  for(var j = 0; j < 2; j++){
+    try{
+      var store = j === 0 ? window.sessionStorage : window.localStorage;
+      for(var i = store.length - 1; i >= 0; i--){
+        var key = store.key(i);
+        if(key === prefix || (key && key.indexOf(prefix + '__') === 0)) store.removeItem(key);
+      }
+    }catch(_ignored){}
+  }
+})();
+</script>
   <!-- Tasun v5 FINAL：版本/快取由 tasun-version.json 控制；腳本改為動態帶 v 載入 -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -1329,13 +1345,32 @@
         }catch(_e){}
         broadcastAuthState('login', { user: user.username, role: record.role });
       }
+      function clearLogoutAuthStorage(){
+        // Logout-only: remove known authentication state, never business rows/settings.
+        const keys = ['tasunBearerToken_v1','tasunCloudToken_v1','tasunCloudToken','tasunCloudToken_v1__index','tasunCloudToken_v1__auth-table','tasunCloudToken_v1__sxdh-notes','tasun_token','tasunToken','tasunWorkerToken','tasun_auth_token','tasun_session_token','tasunAccessToken_v1','tasunAuthToken_v1','tasunSessionToken_v1','authToken','access_token','token','x-api-key','tasunApiKey_v1'].concat(['tasunCurrentUser_v1','tasunCurrentUser_v2','tasunSession_v1','tasunSessionBridge_v1','tasunSessionLogin_v2','tasunAuthSession_v1','tasunIndexUser_v1','tasunIndexSession_v1','tasunIndexSessionAuthed_v2','tasunIndexLoginVerifiedAt_v1','tasunIndexLoginVerifiedUser_v1','tasunSso_v1','tasunSso_v2','tasunSsoTab_v1']);
+        for(const key of keys){
+          try{ sessionStorage.removeItem(key); }catch(_e){}
+          try{ localStorage.removeItem(key); }catch(_e){}
+        }
+        // Include any per-user legacy password aliases created before this fix.
+        for(const store of [sessionStorage, localStorage]){
+          try{
+            for(let i=store.length-1;i>=0;i--){
+              const key=store.key(i);
+              if(key==='tasunLastLoginPass_v1' || (key && key.startsWith('tasunLastLoginPass_v1__'))){
+                store.removeItem(key);
+              }
+            }
+          }catch(_e){}
+        }
+      }
       function clearSession(opts){
         const silent = !!(opts && opts.silent);
         try{ sessionStorage.removeItem(SESSION_KEY); sessionStorage.removeItem(INDEX_SESSION_KEY); sessionStorage.removeItem(CHILD_INDEX_SESSION_KEY); sessionStorage.removeItem(CURRENT_KEY); }catch(e){}
         try{ localStorage.removeItem(CHILD_INDEX_SESSION_KEY); }catch(_e){}
         clearCookieSession();
         clearSSO();
-        if(!silent) broadcastAuthState('logout', null);
+        if(!silent){ clearLogoutAuthStorage(); broadcastAuthState('logout', null); }
       }
       function getSession(){
         const obj = safeJsonParse(sessionStorage.getItem(SESSION_KEY) || 'null', null);
@@ -1449,18 +1484,7 @@
             }
           }
 
-          var pass = '';
-          try{
-            pass = String(sessionStorage.getItem('tasunLastLoginPass_v1__' + username) || localStorage.getItem('tasunLastLoginPass_v1__' + username) || sessionStorage.getItem('tasunLastLoginPass_v1') || localStorage.getItem('tasunLastLoginPass_v1') || '').trim();
-          }catch(_e){}
-          if(pass){
-            try{ sessionStorage.setItem('tasunLastLoginPass_v1', pass); }catch(_e){}
-            try{ localStorage.setItem('tasunLastLoginPass_v1', pass); }catch(_e){}
-            if(username){
-              try{ sessionStorage.setItem('tasunLastLoginPass_v1__' + username, pass); }catch(_e){}
-              try{ localStorage.setItem('tasunLastLoginPass_v1__' + username, pass); }catch(_e){}
-            }
-          }
+          // Keep existing user/session/token bridge; never copy a saved password.
 
           try{ sessionStorage.setItem('tasun_next_path_v1', target); }catch(_e){}
           try{ localStorage.setItem('tasun_next_path_v1', target); }catch(_e){}
@@ -2044,12 +2068,7 @@
           try{ sessionStorage.setItem('tasunIndexSession_v1', '1'); }catch(e){}
           try{ localStorage.setItem('tasunIndexSession_v1', '1'); }catch(e){}
 
-          if(p){
-            try{ sessionStorage.setItem('tasunLastLoginPass_v1', p); }catch(e){}
-            try{ localStorage.setItem('tasunLastLoginPass_v1', p); }catch(e){}
-            try{ sessionStorage.setItem('tasunLastLoginPass_v1__' + u, p); }catch(e){}
-            try{ localStorage.setItem('tasunLastLoginPass_v1__' + u, p); }catch(e){}
-          }
+          // Password remains in the login handler only for this one credential exchange.
 
           return true;
         }catch(err){
@@ -2307,15 +2326,7 @@
     }catch(e){}
     return null;
   }
-  function getLastPass(user){
-    user = norm(user);
-    return norm(
-      (user ? readStorage(sessionStorage, LAST_LOGIN_PASS_KEY + '__' + user) : '') ||
-      (user ? readStorage(localStorage,  LAST_LOGIN_PASS_KEY + '__' + user) : '') ||
-      readStorage(sessionStorage, LAST_LOGIN_PASS_KEY) ||
-      readStorage(localStorage, LAST_LOGIN_PASS_KEY)
-    );
-  }
+  function getLastPass(_user){ return ''; /* Never recover a persisted password. */ }
   function extractToken(obj){
     if(!obj || typeof obj !== 'object') return '';
     return norm(
@@ -2357,12 +2368,7 @@
     writeStorage(localStorage, 'tasunSessionBridge_v1', JSON.stringify(bridge));
     writeStorage(sessionStorage, CURRENT_KEY, JSON.stringify({ user:user, name:user, role:role, at:nowISO() }));
     writeStorage(localStorage, CURRENT_KEY, JSON.stringify({ user:user, name:user, role:role, at:nowISO() }));
-    if(password){
-      writeStorage(sessionStorage, LAST_LOGIN_PASS_KEY, password);
-      writeStorage(localStorage, LAST_LOGIN_PASS_KEY, password);
-      writeStorage(sessionStorage, LAST_LOGIN_PASS_KEY + '__' + user, password);
-      writeStorage(localStorage, LAST_LOGIN_PASS_KEY + '__' + user, password);
-    }
+    // Password is not persisted: the acquired token is the only reusable credential.
     return true;
   }
   function clearBridgedToken(){
@@ -2379,7 +2385,7 @@
       }
     }catch(e){}
   }
-  async function workerLogin(user, password, role){
+  async function workerLogin(user, password, role, epoch){
     user = norm(user); password = norm(password); role = norm(role || 'read') || 'read';
     if(!user || !password) return '';
     var res = await fetch(API_BASE + '/api/tasun/login', {
@@ -2393,7 +2399,9 @@
       var txt = await res.text().catch(function(){ return ''; });
       throw new Error('worker login failed: ' + res.status + ' ' + String(txt).slice(0,200));
     }
+    if(epoch !== bridgeEpoch) return ''; // Logout occurred while login request was pending.
     var json = await res.json().catch(function(){ return {}; });
+    if(epoch !== bridgeEpoch) return '';
     var token = extractToken(json);
     if(token) bridgeToken(token, user, norm(json.role || role) || role, password);
     return token;
@@ -2406,6 +2414,7 @@
     return bridgeToken(token, cur.user, cur.role, '');
   }
   var pendingCred = null;
+  var bridgeEpoch = 0; // Logout invalidates all pending token exchanges.
   var inflight = false;
   async function ensureWorkerBridgeFromCred(cred){
     if(inflight) return false;
@@ -2414,16 +2423,17 @@
       cred = cred || pendingCred || {};
       var user = norm(cred.user);
       var role = norm(cred.role || 'read') || 'read';
-      var pass = norm(cred.pass) || getLastPass(user);
+      var pass = norm(cred.pass); // only the immediate login form may provide this
       if(!user){
         var cur = getCurrentUser();
         user = norm(cur && cur.user);
         role = norm((cur && cur.role) || role || 'read') || 'read';
       }
-      if(!user || !pass) return false;
+      if(!user) return false;
       var token = getAnyToken();
-      if(token){ bridgeToken(token, user, role, pass); return true; }
-      token = await workerLogin(user, pass, role).catch(function(){ return ''; });
+      if(token){ bridgeToken(token, user, role, ''); return true; }
+      if(!pass) return false; // cannot silently re-login using stored plaintext
+      token = await workerLogin(user, pass, role, bridgeEpoch).catch(function(){ return ''; });
       return !!token;
     }finally{
       inflight = false;
@@ -2455,7 +2465,11 @@
     ['btnLogout','btnSwitchUser','btnForceRelogin'].forEach(function(id){
       var el = document.getElementById(id);
       if(!el) return;
-      el.addEventListener('click', function(){ clearBridgedToken(); }, true);
+      el.addEventListener('click', function(){
+        bridgeEpoch++;
+        pendingCred = null;
+        clearBridgedToken();
+      }, true);
     });
   }
   function boot(){
@@ -2463,7 +2477,7 @@
     installLogoutPatch();
     syncExistingTokenBridge();
     var cur = getCurrentUser();
-    if(cur && cur.user){ queueEnsureBridge({ user:cur.user, role:cur.role, pass:getLastPass(cur.user) }, 300); }
+    if(cur && cur.user){ queueEnsureBridge({ user:cur.user, role:cur.role }, 300); }
   }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once:true });
   else boot();

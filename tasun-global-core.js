@@ -6,6 +6,20 @@
   var INDEX_SESSION_KEY = 'tasunIndexSession_v1';
   var SESSION_BRIDGE_KEY = 'tasunSessionBridge_v1';
   var LAST_PASS_KEY = 'tasunLastLoginPass_v1';
+  function clearLegacyPasswordCache(){
+    var prefix='tasunLastLoginPass_v1';
+    for(var j=0;j<2;j++){
+      try{
+        var s=j===0?global.sessionStorage:global.localStorage;
+        for(var i=s.length-1;i>=0;i--){
+          var k=s.key(i);
+          if(k===prefix||(k&&k.indexOf(prefix+'__')===0))s.removeItem(k);
+        }
+      }catch(_e){}
+    }
+  }
+  clearLegacyPasswordCache();
+
   var ROUTES_KEY = 'tasunNavRoutes_v1';
   var BUTTONS_KEY = 'tasunNavButtons_v1';
   var AUTH_KEY = 'tasunAuthTable_v1';
@@ -63,7 +77,7 @@
     if(row.token) mirrorToken(row.token);
     return true;
   }
-  function setLastPass(pass){ pass = norm(pass); if(pass){ writeSession(LAST_PASS_KEY, pass); writeLocal(LAST_PASS_KEY, pass); } }
+  function setLastPass(_pass){ clearLegacyPasswordCache(); } // compatibility: never persist credentials
   function bridgeAuth(user, token, pass){
     var row = normalizeUserLike(user || getCurrentUser(), 'bridge');
     if(!row) return false;
@@ -73,7 +87,13 @@
     if(pass) setLastPass(pass);
     return true;
   }
-  function clearSessionLogin(){ [CURRENT_KEY, SESSION_KEY, SESSION_BRIDGE_KEY, INDEX_SESSION_KEY, LAST_PASS_KEY, 'tasunSso_v2', 'tasunSso_v1'].forEach(removeBoth); TOKEN_KEYS.forEach(removeBoth); }
+  function clearLogoutAuthStorage(){
+    // Logout-only; never delete application data, role tables or configuration.
+    var keys = ['tasunBearerToken_v1','tasunCloudToken_v1','tasunCloudToken','tasunCloudToken_v1__index','tasunCloudToken_v1__auth-table','tasunCloudToken_v1__sxdh-notes','tasun_token','tasunToken','tasunWorkerToken','tasun_auth_token','tasun_session_token','tasunAccessToken_v1','tasunAuthToken_v1','tasunSessionToken_v1','authToken','access_token','token','x-api-key','tasunApiKey_v1'].concat(['tasunCurrentUser_v1','tasunCurrentUser_v2','tasunSession_v1','tasunSessionBridge_v1','tasunSessionLogin_v2','tasunAuthSession_v1','tasunIndexUser_v1','tasunIndexSession_v1','tasunIndexSessionAuthed_v2','tasunIndexLoginVerifiedAt_v1','tasunIndexLoginVerifiedUser_v1','tasunSso_v1','tasunSso_v2','tasunSsoTab_v1']);
+    keys.forEach(removeBoth);
+    clearLegacyPasswordCache();
+  }
+  function clearSessionLogin(){ [CURRENT_KEY, SESSION_KEY, SESSION_BRIDGE_KEY, INDEX_SESSION_KEY, LAST_PASS_KEY, 'tasunSso_v2', 'tasunSso_v1'].forEach(removeBoth); TOKEN_KEYS.forEach(removeBoth); clearLogoutAuthStorage(); }
   function hasAnySitePageOpenSignal(){ try{ return sessionStorage.getItem(INDEX_SESSION_KEY) === '1'; }catch(_e){ return false; } }
   function requireLoginOnColdStart(){ return !(hasAnySitePageOpenSignal() || !!getCurrentUser()); }
   function normalizeAuthTable(){ var t = safeJSON(readLocal(AUTH_KEY)) || {}; var users = Array.isArray(t.users) ? t.users : Array.isArray(t.rows) ? t.rows : Array.isArray(t) ? t : []; return users.map(function(u){ return { user:norm(u.user || u.username || u.name), name:norm(u.name || u.user || u.username), role:normalizeRole(u.role || 'read'), pass:norm(u.pass || u.password || u.pwd || u.secret || u.passwd || '') }; }).filter(function(u){ return !!u.user; }); }
