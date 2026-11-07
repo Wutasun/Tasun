@@ -7,10 +7,9 @@
 //   CORS_ALLOW_ORIGINS      -> comma separated origins, default https://wutasun.github.io
 //   ACCESS_DEFAULT_ROLE     -> role to trust when Cloudflare Access header is present, default admin
 //   ACCESS_DEFAULT_USERNAME -> username to use when Cloudflare Access header is present, default local-part of email
-//   DEFAULT_PASSWORD_HASH   -> fallback hash for brand-new users without password/passHash, default sha256('123456')
+//   DEFAULT_PASSWORD_HASH   -> optional bootstrap hash; configure securely before seeding default users
 
 const SERVICE_VERSION = 'v5.0-r501-official-documents-textplain-sessionbridge-sync-20260607';
-const DEFAULT_PASSWORD_HASH = '8d969eef6ecad3c29a3a629280e686cff0c3f5d5a86afff3ca12020c923adc6c92';
 
 const STORE_KEYS = {
   navButtons: 'auth-table:navButtons',
@@ -206,8 +205,9 @@ export default {
         if (!passHash && password) passHash = await sha256Hex(password);
         if (!passHash) {
           const old = await getUser(env, username);
-          passHash = norm(old?.pass_hash) || String(env.DEFAULT_PASSWORD_HASH || DEFAULT_PASSWORD_HASH);
+          passHash = norm(old?.pass_hash) || norm(env.DEFAULT_PASSWORD_HASH);
         }
+        if (!passHash) return json({ ok: false, error: 'PASSWORD_REQUIRED' }, 400, cors);
         const ts = Date.now();
         const old = await getUser(env, username);
         const createdAt = Number(old?.createdAt || ts);
@@ -377,8 +377,9 @@ async function ensureSchema(env) {
 }
 
 async function seedDefaultUsers(env) {
+  const passHash = norm(env.DEFAULT_PASSWORD_HASH);
+  if (!passHash) return;
   const now = Date.now();
-  const passHash = String(env.DEFAULT_PASSWORD_HASH || DEFAULT_PASSWORD_HASH);
   const defaults = [
     { username: 'alex', role: 'admin', flags: [1,1,1,1,1] },
     { username: 'tasun', role: 'write', flags: [1,1,1,1,1] },
@@ -562,7 +563,8 @@ async function saveAuthTableData(env, payload) {
     const role = normalizeRole(item.role || oldAuth?.role || oldUser?.role || 'read');
     let passHash = norm(item.passHash || item.passwordHash || item.hash || item.pass_hash);
     if (!passHash && item.pass) passHash = await sha256Hex(String(item.pass));
-    if (!passHash) passHash = norm(oldUser?.pass_hash) || String(env.DEFAULT_PASSWORD_HASH || DEFAULT_PASSWORD_HASH);
+    if (!passHash) passHash = norm(oldUser?.pass_hash) || norm(env.DEFAULT_PASSWORD_HASH);
+    if (!passHash) throw new Error('PASSWORD_REQUIRED');
     const enabled = item.enabled === 0 ? 0 : Number(oldUser?.enabled ?? 1);
     const createdAt = Number(oldUser?.createdAt || now);
 
@@ -812,7 +814,7 @@ async function parseSession(request, env, opts = {}) {
 
 async function parseBrowserSessionBridge(request, env) {
   try {
-    if (String(env.TASUN_ALLOW_BROWSER_SESSION_BRIDGE || '1') === '0') return null;
+    if (String(env.TASUN_ALLOW_BROWSER_SESSION_BRIDGE || '0') !== '1') return null;
     let body = {};
     try { body = await readJson(request.clone()); } catch (_) { body = {}; }
     const nestedAuth = (body && typeof body === 'object' && (body.sessionBridgePayload || body.auth || body.session || body.bridgePayload || body.payloadAuth)) || {};
@@ -857,7 +859,7 @@ async function parseBrowserSessionBridge(request, env) {
     // 若 D1 權限表尚未完整同步，但來源已在 CORS 白名單內，允許依預設帳號映射通過，
     // 避免前端已登入卻因舊 token / 權限表暫未讀回而 read/merge 固定 401。
     if (!user && !auth) {
-      const strict = String(env.TASUN_BROWSER_SESSION_BRIDGE_STRICT || '0') === '1';
+      const strict = String(env.TASUN_BROWSER_SESSION_BRIDGE_STRICT || '1') === '1';
       if (strict) return null;
       let r = normalizeRole(hintedRole || 'read');
       username = normalizeBridgeUsername(username || r, r, env);
