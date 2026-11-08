@@ -29,7 +29,7 @@ export default {
     const cors = corsHeaders(request, env);
 
     if (request.method === 'OPTIONS') {
-      return new Response('', { status: 204, headers: cors });
+      return new Response(null, { status: 204, headers: cors });
     }
 
     try {
@@ -763,6 +763,81 @@ async function requireSession(request, env, opts = {}) {
   return { ok: true, me: authorizedMe };
 }
 
+const ACCESS_JWKS_CACHE = { at: 0, url: '', jwks: null };
+
+async function verifyAccessAssertion(request, env) {
+  try {
+    const token = request.headers.get('Cf-Access-Jwt-Assertion') || getCookie(request, 'CF_Authorization');
+    const teamDomain = norm(env.TEAM_DOMAIN).replace(/\/+$/, '');
+    const audience = norm(env.POLICY_AUD);
+    if (!token || !teamDomain || !audience) return null;
+
+    const teamUrl = new URL(teamDomain);
+    if (teamUrl.protocol !== 'https:') return null;
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+
+    const header = JSON.parse(new TextDecoder().decode(accessBase64UrlBytes(parts[0])));
+    const payload = JSON.parse(new TextDecoder().decode(accessBase64UrlBytes(parts[1])));
+    if (!header || header.alg !== 'RS256' || !header.kid || !payload) return null;
+
+    const issuer = new URL(String(payload.iss || ''));
+    if (issuer.origin !== teamUrl.origin) return null;
+
+    const aud = payload.aud;
+    if (!(Array.isArray(aud) ? aud.includes(audience) : aud === audience)) return null;
+
+    const now = Math.floor(Date.now() / 1000);
+    if (!Number.isFinite(Number(payload.exp)) || Number(payload.exp) <= now) return null;
+    if (payload.nbf !== undefined && (!Number.isFinite(Number(payload.nbf)) || Number(payload.nbf) > now)) return null;
+
+    const jwks = await getAccessJwks(teamDomain);
+    const key = (jwks.keys || []).find(item => item.kid === header.kid && (!item.use || item.use === 'sig'));
+    if (!key) return null;
+
+    const cryptoKey = await crypto.subtle.importKey(
+      'jwk',
+      key,
+      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+      false,
+      ['verify']
+    );
+    const signed = new TextEncoder().encode(parts[0] + '.' + parts[1]);
+    const signature = accessBase64UrlBytes(parts[2]);
+    if (!await crypto.subtle.verify('RSASSA-PKCS1-v1_5', cryptoKey, signature, signed)) return null;
+
+    const email = String(payload.email || '').trim();
+    if (!email) return null;
+    return { email, exp: Number(payload.exp) };
+  } catch (_) {
+    return null;
+  }
+}
+
+async function getAccessJwks(teamDomain) {
+  const url = teamDomain + '/cdn-cgi/access/certs';
+  const now = Date.now();
+  if (ACCESS_JWKS_CACHE.jwks && ACCESS_JWKS_CACHE.url === url && now - ACCESS_JWKS_CACHE.at < 10 * 60 * 1000) {
+    return ACCESS_JWKS_CACHE.jwks;
+  }
+  const response = await fetch(url, { cf: { cacheTtl: 600, cacheEverything: true } });
+  if (!response.ok) throw new Error('ACCESS_JWKS_FETCH_FAILED');
+  const jwks = await response.json();
+  ACCESS_JWKS_CACHE.at = now;
+  ACCESS_JWKS_CACHE.url = url;
+  ACCESS_JWKS_CACHE.jwks = jwks;
+  return jwks;
+}
+
+function accessBase64UrlBytes(value) {
+  const normalized = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized + '='.repeat((4 - normalized.length % 4) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 async function parseSession(request, env, opts = {}) {
   const auth = request.headers.get('authorization') || request.headers.get('Authorization') || '';
   if (auth.startsWith('Bearer ')) {
@@ -793,16 +868,14 @@ async function parseSession(request, env, opts = {}) {
   if (bridged) return bridged;
 
   if (opts.allowAccessHeader) {
-    const accessEmail = request.headers.get('cf-access-authenticated-user-email')
-      || request.headers.get('Cf-Access-Authenticated-User-Email')
-      || '';
-    if (accessEmail) {
-      const email = String(accessEmail).trim();
+    const access = await verifyAccessAssertion(request, env);
+    if (access) {
+      const email = String(access.email || '').trim();
       const local = email.split('@')[0] || 'access';
       return {
         u: String(env.ACCESS_DEFAULT_USERNAME || local),
         r: normalizeRole(env.ACCESS_DEFAULT_ROLE || 'admin'),
-        exp: Date.now() + 60 * 60 * 1000,
+        exp: Number(access.exp) * 1000,
         accessEmail: email,
         source: 'access',
       };
