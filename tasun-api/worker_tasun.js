@@ -126,8 +126,7 @@ export default {
           return json({ ok: false, error: 'RELEASE_ENV_MISSING' }, 500, cors);
         }
 
-        const inputs = sanitizeWorkflowInputs(body.inputs || {}, releaseAuth.me);
-        const gh = await dispatchGitHubWorkflow({ owner, repo, workflow, ref, token, inputs });
+        const gh = await dispatchGitHubWorkflow({ owner, repo, workflow, ref, token });
         if (!gh.ok) {
           return json({ ok: false, error: gh.error || 'GITHUB_DISPATCH_FAILED', detail: gh.detail || '' }, gh.status || 500, cors);
         }
@@ -456,21 +455,7 @@ async function requireReleaseAdmin(request, env) {
   };
 }
 
-function sanitizeWorkflowInputs(inputs, me) {
-  const src = (inputs && typeof inputs === 'object') ? inputs : {};
-  const out = {};
-  for (const [k, v] of Object.entries(src)) {
-    const key = String(k || '').trim();
-    if (!key) continue;
-    out[key] = String(v == null ? '' : v).slice(0, 300);
-  }
-  if (!out.actor && me && me.u) out.actor = String(me.u);
-  if (!out.reason) out.reason = 'admin-button';
-  if (!out.write_fallbacks) out.write_fallbacks = 'true';
-  return out;
-}
-
-async function dispatchGitHubWorkflow({ owner, repo, workflow, ref, token, inputs }) {
+async function dispatchGitHubWorkflow({ owner, repo, workflow, ref, token }) {
   const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`;
   const res = await fetch(url, {
     method: 'POST',
@@ -480,7 +465,7 @@ async function dispatchGitHubWorkflow({ owner, repo, workflow, ref, token, input
       'Content-Type': 'application/json',
       'User-Agent': 'tasun-worker-release-dispatch'
     },
-    body: JSON.stringify({ ref, inputs: inputs || {} })
+    body: JSON.stringify({ ref })
   });
   const text = await res.text().catch(() => '');
   if (!res.ok) {
@@ -538,7 +523,8 @@ async function buildAuthTableData(env) {
 
 async function saveAuthTableData(env, payload) {
   const now = Date.now();
-  const authList = Array.isArray(payload.auth) ? payload.auth : [];
+  if (!payload || !Array.isArray(payload.auth)) throw new Error('AUTH_SNAPSHOT_REQUIRED');
+  const authList = payload.auth;
   let usersSaved = 0;
   let authSaved = 0;
 
@@ -552,11 +538,27 @@ async function saveAuthTableData(env, payload) {
   `).all();
   const userMap = new Map((currentUsers.results || []).map(r => [String(r.username), r]));
   const authMap = new Map((currentAuth.results || []).map(r => [String(r.username), r]));
+  const submittedUsernames = new Set();
 
   for (const item of authList) {
-    if (!item || typeof item !== 'object') continue;
+    if (!item || typeof item !== 'object') throw new Error('INVALID_AUTH_SNAPSHOT');
     const username = norm(item.username || item.user || item.name);
-    if (!username) continue;
+    if (!username || submittedUsernames.has(username)) throw new Error('INVALID_AUTH_SNAPSHOT');
+    submittedUsernames.add(username);
+  }
+
+  const retainsActiveAdmin = authList.some(item => {
+    const username = norm(item.username || item.user || item.name);
+    const oldUser = userMap.get(username) || null;
+    const oldAuth = authMap.get(username) || null;
+    const role = normalizeRole(item.role || oldAuth?.role || oldUser?.role || 'read');
+    const enabled = item.enabled === 0 ? 0 : Number(oldUser?.enabled ?? 1);
+    return role === 'admin' && enabled === 1;
+  });
+  if (!retainsActiveAdmin) throw new Error('LAST_ADMIN_REQUIRED');
+
+  for (const item of authList) {
+    const username = norm(item.username || item.user || item.name);
 
     const oldUser = userMap.get(username) || null;
     const oldAuth = authMap.get(username) || null;
@@ -595,6 +597,23 @@ async function saveAuthTableData(env, payload) {
     authSaved++;
   }
 
+  let usersRevoked = 0;
+  let authRevoked = 0;
+  for (const row of currentUsers.results || []) {
+    const username = norm(row.username);
+    if (!username || submittedUsernames.has(username) || Number(row.enabled ?? 1) === 0) continue;
+    await env.DB.prepare(`
+      UPDATE tasun_users SET enabled=0, updatedAt=? WHERE username=?
+    `).bind(now, username).run();
+    usersRevoked++;
+  }
+  for (const row of currentAuth.results || []) {
+    const username = norm(row.username);
+    if (!username || submittedUsernames.has(username)) continue;
+    await env.DB.prepare('DELETE FROM tasun_auth WHERE username=?').bind(username).run();
+    authRevoked++;
+  }
+
   await storePutJson(env, STORE_KEYS.navButtons, payload.navButtons ?? [], now);
   await storePutJson(env, STORE_KEYS.routes, payload.routes ?? {}, now);
   await storePutJson(env, STORE_KEYS.btnMeta, payload.btnMeta ?? [], now);
@@ -602,7 +621,7 @@ async function saveAuthTableData(env, payload) {
   await storePutJson(env, STORE_KEYS.entrySelected, payload.entrySelected ?? 'index.html', now);
   await storePutJson(env, STORE_KEYS.entryRegistry, payload.entryRegistry ?? [], now);
 
-  return { updatedAt: now, usersSaved, authSaved };
+  return { updatedAt: now, usersSaved, authSaved, usersRevoked, authRevoked };
 }
 
 function normalizeBtnFlags(item, role, oldAuth = null) {
