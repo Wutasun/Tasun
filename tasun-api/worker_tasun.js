@@ -522,11 +522,9 @@ async function buildAuthTableData(env) {
 }
 
 async function saveAuthTableData(env, payload) {
-  const now = Date.now();
   if (!payload || !Array.isArray(payload.auth)) throw new Error('AUTH_SNAPSHOT_REQUIRED');
+  const now = Date.now();
   const authList = payload.auth;
-  let usersSaved = 0;
-  let authSaved = 0;
 
   const currentUsers = await env.DB.prepare(`
     SELECT username, pass_hash, role, enabled, createdAt, updatedAt
@@ -539,26 +537,14 @@ async function saveAuthTableData(env, payload) {
   const userMap = new Map((currentUsers.results || []).map(r => [String(r.username), r]));
   const authMap = new Map((currentAuth.results || []).map(r => [String(r.username), r]));
   const submittedUsernames = new Set();
+  const records = [];
 
+  // Validate and prepare the complete snapshot before staging any D1 writes.
   for (const item of authList) {
-    if (!item || typeof item !== 'object') throw new Error('INVALID_AUTH_SNAPSHOT');
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('INVALID_AUTH_SNAPSHOT');
     const username = norm(item.username || item.user || item.name);
     if (!username || submittedUsernames.has(username)) throw new Error('INVALID_AUTH_SNAPSHOT');
     submittedUsernames.add(username);
-  }
-
-  const retainsActiveAdmin = authList.some(item => {
-    const username = norm(item.username || item.user || item.name);
-    const oldUser = userMap.get(username) || null;
-    const oldAuth = authMap.get(username) || null;
-    const role = normalizeRole(item.role || oldAuth?.role || oldUser?.role || 'read');
-    const enabled = item.enabled === 0 ? 0 : Number(oldUser?.enabled ?? 1);
-    return role === 'admin' && enabled === 1;
-  });
-  if (!retainsActiveAdmin) throw new Error('LAST_ADMIN_REQUIRED');
-
-  for (const item of authList) {
-    const username = norm(item.username || item.user || item.name);
 
     const oldUser = userMap.get(username) || null;
     const oldAuth = authMap.get(username) || null;
@@ -567,10 +553,29 @@ async function saveAuthTableData(env, payload) {
     if (!passHash && item.pass) passHash = await sha256Hex(String(item.pass));
     if (!passHash) passHash = norm(oldUser?.pass_hash) || norm(env.DEFAULT_PASSWORD_HASH);
     if (!passHash) throw new Error('PASSWORD_REQUIRED');
-    const enabled = item.enabled === 0 ? 0 : Number(oldUser?.enabled ?? 1);
-    const createdAt = Number(oldUser?.createdAt || now);
 
-    await env.DB.prepare(`
+    let enabled;
+    if (item.enabled !== undefined && item.enabled !== null) {
+      enabled = item.enabled === false || String(item.enabled) === '0' ? 0 : 1;
+    } else if (!oldUser || (Number(oldUser.enabled) === 0 && !oldAuth)) {
+      // Re-adding a revoked account without an enabled field restores access.
+      enabled = 1;
+    } else {
+      enabled = Number(oldUser.enabled ?? 1) === 0 ? 0 : 1;
+    }
+
+    const createdAt = Number(oldUser?.createdAt || now);
+    const flags = normalizeBtnFlags(item, role, oldAuth);
+    records.push({ username, role, passHash, enabled, createdAt, flags });
+  }
+
+  if (!records.some(record => record.role === 'admin' && record.enabled === 1)) {
+    throw new Error('LAST_ADMIN_REQUIRED');
+  }
+
+  const statements = [];
+  for (const record of records) {
+    statements.push(env.DB.prepare(`
       INSERT INTO tasun_users(username, pass_hash, role, enabled, createdAt, updatedAt)
       VALUES(?, ?, ?, ?, ?, ?)
       ON CONFLICT(username) DO UPDATE SET
@@ -578,11 +583,9 @@ async function saveAuthTableData(env, payload) {
         role=excluded.role,
         enabled=excluded.enabled,
         updatedAt=excluded.updatedAt
-    `).bind(username, passHash, role, enabled, createdAt, now).run();
-    usersSaved++;
+    `).bind(record.username, record.passHash, record.role, record.enabled, record.createdAt, now));
 
-    const flags = normalizeBtnFlags(item, role, oldAuth);
-    await env.DB.prepare(`
+    statements.push(env.DB.prepare(`
       INSERT INTO tasun_auth(username, role, btn1, btn2, btn3, btn4, btn5, updatedAt)
       VALUES(?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(username) DO UPDATE SET
@@ -593,8 +596,7 @@ async function saveAuthTableData(env, payload) {
         btn4=excluded.btn4,
         btn5=excluded.btn5,
         updatedAt=excluded.updatedAt
-    `).bind(username, role, flags.btn1, flags.btn2, flags.btn3, flags.btn4, flags.btn5, now).run();
-    authSaved++;
+    `).bind(record.username, record.role, record.flags.btn1, record.flags.btn2, record.flags.btn3, record.flags.btn4, record.flags.btn5, now));
   }
 
   let usersRevoked = 0;
@@ -602,26 +604,49 @@ async function saveAuthTableData(env, payload) {
   for (const row of currentUsers.results || []) {
     const username = norm(row.username);
     if (!username || submittedUsernames.has(username) || Number(row.enabled ?? 1) === 0) continue;
-    await env.DB.prepare(`
-      UPDATE tasun_users SET enabled=0, updatedAt=? WHERE username=?
-    `).bind(now, username).run();
+    statements.push(env.DB.prepare(
+      'UPDATE tasun_users SET enabled=0, updatedAt=? WHERE username=?'
+    ).bind(now, username));
     usersRevoked++;
   }
   for (const row of currentAuth.results || []) {
     const username = norm(row.username);
     if (!username || submittedUsernames.has(username)) continue;
-    await env.DB.prepare('DELETE FROM tasun_auth WHERE username=?').bind(username).run();
+    statements.push(env.DB.prepare(
+      'DELETE FROM tasun_auth WHERE username=?'
+    ).bind(username));
     authRevoked++;
   }
 
-  await storePutJson(env, STORE_KEYS.navButtons, payload.navButtons ?? [], now);
-  await storePutJson(env, STORE_KEYS.routes, payload.routes ?? {}, now);
-  await storePutJson(env, STORE_KEYS.btnMeta, payload.btnMeta ?? [], now);
-  await storePutJson(env, STORE_KEYS.permMatrix, payload.permMatrix ?? { users: {} }, now);
-  await storePutJson(env, STORE_KEYS.entrySelected, payload.entrySelected ?? 'index.html', now);
-  await storePutJson(env, STORE_KEYS.entryRegistry, payload.entryRegistry ?? [], now);
+  const storeEntries = [
+    [STORE_KEYS.navButtons, payload.navButtons ?? []],
+    [STORE_KEYS.routes, payload.routes ?? {}],
+    [STORE_KEYS.btnMeta, payload.btnMeta ?? []],
+    [STORE_KEYS.permMatrix, payload.permMatrix ?? { users: {} }],
+    [STORE_KEYS.entrySelected, payload.entrySelected ?? 'index.html'],
+    [STORE_KEYS.entryRegistry, payload.entryRegistry ?? []],
+  ];
+  for (const [id, value] of storeEntries) {
+    statements.push(env.DB.prepare(`
+      INSERT INTO tasun_store(id, json, updatedAt, rev)
+      VALUES(?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        json=excluded.json,
+        updatedAt=excluded.updatedAt,
+        rev=excluded.rev
+    `).bind(id, JSON.stringify(value ?? null), String(now), String(now)));
+  }
 
-  return { updatedAt: now, usersSaved, authSaved, usersRevoked, authRevoked };
+  // D1 batch runs the full snapshot atomically; any failed statement rolls back all changes.
+  await env.DB.batch(statements);
+
+  return {
+    updatedAt: now,
+    usersSaved: records.length,
+    authSaved: records.length,
+    usersRevoked,
+    authRevoked,
+  };
 }
 
 function normalizeBtnFlags(item, role, oldAuth = null) {
