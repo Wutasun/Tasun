@@ -489,7 +489,15 @@ async function buildAuthTableData(env) {
 
   const authMap = new Map((authRs.results || []).map(r => [String(r.username), r]));
   const userMap = new Map((usersRs.results || []).map(r => [String(r.username), r]));
-  const names = Array.from(new Set([...authMap.keys(), ...userMap.keys()])).sort((a, b) => a.localeCompare(b));
+  const names = Array.from(new Set([...authMap.keys(), ...userMap.keys()]))
+    // Revoked users stay in D1 for audit and reseed protection, but do not re-enter
+    // the editable snapshot unless an administrator explicitly re-adds them.
+    .filter(username => {
+      const user = userMap.get(username);
+      const auth = authMap.get(username);
+      return !(user && Number(user.enabled ?? 1) === 0 && !auth);
+    })
+    .sort((a, b) => a.localeCompare(b));
 
   const auth = names.map(username => {
     const u = userMap.get(username) || {};
