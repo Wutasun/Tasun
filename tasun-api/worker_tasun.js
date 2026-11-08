@@ -557,9 +557,19 @@ async function saveAuthTableData(env, payload) {
     const oldUser = userMap.get(username) || null;
     const oldAuth = authMap.get(username) || null;
     const role = normalizeRole(item.role || oldAuth?.role || oldUser?.role || 'read');
-    let passHash = norm(item.passHash || item.passwordHash || item.hash || item.pass_hash);
-    if (!passHash && item.pass) passHash = await sha256Hex(String(item.pass));
-    if (!passHash) passHash = norm(oldUser?.pass_hash) || norm(env.DEFAULT_PASSWORD_HASH);
+    // Cached hashes are snapshots, not password-change requests. Keep the authoritative
+    // D1 hash unless the client explicitly marks a password edit.
+    let passHash = norm(oldUser?.pass_hash);
+    if (item.passwordChanged === true) {
+      let requestedPassHash = norm(item.passHash || item.passwordHash || item.hash || item.pass_hash);
+      if (!requestedPassHash && item.pass) requestedPassHash = await sha256Hex(String(item.pass));
+      if (!requestedPassHash) throw new Error('PASSWORD_REQUIRED');
+      passHash = requestedPassHash;
+    } else if (!oldUser) {
+      passHash = norm(item.passHash || item.passwordHash || item.hash || item.pass_hash);
+      if (!passHash && item.pass) passHash = await sha256Hex(String(item.pass));
+    }
+    if (!passHash) passHash = norm(env.DEFAULT_PASSWORD_HASH);
     if (!passHash) throw new Error('PASSWORD_REQUIRED');
 
     let enabled;
