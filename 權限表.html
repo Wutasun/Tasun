@@ -1340,7 +1340,13 @@ html.tasun-auth-pending body,html.tasun-auth-blocked body{visibility:hidden!impo
     const permMat    = safeJsonParse(localStorage.getItem(PERM_MATRIX_KEY) || "{}", { users:{} });
 
     return {
-      auth: Array.isArray(auth) ? auth : [],
+      auth: Array.isArray(auth) ? auth.map(u => {
+        const row = u && typeof u === 'object' ? { ...u } : {};
+        row.passwordChanged = !!(u && u.__passwordChanged === true);
+        delete row.__passwordChanged;
+        delete row.__pendingPass;
+        return row;
+      }) : [],
       navButtons: Array.isArray(navButtons) ? navButtons : [],
       routes: Array.isArray(routes) ? routes : [],
       btnMeta: Array.isArray(btnMetaLs) ? btnMetaLs : (Array.isArray(btnMeta) ? btnMeta : []),
@@ -1440,6 +1446,9 @@ html.tasun-auth-pending body,html.tasun-auth-blocked body{visibility:hidden!impo
       const payload = snapshotAuthTableForCloud();
       const r = await d1PostJson(D1_AUTH_TABLE_ENDPOINT_ADMIN, payload);
       if(r.ok && r.json && r.json.ok){
+        for(const u of (Array.isArray(auth) ? auth : [])){
+          if(u && u.__passwordChanged) delete u.__passwordChanged;
+        }
         cloudState.textContent = "雲端：已寫入 D1";
         return { ok:true };
       }
@@ -1991,6 +2000,8 @@ function safeJsonParse(s, fallback){
         role: roleOptions.includes(role) ? role : 'read',
         passHash,
         pass,
+        __pendingPass: String(raw?.__pendingPass ?? ''),
+        __passwordChanged: raw?.__passwordChanged === true,
         name: String(raw?.name ?? user).trim()
       };
     }).filter(u => u.user);
@@ -2485,6 +2496,7 @@ function safeJsonParse(s, fallback){
       try{
         u.passHash = await sha256Hex(plain);
         u.pass = '';
+        u.__passwordChanged = true;
         delete u.__pendingPass;
       }catch(_){ }
     }
@@ -2495,6 +2507,7 @@ function safeJsonParse(s, fallback){
     const sanitized = (Array.isArray(auth) ? auth : []).map(u => {
       const row = { ...u };
       delete row.__pendingPass;
+      delete row.__passwordChanged;
       return row;
     });
     localStorage.setItem(AUTH_KEY, JSON.stringify(sanitized));
@@ -2657,6 +2670,7 @@ function safeJsonParse(s, fallback){
         try{
           auth[idx].passHash = await sha256Hex(plain);
           auth[idx].pass = "";
+          auth[idx].__passwordChanged = true;
           e.target.value = "";
           setMsg("✅ 已更新密碼（SHA-256 加密儲存）。");
         }catch(_){
@@ -2990,7 +3004,13 @@ function safeJsonParse(s, fallback){
   }
 
   async function doUploadOnce(token){
-    const bodyObj = { auth, permMatrix };
+    const safeAuth = (Array.isArray(auth) ? auth : []).map(u => {
+      const row = u && typeof u === 'object' ? { ...u } : {};
+      delete row.__pendingPass;
+      delete row.__passwordChanged;
+      return row;
+    });
+    const bodyObj = { auth:safeAuth, permMatrix };
     const body = JSON.stringify(bodyObj, null, 2);
 
     const lastRev = stripInvisibles(localStorage.getItem(CLOUD_REV_KEY) || '');
