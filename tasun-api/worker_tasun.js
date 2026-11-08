@@ -1118,7 +1118,7 @@ function corsHeaders(request, env) {
     'Access-Control-Allow-Origin': allowOrigin,
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    'Access-Control-Allow-Headers': 'content-type,authorization,x-tasun-release-token,x-tasun-user,x-tasun-role,x-tasun-session-bridge,x-tasun-page-key,x-tasun-page-file,x-tasun-resource-key,x-tasun-token,x-tasun-auth-token,x-tasun-worker-token,x-worker-token,x-api-key,x-tasun-api-key,x-tasun-client',
+    'Access-Control-Allow-Headers': 'content-type,authorization,cache-control,pragma,x-tasun-release-token,x-tasun-user,x-tasun-role,x-tasun-session-bridge,x-tasun-page-key,x-tasun-page-file,x-tasun-resource-key,x-tasun-token,x-tasun-auth-token,x-tasun-worker-token,x-worker-token,x-api-key,x-tasun-api-key,x-tasun-client',
     'Access-Control-Max-Age': '86400',
     'Vary': 'Origin',
   };
