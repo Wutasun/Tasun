@@ -2609,8 +2609,9 @@ body:not(.locked) #loginOverlay{display:none!important;}
           const next = Object.assign({}, prev, row);
           next.user = user;
           next.username = user;
-          if(!next.role && next.level) next.role = next.level;
-          if(!next.level && next.role) next.level = next.role;
+          const authorityRole = String(row?.role ?? row?.level ?? 'read').trim().toLowerCase() || 'read';
+          next.role = authorityRole;
+          next.level = authorityRole;
           const incomingHash = String(row?.passHash || row?.passwordHash || row?.hash || '').trim();
           const incomingPlain = String(row?.pass || row?.password || row?.pw || '').trim();
           if(incomingHash) next.passHash = incomingHash;
@@ -4623,21 +4624,35 @@ body:not(.locked) #loginOverlay{display:none!important;}
           repairKnownAuthSecrets();
           AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
 
-          let u = await verifyUserPassword(username, password);
+          const stagingPreview = String(location.hostname || '').toLowerCase().endsWith('.tasun-g3-pr104-preview.pages.dev');
+          const authorityUser = AUTH_TABLE.find(r => String(r.username || '').trim().toLowerCase() === String(username).trim().toLowerCase());
+          let u = null;
           let workerAuthenticated = false;
-          if(!u){
-            const authorityUser = AUTH_TABLE.find(r => String(r.username || '').trim().toLowerCase() === String(username).trim().toLowerCase());
-            if(authorityUser){
-              workerAuthenticated = await __tasunBridgeWorkerTokenNow(username, password, authorityUser.level || authorityUser.role || 'read');
+
+          if(stagingPreview){
+            if(!authorityUser || Number(authorityUser.enabled ?? 0) !== 1){
+              loginError.textContent = '帳號不存在或已停用，請依權限表確認';
+              return;
+            }
+            workerAuthenticated = await __tasunBridgeWorkerTokenNow(username, password, authorityUser.role || authorityUser.level || 'read');
+            if(!workerAuthenticated){
+              loginError.textContent = 'Staging 密碼驗證失敗，請確認 Staging 帳號資料';
+              return;
+            }
+            u = authorityUser;
+          }else{
+            u = await verifyUserPassword(username, password);
+            if(!u && authorityUser){
+              workerAuthenticated = await __tasunBridgeWorkerTokenNow(username, password, authorityUser.role || authorityUser.level || 'read');
               if(workerAuthenticated) u = authorityUser;
             }
-          }
-          if(!u){
-            const exists = AUTH_TABLE.some(r =>
-              String(r.username || '').trim().toLowerCase() === String(username).trim().toLowerCase()
-            );
-            loginError.textContent = exists ? '密碼錯誤' : '查無此使用者（請到「系統 / 權限」新增）';
-            return;
+            if(!u){
+              const exists = AUTH_TABLE.some(r =>
+                String(r.username || '').trim().toLowerCase() === String(username).trim().toLowerCase()
+              );
+              loginError.textContent = exists ? '密碼錯誤' : '查無此使用者（請到「系統 / 權限」新增）';
+              return;
+            }
           }
 
           const finalRole = String(u.level || u.role || inferRole(u.username, '') || 'read').trim().toLowerCase();
