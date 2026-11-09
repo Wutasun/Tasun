@@ -2622,34 +2622,41 @@ body:not(.locked) #loginOverlay{display:none!important;}
         }
         return changed;
       }
-      async function syncAuthTableFromAuthority(){
-        try{
-          const host = String(location.hostname || '').toLowerCase();
-          if(!host.endsWith('.tasun-g3-pr104-preview.pages.dev')) return false;
-          let result;
-          for(let attempt = 0; attempt < 2; attempt++){
-            try{
-              result = await d1GetPublicJson(D1_AUTH_TABLE_ENDPOINT_PUB);
-              break;
-            }catch(fetchError){
-              if(attempt === 0 && fetchError instanceof TypeError){
-                await new Promise(resolve=>setTimeout(resolve, 500));
-                continue;
+      let authTableSyncPromise = null;
+      function syncAuthTableFromAuthority(){
+        if(authTableSyncPromise) return authTableSyncPromise;
+        authTableSyncPromise = (async function(){
+          try{
+            const host = String(location.hostname || '').toLowerCase();
+            if(!host.endsWith('.tasun-g3-pr104-preview.pages.dev')) return false;
+            let result;
+            for(let attempt = 0; attempt < 2; attempt++){
+              try{
+                result = await d1GetPublicJson(D1_AUTH_TABLE_ENDPOINT_PUB);
+                break;
+              }catch(fetchError){
+                if(attempt === 0 && fetchError instanceof TypeError){
+                  await new Promise(resolve=>setTimeout(resolve, 500));
+                  continue;
+                }
+                throw fetchError;
               }
-              throw fetchError;
             }
+            const json = result && result.json;
+            const rows = json && json.ok && json.data && Array.isArray(json.data.auth) ? json.data.auth : null;
+            if(!result || !result.ok || !rows) return false;
+            mergeAuthorityAuthToLocal(rows);
+            AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+            if(loginOverlay && loginOverlay.style.display === 'flex') populateUserSelect();
+            return true;
+          }catch(e){
+            console.warn('staging auth list sync failed', e);
+            return false;
+          }finally{
+            authTableSyncPromise = null;
           }
-          const json = result && result.json;
-          const rows = json && json.ok && json.data && Array.isArray(json.data.auth) ? json.data.auth : null;
-          if(!result || !result.ok || !rows) return false;
-          mergeAuthorityAuthToLocal(rows);
-          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-          if(loginOverlay && loginOverlay.style.display === 'flex') populateUserSelect();
-          return true;
-        }catch(e){
-          console.warn('staging auth list sync failed', e);
-          return false;
-        }
+        })();
+        return authTableSyncPromise;
       }
       function loadScriptOnce(src){
         return new Promise((resolve)=>{
@@ -3990,7 +3997,26 @@ body:not(.locked) #loginOverlay{display:none!important;}
       function menuItems(){ return Array.from(usernameMenu ? usernameMenu.querySelectorAll('.select-option') : []); }
       function isMenuOpen(){ return !!(usernameMenu && usernameMenu.classList.contains('open')); }
       function closeUsernameMenu(){ if(!usernameMenu) return; usernameMenu.classList.remove('open'); if(usernameDisplay) usernameDisplay.setAttribute('aria-expanded', 'false'); _userActiveIndex = -1; _typeBuf = ''; }
-      function openUsernameMenu(){ if(!usernameMenu || !usernameDisplay || usernameDisplay.disabled) return; usernameMenu.classList.add('open'); usernameDisplay.setAttribute('aria-expanded', 'true'); try{ if(String(location.hostname || '').toLowerCase().endsWith('.tasun-g3-pr104-preview.pages.dev')) syncAuthTableFromAuthority(); }catch(e){} const items = menuItems(); if(!items.length) return; const idx = items.findIndex(it => (it.dataset.value || '') === (usernameSel.value || '')); setActiveIndex(idx >= 0 ? idx : 0, true); }
+      async function openUsernameMenu(){
+        if(!usernameMenu || !usernameDisplay || usernameDisplay.disabled) return;
+        const host = String(location.hostname || '').toLowerCase();
+        const isStagingPreview = host.endsWith('.tasun-g3-pr104-preview.pages.dev');
+        if(isStagingPreview){
+          usernameMenu.innerHTML = '<div class="select-option" role="status">正在同步測試帳號清單…</div>';
+          usernameMenu.classList.add('open');
+          usernameDisplay.setAttribute('aria-expanded', 'true');
+          if(loginError) loginError.textContent = '正在同步測試帳號清單…';
+          const synced = await syncAuthTableFromAuthority();
+          if(loginError) loginError.textContent = synced ? '' : '測試帳號同步失敗；目前顯示本機清單，請稍後再點選使用者重試。';
+          if(!synced) populateUserSelect();
+        }
+        usernameMenu.classList.add('open');
+        usernameDisplay.setAttribute('aria-expanded', 'true');
+        const items = menuItems();
+        if(!items.length) return;
+        const idx = items.findIndex(it => (it.dataset.value || '') === (usernameSel.value || ''));
+        setActiveIndex(idx >= 0 ? idx : 0, true);
+      }
       function toggleUsernameMenu(){ if(isMenuOpen()) closeUsernameMenu(); else openUsernameMenu(); }
       function selectedUsernameState(){
         if(!usernameSel) return { value:'', text:'請選擇使用者', valid:false };
@@ -4083,13 +4109,13 @@ body:not(.locked) #loginOverlay{display:none!important;}
       }
       if(usernameDisplay){
         usernameDisplay.addEventListener('click', toggleUsernameMenu);
-        usernameDisplay.addEventListener('keydown', (e) => {
+        usernameDisplay.addEventListener('keydown', async (e) => {
           if(usernameDisplay.disabled) return;
           const key = e.key;
-          if(key === 'ArrowDown' || key === 'ArrowUp'){ e.preventDefault(); if(!isMenuOpen()) openUsernameMenu(); const items = menuItems(); if(!items.length) return; const dir = (key === 'ArrowDown') ? 1 : -1; const next = (_userActiveIndex < 0) ? 0 : (_userActiveIndex + dir); setActiveIndex(next, true); return; }
-          if(key === 'Enter'){ e.preventDefault(); if(!isMenuOpen()){ openUsernameMenu(); return; } const items = menuItems(); if(!items.length) return; const idx = (_userActiveIndex >= 0) ? _userActiveIndex : 0; const val = items[idx]?.dataset?.value || ''; if(val) selectByValue(val); closeUsernameMenu(); return; }
+          if(key === 'ArrowDown' || key === 'ArrowUp'){ e.preventDefault(); if(!isMenuOpen()) await openUsernameMenu(); const items = menuItems(); if(!items.length) return; const dir = (key === 'ArrowDown') ? 1 : -1; const next = (_userActiveIndex < 0) ? 0 : (_userActiveIndex + dir); setActiveIndex(next, true); return; }
+          if(key === 'Enter'){ e.preventDefault(); if(!isMenuOpen()){ await openUsernameMenu(); return; } const items = menuItems(); if(!items.length) return; const idx = (_userActiveIndex >= 0) ? _userActiveIndex : 0; const val = items[idx]?.dataset?.value || ''; if(val) selectByValue(val); closeUsernameMenu(); return; }
           if(key === 'Escape'){ e.preventDefault(); closeUsernameMenu(); return; }
-          if(key && key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey){ if(!isMenuOpen()) openUsernameMenu(); _typeBuf += key.toLowerCase(); clearTimeout(_typeTimer); _typeTimer = setTimeout(()=>{ _typeBuf=''; }, 650); const items = menuItems(); const idx = items.findIndex(it => String(it.textContent||'').trim().toLowerCase().startsWith(_typeBuf)); if(idx >= 0) setActiveIndex(idx, true); }
+          if(key && key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey){ if(!isMenuOpen()) await openUsernameMenu(); _typeBuf += key.toLowerCase(); clearTimeout(_typeTimer); _typeTimer = setTimeout(()=>{ _typeBuf=''; }, 650); const items = menuItems(); const idx = items.findIndex(it => String(it.textContent||'').trim().toLowerCase().startsWith(_typeBuf)); if(idx >= 0) setActiveIndex(idx, true); }
         });
       }
       document.addEventListener('click', (e) => { if(!usernameWrap || !usernameMenu) return; if(isMenuOpen() && !usernameWrap.contains(e.target)) closeUsernameMenu(); });
