@@ -2614,8 +2614,23 @@ body:not(.locked) #loginOverlay{display:none!important;}
         }
         return changed;
       }
-      async function syncAuthTableFromAuthority(){ return false; }
-
+      async function syncAuthTableFromAuthority(){
+        try{
+          const host = String(location.hostname || '').toLowerCase();
+          if(!host.endsWith('.tasun-g3-pr104-preview.pages.dev')) return false;
+          const result = await d1GetJson(D1_AUTH_TABLE_ENDPOINT_PUB);
+          const json = result && result.json;
+          const rows = json && json.ok && json.data && Array.isArray(json.data.auth) ? json.data.auth : null;
+          if(!result || !result.ok || !rows) return false;
+          mergeAuthorityAuthToLocal(rows);
+          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+          if(loginOverlay && loginOverlay.style.display === 'flex') populateUserSelect();
+          return true;
+        }catch(e){
+          console.warn('staging auth list sync failed', e);
+          return false;
+        }
+      }
       function loadScriptOnce(src){
         return new Promise((resolve)=>{
           try{
@@ -3042,7 +3057,8 @@ body:not(.locked) #loginOverlay{display:none!important;}
           else buttons[i] = (level === 'read') ? (i === btnCount - 1) : true;
         }
         const passHash = (row?.passHash ?? row?.passwordHash ?? row?.hash ?? '').toString().trim();
-        return { username, password, passHash, level, buttons };
+        const enabled = row?.enabled == null ? 1 : Number(row.enabled);
+        return { username, password, passHash, level, buttons, enabled };
       }
       function loadAuthTable(btnCount){
         const raw = localStorage.getItem(AUTH_KEY);
@@ -3672,6 +3688,7 @@ body:not(.locked) #loginOverlay{display:none!important;}
         if(loginError) loginError.textContent = '';
         if(passwordInput) passwordInput.value = '';
         populateUserSelect();
+        try{ syncAuthTableFromAuthority(); }catch(e){}
         resetButtonsForLogout();
         updateReleaseButtonVisibility();
         if(userInfo){ userInfo.textContent = '目前使用者：未登入'; userInfo.setAttribute('data-text', '目前使用者：未登入'); }
@@ -4122,7 +4139,7 @@ body:not(.locked) #loginOverlay{display:none!important;}
         ph.selected = true;
         usernameSel.appendChild(ph);
 
-        const names = Array.from(new Set(AUTH_TABLE.map(r => r.username).filter(Boolean))).sort((a,b)=>a.localeCompare(b, 'zh-Hant'));
+        const names = Array.from(new Set(AUTH_TABLE.filter(r => Number(r.enabled ?? 1) === 1).map(r => r.username).filter(Boolean))).sort((a,b)=>a.localeCompare(b, 'zh-Hant'));
         names.forEach(name => {
           const opt = document.createElement('option');
           opt.value = name;
@@ -4554,7 +4571,15 @@ body:not(.locked) #loginOverlay{display:none!important;}
           repairKnownAuthSecrets();
           AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
 
-          const u = await verifyUserPassword(username, password);
+          let u = await verifyUserPassword(username, password);
+          let workerAuthenticated = false;
+          if(!u){
+            const authorityUser = AUTH_TABLE.find(r => String(r.username || '').trim().toLowerCase() === String(username).trim().toLowerCase());
+            if(authorityUser){
+              workerAuthenticated = await __tasunBridgeWorkerTokenNow(username, password, authorityUser.level || authorityUser.role || 'read');
+              if(workerAuthenticated) u = authorityUser;
+            }
+          }
           if(!u){
             const exists = AUTH_TABLE.some(r =>
               String(r.username || '').trim().toLowerCase() === String(username).trim().toLowerCase()
@@ -4568,7 +4593,7 @@ body:not(.locked) #loginOverlay{display:none!important;}
           setSession({ username: u.username, level: finalRole });
 
           __tasunSaveLoginBridge(u.username, password, finalRole);
-          await __tasunBridgeWorkerTokenNow(u.username, password, finalRole);
+          if(!workerAuthenticated) await __tasunBridgeWorkerTokenNow(u.username, password, finalRole);
 
           applyUser(
             Object.assign({}, u, { level: finalRole }),
