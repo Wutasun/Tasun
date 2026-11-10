@@ -1,0 +1,51 @@
+name: Deploy Tasun Worker to Staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_staging:
+        description: "Confirm target: tasun-worker-staging"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tasun-staging-worker-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-staging:
+    name: Deploy tasun-worker-staging
+    if: ${{ github.ref == 'refs/heads/fix/production-worker-auth-baseline' && inputs.confirm_staging }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out selected branch
+        uses: actions/checkout@v6
+
+      - name: Verify Staging-only target
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          config="tasun-api/wrangler.staging.toml"
+          test -f "$config"
+          grep -Fxq 'name = "tasun-worker-staging"' "$config"
+          grep -Fxq 'database_id = "ca30bb1d-314a-44e3-b889-08b30a0eba27"' "$config"
+          if [[ -z "$CLOUDFLARE_ACCOUNT_ID" ]]; then
+            echo "::error::Repository variable CLOUDFLARE_ACCOUNT_ID is missing."
+            exit 1
+          fi
+
+      - name: Deploy using the Staging configuration
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: "tasun-api"
+          command: deploy --config wrangler.staging.toml
+          wranglerVersion: "4"
