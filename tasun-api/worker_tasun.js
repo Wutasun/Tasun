@@ -1121,7 +1121,7 @@ function isStagingPreviewCorsOriginAllowed(origin, env) {
   const projectDomain = String(env.STAGING_PREVIEW_CORS_PROJECT_DOMAIN || '')
     .trim()
     .toLowerCase()
-    .replace(/^\\./, '');
+;
   if (!projectDomain || !origin) return false;
   try {
     const parsed = new URL(origin);
