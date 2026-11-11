@@ -1117,13 +1117,32 @@ function json(obj, status = 200, headers = {}) {
   return new Response(JSON.stringify(obj), { status, headers: h });
 }
 
+function isStagingPreviewCorsOriginAllowed(origin, env) {
+  const projectDomain = String(env.STAGING_PREVIEW_CORS_PROJECT_DOMAIN || '')
+    .trim()
+    .toLowerCase()
+;
+  if (!projectDomain || !origin) return false;
+  try {
+    const parsed = new URL(origin);
+    const hostname = parsed.hostname.toLowerCase();
+    const suffix = '.' + projectDomain;
+    if (parsed.protocol !== 'https:' || parsed.origin !== origin || !hostname.endsWith(suffix)) return false;
+    const previewLabel = hostname.slice(0, -suffix.length);
+    return Boolean(previewLabel) && !previewLabel.includes('.');
+  } catch (_) {
+    return false;
+  }
+}
+
 function corsHeaders(request, env) {
   const origin = request.headers.get('Origin') || '';
   const allowList = String(env.CORS_ALLOW_ORIGINS || 'https://wutasun.github.io')
     .split(',')
     .map(s => s.trim())
     .filter(Boolean);
-  const allowOrigin = allowList.includes(origin) ? origin : (allowList[0] || 'https://wutasun.github.io');
+  const isAllowed = allowList.includes(origin) || isStagingPreviewCorsOriginAllowed(origin, env);
+  const allowOrigin = isAllowed ? origin : (allowList[0] || 'https://wutasun.github.io');
   return {
     'Access-Control-Allow-Origin': allowOrigin,
     'Access-Control-Allow-Credentials': 'true',
