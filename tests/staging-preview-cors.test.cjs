@@ -6,10 +6,10 @@ const { test } = require('node:test');
 const { pathToFileURL } = require('node:url');
 
 const workerPath = path.join(__dirname, '..', 'tasun-api', 'worker_tasun.js');
-const workerModule = await import(pathToFileURL(workerPath).href);
-const worker = workerModule.default;
+const workerPromise = import(pathToFileURL(workerPath).href).then(module => module.default);
 
 async function preflight(origin, env) {
+  const worker = await workerPromise;
   const response = await worker.fetch(new Request(
     'https://tasun-worker-staging.wutasun.workers.dev/api/auth/public',
     { method: 'OPTIONS', headers: { Origin: origin } },
