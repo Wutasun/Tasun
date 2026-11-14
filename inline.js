@@ -2877,10 +2877,10 @@ main.hero,
         const mkAll = () => Object.fromEntries(keys.map(k => [k, true]));
         const mkOnlyLast = () => Object.fromEntries(keys.map((k, i) => [k, i === btnCount - 1]));
         return [
-          { user:'alex',  passHash:'7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07',  role:'admin', ...mkAll() },
-          { user:'JOYCE', passHash:'d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815', role:'admin', ...mkAll() },
-          { user:'tasun', passHash:'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba', role:'write', ...mkAll() },
-          { user:'wu',    passHash:'8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92', role:'read', ...mkOnlyLast() }
+          { user:'alex', role:'admin', ...mkAll() },
+          { user:'JOYCE', role:'admin', ...mkAll() },
+          { user:'tasun', role:'write', ...mkAll() },
+          { user:'wu', role:'read', ...mkOnlyLast() }
         ];
       }
       function normalizeRowFromStorage(row, btnCount){
@@ -2923,27 +2923,6 @@ main.hero,
         localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
         return legacy.map(r => normalizeRowFromStorage(r, btnCount));
       }
-      const DEFAULT_AUTH_HASH = {
-        alex: '7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07',
-        joyce: 'd558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815',
-        tasun: 'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba',
-        wu: '8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92'
-      };
-      function findAuthCandidates(username){
-        const wanted = String(username || '').trim().toLowerCase();
-        if(!wanted) return [];
-        AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-        return AUTH_TABLE.filter(r => String(r.username || '').trim().toLowerCase() === wanted);
-      }
-      function pickLoginUserFromCandidates(candidates, passwordHash, passwordPlain){
-        const plain = String(passwordPlain || '').trim();
-        for(const u of candidates){
-          const storedHash = String(u.passHash || '').trim().toLowerCase();
-          const storedPlain = String(u.password || '').trim();
-          if((storedHash && passwordHash === storedHash) || (!!storedPlain && plain === storedPlain)) return u;
-        }
-        return null;
-      }
       function repairKnownAuthSecrets(){
         try{
           const raw = localStorage.getItem(AUTH_KEY);
@@ -2951,10 +2930,10 @@ main.hero,
           const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
           if(!Array.isArray(arr) || !arr.length) return;
           const seedMap = new Map([
-            ['alex',  { user:'alex',  passHash:'7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07', role:'admin' }],
-            ['joyce', { user:'JOYCE', passHash:'d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815', role:'admin' }],
-            ['tasun', { user:'tasun', passHash:'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba', role:'write' }],
-            ['wu',    { user:'wu',    passHash:'8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92', role:'read' }]
+            ['alex',  { user:'alex',   role:'admin' }],
+            ['joyce', { user:'JOYCE',  role:'admin' }],
+            ['tasun', { user:'tasun',  role:'write' }],
+            ['wu',    { user:'wu',     role:'read' }]
           ]);
           let changed = false;
           arr.forEach(r => {
@@ -2962,12 +2941,6 @@ main.hero,
             const key = String(r.user || r.username || r.name || r.account || '').trim().toLowerCase();
             const seed = seedMap.get(key);
             if(!seed) return;
-            const hasHash = String(r.passHash || r.passwordHash || r.hash || '').trim();
-            const hasPlain = String(r.pass || r.password || r.pw || '').trim();
-            if(!hasHash && !hasPlain){
-              r.passHash = seed.passHash;
-              changed = true;
-            }
             if(!String(r.role || r.level || '').trim()){
               r.role = seed.role;
               changed = true;
@@ -2976,29 +2949,7 @@ main.hero,
           if(changed) localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
         }catch(e){}
       }
-      function migrateAuthToHashedIfNeeded(){
-        try{
-          const raw = localStorage.getItem(AUTH_KEY);
-          const parsed = safeJsonParse(raw, null);
-          const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
-          if(!Array.isArray(arr) || arr.length === 0){ const legacy = getDefaultAuthTableLegacy(LEGACY_BUTTON_KEYS.length); localStorage.setItem(AUTH_KEY, JSON.stringify(legacy)); return; }
-          let need = false;
-          for(const r of arr){ if(!r) continue; const hasPass = (r.pass || r.password || r.pw); const hasHash = (r.passHash || r.passwordHash || r.hash); if(hasPass && !hasHash){ need = true; break; } }
-          if(!need) return;
-          (async ()=>{
-            try{
-              let changed = false;
-              for(const r of arr){
-                if(!r) continue;
-                const hasHash = (r.passHash || r.passwordHash || r.hash);
-                const pass = (r.password ?? r.pass ?? r.pw ?? '').toString();
-                if(!hasHash && pass){ r.passHash = await sha256Hex(pass); delete r.password; delete r.pass; delete r.pw; changed = true; }
-              }
-              if(changed) localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
-            }catch(e){}
-          })();
-        }catch(e){}
-      }
+      
 
       const COOKIE_NAME = 'tasun_session_v4';
       const COOKIE_TTL_MS = 1000 * 60 * 60 * 12;
@@ -3343,7 +3294,7 @@ main.hero,
       }
       function onIndexConfigApplied(){
         try{
-          try{ migrateAuthToHashedIfNeeded(); }catch(_e){}
+          
           ROUTES = loadRoutes();
           NAV_ARR = loadNavButtonsSeedIfMissing();
           AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
@@ -4104,24 +4055,7 @@ main.hero,
       if(zenImg) zenImg.addEventListener('load', () => { scheduleAll(); }, { once:false });
       requestAnimationFrame(() => { document.body.classList.remove('booting'); scheduleAll(); runStableCalibrator('raf'); onFontsReady(() => { scheduleAll(); runStableCalibrator('fonts'); }); setTimeout(() => { scheduleAll(); runStableCalibrator('t120'); }, 120); setTimeout(() => { scheduleAll(); runStableCalibrator('t320'); }, 320); });
 
-      async function verifyUserPassword(username, password){
-        const wanted = String(username || '').trim().toLowerCase();
-        const plain = String(password || '').trim();
-        if(!wanted || !plain) return null;
-        const pwHash = (await sha256Hex(plain)).toLowerCase();
-        const candidates = AUTH_TABLE.filter(r => String(r.username || '').trim().toLowerCase() === wanted);
-        for(const u of candidates){
-          const storedHash = String(u.passHash || '').trim().toLowerCase();
-          const storedPlain = String(u.password || u.pass || '').trim();
-          if((storedHash && pwHash === storedHash) || (!!storedPlain && plain === storedPlain)) return u;
-        }
-        const fallbackHash = String(DEFAULT_AUTH_HASH[wanted] || '').trim().toLowerCase();
-        if(fallbackHash && pwHash === fallbackHash){
-          const matched = candidates[0] || { username: username, level: inferRole(username, '') };
-          return Object.assign({}, matched, {
-            username: String(matched.username || username).trim(),
-            level: String(matched.level || matched.role || inferRole(username, '')).trim().toLowerCase() || 'read',
-            passHash: fallbackHash
+ackHash
           });
         }
         return null;
@@ -4129,11 +4063,10 @@ main.hero,
 
 
 
-      function __tasunSaveLoginBridge(username, password, role){
+      function __tasunSaveLoginBridge(username, role){
         try{
           const nowIso = new Date().toISOString();
           const u = String(username || '').trim();
-          const p = String(password || '');
           const r = String(role || '').trim().toLowerCase() || 'read';
 
           if(!u) return false;
@@ -4168,60 +4101,71 @@ main.hero,
         }
       }
 
-      async function __tasunBridgeWorkerTokenNow(username, password, role){
+      function __tasunResolveLoginApiBase(){
+        if(typeof getApiBaseLocked === 'function') return getApiBaseLocked();
+        const host = String(location.hostname || '').toLowerCase();
+        if(host.endsWith('.tasun-g3-pr104-preview.pages.dev')) return 'https://tasun-worker-staging.wutasun.workers.dev';
+        let override = '';
+        try{ override = String(localStorage.getItem('tasunApiBase_v1') || '').trim(); }catch(_e){}
+        return String(override || 'https://tasun-worker.wutasun.workers.dev').replace(/\\/+$/, '');
+      }
+      async function __tasunBridgeWorkerTokenNow(username, password){
         try{
           const user = String(username || '').trim();
-          const pass = String(password || '').trim();
-          const finalRole = String(role || 'read').trim().toLowerCase() || 'read';
-          if(!user || !pass) return false;
-          const apiBase = 'https://tasun-worker.wutasun.workers.dev';
-          const res = await fetch(apiBase + '/api/tasun/login', {
-            method:'POST',
-            cache:'no-store',
-            credentials:'include',
-            headers:{ 'content-type':'application/json', 'accept':'application/json' },
-            body: JSON.stringify({ username:user, password:pass, user:user, pass:pass })
-          });
-          if(!res.ok) return false;
-          const json = await res.json().catch(() => ({}));
-          const token = String(
-            json.token || json.accessToken || json.authToken || json.bearer || json.workerToken || json.cloudToken || json.apiKey ||
-            ((json.auth || {}).token || (json.auth || {}).accessToken || (json.auth || {}).authToken || (json.auth || {}).bearer || (json.auth || {}).apiKey) ||
-            ((json.session || {}).token || (json.session || {}).accessToken || (json.session || {}).authToken || (json.session || {}).bearer || (json.session || {}).apiKey) ||
-            ((json.data || {}).token || (json.data || {}).accessToken || (json.data || {}).authToken || (json.data || {}).bearer || (json.data || {}).apiKey) ||
-            ((json.payload || {}).token || (json.payload || {}).accessToken || (json.payload || {}).authToken || (json.payload || {}).bearer || (json.payload || {}).apiKey) ||
-            ''
-          ).trim();
-          if(!token) return false;
-
+          const pass = String(password || '');
+          if(!user || !pass) return { ok:false, error:'BAD_INPUT' };
+          const apiBase = __tasunResolveLoginApiBase();
+          const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+          const timeout = controller ? setTimeout(() => controller.abort(), 15000) : null;
+          let response;
+          let body;
+          try{
+            response = await fetch(apiBase + '/api/tasun/login', {
+              method:'POST',
+              cache:'no-store',
+              credentials:'include',
+              headers:{ 'content-type':'application/json', 'accept':'application/json' },
+              body: JSON.stringify({ username:user, password:pass }),
+              ...(controller ? { signal:controller.signal } : {})
+            });
+            if(!response.ok) return { ok:false, status:response.status, error:'LOGIN_REJECTED' };
+            body = await response.json().catch(() => ({}));
+          }finally{
+            if(timeout) clearTimeout(timeout);
+          }
+          if(!body || body.ok !== true) return { ok:false, error:String(body?.error || 'LOGIN_REJECTED') };
+          const token = String(body.token || body.accessToken || body.authToken || body.bearer ||
+            body.workerToken || body.cloudToken || body.apiKey ||
+            body.auth?.token || body.auth?.accessToken || body.auth?.authToken || body.auth?.bearer ||
+            body.session?.token || body.session?.accessToken || body.session?.authToken || body.session?.bearer ||
+            body.data?.token || body.data?.accessToken || body.data?.authToken || body.data?.bearer ||
+            body.payload?.token || body.payload?.accessToken || body.payload?.authToken || body.payload?.bearer || '').trim();
+          const rawUser = typeof body.user === 'string' ? body.user :
+            (body.user?.username || body.user?.user || body.username || body.data?.user || '');
+          const authenticatedUser = String(rawUser || '').trim();
+          const role = String(body.role || body.user?.role || body.data?.role || '').trim().toLowerCase();
+          if(!token || !authenticatedUser || !['admin','write','read'].includes(role)){
+            return { ok:false, error:'INVALID_LOGIN_RESPONSE' };
+          }
           const tokenKeys = [
-            'tasunCloudToken_v1',
-            'tasunCloudToken_v1__index',
-            'tasunCloudToken_v1__auth-table',
-            'tasunBearerToken_v1',
-            'tasunAccessToken_v1',
-            'tasunAuthToken_v1',
-            'tasunSessionToken_v1',
-            'tasun_token',
-            'tasunToken',
-            'tasun_auth_token',
-            'authToken',
-            'access_token',
-            'token',
-            'x-api-key',
-            'tasunApiKey_v1'
+            'tasunCloudToken_v1','tasunCloudToken_v1__index','tasunCloudToken_v1__auth-table',
+            'tasunBearerToken_v1','tasunAccessToken_v1','tasunAuthToken_v1','tasunSessionToken_v1',
+            'tasun_token','tasunToken','tasun_auth_token','authToken','access_token','token','x-api-key','tasunApiKey_v1'
           ];
-          tokenKeys.forEach((k) => {
-            try{ sessionStorage.setItem(k, token); }catch(e){}
-            try{ localStorage.setItem(k, token); }catch(e){}
+          tokenKeys.forEach(k => {
+            try{ sessionStorage.setItem(k, token); }catch(_e){}
+            try{ localStorage.setItem(k, token); }catch(_e){}
           });
-
-          const bridge = { user:user, name:user, role:finalRole, token:token, accessToken:token, authToken:token, bearer:token, at:new Date().toISOString() };
-          try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge)); }catch(e){}
-          try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge)); }catch(e){}
-          return true;
+          const bridge = { user:authenticatedUser, name:authenticatedUser, role, token, accessToken:token,
+            authToken:token, bearer:token, at:new Date().toISOString() };
+          try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge)); }catch(_e){}
+          try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge)); }catch(_e){}
+          return { ok:true, user:authenticatedUser, role };
         }catch(err){
-          console.warn('worker token bridge failed', err);
+          console.warn('worker token bridge failed');
+          return { ok:false, error:'LOGIN_UNAVAILABLE' };
+        }
+      }orker token bridge failed', err);
           return false;
         }
       }
@@ -4246,25 +4190,34 @@ main.hero,
         try{
           repairKnownAuthSecrets();
           AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-
-          const u = await verifyUserPassword(username, password);
-          if(!u){
-            const exists = AUTH_TABLE.some(r =>
-              String(r.username || '').trim().toLowerCase() === String(username).trim().toLowerCase()
-            );
-            loginError.textContent = exists ? '密碼錯誤' : '查無此使用者（請到「系統 / 權限」新增）';
+          try{
+            if(typeof syncAuthTableFromAuthority === 'function') await syncAuthTableFromAuthority();
+          }catch(_e){}
+          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+          const localUser = AUTH_TABLE.find(r =>
+            String(r.username || '').trim().toLowerCase() === String(username).trim().toLowerCase()
+          );
+          if(!localUser){
+            loginError.textContent = '使用者權限資料尚未同步，請稍後重試';
             return;
           }
-
-          const finalRole = String(u.level || u.role || inferRole(u.username, '') || 'read').trim().toLowerCase();
-
-          setSession({ username: u.username, level: finalRole });
-
-          __tasunSaveLoginBridge(u.username, password, finalRole);
-          await __tasunBridgeWorkerTokenNow(u.username, password, finalRole);
-
+          const workerAuth = await __tasunBridgeWorkerTokenNow(username, password);
+          if(!workerAuth.ok){
+            loginError.textContent = workerAuth.error === 'LOGIN_UNAVAILABLE'
+              ? '登入服務暫時無法使用，請稍後重試'
+              : '帳號或密碼錯誤，或帳號未啟用';
+            return;
+          }
+          const finalRole = workerAuth.role;
+          const authenticatedUser = workerAuth.user;
+          const u = Object.assign({}, localUser, {
+            username:authenticatedUser, user:authenticatedUser, name:authenticatedUser,
+            role:finalRole, level:finalRole
+          });
+          setSession({ username:authenticatedUser, level:finalRole });
+          __tasunSaveLoginBridge(authenticatedUser, finalRole);
           applyUser(
-            Object.assign({}, u, { level: finalRole }),
+            Object.assign({}, u, { role:finalRole, level:finalRole }),
             { skipBroadcast:true }
           );
 
