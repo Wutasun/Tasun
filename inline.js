@@ -4055,14 +4055,6 @@ main.hero,
       if(zenImg) zenImg.addEventListener('load', () => { scheduleAll(); }, { once:false });
       requestAnimationFrame(() => { document.body.classList.remove('booting'); scheduleAll(); runStableCalibrator('raf'); onFontsReady(() => { scheduleAll(); runStableCalibrator('fonts'); }); setTimeout(() => { scheduleAll(); runStableCalibrator('t120'); }, 120); setTimeout(() => { scheduleAll(); runStableCalibrator('t320'); }, 320); });
 
-ackHash
-          });
-        }
-        return null;
-      }
-
-
-
       function __tasunSaveLoginBridge(username, role){
         try{
           const nowIso = new Date().toISOString();
@@ -4164,9 +4156,6 @@ ackHash
         }catch(err){
           console.warn('worker token bridge failed');
           return { ok:false, error:'LOGIN_UNAVAILABLE' };
-        }
-      }orker token bridge failed', err);
-          return false;
         }
       }
 
