@@ -4094,9 +4094,14 @@ main.hero,
       }
 
       function __tasunResolveLoginApiBase(){
-        if(typeof getApiBaseLocked === 'function') return getApiBaseLocked();
         const host = String(location.hostname || '').toLowerCase();
-        if(host.endsWith('.tasun-g3-pr104-preview.pages.dev')) return 'https://tasun-worker-staging.wutasun.workers.dev';
+        const isStagingPagesHost =
+          host === 'tasun-g3-pr104-v2-qa.pages.dev' ||
+          host.endsWith('.tasun-g3-pr104-v2-qa.pages.dev') ||
+          host === 'tasun-g3-pr104-preview.pages.dev' ||
+          host.endsWith('.tasun-g3-pr104-preview.pages.dev');
+        if(isStagingPagesHost) return 'https://tasun-worker-staging.wutasun.workers.dev';
+        if(typeof getApiBaseLocked === 'function') return getApiBaseLocked();
         let override = '';
         try{ override = String(localStorage.getItem('tasunApiBase_v1') || '').trim(); }catch(_e){}
         return String(override || 'https://tasun-worker.wutasun.workers.dev').replace(/\\/+$/, '');
