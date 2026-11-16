@@ -465,11 +465,30 @@
         .replaceAll("'","&#39;");
     }
 
+    function currentAuthUser(){
+      const auth = window.TasunAuthV4;
+      if(!auth || typeof auth.getCurrent !== "function") return null;
+      try{
+        const raw = auth.getCurrent();
+        const username = norm(raw && (raw.username || raw.user || raw.name));
+        const token = norm((raw && raw.token) || (typeof auth.getToken === "function" ? auth.getToken() : ""));
+        const role = norm(raw && (raw.role || raw.level)).toLowerCase();
+        if(!username || !token || !["admin","write","read"].includes(role)) return null;
+        return { username, user:username, role, token };
+      }catch(_e){
+        return null;
+      }
+    }
+
+    function canWrite(user){
+      return !!(user && (user.role === "admin" || user.role === "write"));
+    }
+
     function syncUserUI(){
-      const u = Core.Auth.current();
+      const u = currentAuthUser();
       $("uName").textContent = u?.username || "—";
-      $("uRole").textContent = Core.Auth.role();
-      $("btnReg").style.display = Core.Auth.canWrite() ? "inline-block" : "none";
+      $("uRole").textContent = u?.role || "—";
+      $("btnReg").style.display = canWrite(u) ? "inline-block" : "none";
     }
 
     function loadDB(){
@@ -590,7 +609,7 @@
         `;
       }).join("") || `<tr><td colspan="6" class="muted" style="padding:18px;">尚無資料</td></tr>`;
 
-      const writable = Core.Auth.canWrite();
+      const writable = canWrite(currentAuthUser());
       $("hint").innerHTML =
         `筆數：<b style="color:var(--gold)">${rows.length}</b>。` +
         (writable ? ` 你也可以到「登錄資料」新增。` : `（read 權限僅可查詢）`);
@@ -659,8 +678,20 @@
       });
     }
 
+    function showAuthRequired(){
+      syncUserUI();
+      $("btnReg").style.display = "none";
+      $("tbody").innerHTML =
+        '<tr><td colspan="6" class="muted" style="padding:18px;">請先返回首頁完成 Worker 登入，再開啟此查詢頁。</td></tr>';
+      $("hint").textContent = "目前沒有有效的 Worker 登入工作階段。";
+    }
+
     function start(){
-      if(!Core.Auth.ensureLoggedIn()) return;
+      const user = currentAuthUser();
+      if(!user){
+        showAuthRequired();
+        return;
+      }
 
       bindOnce();
       syncUserUI();
@@ -671,10 +702,13 @@
       render();
     }
 
-    Core.Auth.init({
-      onAuthed: ()=>{ toast("登入成功"); start(); },
-      onSessionChange: ()=>{ syncUserUI(); },
-      onForceRelogin: (msg)=>{ toast(msg || "請重新登入"); syncUserUI(); }
+    const AUTH_STORAGE_KEYS = new Set([
+      "tasunCurrentUser_v1","tasunCurrentUser_v2","tasunSession_v1",
+      "tasunSessionBridge_v1","tasunSessionLogin_v2","tasunAuthSession_v1",
+      "tasunBearerToken_v1","tasunWorkerToken","tasun_token"
+    ]);
+    window.addEventListener("storage", (event)=>{
+      if(!event || event.key === null || AUTH_STORAGE_KEYS.has(event.key)) start();
     });
 
     start();
