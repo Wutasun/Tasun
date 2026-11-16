@@ -3619,6 +3619,61 @@ body:not(.locked) #loginOverlay{display:none!important;}
           return true;
         }catch(e){ return false; }
       }
+      function tryRestoreExistingWorkerSession(){
+        try{
+          const auth = window.TasunAuthV4;
+          if(!auth || typeof auth.getCurrent !== 'function' || typeof auth.getToken !== 'function') return false;
+          const stored = auth.getCurrent();
+          const username = String(stored && (stored.username || stored.user || stored.name) || '').trim();
+          const role = String(stored && (stored.role || stored.level) || '').trim().toLowerCase();
+          const token = String((stored && stored.token) || auth.getToken() || '').trim().replace(/^Bearer\\s+/i, '');
+          if(!username || !token || !['admin','write','read'].includes(role)) return false;
+
+          const row = AUTH_TABLE.find(function(item){
+            return String(item.username || '').trim().toLowerCase() === username.toLowerCase();
+          });
+          if(!row || Number(row.enabled ?? 1) !== 1) return false;
+          const tableRole = String(row.level || row.role || '').trim().toLowerCase();
+          if(tableRole !== role) return false;
+
+          applyUser(Object.assign({}, row, {username:username, user:username, name:username, role:role, level:role}), {skipBroadcast:true});
+          verifyRestoredWorkerSession(username, role, token).catch(function(){});
+          return true;
+        }catch(_e){ return false; }
+      }
+      async function verifyRestoredWorkerSession(username, role, token){
+        let timeout = null;
+        try{
+          const apiBase = __tasunResolveLoginApiBase();
+          const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+          if(controller) timeout = setTimeout(function(){ controller.abort(); }, 8000);
+          const response = await fetch(String(apiBase).replace(/\\/+$/,'') + '/api/tasun/me', {
+            method:'GET',
+            cache:'no-store',
+            credentials:'include',
+            headers:{'accept':'application/json','authorization':'Bearer ' + token},
+            ...(controller ? {signal:controller.signal} : {})
+          });
+          if(response.status === 401 || response.status === 403){
+            if(CURRENT_USER && CURRENT_USER.username === username) forceLogoutAndShowLogin('登入工作階段已失效，請重新登入');
+            return false;
+          }
+          if(!response.ok) return null;
+          const data = await response.json().catch(function(){ return {}; });
+          const workerUser = String(data && (data.user || data.username) || '').trim();
+          const workerRole = String(data && data.role || '').trim().toLowerCase();
+          if(data.ok !== true || workerUser !== username || workerRole !== role){
+            if(CURRENT_USER && CURRENT_USER.username === username) forceLogoutAndShowLogin('登入身分或權限已變更，請重新登入');
+            return false;
+          }
+          return true;
+        }catch(_e){
+          // Keep the existing session during a transient network failure; protected Worker requests still enforce authorization.
+          return null;
+        }finally{
+          if(timeout) clearTimeout(timeout);
+        }
+      }
       function tryRestoreLogin(){
         // R1156 isolated fix: R739 manager -> index, single-use same-tab handoff ONLY.
         // A URL flag alone, a persisted identity alone, or a stored Token is insufficient.
@@ -4443,7 +4498,7 @@ body:not(.locked) #loginOverlay{display:none!important;}
       buildMainButtonsDOM();
       updateReleaseButtonVisibility();
       bindStableCalibrator();
-      if(!tryRestoreLogin()) showLogin();
+      if(!tryRestoreLogin() && !tryRestoreExistingWorkerSession()) showLogin();
       if(zenImg) zenImg.addEventListener('load', () => { scheduleAll(); }, { once:false });
       requestAnimationFrame(() => { document.body.classList.remove('booting'); scheduleAll(); runStableCalibrator('raf'); onFontsReady(() => { scheduleAll(); runStableCalibrator('fonts'); }); setTimeout(() => { scheduleAll(); runStableCalibrator('t120'); }, 120); setTimeout(() => { scheduleAll(); runStableCalibrator('t320'); }, 320); });
 
