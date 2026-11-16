@@ -49,15 +49,15 @@ export default {
         if (!username || !password) return json({ ok: false, error: 'BAD_INPUT' }, 400, cors);
 
         const user = await getUser(env, username);
-        if (!user || Number(user.enabled || 0) !== 1) return json({ ok: false, error: 'NO_USER' }, 401, cors);
+        const authRow = await getAuth(env, username);
+        if (!isAuthorizedLoginAccount(user, authRow)) return json({ ok: false, error: 'NO_USER' }, 401, cors);
 
         const passHash = await sha256Hex(password);
         if (passHash !== String(user.pass_hash || '')) {
           return json({ ok: false, error: 'BAD_CRED' }, 401, cors);
         }
 
-        const authRow = await getAuth(env, username);
-        const role = normalizeRole(authRow?.role || user.role || 'read');
+        const role = normalizeRole(authRow.role || 'read');
         const exp = Date.now() + 8 * 60 * 60 * 1000;
         const token = await signToken(env, { u: username, r: role, exp });
         const h = new Headers(cors);
@@ -473,6 +473,10 @@ async function dispatchGitHubWorkflow({ owner, repo, workflow, ref, token }) {
   return { ok: true, status: res.status, dispatch_id: `gh_${Date.now()}` };
 }
 
+function isAuthorizedLoginAccount(user, authRow) {
+  return Boolean(user && authRow && Number(user.enabled ?? 0) === 1);
+}
+
 async function buildAuthTableData(env) {
   const usersRs = await env.DB.prepare(`
     SELECT username, pass_hash, role, enabled, createdAt, updatedAt
@@ -498,20 +502,20 @@ async function buildAuthTableData(env) {
     .sort((a, b) => a.localeCompare(b));
 
   const auth = names.map(username => {
-    const u = userMap.get(username) || {};
-    const a = authMap.get(username) || {};
+    const u = userMap.get(username) || null;
+    const a = authMap.get(username) || null;
     const row = {
       user: username,
       name: username,
-      role: normalizeRole(a.role || u.role || 'read'),
-      enabled: Number(u.enabled == null ? 1 : u.enabled),
-      btn1: Number(a.btn1 || 0),
-      btn2: Number(a.btn2 || 0),
-      btn3: Number(a.btn3 || 0),
-      btn4: Number(a.btn4 || 0),
-      btn5: Number(a.btn5 || 0),
-      createdAt: Number(u.createdAt || 0),
-      updatedAt: Math.max(Number(u.updatedAt || 0), Number(a.updatedAt || 0)),
+      role: normalizeRole(a?.role || u?.role || 'read'),
+      enabled: isAuthorizedLoginAccount(u, a) ? 1 : 0,
+      btn1: Number(a?.btn1 || 0),
+      btn2: Number(a?.btn2 || 0),
+      btn3: Number(a?.btn3 || 0),
+      btn4: Number(a?.btn4 || 0),
+      btn5: Number(a?.btn5 || 0),
+      createdAt: Number(u?.createdAt || 0),
+      updatedAt: Math.max(Number(u?.updatedAt || 0), Number(a?.updatedAt || 0)),
     };
     return row;
   });
