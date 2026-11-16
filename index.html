@@ -2537,9 +2537,22 @@ body:not(.locked) #loginOverlay{display:none!important;}
 
       const D1_AUTH_TABLE_ENDPOINT_FULL  = '/api/auth/table';
       const D1_AUTH_TABLE_ENDPOINT_PUB   = '/api/auth/public';
+      const AUTH_TABLE_SYNC_TIMEOUT_MS = 8000;
+      const AUTH_TABLE_SYNC_TTL_MS = 30000;
+      let authTableAuthorityReady = false;
+      let authTableSyncedAt = 0;
+      let authTableSyncError = '';
+      let authTableSyncPromise = null;
+      function isStagingPagesHost(hostname){
+        const host = String(hostname || location.hostname || '').trim().toLowerCase();
+        return [
+          'tasun-g3-pr104-preview.pages.dev',
+          'tasun-g3-pr104-v2-qa.pages.dev'
+        ].some(domain => host === domain || host.endsWith('.' + domain));
+      }
       function getApiBaseLocked(){
         const host = String(location.hostname || '').toLowerCase();
-        if(host.endsWith('.tasun-g3-pr104-preview.pages.dev')){
+        if(isStagingPagesHost(host)){
           return 'https://tasun-worker-staging.wutasun.workers.dev';
         }
         const v = String(localStorage.getItem('tasunApiBase_v1') || '').trim();
@@ -2582,12 +2595,14 @@ body:not(.locked) #loginOverlay{display:none!important;}
         const url = getApiBaseLocked() + path;
         const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
         const timeout = controller
-          ? setTimeout(()=>controller.abort(), 30000)
+          ? setTimeout(()=>controller.abort(), AUTH_TABLE_SYNC_TIMEOUT_MS)
           : null;
         try{
           const res = await fetch(url, {
             method:'GET',
-            credentials:'include',
+            // This is a deliberately public, read-only snapshot. Do not send
+            // cross-site cookies or depend on a browser session to load it.
+            credentials:'omit',
             cache:'no-store',
             headers:{ 'accept':'application/json' },
             ...(controller ? { signal:controller.signal } : {})
@@ -2604,49 +2619,47 @@ body:not(.locked) #loginOverlay{display:none!important;}
         }
       }
       function mergeAuthorityAuthToLocal(rows){
-        if(!Array.isArray(rows) || !rows.length) return false;
-        const local = safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []);
+        if(!Array.isArray(rows)) return false;
         const map = new Map();
-        (Array.isArray(local) ? local : []).forEach(row=>{
-          const key = String(row?.user ?? row?.username ?? row?.name ?? row?.account ?? '').trim();
-          if(key) map.set(key.toLowerCase(), Object.assign({}, row));
-        });
-        let changed = false;
         rows.forEach(row=>{
           const user = String(row?.user ?? row?.username ?? row?.name ?? row?.account ?? '').trim();
           if(!user) return;
           const k = user.toLowerCase();
-          const prev = map.get(k) || {};
-          const next = Object.assign({}, prev, row);
-          next.user = user;
-          next.username = user;
-          const authorityRole = String(row?.role ?? row?.level ?? 'read').trim().toLowerCase() || 'read';
-          next.role = authorityRole;
-          next.level = authorityRole;
-          const incomingHash = String(row?.passHash || row?.passwordHash || row?.hash || '').trim();
-          const incomingPlain = String(row?.pass || row?.password || row?.pw || '').trim();
-          if(incomingHash) next.passHash = incomingHash;
-          else if(!String(next.passHash || '').trim()) next.passHash = String(prev.passHash || prev.passwordHash || prev.hash || '').trim();
-          if(incomingPlain) next.pass = incomingPlain;
-          else if(!String(next.pass || next.password || next.pw || '').trim()) next.pass = String(prev.pass || prev.password || prev.pw || '').trim();
-          map.set(k, next);
+          const roleRaw = String(row?.role ?? row?.level ?? 'read').trim().toLowerCase();
+          const role = ['admin','write','read'].includes(roleRaw) ? roleRaw : 'read';
+          const buttons = LEGACY_BUTTON_KEYS.map((key, index)=>{
+            if(Array.isArray(row?.buttons) && index < row.buttons.length) return !!row.buttons[index];
+            return row?.[key] === true || Number(row?.[key] || 0) === 1;
+          });
+          const safeRow = {
+            user,
+            username:user,
+            name:user,
+            role,
+            level:role,
+            enabled:row?.enabled == null ? 1 : Number(row.enabled),
+            buttons,
+            createdAt:Number(row?.createdAt || 0),
+            updatedAt:Number(row?.updatedAt || 0)
+          };
+          buttons.forEach((enabled, index)=>{ safeRow['btn' + (index + 1)] = enabled ? 1 : 0; });
+          map.set(k, safeRow);
         });
+        // Replace the cache with the complete authority snapshot. Union-merging
+        // left deleted users and seeded defaults visible on fresh Preview hosts.
         const merged = Array.from(map.values());
-        const oldText = JSON.stringify(Array.isArray(local) ? local : []);
+        const oldText = String(localStorage.getItem(AUTH_KEY) || '');
         const newText = JSON.stringify(merged);
         if(oldText !== newText){
           localStorage.setItem(AUTH_KEY, newText);
-          return true;
         }
-        return changed;
+        AUTH_TABLE = merged.map(row=>normalizeRowFromStorage(row, LEGACY_BUTTON_KEYS.length));
+        return true;
       }
-      let authTableSyncPromise = null;
       function syncAuthTableFromAuthority(){
         if(authTableSyncPromise) return authTableSyncPromise;
         authTableSyncPromise = (async function(){
           try{
-            const host = String(location.hostname || '').toLowerCase();
-            if(!host.endsWith('.tasun-g3-pr104-preview.pages.dev')) return false;
             let result;
             for(let attempt = 0; attempt < 2; attempt++){
               try{
@@ -2661,14 +2674,19 @@ body:not(.locked) #loginOverlay{display:none!important;}
               }
             }
             const json = result && result.json;
-            const rows = json && json.ok && json.data && Array.isArray(json.data.auth) ? json.data.auth : null;
-            if(!result || !result.ok || !rows) return false;
-            mergeAuthorityAuthToLocal(rows);
+            if(!result || !result.ok) throw new Error('權責表讀取失敗：HTTP ' + String(result && result.status || '無回應'));
+            const rows = json && json.ok === true && json.data && Array.isArray(json.data.auth) ? json.data.auth : null;
+            if(!rows) throw new Error('權責表回應格式無效');
+            if(!mergeAuthorityAuthToLocal(rows)) throw new Error('權責表資料無法套用');
             AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+            authTableAuthorityReady = true;
+            authTableSyncedAt = Date.now();
+            authTableSyncError = '';
             if(loginOverlay && loginOverlay.style.display === 'flex') populateUserSelect();
             return true;
           }catch(e){
-            console.warn('staging auth list sync failed', e);
+            authTableSyncError = String(e && e.message || e || '權責表讀取失敗');
+            console.warn('auth authority roster sync failed', e);
             return false;
           }finally{
             authTableSyncPromise = null;
@@ -3077,20 +3095,8 @@ body:not(.locked) #loginOverlay{display:none!important;}
         const guess = labelToFile(label);
         return guess;
       }
-      function getDefaultAuthTableLegacy(btnCount){
-        const keys = Array.from({length: btnCount}, (_, i) => `btn${i+1}`);
-        const mkAll = () => Object.fromEntries(keys.map(k => [k, true]));
-        const mkOnlyLast = () => Object.fromEntries(keys.map((k, i) => [k, i === btnCount - 1]));
-        return [
-          { user:'alex', role:'admin', ...mkAll() },
-          { user:'JOYCE', role:'admin', ...mkAll() },
-          { user:'tasun', role:'write', ...mkAll() },
-          { user:'wu', role:'read', ...mkOnlyLast() }
-        ];
-      }
       function normalizeRowFromStorage(row, btnCount){
         const username = (row?.username ?? row?.user ?? row?.name ?? row?.account ?? '').toString().trim();
-        const password = (row?.password ?? row?.pass ?? '').toString();
         const level    = (row?.level ?? row?.role ?? 'read').toString().trim().toLowerCase();
         const arr = Array.isArray(row?.buttons) ? row.buttons : null;
         const buttons = [];
@@ -3101,17 +3107,17 @@ body:not(.locked) #loginOverlay{display:none!important;}
           if(has) buttons[i] = !!row[k];
           else buttons[i] = (level === 'read') ? (i === btnCount - 1) : true;
         }
-        const passHash = (row?.passHash ?? row?.passwordHash ?? row?.hash ?? '').toString().trim();
         const enabled = row?.enabled == null ? 1 : Number(row.enabled);
-        return { username, password, passHash, level, buttons, enabled };
+        return { username, level, buttons, enabled };
       }
       function loadAuthTable(btnCount){
         const raw = localStorage.getItem(AUTH_KEY);
-        if(!raw){ const legacy = getDefaultAuthTableLegacy(btnCount); localStorage.setItem(AUTH_KEY, JSON.stringify(legacy)); return legacy.map(r => normalizeRowFromStorage(r, btnCount)); }
+        if(!raw) return [];
         const parsed = safeJsonParse(raw, null);
         const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
         if(Array.isArray(arr)){
           const mapped = arr.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
+          if(!mapped.length) return [];
           if(mapped.length){
             const dedup = [];
             const seen = new Set();
@@ -3125,9 +3131,7 @@ body:not(.locked) #loginOverlay{display:none!important;}
             return dedup.length ? dedup : mapped;
           }
         }
-        const legacy = getDefaultAuthTableLegacy(btnCount);
-        localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
-        return legacy.map(r => normalizeRowFromStorage(r, btnCount));
+        return [];
       }
       function repairKnownAuthSecrets(){
         try{
@@ -3135,22 +3139,15 @@ body:not(.locked) #loginOverlay{display:none!important;}
           const parsed = safeJsonParse(raw, null);
           const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
           if(!Array.isArray(arr) || !arr.length) return;
-          const seedMap = new Map([
-            ['alex',  { user:'alex',   role:'admin' }],
-            ['joyce', { user:'JOYCE',  role:'admin' }],
-            ['tasun', { user:'tasun',  role:'write' }],
-            ['wu',    { user:'wu',     role:'read' }]
-          ]);
           let changed = false;
           arr.forEach(r => {
             if(!r || typeof r !== 'object') return;
-            const key = String(r.user || r.username || r.name || r.account || '').trim().toLowerCase();
-            const seed = seedMap.get(key);
-            if(!seed) return;
-            if(!String(r.role || r.level || '').trim()){
-              r.role = seed.role;
-              changed = true;
-            }
+            ['passHash','passwordHash','hash','password','pass','pw'].forEach(function(key){
+              if(Object.prototype.hasOwnProperty.call(r, key)){
+                delete r[key];
+                changed = true;
+              }
+            });
           });
           if(changed) localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
         }catch(e){}
@@ -3742,8 +3739,14 @@ body:not(.locked) #loginOverlay{display:none!important;}
         try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){}
         if(loginError) loginError.textContent = '';
         if(passwordInput) passwordInput.value = '';
+        const rosterSync = syncAuthTableFromAuthority();
         populateUserSelect();
-        try{ syncAuthTableFromAuthority(); }catch(e){}
+        rosterSync.then(function(synced){
+          populateUserSelect();
+          if(!synced && !authTableAuthorityReady && loginError){
+            loginError.textContent = '無法連線權責表，未顯示舊的本機帳號。請點使用者欄位重試，或檢查權責表服務連線。';
+          }
+        }).catch(function(){});
         resetButtonsForLogout();
         updateReleaseButtonVisibility();
         if(userInfo){ userInfo.textContent = '目前使用者：未登入'; userInfo.setAttribute('data-text', '目前使用者：未登入'); }
@@ -4027,16 +4030,18 @@ body:not(.locked) #loginOverlay{display:none!important;}
       function closeUsernameMenu(){ if(!usernameMenu) return; usernameMenu.classList.remove('open'); if(usernameDisplay) usernameDisplay.setAttribute('aria-expanded', 'false'); _userActiveIndex = -1; _typeBuf = ''; }
       async function openUsernameMenu(){
         if(!usernameMenu || !usernameDisplay || usernameDisplay.disabled) return;
-        const host = String(location.hostname || '').toLowerCase();
-        const isStagingPreview = host.endsWith('.tasun-g3-pr104-preview.pages.dev');
-        if(isStagingPreview){
-          usernameMenu.innerHTML = '<div class="select-option" role="status">正在同步測試帳號清單…</div>';
+        if(!authTableAuthorityReady){
+          usernameMenu.innerHTML = '<div class="select-option" role="status">正在同步權責表帳號清單…</div>';
           usernameMenu.classList.add('open');
           usernameDisplay.setAttribute('aria-expanded', 'true');
-          if(loginError) loginError.textContent = '正在同步測試帳號清單…';
+          if(loginError) loginError.textContent = '正在同步權責表帳號…';
           const synced = await syncAuthTableFromAuthority();
-          if(loginError) loginError.textContent = synced ? '' : '測試帳號同步失敗；目前顯示本機清單，請稍後再點選使用者重試。';
-          if(!synced) populateUserSelect();
+          if(!synced && !authTableAuthorityReady){
+            usernameMenu.innerHTML = '<div class="select-option" role="status">權責表清單暫時無法讀取，舊的本機帳號不會顯示。請關閉後再點使用者欄位重試。</div>';
+            if(loginError) loginError.textContent = '權責表清單讀取失敗；未使用本機預設帳號。';
+            return;
+          }
+          if(loginError) loginError.textContent = '';
         }
         usernameMenu.classList.add('open');
         usernameDisplay.setAttribute('aria-expanded', 'true');
@@ -4196,14 +4201,28 @@ body:not(.locked) #loginOverlay{display:none!important;}
         AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
         const previousValue = usernameSel ? String(usernameSel.value || '').trim() : '';
         usernameSel.innerHTML = '';
+        if(!authTableAuthorityReady){
+          const opt = document.createElement('option');
+          opt.value = '';
+          opt.textContent = authTableSyncPromise
+            ? '正在同步權責表帳號…'
+            : (authTableSyncError ? '權責表連線失敗，點此重試' : '權責表帳號清單尚未載入');
+          opt.disabled = true;
+          opt.selected = true;
+          usernameSel.appendChild(opt);
+          try{ if(usernameDisplay) usernameDisplay.disabled = !!authTableSyncPromise; }catch(e){}
+          refreshUsernamePicker('populate-authority-loading');
+          return;
+        }
         if(!AUTH_TABLE.length){
           const opt = document.createElement('option');
           opt.value = '';
-          opt.textContent = '（尚無使用者，請先到「系統 / 權限」新增）';
+          opt.textContent = '（權責表目前沒有啟用中的帳號）';
           opt.disabled = true;
           opt.selected = true;
           usernameSel.appendChild(opt);
           refreshUsernamePicker('populate-no-users');
+          try{ if(usernameDisplay) usernameDisplay.disabled = false; }catch(e){}
           return;
         }
         const ph = document.createElement('option');
@@ -4629,11 +4648,15 @@ body:not(.locked) #loginOverlay{display:none!important;}
         loginError.textContent = '登入中…';
 
         try{
+          if(!authTableAuthorityReady || Date.now() - authTableSyncedAt > AUTH_TABLE_SYNC_TTL_MS){
+            let rosterSynced = false;
+            try{ rosterSynced = await syncAuthTableFromAuthority(); }catch(_e){}
+            if(!rosterSynced && !authTableAuthorityReady){
+              loginError.textContent = '權責表清單目前無法讀取，請稍後重試；不會改用本機預設帳號。';
+              return;
+            }
+          }
           repairKnownAuthSecrets();
-          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-          try{
-            if(typeof syncAuthTableFromAuthority === 'function') await syncAuthTableFromAuthority();
-          }catch(_e){}
           AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
           const localUser = AUTH_TABLE.find(r =>
             String(r.username || '').trim().toLowerCase() === String(username).trim().toLowerCase()
