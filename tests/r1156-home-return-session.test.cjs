@@ -54,7 +54,7 @@ test('logout and wrong role denied',()=>{
 test('missing verification flag denied',()=>assert.equal(verify({session:{tasunIndexSessionAuthed_v2:''}}).invoke(),false));
 test('explicit force-login cannot be bypassed',()=>assert.equal(verify({href:page+'?from=manager-home-r739&_resumeSession=1&_rt='+now+'&_forceLogin=1'}).invoke(),false));
 test('homepage boot falls back to normal login if handoff invalid',()=>{
-  assert.match(html,/if\(!tryRestoreLogin\(\)\) showLogin\(\);/);
+  assert.match(html,/if\(!tryRestoreLogin\(\)(?:\s*&&\s*!tryRestoreExistingWorkerSession\(\))?\)\s*showLogin\(\);/);
   assert.match(html,/function clearLogoutAuthStorage\(\)/);
   assert.match(html,/tasun-legacy-password-cache-clean-v1/);
 });
