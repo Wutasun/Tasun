@@ -1,0 +1,64 @@
+name: Deploy Production Worker
+
+run-name: Production Worker deploy (${{ github.sha }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_production:
+        description: Select DEPLOY only after the production release is approved
+        required: true
+        type: choice
+        options:
+          - CANCEL
+          - DEPLOY
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Fail closed until the repository variable and protected environment are configured.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      inputs.confirm_production == 'DEPLOY' &&
+      vars.WORKER_PRODUCTION_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+    steps:
+      - name: Check out approved main commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Verify Production target and required credentials
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          config="tasun-api/wrangler.toml"
+          test -f "$config"
+          grep -Fxq 'name = "tasun-worker"' "$config"
+          grep -Fxq 'database_id = "ecb1ff1d-eb3d-4fe8-ba2c-8b7cc884bd84"' "$config"
+          if [[ -z "$CLOUDFLARE_API_TOKEN" || -z "$CLOUDFLARE_ACCOUNT_ID" ]]; then
+            echo "::error::Production Cloudflare credentials are not configured in the protected environment."
+            exit 1
+          fi
+
+      - name: Deploy Worker
+        # Cloudflare Wrangler Action v4, pinned to its reviewed commit.
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4.158.0"
+          command: deploy
+          workingDirectory: tasun-api
