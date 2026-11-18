@@ -1985,10 +1985,6 @@ main.hero,
           <div class="select-wrap" id="usernameWrap">
             <select id="username" name="username" autocomplete="username">
               <option value="" disabled selected>請選擇使用者</option>
-              <option value="alex">alex</option>
-              <option value="JOYCE">JOYCE</option>
-              <option value="tasun">tasun</option>
-              <option value="wu">wu</option>
             </select>
             <button type="button" class="select-display" id="usernameDisplay" aria-haspopup="listbox" aria-expanded="false">請選擇使用者</button>
             <div class="select-menu" id="usernameMenu" role="listbox" aria-label="使用者名稱清單"></div>
@@ -2369,7 +2365,24 @@ main.hero,
 
       const D1_AUTH_TABLE_ENDPOINT_FULL  = '/api/auth/table';
       const D1_AUTH_TABLE_ENDPOINT_PUB   = '/api/auth/public';
+      const AUTH_TABLE_SYNC_TIMEOUT_MS = 8000;
+      const AUTH_TABLE_SYNC_TTL_MS = 30000;
+      let authTableAuthorityReady = false;
+      let authTableSyncedAt = 0;
+      let authTableSyncError = '';
+      let authTableSyncPromise = null;
+      function isStagingPagesHost(hostname){
+        const host = String(hostname || location.hostname || '').trim().toLowerCase();
+        return [
+          'tasun-g3-pr104-preview.pages.dev',
+          'tasun-g3-pr104-v2-qa.pages.dev'
+        ].some(domain => host === domain || host.endsWith('.' + domain));
+      }
       function getApiBaseLocked(){
+        const host = String(location.hostname || '').toLowerCase();
+        if(isStagingPagesHost(host)){
+          return 'https://tasun-worker-staging.wutasun.workers.dev';
+        }
         const v = String(localStorage.getItem('tasunApiBase_v1') || '').trim();
         return String(v || 'https://tasun-worker.wutasun.workers.dev').replace(/\/+$/,'');
       }
@@ -2406,44 +2419,109 @@ main.hero,
         const json = await res.json().catch(()=>null);
         return { ok: res.ok, status: res.status, json };
       }
+      async function d1GetPublicJson(path){
+        const url = getApiBaseLocked() + path;
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timeout = controller
+          ? setTimeout(()=>controller.abort(), AUTH_TABLE_SYNC_TIMEOUT_MS)
+          : null;
+        try{
+          const res = await fetch(url, {
+            method:'GET',
+            // This is a deliberately public, read-only snapshot. Do not send
+            // cross-site cookies or depend on a browser session to load it.
+            credentials:'omit',
+            cache:'no-store',
+            headers:{ 'accept':'application/json' },
+            ...(controller ? { signal:controller.signal } : {})
+          });
+          const json = await res.json().catch(()=>null);
+          return { ok:res.ok, status:res.status, json };
+        }catch(err){
+          if(controller && controller.signal.aborted){
+            throw new Error('Staging auth-list request timed out');
+          }
+          throw err;
+        }finally{
+          if(timeout) clearTimeout(timeout);
+        }
+      }
       function mergeAuthorityAuthToLocal(rows){
-        if(!Array.isArray(rows) || !rows.length) return false;
-        const local = safeJsonParse(localStorage.getItem(AUTH_KEY) || '[]', []);
+        if(!Array.isArray(rows)) return false;
         const map = new Map();
-        (Array.isArray(local) ? local : []).forEach(row=>{
-          const key = String(row?.user ?? row?.username ?? row?.name ?? row?.account ?? '').trim();
-          if(key) map.set(key.toLowerCase(), Object.assign({}, row));
-        });
-        let changed = false;
         rows.forEach(row=>{
           const user = String(row?.user ?? row?.username ?? row?.name ?? row?.account ?? '').trim();
           if(!user) return;
           const k = user.toLowerCase();
-          const prev = map.get(k) || {};
-          const next = Object.assign({}, prev, row);
-          next.user = user;
-          next.username = user;
-          if(!next.role && next.level) next.role = next.level;
-          if(!next.level && next.role) next.level = next.role;
-          const incomingHash = String(row?.passHash || row?.passwordHash || row?.hash || '').trim();
-          const incomingPlain = String(row?.pass || row?.password || row?.pw || '').trim();
-          if(incomingHash) next.passHash = incomingHash;
-          else if(!String(next.passHash || '').trim()) next.passHash = String(prev.passHash || prev.passwordHash || prev.hash || '').trim();
-          if(incomingPlain) next.pass = incomingPlain;
-          else if(!String(next.pass || next.password || next.pw || '').trim()) next.pass = String(prev.pass || prev.password || prev.pw || '').trim();
-          map.set(k, next);
+          const roleRaw = String(row?.role ?? row?.level ?? 'read').trim().toLowerCase();
+          const role = ['admin','write','read'].includes(roleRaw) ? roleRaw : 'read';
+          const buttons = LEGACY_BUTTON_KEYS.map((key, index)=>{
+            if(Array.isArray(row?.buttons) && index < row.buttons.length) return !!row.buttons[index];
+            return row?.[key] === true || Number(row?.[key] || 0) === 1;
+          });
+          const safeRow = {
+            user,
+            username:user,
+            name:user,
+            role,
+            level:role,
+            enabled:row?.enabled == null ? 1 : Number(row.enabled),
+            buttons,
+            createdAt:Number(row?.createdAt || 0),
+            updatedAt:Number(row?.updatedAt || 0)
+          };
+          buttons.forEach((enabled, index)=>{ safeRow['btn' + (index + 1)] = enabled ? 1 : 0; });
+          map.set(k, safeRow);
         });
+        // Replace the cache with the complete authority snapshot. Union-merging
+        // left deleted users and seeded defaults visible on fresh Preview hosts.
         const merged = Array.from(map.values());
-        const oldText = JSON.stringify(Array.isArray(local) ? local : []);
+        const oldText = String(localStorage.getItem(AUTH_KEY) || '');
         const newText = JSON.stringify(merged);
         if(oldText !== newText){
           localStorage.setItem(AUTH_KEY, newText);
-          return true;
         }
-        return changed;
+        AUTH_TABLE = merged.map(row=>normalizeRowFromStorage(row, LEGACY_BUTTON_KEYS.length));
+        return true;
       }
-      async function syncAuthTableFromAuthority(){ return false; }
-
+      function syncAuthTableFromAuthority(){
+        if(authTableSyncPromise) return authTableSyncPromise;
+        authTableSyncPromise = (async function(){
+          try{
+            let result;
+            for(let attempt = 0; attempt < 2; attempt++){
+              try{
+                result = await d1GetPublicJson(D1_AUTH_TABLE_ENDPOINT_PUB);
+                break;
+              }catch(fetchError){
+                if(attempt === 0 && fetchError instanceof TypeError){
+                  await new Promise(resolve=>setTimeout(resolve, 500));
+                  continue;
+                }
+                throw fetchError;
+              }
+            }
+            const json = result && result.json;
+            if(!result || !result.ok) throw new Error('權責表讀取失敗：HTTP ' + String(result && result.status || '無回應'));
+            const rows = json && json.ok === true && json.data && Array.isArray(json.data.auth) ? json.data.auth : null;
+            if(!rows) throw new Error('權責表回應格式無效');
+            if(!mergeAuthorityAuthToLocal(rows)) throw new Error('權責表資料無法套用');
+            AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+            authTableAuthorityReady = true;
+            authTableSyncedAt = Date.now();
+            authTableSyncError = '';
+            if(loginOverlay && loginOverlay.style.display === 'flex') populateUserSelect();
+            return true;
+          }catch(e){
+            authTableSyncError = String(e && e.message || e || '權責表讀取失敗');
+            console.warn('auth authority roster sync failed', e);
+            return false;
+          }finally{
+            authTableSyncPromise = null;
+          }
+        })();
+        return authTableSyncPromise;
+      }
       function loadScriptOnce(src){
         return new Promise((resolve)=>{
           try{
@@ -2482,13 +2560,9 @@ main.hero,
       }
       function inferRole(name, role){
         const r = String(role || '').trim().toLowerCase();
-        if(r) return r;
-        const u = String(name || '').trim().toLowerCase();
-        if(u === 'alex' || u === 'joyce') return 'admin';
-        if(u === 'tasun') return 'write';
-        return 'read';
+        return ['admin','write','read'].includes(r) ? r : 'read';
       }
-      function userKey(s){ return String(s || '').trim(); }
+function userKey(s){ return String(s || '').trim(); }
       function loadPermMatrixSafe(){ return safeJsonParse(localStorage.getItem(PERM_MATRIX_KEY) || 'null', null) || null; }
       function getPermFromMatrix(pm, username, page, btnId){
         try{
@@ -2872,20 +2946,8 @@ main.hero,
         const guess = labelToFile(label);
         return guess;
       }
-      function getDefaultAuthTableLegacy(btnCount){
-        const keys = Array.from({length: btnCount}, (_, i) => `btn${i+1}`);
-        const mkAll = () => Object.fromEntries(keys.map(k => [k, true]));
-        const mkOnlyLast = () => Object.fromEntries(keys.map((k, i) => [k, i === btnCount - 1]));
-        return [
-          { user:'alex',  passHash:'7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07',  role:'admin', ...mkAll() },
-          { user:'JOYCE', passHash:'d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815', role:'admin', ...mkAll() },
-          { user:'tasun', passHash:'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba', role:'write', ...mkAll() },
-          { user:'wu',    passHash:'8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92', role:'read', ...mkOnlyLast() }
-        ];
-      }
       function normalizeRowFromStorage(row, btnCount){
         const username = (row?.username ?? row?.user ?? row?.name ?? row?.account ?? '').toString().trim();
-        const password = (row?.password ?? row?.pass ?? '').toString();
         const level    = (row?.level ?? row?.role ?? 'read').toString().trim().toLowerCase();
         const arr = Array.isArray(row?.buttons) ? row.buttons : null;
         const buttons = [];
@@ -2896,16 +2958,17 @@ main.hero,
           if(has) buttons[i] = !!row[k];
           else buttons[i] = (level === 'read') ? (i === btnCount - 1) : true;
         }
-        const passHash = (row?.passHash ?? row?.passwordHash ?? row?.hash ?? '').toString().trim();
-        return { username, password, passHash, level, buttons };
+        const enabled = row?.enabled == null ? 1 : Number(row.enabled);
+        return { username, level, buttons, enabled };
       }
       function loadAuthTable(btnCount){
         const raw = localStorage.getItem(AUTH_KEY);
-        if(!raw){ const legacy = getDefaultAuthTableLegacy(btnCount); localStorage.setItem(AUTH_KEY, JSON.stringify(legacy)); return legacy.map(r => normalizeRowFromStorage(r, btnCount)); }
+        if(!raw) return [];
         const parsed = safeJsonParse(raw, null);
         const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
         if(Array.isArray(arr)){
           const mapped = arr.map(r => normalizeRowFromStorage(r, btnCount)).filter(x => x.username);
+          if(!mapped.length) return [];
           if(mapped.length){
             const dedup = [];
             const seen = new Set();
@@ -2919,30 +2982,7 @@ main.hero,
             return dedup.length ? dedup : mapped;
           }
         }
-        const legacy = getDefaultAuthTableLegacy(btnCount);
-        localStorage.setItem(AUTH_KEY, JSON.stringify(legacy));
-        return legacy.map(r => normalizeRowFromStorage(r, btnCount));
-      }
-      const DEFAULT_AUTH_HASH = {
-        alex: '7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07',
-        joyce: 'd558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815',
-        tasun: 'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba',
-        wu: '8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92'
-      };
-      function findAuthCandidates(username){
-        const wanted = String(username || '').trim().toLowerCase();
-        if(!wanted) return [];
-        AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-        return AUTH_TABLE.filter(r => String(r.username || '').trim().toLowerCase() === wanted);
-      }
-      function pickLoginUserFromCandidates(candidates, passwordHash, passwordPlain){
-        const plain = String(passwordPlain || '').trim();
-        for(const u of candidates){
-          const storedHash = String(u.passHash || '').trim().toLowerCase();
-          const storedPlain = String(u.password || '').trim();
-          if((storedHash && passwordHash === storedHash) || (!!storedPlain && plain === storedPlain)) return u;
-        }
-        return null;
+        return [];
       }
       function repairKnownAuthSecrets(){
         try{
@@ -2950,55 +2990,20 @@ main.hero,
           const parsed = safeJsonParse(raw, null);
           const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
           if(!Array.isArray(arr) || !arr.length) return;
-          const seedMap = new Map([
-            ['alex',  { user:'alex',  passHash:'7b58036f696822b2de0208fe7d52372c42756c1ded52ebdd676610b68aeb5f07', role:'admin' }],
-            ['joyce', { user:'JOYCE', passHash:'d558060dec275fb1eeec5d557de6b1d5058a865271c32ca028f5d426204a4815', role:'admin' }],
-            ['tasun', { user:'tasun', passHash:'cebfd54a6f2db4a1314e5071f0bb7c778185d41eae81c0914d5f77c854ce4dba', role:'write' }],
-            ['wu',    { user:'wu',    passHash:'8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92', role:'read' }]
-          ]);
           let changed = false;
           arr.forEach(r => {
             if(!r || typeof r !== 'object') return;
-            const key = String(r.user || r.username || r.name || r.account || '').trim().toLowerCase();
-            const seed = seedMap.get(key);
-            if(!seed) return;
-            const hasHash = String(r.passHash || r.passwordHash || r.hash || '').trim();
-            const hasPlain = String(r.pass || r.password || r.pw || '').trim();
-            if(!hasHash && !hasPlain){
-              r.passHash = seed.passHash;
-              changed = true;
-            }
-            if(!String(r.role || r.level || '').trim()){
-              r.role = seed.role;
-              changed = true;
-            }
+            ['passHash','passwordHash','hash','password','pass','pw'].forEach(function(key){
+              if(Object.prototype.hasOwnProperty.call(r, key)){
+                delete r[key];
+                changed = true;
+              }
+            });
           });
           if(changed) localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
         }catch(e){}
       }
-      function migrateAuthToHashedIfNeeded(){
-        try{
-          const raw = localStorage.getItem(AUTH_KEY);
-          const parsed = safeJsonParse(raw, null);
-          const arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.users) ? parsed.users : null);
-          if(!Array.isArray(arr) || arr.length === 0){ const legacy = getDefaultAuthTableLegacy(LEGACY_BUTTON_KEYS.length); localStorage.setItem(AUTH_KEY, JSON.stringify(legacy)); return; }
-          let need = false;
-          for(const r of arr){ if(!r) continue; const hasPass = (r.pass || r.password || r.pw); const hasHash = (r.passHash || r.passwordHash || r.hash); if(hasPass && !hasHash){ need = true; break; } }
-          if(!need) return;
-          (async ()=>{
-            try{
-              let changed = false;
-              for(const r of arr){
-                if(!r) continue;
-                const hasHash = (r.passHash || r.passwordHash || r.hash);
-                const pass = (r.password ?? r.pass ?? r.pw ?? '').toString();
-                if(!hasHash && pass){ r.passHash = await sha256Hex(pass); delete r.password; delete r.pass; delete r.pw; changed = true; }
-              }
-              if(changed) localStorage.setItem(AUTH_KEY, JSON.stringify(arr));
-            }catch(e){}
-          })();
-        }catch(e){}
-      }
+      
 
       const COOKIE_NAME = 'tasun_session_v4';
       const COOKIE_TTL_MS = 1000 * 60 * 60 * 12;
@@ -3343,7 +3348,7 @@ main.hero,
       }
       function onIndexConfigApplied(){
         try{
-          try{ migrateAuthToHashedIfNeeded(); }catch(_e){}
+          
           ROUTES = loadRoutes();
           NAV_ARR = loadNavButtonsSeedIfMissing();
           AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
@@ -3732,7 +3737,28 @@ main.hero,
       function menuItems(){ return Array.from(usernameMenu ? usernameMenu.querySelectorAll('.select-option') : []); }
       function isMenuOpen(){ return !!(usernameMenu && usernameMenu.classList.contains('open')); }
       function closeUsernameMenu(){ if(!usernameMenu) return; usernameMenu.classList.remove('open'); if(usernameDisplay) usernameDisplay.setAttribute('aria-expanded', 'false'); _userActiveIndex = -1; _typeBuf = ''; }
-      function openUsernameMenu(){ if(!usernameMenu || !usernameDisplay || usernameDisplay.disabled) return; usernameMenu.classList.add('open'); usernameDisplay.setAttribute('aria-expanded', 'true'); const items = menuItems(); if(!items.length) return; const idx = items.findIndex(it => (it.dataset.value || '') === (usernameSel.value || '')); setActiveIndex(idx >= 0 ? idx : 0, true); }
+      async function openUsernameMenu(){
+        if(!usernameMenu || !usernameDisplay || usernameDisplay.disabled) return;
+        if(!authTableAuthorityReady){
+          usernameMenu.innerHTML = '<div class="select-option" role="status">正在同步權責表帳號清單…</div>';
+          usernameMenu.classList.add('open');
+          usernameDisplay.setAttribute('aria-expanded', 'true');
+          if(loginError) loginError.textContent = '正在同步權責表帳號…';
+          const synced = await syncAuthTableFromAuthority();
+          if(!synced && !authTableAuthorityReady){
+            usernameMenu.innerHTML = '<div class="select-option" role="status">權責表清單暫時無法讀取，舊的本機帳號不會顯示。請關閉後再點使用者欄位重試。</div>';
+            if(loginError) loginError.textContent = '權責表清單讀取失敗；未使用本機預設帳號。';
+            return;
+          }
+          if(loginError) loginError.textContent = '';
+        }
+        usernameMenu.classList.add('open');
+        usernameDisplay.setAttribute('aria-expanded', 'true');
+        const items = menuItems();
+        if(!items.length) return;
+        const idx = items.findIndex(it => (it.dataset.value || '') === (usernameSel.value || ''));
+        setActiveIndex(idx >= 0 ? idx : 0, true);
+      }
       function toggleUsernameMenu(){ if(isMenuOpen()) closeUsernameMenu(); else openUsernameMenu(); }
       function syncUsernameDisplay(){ if(!usernameSel || !usernameDisplay) return; const opt = usernameSel.options[usernameSel.selectedIndex]; const txt = opt ? String(opt.textContent || '').trim() : ''; usernameDisplay.textContent = (!txt || (opt && opt.disabled)) ? '請選擇使用者' : txt; }
       function selectByValue(val){ if(!val) return; usernameSel.value = val; syncUsernameDisplay(); const items = menuItems(); items.forEach(it => it.setAttribute('aria-selected', (it.dataset.value === val) ? 'true' : 'false')); }
@@ -3783,15 +3809,30 @@ main.hero,
       function populateUserSelect(){
         repairKnownAuthSecrets();
         AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+        const previousValue = usernameSel ? String(usernameSel.value || '').trim() : '';
         usernameSel.innerHTML = '';
-        if(!AUTH_TABLE.length){
+        if(!authTableAuthorityReady){
           const opt = document.createElement('option');
           opt.value = '';
-          opt.textContent = '（尚無使用者，請先到「系統 / 權限」新增）';
+          opt.textContent = authTableSyncPromise
+            ? '正在同步權責表帳號…'
+            : (authTableSyncError ? '權責表連線失敗，點此重試' : '權責表帳號清單尚未載入');
           opt.disabled = true;
           opt.selected = true;
           usernameSel.appendChild(opt);
-          refreshUsernamePicker();
+          try{ if(usernameDisplay) usernameDisplay.disabled = false; }catch(e){}
+          refreshUsernamePicker('populate-authority-loading');
+          return;
+        }
+        if(!AUTH_TABLE.length){
+          const opt = document.createElement('option');
+          opt.value = '';
+          opt.textContent = '（權責表目前沒有啟用中的帳號）';
+          opt.disabled = true;
+          opt.selected = true;
+          usernameSel.appendChild(opt);
+          refreshUsernamePicker('populate-no-users');
+          try{ if(usernameDisplay) usernameDisplay.disabled = false; }catch(e){}
           return;
         }
         const ph = document.createElement('option');
@@ -3801,7 +3842,7 @@ main.hero,
         ph.selected = true;
         usernameSel.appendChild(ph);
 
-        const names = Array.from(new Set(AUTH_TABLE.map(r => r.username).filter(Boolean))).sort((a,b)=>a.localeCompare(b, 'zh-Hant'));
+        const names = Array.from(new Set(AUTH_TABLE.filter(r => Number(r.enabled ?? 1) === 1).map(r => r.username).filter(Boolean))).sort((a,b)=>a.localeCompare(b, 'zh-Hant'));
         names.forEach(name => {
           const opt = document.createElement('option');
           opt.value = name;
@@ -3809,9 +3850,9 @@ main.hero,
           usernameSel.appendChild(opt);
         });
 
-        usernameSel.selectedIndex = 0;
-        syncUsernameDisplay();
-        buildUsernameMenu();
+        if(previousValue && names.includes(previousValue)) usernameSel.value = previousValue;
+        else usernameSel.selectedIndex = 0;
+        refreshUsernamePicker('populate-user-select');
         try{ if(usernameDisplay) usernameDisplay.disabled = false; }catch(e){}
       }
 
@@ -4104,36 +4145,10 @@ main.hero,
       if(zenImg) zenImg.addEventListener('load', () => { scheduleAll(); }, { once:false });
       requestAnimationFrame(() => { document.body.classList.remove('booting'); scheduleAll(); runStableCalibrator('raf'); onFontsReady(() => { scheduleAll(); runStableCalibrator('fonts'); }); setTimeout(() => { scheduleAll(); runStableCalibrator('t120'); }, 120); setTimeout(() => { scheduleAll(); runStableCalibrator('t320'); }, 320); });
 
-      async function verifyUserPassword(username, password){
-        const wanted = String(username || '').trim().toLowerCase();
-        const plain = String(password || '').trim();
-        if(!wanted || !plain) return null;
-        const pwHash = (await sha256Hex(plain)).toLowerCase();
-        const candidates = AUTH_TABLE.filter(r => String(r.username || '').trim().toLowerCase() === wanted);
-        for(const u of candidates){
-          const storedHash = String(u.passHash || '').trim().toLowerCase();
-          const storedPlain = String(u.password || u.pass || '').trim();
-          if((storedHash && pwHash === storedHash) || (!!storedPlain && plain === storedPlain)) return u;
-        }
-        const fallbackHash = String(DEFAULT_AUTH_HASH[wanted] || '').trim().toLowerCase();
-        if(fallbackHash && pwHash === fallbackHash){
-          const matched = candidates[0] || { username: username, level: inferRole(username, '') };
-          return Object.assign({}, matched, {
-            username: String(matched.username || username).trim(),
-            level: String(matched.level || matched.role || inferRole(username, '')).trim().toLowerCase() || 'read',
-            passHash: fallbackHash
-          });
-        }
-        return null;
-      }
-
-
-
-      function __tasunSaveLoginBridge(username, password, role){
+      function __tasunSaveLoginBridge(username, role){
         try{
           const nowIso = new Date().toISOString();
           const u = String(username || '').trim();
-          const p = String(password || '');
           const r = String(role || '').trim().toLowerCase() || 'read';
 
           if(!u) return false;
@@ -4168,61 +4183,74 @@ main.hero,
         }
       }
 
+      function __tasunResolveLoginApiBase(){
+        const host = String(location.hostname || '').toLowerCase();
+        const isStagingPagesHost =
+          host === 'tasun-g3-pr104-v2-qa.pages.dev' ||
+          host.endsWith('.tasun-g3-pr104-v2-qa.pages.dev') ||
+          host === 'tasun-g3-pr104-preview.pages.dev' ||
+          host.endsWith('.tasun-g3-pr104-preview.pages.dev');
+        if(isStagingPagesHost) return 'https://tasun-worker-staging.wutasun.workers.dev';
+        if(typeof getApiBaseLocked === 'function') return getApiBaseLocked();
+        let override = '';
+        try{ override = String(localStorage.getItem('tasunApiBase_v1') || '').trim(); }catch(_e){}
+        return String(override || 'https://tasun-worker.wutasun.workers.dev').replace(/\/+$/, '');
+      }
       async function __tasunBridgeWorkerTokenNow(username, password, role){
         try{
           const user = String(username || '').trim();
-          const pass = String(password || '').trim();
-          const finalRole = String(role || 'read').trim().toLowerCase() || 'read';
-          if(!user || !pass) return false;
-          const apiBase = 'https://tasun-worker.wutasun.workers.dev';
-          const res = await fetch(apiBase + '/api/tasun/login', {
-            method:'POST',
-            cache:'no-store',
-            credentials:'include',
-            headers:{ 'content-type':'application/json', 'accept':'application/json' },
-            body: JSON.stringify({ username:user, password:pass, user:user, pass:pass })
-          });
-          if(!res.ok) return false;
-          const json = await res.json().catch(() => ({}));
-          const token = String(
-            json.token || json.accessToken || json.authToken || json.bearer || json.workerToken || json.cloudToken || json.apiKey ||
-            ((json.auth || {}).token || (json.auth || {}).accessToken || (json.auth || {}).authToken || (json.auth || {}).bearer || (json.auth || {}).apiKey) ||
-            ((json.session || {}).token || (json.session || {}).accessToken || (json.session || {}).authToken || (json.session || {}).bearer || (json.session || {}).apiKey) ||
-            ((json.data || {}).token || (json.data || {}).accessToken || (json.data || {}).authToken || (json.data || {}).bearer || (json.data || {}).apiKey) ||
-            ((json.payload || {}).token || (json.payload || {}).accessToken || (json.payload || {}).authToken || (json.payload || {}).bearer || (json.payload || {}).apiKey) ||
-            ''
-          ).trim();
-          if(!token) return false;
-
+          const pass = String(password || '');
+          if(!user || !pass) return { ok:false, error:'BAD_INPUT' };
+          const apiBase = __tasunResolveLoginApiBase();
+          const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+          const timeout = controller ? setTimeout(() => controller.abort(), 15000) : null;
+          let response;
+          let body;
+          try{
+            response = await fetch(apiBase + '/api/tasun/login', {
+              method:'POST',
+              cache:'no-store',
+              credentials:'include',
+              headers:{ 'content-type':'application/json', 'accept':'application/json' },
+              body: JSON.stringify({ username:user, password:pass }),
+              ...(controller ? { signal:controller.signal } : {})
+            });
+            if(!response.ok) return { ok:false, status:response.status, error:'LOGIN_REJECTED' };
+            body = await response.json().catch(() => ({}));
+          }finally{
+            if(timeout) clearTimeout(timeout);
+          }
+          if(!body || body.ok !== true) return { ok:false, error:String(body?.error || 'LOGIN_REJECTED') };
+          const token = String(body.token || body.accessToken || body.authToken || body.bearer ||
+            body.workerToken || body.cloudToken || body.apiKey ||
+            body.auth?.token || body.auth?.accessToken || body.auth?.authToken || body.auth?.bearer ||
+            body.session?.token || body.session?.accessToken || body.session?.authToken || body.session?.bearer ||
+            body.data?.token || body.data?.accessToken || body.data?.authToken || body.data?.bearer ||
+            body.payload?.token || body.payload?.accessToken || body.payload?.authToken || body.payload?.bearer || '').trim();
+          const rawUser = typeof body.user === 'string' ? body.user :
+            (body.user?.username || body.user?.user || body.username || body.data?.user || '');
+          const authenticatedUser = String(rawUser || '').trim();
+          const role = String(body.role || body.user?.role || body.data?.role || '').trim().toLowerCase();
+          if(!token || !authenticatedUser || !['admin','write','read'].includes(role)){
+            return { ok:false, error:'INVALID_LOGIN_RESPONSE' };
+          }
           const tokenKeys = [
-            'tasunCloudToken_v1',
-            'tasunCloudToken_v1__index',
-            'tasunCloudToken_v1__auth-table',
-            'tasunBearerToken_v1',
-            'tasunAccessToken_v1',
-            'tasunAuthToken_v1',
-            'tasunSessionToken_v1',
-            'tasun_token',
-            'tasunToken',
-            'tasun_auth_token',
-            'authToken',
-            'access_token',
-            'token',
-            'x-api-key',
-            'tasunApiKey_v1'
+            'tasunCloudToken_v1','tasunCloudToken_v1__index','tasunCloudToken_v1__auth-table',
+            'tasunBearerToken_v1','tasunAccessToken_v1','tasunAuthToken_v1','tasunSessionToken_v1',
+            'tasun_token','tasunToken','tasun_auth_token','authToken','access_token','token','x-api-key','tasunApiKey_v1'
           ];
-          tokenKeys.forEach((k) => {
-            try{ sessionStorage.setItem(k, token); }catch(e){}
-            try{ localStorage.setItem(k, token); }catch(e){}
+          tokenKeys.forEach(k => {
+            try{ sessionStorage.setItem(k, token); }catch(_e){}
+            try{ localStorage.setItem(k, token); }catch(_e){}
           });
-
-          const bridge = { user:user, name:user, role:finalRole, token:token, accessToken:token, authToken:token, bearer:token, at:new Date().toISOString() };
-          try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge)); }catch(e){}
-          try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge)); }catch(e){}
-          return true;
+          const bridge = { user:authenticatedUser, name:authenticatedUser, role, token, accessToken:token,
+            authToken:token, bearer:token, at:new Date().toISOString() };
+          try{ sessionStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge)); }catch(_e){}
+          try{ localStorage.setItem('tasunSessionBridge_v1', JSON.stringify(bridge)); }catch(_e){}
+          return { ok:true, user:authenticatedUser, role };
         }catch(err){
-          console.warn('worker token bridge failed', err);
-          return false;
+          console.warn('worker token bridge failed');
+          return { ok:false, error:'LOGIN_UNAVAILABLE' };
         }
       }
 
@@ -4246,25 +4274,34 @@ main.hero,
         try{
           repairKnownAuthSecrets();
           AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
-
-          const u = await verifyUserPassword(username, password);
-          if(!u){
-            const exists = AUTH_TABLE.some(r =>
-              String(r.username || '').trim().toLowerCase() === String(username).trim().toLowerCase()
-            );
-            loginError.textContent = exists ? '密碼錯誤' : '查無此使用者（請到「系統 / 權限」新增）';
+          try{
+            if(typeof syncAuthTableFromAuthority === 'function') await syncAuthTableFromAuthority();
+          }catch(_e){}
+          AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
+          const localUser = AUTH_TABLE.find(r =>
+            String(r.username || '').trim().toLowerCase() === String(username).trim().toLowerCase()
+          );
+          if(!localUser){
+            loginError.textContent = '使用者權限資料尚未同步，請稍後重試';
             return;
           }
-
-          const finalRole = String(u.level || u.role || inferRole(u.username, '') || 'read').trim().toLowerCase();
-
-          setSession({ username: u.username, level: finalRole });
-
-          __tasunSaveLoginBridge(u.username, password, finalRole);
-          await __tasunBridgeWorkerTokenNow(u.username, password, finalRole);
-
+          const workerAuth = await __tasunBridgeWorkerTokenNow(username, password);
+          if(!workerAuth.ok){
+            loginError.textContent = workerAuth.error === 'LOGIN_UNAVAILABLE'
+              ? '登入服務暫時無法使用，請稍後重試'
+              : '帳號或密碼錯誤，或帳號未啟用';
+            return;
+          }
+          const finalRole = workerAuth.role;
+          const authenticatedUser = workerAuth.user;
+          const u = Object.assign({}, localUser, {
+            username:authenticatedUser, user:authenticatedUser, name:authenticatedUser,
+            role:finalRole, level:finalRole
+          });
+          setSession({ username:authenticatedUser, level:finalRole });
+          __tasunSaveLoginBridge(authenticatedUser, finalRole);
           applyUser(
-            Object.assign({}, u, { level: finalRole }),
+            Object.assign({}, u, { role:finalRole, level:finalRole }),
             { skipBroadcast:true }
           );
 

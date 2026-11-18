@@ -20,7 +20,7 @@ const STORE_KEYS = {
   entryRegistry: 'auth-table:entryRegistry',
 };
 
-let schemaReadyPromise = null;
+let schemaReady = false;
 
 export default {
   async fetch(request, env) {
@@ -49,15 +49,15 @@ export default {
         if (!username || !password) return json({ ok: false, error: 'BAD_INPUT' }, 400, cors);
 
         const user = await getUser(env, username);
-        if (!user || Number(user.enabled || 0) !== 1) return json({ ok: false, error: 'NO_USER' }, 401, cors);
+        const authRow = await getAuth(env, username);
+        if (!isAuthorizedLoginAccount(user, authRow)) return json({ ok: false, error: 'NO_USER' }, 401, cors);
 
         const passHash = await sha256Hex(password);
         if (passHash !== String(user.pass_hash || '')) {
           return json({ ok: false, error: 'BAD_CRED' }, 401, cors);
         }
 
-        const authRow = await getAuth(env, username);
-        const role = normalizeRole(authRow?.role || user.role || 'read');
+        const role = normalizeRole(authRow.role || 'read');
         const exp = Date.now() + 8 * 60 * 60 * 1000;
         const token = await signToken(env, { u: username, r: role, exp });
         const h = new Headers(cors);
@@ -320,59 +320,57 @@ export default {
 
 async function ensureSchema(env) {
   if (!env || !env.DB) throw new Error('D1_DB_BINDING_MISSING');
-  if (!schemaReadyPromise) {
-    schemaReadyPromise = (async () => {
-      await env.DB.prepare(`
-        CREATE TABLE IF NOT EXISTS tasun_users (
-          username TEXT PRIMARY KEY,
-          pass_hash TEXT,
-          role TEXT DEFAULT 'read',
-          enabled INTEGER DEFAULT 1,
-          createdAt INTEGER DEFAULT 0,
-          updatedAt INTEGER DEFAULT 0
-        )
-      `).run();
-      await env.DB.prepare(`
-        CREATE TABLE IF NOT EXISTS tasun_auth (
-          username TEXT PRIMARY KEY,
-          role TEXT DEFAULT 'read',
-          btn1 INTEGER DEFAULT 0,
-          btn2 INTEGER DEFAULT 0,
-          btn3 INTEGER DEFAULT 0,
-          btn4 INTEGER DEFAULT 0,
-          btn5 INTEGER DEFAULT 0,
-          updatedAt INTEGER DEFAULT 0
-        )
-      `).run();
-      await env.DB.prepare(`
-        CREATE TABLE IF NOT EXISTS tasun_rows (
-          resourceKey TEXT NOT NULL,
-          uid TEXT NOT NULL,
-          data TEXT,
-          updatedAt INTEGER DEFAULT 0,
-          rev INTEGER DEFAULT 0,
-          deleted INTEGER DEFAULT 0,
-          PRIMARY KEY (resourceKey, uid)
-        )
-      `).run();
-      await env.DB.prepare(`
-        CREATE TABLE IF NOT EXISTS tasun_store (
-          id TEXT PRIMARY KEY,
-          json TEXT,
-          updatedAt TEXT,
-          rev TEXT
-        )
-      `).run();
-      await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_tasun_rows_resource_updated ON tasun_rows(resourceKey, updatedAt)`).run();
-      await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_tasun_rows_resource_deleted ON tasun_rows(resourceKey, deleted)`).run();
-      await seedDefaultUsers(env);
-      return true;
-    })().catch(err => {
-      schemaReadyPromise = null;
-      throw err;
-    });
-  }
-  return schemaReadyPromise;
+  if (schemaReady) return true;
+
+  // Cache only the completed state, never an in-flight Promise. A module-global
+  // Promise can cross Cloudflare request contexts and fail with
+  // "promise was created by a request that has since ended".
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS tasun_users (
+      username TEXT PRIMARY KEY,
+      pass_hash TEXT,
+      role TEXT DEFAULT 'read',
+      enabled INTEGER DEFAULT 1,
+      createdAt INTEGER DEFAULT 0,
+      updatedAt INTEGER DEFAULT 0
+    )
+  `).run();
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS tasun_auth (
+      username TEXT PRIMARY KEY,
+      role TEXT DEFAULT 'read',
+      btn1 INTEGER DEFAULT 0,
+      btn2 INTEGER DEFAULT 0,
+      btn3 INTEGER DEFAULT 0,
+      btn4 INTEGER DEFAULT 0,
+      btn5 INTEGER DEFAULT 0,
+      updatedAt INTEGER DEFAULT 0
+    )
+  `).run();
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS tasun_rows (
+      resourceKey TEXT NOT NULL,
+      uid TEXT NOT NULL,
+      data TEXT,
+      updatedAt INTEGER DEFAULT 0,
+      rev INTEGER DEFAULT 0,
+      deleted INTEGER DEFAULT 0,
+      PRIMARY KEY (resourceKey, uid)
+    )
+  `).run();
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS tasun_store (
+      id TEXT PRIMARY KEY,
+      json TEXT,
+      updatedAt TEXT,
+      rev TEXT
+    )
+  `).run();
+  await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_tasun_rows_resource_updated ON tasun_rows(resourceKey, updatedAt)`).run();
+  await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_tasun_rows_resource_deleted ON tasun_rows(resourceKey, deleted)`).run();
+  await seedDefaultUsers(env);
+  schemaReady = true;
+  return true;
 }
 
 async function seedDefaultUsers(env) {
@@ -475,6 +473,10 @@ async function dispatchGitHubWorkflow({ owner, repo, workflow, ref, token }) {
   return { ok: true, status: res.status, dispatch_id: `gh_${Date.now()}` };
 }
 
+function isAuthorizedLoginAccount(user, authRow) {
+  return Boolean(user && authRow && Number(user.enabled ?? 0) === 1);
+}
+
 async function buildAuthTableData(env) {
   const usersRs = await env.DB.prepare(`
     SELECT username, pass_hash, role, enabled, createdAt, updatedAt
@@ -500,20 +502,20 @@ async function buildAuthTableData(env) {
     .sort((a, b) => a.localeCompare(b));
 
   const auth = names.map(username => {
-    const u = userMap.get(username) || {};
-    const a = authMap.get(username) || {};
+    const u = userMap.get(username) || null;
+    const a = authMap.get(username) || null;
     const row = {
       user: username,
       name: username,
-      role: normalizeRole(a.role || u.role || 'read'),
-      enabled: Number(u.enabled == null ? 1 : u.enabled),
-      btn1: Number(a.btn1 || 0),
-      btn2: Number(a.btn2 || 0),
-      btn3: Number(a.btn3 || 0),
-      btn4: Number(a.btn4 || 0),
-      btn5: Number(a.btn5 || 0),
-      createdAt: Number(u.createdAt || 0),
-      updatedAt: Math.max(Number(u.updatedAt || 0), Number(a.updatedAt || 0)),
+      role: normalizeRole(a?.role || u?.role || 'read'),
+      enabled: isAuthorizedLoginAccount(u, a) ? 1 : 0,
+      btn1: Number(a?.btn1 || 0),
+      btn2: Number(a?.btn2 || 0),
+      btn3: Number(a?.btn3 || 0),
+      btn4: Number(a?.btn4 || 0),
+      btn5: Number(a?.btn5 || 0),
+      createdAt: Number(u?.createdAt || 0),
+      updatedAt: Math.max(Number(u?.updatedAt || 0), Number(a?.updatedAt || 0)),
     };
     return row;
   });
@@ -1117,13 +1119,32 @@ function json(obj, status = 200, headers = {}) {
   return new Response(JSON.stringify(obj), { status, headers: h });
 }
 
+function isStagingPreviewCorsOriginAllowed(origin, env) {
+  const projectDomain = String(env.STAGING_PREVIEW_CORS_PROJECT_DOMAIN || '')
+    .trim()
+    .toLowerCase()
+;
+  if (!projectDomain || !origin) return false;
+  try {
+    const parsed = new URL(origin);
+    const hostname = parsed.hostname.toLowerCase();
+    const suffix = '.' + projectDomain;
+    if (parsed.protocol !== 'https:' || parsed.origin !== origin || !hostname.endsWith(suffix)) return false;
+    const previewLabel = hostname.slice(0, -suffix.length);
+    return Boolean(previewLabel) && !previewLabel.includes('.');
+  } catch (_) {
+    return false;
+  }
+}
+
 function corsHeaders(request, env) {
   const origin = request.headers.get('Origin') || '';
   const allowList = String(env.CORS_ALLOW_ORIGINS || 'https://wutasun.github.io')
     .split(',')
     .map(s => s.trim())
     .filter(Boolean);
-  const allowOrigin = allowList.includes(origin) ? origin : (allowList[0] || 'https://wutasun.github.io');
+  const isAllowed = allowList.includes(origin) || isStagingPreviewCorsOriginAllowed(origin, env);
+  const allowOrigin = isAllowed ? origin : (allowList[0] || 'https://wutasun.github.io');
   return {
     'Access-Control-Allow-Origin': allowOrigin,
     'Access-Control-Allow-Credentials': 'true',

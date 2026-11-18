@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 const html = fs.readFileSync(path.resolve(__dirname,'..','index.html'),'utf8');
+const workerSource = fs.readFileSync(path.resolve(__dirname,'..','tasun-api','worker_tasun.js'),'utf8');
 const start = html.indexOf('function tryRestoreLogin(){');
 const end = html.indexOf('function showLogin(msg){',start);
 assert.ok(start>0 && end>start);
@@ -24,7 +25,7 @@ function verify(config={}){
   const localStorage = new Store({tasun_manager_home_return_r739:'shadow-ticket',tasunBusinessRows_v1:'KEEP'});
   const applied=[]; const urls=[];
   const href=config.href || page+'?from=manager-home-r739&_resumeSession=1&_rt='+now;
-  const state={URL,Date,Number,JSON,Math,Array,String,Object,sessionStorage,localStorage,
+  const state={URL,Date,Number,JSON,Math,Array,String,Object,sessionStorage,localStorage,window:{opener:null},
     location:{href,origin:new URL(href).origin},document:{referrer:config.referrer===undefined?manager:config.referrer},
     INDEX_SESSION_KEY:'tasunIndexSessionAuthed_v2',CHILD_INDEX_SESSION_KEY:'tasunIndexSession_v1',
     AUTH_TABLE:[{username:'qa_offline',level:'read'}],getSession:()=>config.logout?null:{user:'qa_offline',role:config.role || 'read'},
@@ -54,7 +55,44 @@ test('logout and wrong role denied',()=>{
 test('missing verification flag denied',()=>assert.equal(verify({session:{tasunIndexSessionAuthed_v2:''}}).invoke(),false));
 test('explicit force-login cannot be bypassed',()=>assert.equal(verify({href:page+'?from=manager-home-r739&_resumeSession=1&_rt='+now+'&_forceLogin=1'}).invoke(),false));
 test('homepage boot falls back to normal login if handoff invalid',()=>{
-  assert.match(html,/if\(!tryRestoreLogin\(\)\) showLogin\(\);/);
+  assert.match(html,/if\(!tryRestoreLogin\(\)(?:\s*&&\s*!tryRestoreExistingWorkerSession\(\))?\)\s*showLogin\(\);/);
   assert.match(html,/function clearLogoutAuthStorage\(\)/);
   assert.match(html,/tasun-legacy-password-cache-clean-v1/);
+});
+
+
+function extractScriptContaining(source, marker, filename){
+  const markerAt = source.indexOf(marker);
+  assert.ok(markerAt >= 0, filename + ': expected login API resolver');
+  const openAt = source.lastIndexOf('<script', markerAt);
+  const openEnd = source.indexOf('>', openAt);
+  const closeAt = source.indexOf('</script', markerAt);
+  assert.ok(openAt >= 0 && openEnd >= 0 && closeAt > markerAt, filename + ': expected enclosing script block');
+  return source.slice(openEnd + 1, closeAt);
+}
+
+test('login API resolver script blocks parse in all three entry pages',()=>{
+  for(const filename of ['index.html','inline.js','tasun-api/index.html']){
+    const source = fs.readFileSync(path.resolve(__dirname,'..',filename),'utf8');
+    const script = extractScriptContaining(source,'function __tasunResolveLoginApiBase(){',filename);
+    assert.doesNotThrow(()=>new vm.Script(script,{filename}), filename + ': embedded login script must parse');
+  }
+});
+
+test('permission table and login eligibility use the same account rule',()=>{
+  const start = workerSource.indexOf('function isAuthorizedLoginAccount(');
+  const end = workerSource.indexOf('\n}',start);
+  assert.ok(start >= 0 && end > start, 'Worker must define the shared login eligibility rule');
+  const helperSource = workerSource.slice(start,end + 2);
+  const isEligible = new vm.Script('(' + helperSource + ')').runInNewContext();
+  assert.equal(isEligible({enabled:1},{username:'active',role:'write'}),true);
+  assert.equal(isEligible({enabled:0},{username:'disabled',role:'write'}),false);
+  assert.equal(isEligible({enabled:1},null),false);
+  assert.equal(isEligible(null,{username:'orphan-permission'}),false);
+  assert.ok(workerSource.includes('if (!isAuthorizedLoginAccount(user, authRow))'),
+    'Worker login must require an enabled user and a permission row');
+  assert.ok(workerSource.includes('enabled: isAuthorizedLoginAccount(u, a) ? 1 : 0'),
+    'Public login roster must apply the same eligibility rule');
+  assert.ok(workerSource.includes("const role = normalizeRole(authRow.role || 'read');"),
+    'Worker login role must come from the permission row');
 });
