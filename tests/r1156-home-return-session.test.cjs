@@ -25,7 +25,7 @@ function verify(config={}){
   const localStorage = new Store({tasun_manager_home_return_r739:'shadow-ticket',tasunBusinessRows_v1:'KEEP'});
   const applied=[]; const urls=[];
   const href=config.href || page+'?from=manager-home-r739&_resumeSession=1&_rt='+now;
-  const state={URL,Date,Number,JSON,Math,Array,String,Object,sessionStorage,localStorage,
+  const state={URL,Date,Number,JSON,Math,Array,String,Object,sessionStorage,localStorage,window:{opener:null},
     location:{href,origin:new URL(href).origin},document:{referrer:config.referrer===undefined?manager:config.referrer},
     INDEX_SESSION_KEY:'tasunIndexSessionAuthed_v2',CHILD_INDEX_SESSION_KEY:'tasunIndexSession_v1',
     AUTH_TABLE:[{username:'qa_offline',level:'read'}],getSession:()=>config.logout?null:{user:'qa_offline',role:config.role || 'read'},
