@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- R821: 首屏先完成本機資料、按鈕事件與表格繪製，登入橋接與雲端同步改為背景執行；表格分批提交 DOM、跳過隱藏卡片重建並保留雙軸捲動位置。 -->
 <!-- R818: 新增/編輯表單「工種／系統／出處」統一為可直接輸入的下拉欄位；完成輸入、離開欄位、按 Enter 或儲存時，自動登錄為下拉選項。新增共用選項目錄與刪除墓碑，刪除選項不改動既有資料列且刷新後不復活；選項目錄隨本端、雲端、備份去重合併，並納入 TasunSelfHealV5 check / repair / verify。主頁搜尋仍維持 R550 只讀資料列同欄精準比對，不受自訂字典污染。 -->
 <!-- R610: 修復「捷運汐止東湖線統包工程-資料明細表.html」新增/編輯表單「系統」工項：按「新增系統」輸入文字後，需同步寫入系統字典與目前工種-系統綁定表，重建新增表單系統下拉時必須保留新輸入值並可隨本列儲存；主頁搜尋系統選項仍維持 R550 只讀資料列「系統」欄、不回灌全域字典，避免搜尋污染；納入 TasunSelfHealV5 check / repair / verify。 -->
 <!-- R550: 修正搜尋表單「系統」選項只依目前所選「工種」為依據，系統下拉只取同一筆資料列「系統」欄不重複值；清除舊版從全域系統字典、fSys/mSysSel 舊選項或其他欄位反灌造成的錯誤選項。搜尋結果仍維持同欄精準比對，不跨欄、不包含比對。另已檢查本頁無收發文登錄表專用連結欄位，避免誤套其他頁面欄位修復。現行版本：20260806_tasun_v5_detail_list_r818_editable_dropdown_option_delete_sync_fix -->
@@ -3126,11 +3127,18 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
       var cur = null;
       try{ cur = getCurrentUser(); }catch(e){ cur = null; }
       if(cur){
-        try{ setCurrentUser(cur); }catch(e){}
-        try{ applyUser(cur); }catch(e){}
+        var known = state.user && typeof state.user === "object" ? state.user : {};
+        var sameUser = norm(known.user) === norm(cur.user) && norm(known.role) === norm(cur.role) && norm(known.name || known.user) === norm(cur.name || cur.user);
+        if(!sameUser){
+          try{ setCurrentUser(cur); }catch(e){}
+          try{ applyUser(cur); }catch(e){}
+        }
         return true;
       }
-      try{ applyUser({ user:"—", role:"read", name:"—" }); }catch(e){}
+      var current = state.user && typeof state.user === "object" ? state.user : {};
+      if(norm(current.user) !== "—"){
+        try{ applyUser({ user:"—", role:"read", name:"—" }); }catch(e){}
+      }
       return false;
     }
 
@@ -3140,15 +3148,24 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
       var settling = false;
       var queued = false;
       var syncPromise = null;
+      var uiSettled = false;
+      var lastRuntimeIdentity = "";
 
       async function doOneSettle(){
         var ok = false;
         try{ ok = resolveRuntimeUser(); }catch(e){ ok = false; }
-        try{ ensureActionButtonsVisible(); }catch(e){}
-        try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
+        var runtimeUser = state.user && typeof state.user === "object" ? state.user : {};
+        var identity = [norm(runtimeUser.user), norm(runtimeUser.role), norm(runtimeUser.name || runtimeUser.user)].join("|");
+        if(!uiSettled || identity !== lastRuntimeIdentity){
+          uiSettled = true;
+          lastRuntimeIdentity = identity;
+          try{ ensureActionButtonsVisible(); }catch(e){}
+          try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
+        }
 
-        if(!syncAttempted && (hasBridgeSessionReady() || hasWorkerTokenReady())){
+        if(!syncAttempted && !window.__TASUN_DETAIL_BOOT_SYNC_ATTEMPTED_R819__ && !window.__TASUN_DETAIL_BOOT_SYNC_PENDING_R821__ && (hasBridgeSessionReady() || hasWorkerTokenReady())){
           syncAttempted = true;
+          window.__TASUN_DETAIL_BOOT_SYNC_PENDING_R821__ = true;
           window.__TASUN_DETAIL_BOOT_SYNC_ATTEMPTED_R819__ = true;
           if(!syncPromise){
             syncPromise = reconcileCloudOnOpen({ silent:true, reason:"r546-auth-hydration-watch" }).catch(function(){ return false; }).then(function(ok){
@@ -3157,6 +3174,7 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
               }
               return ok;
             }).finally(function(){
+              window.__TASUN_DETAIL_BOOT_SYNC_PENDING_R821__ = false;
               syncPromise = null;
             });
           }
@@ -3181,7 +3199,7 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
 
       var tm = setInterval(function(){
         tries++;
-        settle().then(function(ok){ if(ok || tries >= maxTries) clearInterval(tm); });
+        settle().then(function(){ if(syncAttempted || window.__TASUN_DETAIL_BOOT_SYNC_ATTEMPTED_R819__ || tries >= maxTries) clearInterval(tm); });
       }, 250);
       ["focus","pageshow","load"].forEach(function(evt){
         window.addEventListener(evt, function(){ settle(); });
@@ -5119,7 +5137,8 @@ function calcMaxDisplayChars(rows, key){
 
     function renderTable(rows){
       var tb = $("tbody");
-      tb.innerHTML = "";
+      if(!tb) return;
+      var fragment = document.createDocumentFragment();
       for(var i=0;i<rows.length;i++){
         var r = rows[i];
         var tr = document.createElement("tr");
@@ -5175,13 +5194,21 @@ function calcMaxDisplayChars(rows, key){
           selectRow(uid);
         };})(r.uid));
 
-        tb.appendChild(tr);
+        fragment.appendChild(tr);
       }
+      if(typeof tb.replaceChildren === "function") tb.replaceChildren(fragment);
+      else{ tb.innerHTML = ""; tb.appendChild(fragment); }
     }
 
     function renderCards(rows){
       var box = $("cards");
-      box.innerHTML = "";
+      if(!box) return;
+      // 閱讀模式未開啟時卡片完全隱藏，略過重建可見表格以外的整份副本。
+      if(!state.readMode){
+        if(box.childElementCount) box.innerHTML = "";
+        return;
+      }
+      var fragment = document.createDocumentFragment();
       for(var i=0;i<rows.length;i++){
         var r = rows[i];
         var card = document.createElement("div");
@@ -5228,8 +5255,10 @@ function calcMaxDisplayChars(rows, key){
           this.classList.toggle("open");
         });
 
-        box.appendChild(card);
+        fragment.appendChild(card);
       }
+      if(typeof box.replaceChildren === "function") box.replaceChildren(fragment);
+      else{ box.innerHTML = ""; box.appendChild(fragment); }
     }
 
     function activeRowsR546(rows){
@@ -5280,6 +5309,9 @@ function calcMaxDisplayChars(rows, key){
     }
 
     function refresh(){
+      var tableWrap = document.querySelector(".tableWrap");
+      var scrollTop = tableWrap ? tableWrap.scrollTop : 0;
+      var scrollLeft = tableWrap ? tableWrap.scrollLeft : 0;
       try{ ensureTitleSubtitleRemovedR546(); }catch(e){}
       try{ removeTopbarUserRolePillsR451(); }catch(e){}
       ensureActionButtonsVisible();
@@ -5291,6 +5323,11 @@ function calcMaxDisplayChars(rows, key){
       try{ renderCards(rows); }catch(e){ try{ console.warn("R453 renderCards failed", e); }catch(_e){} }
       try{ ensureMobileTableVisibleR546("refresh"); }catch(e){}
       applyMobileCompactColumnWidths(rows);
+      // 重繪資料列後保留使用者的水平、垂直瀏覽位置。
+      if(tableWrap){
+        if(tableWrap.scrollTop !== scrollTop) tableWrap.scrollTop = scrollTop;
+        if(tableWrap.scrollLeft !== scrollLeft) tableWrap.scrollLeft = scrollLeft;
+      }
       refreshHintSafe();
       ensureActionButtonsVisible();
       try{ syncSearchPanelFloatingSpace(); }catch(e){}
@@ -6190,7 +6227,9 @@ function getPromptOptions(mode){
       }catch(e){}
       buildDictsFromDb();
       if(!opts.noRender) refresh();
-      try{ ensureMobileTableVisibleR546('r546-cloud-authority-apply'); }catch(_e){}
+      if(!opts.noRender){
+        try{ ensureMobileTableVisibleR546('r546-cloud-authority-apply'); }catch(_e){}
+      }
       return { db: state.db, counter: state.counter, optionCatalog:state.optionCatalog };
     }
 
@@ -6401,6 +6440,7 @@ var __detailReconcilePromiseR819 = null;
       opts = (opts && typeof opts==="object") ? opts : {};
       var silent = (opts.silent!==false);
       var reason = norm(opts.reason || 'open-cloud-authority-r546');
+      var cloudRowsAppliedWithoutRender = false;
 
       var cfg = await loadCloudCfg();
       if(!cfg || !isValidApiBase(cfg.apiBase)){
@@ -6439,8 +6479,8 @@ var __detailReconcilePromiseR819 = null;
           }catch(_retryBeforeErr){}
         }
         if(remoteActiveCountR546 && !localActiveCountR546){
-          await applyCloudAuthorityRowsR546(remoteBefore.db || [], remoteBefore.counter, 'r546-first-download-cloud-authority-before-upload:' + reason, { allowEmptyAuthority:false, optionCatalog:remoteBefore.optionCatalog || [] });
-          try{ ensureMobileTableVisibleR546('r546-first-download-before-upload'); }catch(_e){}
+          cloudRowsAppliedWithoutRender = true;
+          await applyCloudAuthorityRowsR546(remoteBefore.db || [], remoteBefore.counter, 'r546-first-download-cloud-authority-before-upload:' + reason, { allowEmptyAuthority:false, optionCatalog:remoteBefore.optionCatalog || [], noRender:true });
           localAll = await readLocalAuthorityRows();
         }
 
@@ -6510,11 +6550,12 @@ var __detailReconcilePromiseR819 = null;
           };
         }
 
+        cloudRowsAppliedWithoutRender = true;
         await applyCloudAuthorityRowsR546(
           (finalCloud && finalCloud.db) || [],
           finalCloud && finalCloud.counter,
           'r546-final-cloud-authority-purge-local:' + reason,
-          { optionCatalog:mergeOptionCatalog(uploadOptionCatalog, finalCloud && finalCloud.optionCatalog) }
+          { optionCatalog:mergeOptionCatalog(uploadOptionCatalog, finalCloud && finalCloud.optionCatalog), noRender:true }
         );
         try{ window.__TASUN_DETAIL_LAST_CLOUD_DUP_ROWS__ = (finalCloud && finalCloud.db) || []; updateDuplicateStatusFromRows(window.__TASUN_DETAIL_LAST_CLOUD_DUP_ROWS__, "final-cloud-redownload-r546"); }catch(_e){}
 
@@ -6542,6 +6583,7 @@ var __detailReconcilePromiseR819 = null;
         var msg = String(e && e.message ? e.message : e || "");
         var st = /401|403|unauth|forbidden/i.test(msg) ? 'standby' : ((state.cloud && state.cloud.authState) || 'standby');
         setCloudState({ ok:false, authState:st, reachable:(state.cloud && state.cloud.reachable!==undefined ? state.cloud.reachable : null), authPending:false, syncInProgress:false }, true);
+        if(cloudRowsAppliedWithoutRender){ try{ refresh(); }catch(_renderErr){} }
         if(!silent) toast("雲端同步處理中：" + msg);
         return false;
       }
@@ -6789,7 +6831,8 @@ var __detailReconcilePromiseR819 = null;
     // ---------------------------
     // Read mode
     // ---------------------------
-    function applyReadMode(on){
+    function applyReadMode(on, opts){
+      opts = (opts && typeof opts === "object") ? opts : {};
       state.readMode = !!on;
       document.body.classList.toggle("readMode", state.readMode);
       try{
@@ -6806,7 +6849,7 @@ var __detailReconcilePromiseR819 = null;
         }
       }catch(_e){}
       localStorage.setItem(READ_MODE_KEY, state.readMode ? "1" : "0");
-      refresh();
+      if(!opts.skipRefresh) refresh();
     }
 
     // ---------------------------
@@ -6877,7 +6920,8 @@ var __detailReconcilePromiseR819 = null;
     }
     function closeLogin(){ $("loginMask").style.display="none"; }
 
-    function applyUser(u){
+    function applyUser(u, opts){
+      opts = (opts && typeof opts === "object") ? opts : {};
       u = normalizeAuthUser(u) || { user:"—", role:"read", name:"—", at: nowISO() };
       state.user = u;
       state.role = u && u.role ? u.role : "read";
@@ -6894,7 +6938,9 @@ var __detailReconcilePromiseR819 = null;
       if($("btnToken")) $("btnToken").style.display = (state.role==="admin") ? "" : "none";
       try{ updateEditActionOptions(); }catch(_e){}
       ensureHeaderStateVisible();
-      try{ refresh(); }catch(e){ try{ refreshHintSafe(); }catch(_e){} }
+      if(!opts.skipRefresh){
+        try{ refresh(); }catch(e){ try{ refreshHintSafe(); }catch(_e){} }
+      }
     }
 
     async function doLogin(){
@@ -7771,10 +7817,6 @@ $("btnSave").addEventListener("click", async function(){
       try{ hydrateCrossPageAuth(); }catch(e){}
       try{ refreshCloudAuthStateSync(); }catch(e){}
       try{ renderHintFallback(); }catch(e){}
-      try{
-        var __cur0 = getCurrentUser();
-        if(__cur0) applyUser(__cur0);
-      }catch(e){}
       // 這段只加防護，不改 UI/DOM/CSS。
       var cur = null;
       try{
@@ -7808,44 +7850,21 @@ $("btnSave").addEventListener("click", async function(){
             state.readMode = false;
             try{ localStorage.setItem(READ_MODE_KEY, "0"); }catch(_e){}
           }
-          applyReadMode(state.readMode);
+          applyReadMode(state.readMode, { skipRefresh:true });
         }catch(e){ state.readMode = false; }
 
         try{ ensureAuthTable(); }catch(e){}
         try{ hydrateCrossPageAuth(); }catch(e){}
         try{ cur = getCurrentUser(); }catch(e){ cur = null; }
-        if(!cur){
-          try{ cur = await waitForGlobalAuthBridge(900); }catch(e){ cur = null; }
-          try{ cur = cur || getCurrentUser(); }catch(e){ cur = cur || null; }
-        }
+        try{ wire(); }catch(e){}
         try{
-          if(cur) applyUser(cur);
-          else applyUser({ user:"—", role:"read", name:"—" });
+          if(cur) applyUser(cur, { skipRefresh:true });
+          else applyUser({ user:"—", role:"read", name:"—" }, { skipRefresh:true });
         }catch(e){}
 
-        try{ wire(); }catch(e){}
         try{ ensureHeaderStateVisible(); }catch(e){}
-        try{ renderHintFallback(); }catch(e){}
-        try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         try{ refresh(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         try{ ensureMobileTableVisibleR546('r546-boot-local-render'); }catch(e){}
-        try{ hydrateCrossPageAuth(); }catch(e){}
-        try{ await refreshCloudAuthState(); }catch(e){}
-        try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
-        // ✅ 開頁同步策略修正：只要雲端設定有效，就主動跑一次 reconcile；
-        // 由 reconcile / ensureWorkerAuthorized 自行判斷橋接授權或連線狀態，
-        // 避免頁面長時間停在未完成同步狀態卻未真正嘗試同步。
-        try{
-          var _c = (typeof state !== "undefined" && state && state.cloud) ? state.cloud : {};
-          window.__TASUN_DETAIL_BOOT_SYNC_ATTEMPTED_R819__ = true;
-          if(_c && _c.cfgOk){
-            await reconcileCloudOnOpen({ silent:true });
-            try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
-            try{ ensureMobileTableVisibleR546('r546-boot-cloud-render'); }catch(e){}
-          }else{
-            try{ setCloudState({ authState:"unauth", authPending:false, ok:false }, false); }catch(e){}
-          }
-        }catch(e){}
         try{ ensureHeaderStateVisible(); }catch(e){}
         try{ if(!cur && !state.db.length) openLogin(); }catch(e){}
 
@@ -7858,6 +7877,56 @@ $("btnSave").addEventListener("click", async function(){
             updatedAt: nowISO()
           });
         }catch(e){}
+
+        // 先完成本機資料與操作事件繪製，雲端授權、健康檢查與權威同步延後到首屏繪製後背景執行。
+        window.__TASUN_DETAIL_BOOT_SYNC_ATTEMPTED_R819__ = false;
+        window.__TASUN_DETAIL_BOOT_SYNC_PENDING_R821__ = true;
+        var bootSyncStarted = false;
+        var beginBootCloudSyncR821 = function(){
+          if(bootSyncStarted) return;
+          bootSyncStarted = true;
+          (async function(){
+            try{
+              var syncUser = cur;
+              try{ syncUser = syncUser || getCurrentUser(); }catch(_e){}
+              if(!syncUser){
+                try{ syncUser = await waitForGlobalAuthBridge(900); }catch(_e){ syncUser = null; }
+                try{ syncUser = syncUser || getCurrentUser(); }catch(_e){}
+              }
+              if(syncUser){
+                var known = state.user && typeof state.user === "object" ? state.user : {};
+                if(norm(known.user) !== norm(syncUser.user) || norm(known.role) !== norm(syncUser.role) || norm(known.name || known.user) !== norm(syncUser.name || syncUser.user)){
+                  cur = syncUser;
+                  applyUser(syncUser);
+                }
+                try{
+                  if($("loginMask") && $("loginMask").style.display === "flex" && !norm($("loginUser").value) && !norm($("loginPass").value)) closeLogin();
+                }catch(_e){}
+                try{ hydrateCrossPageAuth(); }catch(_e){}
+              }
+              if(!(hasBridgeSessionReady() || hasWorkerTokenReady())){
+                window.__TASUN_DETAIL_BOOT_SYNC_PENDING_R821__ = false;
+                return;
+              }
+              window.__TASUN_DETAIL_BOOT_SYNC_ATTEMPTED_R819__ = true;
+              try{ await refreshCloudAuthState(); }catch(_e){}
+              var cloud = state.cloud || {};
+              if(cloud.cfgOk){
+                await reconcileCloudOnOpen({ silent:true, reason:"r821-background-open-sync" });
+                try{ refreshHintSafe(); }catch(_e){ try{ renderHintFallback(); }catch(__e){} }
+                try{ ensureMobileTableVisibleR546('r821-background-open-sync'); }catch(_e){}
+              }else{
+                try{ setCloudState({ authState:"unauth", authPending:false, ok:false }, false); }catch(_e){}
+              }
+            }catch(_e){}
+            finally{ window.__TASUN_DETAIL_BOOT_SYNC_PENDING_R821__ = false; }
+          })();
+        };
+        if(window.requestAnimationFrame){
+          window.requestAnimationFrame(function(){ setTimeout(beginBootCloudSyncR821, 0); });
+        }else{
+          setTimeout(beginBootCloudSyncR821, 0);
+        }
       }catch(e){
         // 任何未預期錯誤：仍然嘗試畫出狀態列，避免出現「空白資訊列」。
         try{ wire(); }catch(_e){}
