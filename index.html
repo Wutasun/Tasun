@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!-- R735：修復 index.html 登入表「使用者名稱」選取後顯示框仍顯示空白或「-」的問題。根因為 R731 將 usernameWrap 強制套用 native-touch，桌機亦使用原生 select；同時 R731 的 #loginOverlay .select-display 規則與既有 native-touch 隱藏規則發生 specificity 競爭，造成原生選單與自訂顯示框可能同時存在或顯示層不一致。另 populateUserSelect 每次重建選項均強制 selectedIndex=0，雲端／權限資料刷新時會清掉剛選取的使用者。本版直接整合於登入選擇器共用核心：依實際輸入裝置切換桌機自訂選擇器與觸控原生選擇器；用 ID 範圍 CSS 明確保證同一時間只有一個可見控制；選取、輸入、選項重建及模式切換均由單一 syncUsernamePickerSelection 同步 select、顯示文字、title、data-selected-user 與 aria-selected；重建使用者清單時保留仍有效的目前選擇，不再無條件歸零。新增 TasunSelfHealV5／R268 check / repair / verify，採冷卻與最多 3 次註冊，不使用無限輪詢；登入、密碼驗證、權限、直接開啟返回、雲端與版面 R731 自適應契約不變。 -->
 <!-- R731：依最新截圖深入整合 index.html 登入表單全解析度自適應。根因為舊版同時存在三套 full-bleed／固定 min-height／aspect-ratio 登入布局，且 login-box 使用 overflow:hidden，於小視窗、低高度或瀏覽器非最大化時造成登入按鍵及表單內容超出玻璃面板或整體被視窗裁切。R731 正式移除三套互相覆蓋的舊登入幾何規則，整合為單一登入版面核心：表單、使用者選單、密碼欄、顯示密碼按鍵、錯誤訊息及登入操作列皆維持於 login-box 內；依 visualViewport／視窗寬高自動調整欄寬、字級、控制高度、間距及必要縮放，桌機、筆電、手機直式與低高度橫式皆保持完整顯示。resize／orientationchange／visualViewport／字型完成後只採 requestAnimationFrame＋防抖有限校正，不使用無限輪詢。同步將 index 版本判斷改為只讀 tasun-version.json 的 index.html／index 本頁 entry，不再讀 root version，並登錄 TasunSelfHealV5／R268 check / repair / verify、清除舊版版本鎖／Cache Storage／Service Worker／build stamp memo 相容規則。 -->
-<!-- TASUN_REBUILD_STAMP:20260721_tasun_v5_index_r735_login_username_selection_display_sync_release -->
+<!-- TASUN_REBUILD_STAMP:20261119_tasun_v5_index_r736_nonblocking_auth_roster_release -->
 <html lang="zh-Hant">
 <head>
 <script id="tasun-legacy-password-cache-clean-v1">
@@ -131,8 +131,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Tasun 資料首頁 · 空無明</title>
-  <meta name="tasun-build-stamp" content="20260721_tasun_v5_index_r735_login_username_selection_display_sync_release" />
-  <meta name="tasun-rebuild-stamp" content="20260721_tasun_v5_index_r735_login_username_selection_display_sync_release" />
+  <meta name="tasun-build-stamp" content="20261119_tasun_v5_index_r736_nonblocking_auth_roster_release" />
+  <meta name="tasun-rebuild-stamp" content="20261119_tasun_v5_index_r736_nonblocking_auth_roster_release" />
   <link rel="icon" href="data:,">
   <meta name="color-scheme" content="dark light">
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
@@ -175,7 +175,7 @@
 
   <script>
   (function(){
-    console.log('[TASUN BUILD] 20260721_tasun_v5_index_r735_login_username_selection_display_sync_release');
+    console.log('[TASUN BUILD] 20261119_tasun_v5_index_r736_nonblocking_auth_roster_release');
     try{
       const dm = navigator.deviceMemory || 0;
       const conn = navigator.connection || {};
@@ -2120,7 +2120,7 @@ body:not(.locked) #loginOverlay{display:none!important;}
   'use strict';
   if(window.__TASUN_INDEX_R731_LOGIN_RESPONSIVE_CORE__) return;
   window.__TASUN_INDEX_R731_LOGIN_RESPONSIVE_CORE__ = true;
-  var BUILD = '20260721_tasun_v5_index_r735_login_username_selection_display_sync_release';
+  var BUILD = '20261119_tasun_v5_index_r736_nonblocking_auth_roster_release';
   var retryCount = 0, maxRetry = 3, timer = 0, raf = 0, lastRun = 0;
   var aborter = typeof AbortController !== 'undefined' ? new AbortController() : null;
   var signalOpt = aborter ? {passive:true, signal:aborter.signal} : {passive:true};
@@ -2548,7 +2548,7 @@ body:not(.locked) #loginOverlay{display:none!important;}
 
       const D1_AUTH_TABLE_ENDPOINT_FULL  = '/api/auth/table';
       const D1_AUTH_TABLE_ENDPOINT_PUB   = '/api/auth/public';
-      const AUTH_TABLE_SYNC_TIMEOUT_MS = 8000;
+      const AUTH_TABLE_SYNC_TIMEOUT_MS = 3500;
       const AUTH_TABLE_SYNC_TTL_MS = 30000;
       let authTableAuthorityReady = false;
       let authTableSyncedAt = 0;
@@ -2622,7 +2622,7 @@ body:not(.locked) #loginOverlay{display:none!important;}
           return { ok:res.ok, status:res.status, json };
         }catch(err){
           if(controller && controller.signal.aborted){
-            throw new Error('Staging auth-list request timed out');
+            throw new Error('權責表清單讀取逾時');
           }
           throw err;
         }finally{
@@ -2678,7 +2678,7 @@ body:not(.locked) #loginOverlay{display:none!important;}
                 break;
               }catch(fetchError){
                 if(attempt === 0 && fetchError instanceof TypeError){
-                  await new Promise(resolve=>setTimeout(resolve, 500));
+                  await new Promise(resolve=>setTimeout(resolve, 250));
                   continue;
                 }
                 throw fetchError;
@@ -4067,22 +4067,28 @@ body:not(.locked) #loginOverlay{display:none!important;}
       async function openUsernameMenu(){
         if(!usernameMenu || !usernameDisplay || usernameDisplay.disabled) return;
         if(!authTableAuthorityReady){
-          usernameMenu.innerHTML = '<div class="select-option" role="status">正在同步權責表帳號清單…</div>';
-          usernameMenu.classList.add('open');
-          usernameDisplay.setAttribute('aria-expanded', 'true');
+          // Keep the dropdown closed while the authority roster is fetched.
+          // The inline status stays visible without covering the password field.
+          closeUsernameMenu();
           if(loginError) loginError.textContent = '正在同步權責表帳號…';
           const synced = await syncAuthTableFromAuthority();
           if(!synced && !authTableAuthorityReady){
-            usernameMenu.innerHTML = '<div class="select-option" role="status">權責表清單暫時無法讀取，舊的本機帳號不會顯示。請關閉後再點使用者欄位重試。</div>';
-            if(loginError) loginError.textContent = '權責表清單讀取失敗；未使用本機預設帳號。';
+            if(loginError) loginError.textContent = '權責表帳號清單暫時無法讀取，請稍後再點使用者欄位重試。';
             return;
           }
+          populateUserSelect();
           if(loginError) loginError.textContent = '';
+        }
+        refreshUsernamePicker('menu-open');
+        const items = menuItems();
+        if(!items.length){
+          if(loginError) loginError.textContent = authTableAuthorityReady
+            ? '權責表目前沒有啟用中的帳號。'
+            : '權責表帳號清單尚未載入，請稍後重試。';
+          return;
         }
         usernameMenu.classList.add('open');
         usernameDisplay.setAttribute('aria-expanded', 'true');
-        const items = menuItems();
-        if(!items.length) return;
         const idx = items.findIndex(it => (it.dataset.value || '') === (usernameSel.value || ''));
         setActiveIndex(idx >= 0 ? idx : 0, true);
       }
@@ -4145,19 +4151,9 @@ body:not(.locked) #loginOverlay{display:none!important;}
         usernameMenu.innerHTML = '';
         const opts = Array.from(usernameSel.options || []);
         const usable = opts.filter(o => !o.disabled && String(o.value||'').trim());
+        // Keep loading/error status in the inline login message, not the dark dropdown.
         if(!usable.length){
-          // Keep the picker interactive while the authority roster is loading or
-          // unavailable. A disabled button prevents users from opening it to retry.
           usernameDisplay.disabled = false;
-          const status = document.createElement('div');
-          status.className = 'select-option';
-          status.setAttribute('role', 'status');
-          status.textContent = authTableAuthorityReady
-            ? '權責表目前沒有啟用中的帳號'
-            : (authTableSyncPromise
-                ? '正在同步權責表帳號清單…'
-                : (authTableSyncError ? '權責表清單暫時無法讀取，點此重試。' : '權責表帳號清單尚未載入，點此重試。'));
-          usernameMenu.appendChild(status);
           return;
         }
         usernameDisplay.disabled = false;
