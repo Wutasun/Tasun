@@ -355,7 +355,7 @@
 
     async function fetchVersionBundle(){
       try{
-        var res = await fetchWithTimeoutR818('tasun-version.json?_=' + now() + '&__page_authority=1', { cache:'no-store', credentials:'same-origin', headers:{'Cache-Control':'no-cache','Pragma':'no-cache'} }, 10000);
+        var res = await fetchWithTimeoutR818('tasun-version.json?_=' + now() + '&__page_authority=1', { cache:'no-store', credentials:'same-origin', headers:{'Cache-Control':'no-cache','Pragma':'no-cache'} }, 5000);
         if(!res.ok) return null;
         var data = await res.json().catch(function(){ return null; });
         if(!data) return null;
@@ -368,47 +368,22 @@
       }catch(_e){ return null; }
     }
 
-    async function fetchRemotePageBuildStampOnce(){
-      try{
-        var pageUrl = new URL(location.pathname, location.origin);
-        pageUrl.searchParams.set('__bs_probe', String(now()));
-        var res = await fetchWithTimeoutR818(pageUrl.toString(), { cache:'no-store', credentials:'same-origin', headers:{'Cache-Control':'no-cache','Pragma':'no-cache'} }, 10000);
-        if(!res.ok) return { htmlBuildStamp:'', htmlRebuildStamp:'' };
-        var html = await res.text().catch(function(){ return ''; });
-        if(!html) return { htmlBuildStamp:'', htmlRebuildStamp:'' };
-        var buildMeta = html.match(/<meta[^>]+name=["']tasun-build-stamp["'][^>]+content=["']([^"']+)["']/i);
-        var buildVar = html.match(/var\s+PAGE_BUILD_STAMP\s*=\s*["']([^"']+)["']/i);
-        var rebuildMeta = html.match(/<meta[^>]+name=["']tasun-rebuild-stamp["'][^>]+content=["']([^"']+)["']/i);
-        var rebuildVar = html.match(/(?:window\.)?TASUN_REBUILD_STAMP\s*=\s*["']([^"']+)["']/i);
-        function pick(){ for(var i=0;i<arguments.length;i++){ var s = norm(arguments[i]); if(s) return s; } return ''; }
-        return {
-          htmlBuildStamp: pick(buildMeta && buildMeta[1], buildVar && buildVar[1]),
-          htmlRebuildStamp: pick(rebuildMeta && rebuildMeta[1], rebuildVar && rebuildVar[1])
-        };
-      }catch(_e){ return { htmlBuildStamp:'', htmlRebuildStamp:'' }; }
-    }
-
-    async function purgeOldLocksCaches(){
-      try{
-        Object.keys(sessionStorage || {}).forEach(function(k){
-          if(/^tasun_(buildstamp_check_lock|force_refresh_lock|html_once_refresh|latest_open_authority_guard|stale_version_lock_clear)/.test(k)) sessionStorage.removeItem(k);
-        });
-      }catch(_e){}
-      try{ if('caches' in window){ var names = await caches.keys().catch(function(){ return []; }); await Promise.all((names || []).map(function(name){ return caches.delete(name).catch(function(){ return false; }); })); } }catch(_e){}
-      try{ if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations){ var regs = await navigator.serviceWorker.getRegistrations().catch(function(){ return []; }); await Promise.all((regs || []).map(function(r){ return r.unregister().catch(function(){ return false; }); })); } }catch(_e){}
-    }
+    // tasun-version.json 是唯一版本來源；不重抓整份 HTML，也不清除瀏覽器快取或取消 Service Worker。
 
     async function hardRefreshTo(version, buildStamp){
-      var cur = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || PAGE_BUILD_STAMP || queryV() || '');
+      var requestedV = queryV();
+      var cur = requestedV || norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || PAGE_BUILD_STAMP || '');
       var nextVer = norm(version) || cur;
       var nextBs = norm(buildStamp || nextVer || PAGE_BUILD_STAMP);
-      if(!newerThan(nextVer, cur) && !newerThan(nextBs, PAGE_BUILD_STAMP)) return false;
+      // 網址已指定同版或更新版時停止重導，避免舊頁面戳記造成重載循環。
+      if(requestedV && (requestedV === nextVer || (rank(requestedV) && rank(nextVer) && rank(requestedV) >= rank(nextVer)))) return false;
+      if(!requestedV && !newerThan(nextVer, cur) && !newerThan(nextBs, PAGE_BUILD_STAMP)) return false;
       try{
         var prev = JSON.parse(sessionStorage.getItem(REFRESH_LOCK_KEY) || 'null');
         if(prev && prev.v === nextVer && prev.bs === nextBs && (now() - Number(prev.ts || 0)) < 15000) return false;
         sessionStorage.setItem(REFRESH_LOCK_KEY, JSON.stringify({ v: nextVer, bs: nextBs, ts: now() }));
       }catch(_e){}
-      await purgeOldLocksCaches();
+      // 保留 REFRESH_LOCK_KEY；不可在導頁前清除此鎖。
       var u = new URL(location.href);
       if(nextVer) u.searchParams.set('v', nextVer);
       u.searchParams.set('_', String(now()));
@@ -428,28 +403,32 @@
         ensureWithV();
         var bundle = await fetchVersionBundle();
         if(!bundle || !bundle.hasPageEntry) return false;
-        var curV = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || PAGE_BUILD_STAMP || queryV() || '');
+        var requestedV = queryV();
+        var curV = requestedV || norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || PAGE_BUILD_STAMP || '');
         var latestV = norm(bundle.version);
         var latestBS = norm(bundle.buildStamp);
-        var remotePage = await fetchRemotePageBuildStampOnce();
-        var remoteHtmlBS = norm(remotePage && remotePage.htmlBuildStamp);
-        var remoteRebuildStamp = norm(remotePage && remotePage.htmlRebuildStamp);
-        var currentRebuild = norm(window.TASUN_REBUILD_STAMP || window.__TASUN_REBUILD_STAMP__ || PAGE_BUILD_STAMP);
         var targetV = '';
         var targetBS = '';
-        if(newerThan(latestV, curV)){ targetV = latestV; targetBS = latestBS || latestV; }
-        if(newerThan(latestBS, PAGE_BUILD_STAMP)){ targetV = latestV || curV; targetBS = latestBS; }
-        if(newerThan(remoteHtmlBS, PAGE_BUILD_STAMP)){ targetV = latestV || remoteHtmlBS || curV; targetBS = remoteHtmlBS; }
-        if(newerThan(remoteRebuildStamp, currentRebuild)){ targetV = latestV || curV; targetBS = remoteRebuildStamp; }
-        try{ sessionStorage.setItem(CHECK_LOCK_KEY, JSON.stringify({ ts: now(), v: latestV || curV || '', bs: latestBS || remoteHtmlBS || PAGE_BUILD_STAMP })); }catch(_e){}
-        if(targetV || targetBS) return await hardRefreshTo(targetV || curV, targetBS || targetV || PAGE_BUILD_STAMP);
-        if(latestV && !newerThan(curV, latestV)){ window.__CACHE_V = latestV; window.TASUN_APP_VER = latestV; window.APP_VER = latestV; }
+        // 只在網址未帶版號或落後 manifest 時重導，已是新版網址時不因舊 HTML 戳記重載。
+        if(latestV && (!requestedV || newerThan(latestV, requestedV))){ targetV = latestV; targetBS = latestBS || latestV; }
+        try{ sessionStorage.setItem(CHECK_LOCK_KEY, JSON.stringify({ ts: now(), v: latestV || curV || '', bs: latestBS || PAGE_BUILD_STAMP })); }catch(_e){}
+        if(targetV) return await hardRefreshTo(targetV, targetBS || targetV);
+        if(latestV && (!curV || !newerThan(curV, latestV))){ window.__CACHE_V = latestV; window.TASUN_APP_VER = latestV; window.APP_VER = latestV; }
         return false;
       } finally { RUNNING = false; }
     }
 
     window.__TASUN_ENSURE_LATEST_BUILDSTAMP__ = ensureLatestVersionAndBuildStamp;
-    Promise.resolve(window.__TASUN_VERSION_READY__ || true).then(function(){ ensureLatestVersionAndBuildStamp({ force:false }).catch(function(){}); });
+    function scheduleLatestBuildCheckR819(){
+      var run = function(){
+        var check = function(){ ensureLatestVersionAndBuildStamp({ force:false }).catch(function(){}); };
+        if(typeof window.requestIdleCallback === "function") window.requestIdleCallback(check, { timeout:3500 });
+        else setTimeout(check, 1200);
+      };
+      if(document.readyState === "complete") run();
+      else window.addEventListener("load", run, { once:true, passive:true });
+    }
+    Promise.resolve(window.__TASUN_VERSION_READY__ || true).then(scheduleLatestBuildCheckR819);
   })();
   </script>
 <link rel="icon" href="data:,">
@@ -532,42 +511,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
 
-  <script id="tasun-github-pages-html-once-refresh-r5">
-(function(){
-  'use strict';
-  try{
-    var isGithubPages = /(?:^|\.)github\.io$/i.test(String(location.hostname || ''));
-    if(!isGithubPages) return;
-    var V = "20260806_tasun_v5_detail_list_r818_editable_dropdown_option_delete_sync_fix";
-    var pageKey = String((location.pathname || '').replace(/\/+/g,'/'));
-    var guardKey = 'tasun_r546_cache_cleanup_once::' + pageKey;
-    var now = Date.now();
-    try{
-      var u = new URL(location.href);
-      if(String(u.searchParams.get('v') || '') !== V){
-        u.searchParams.set('v', V);
-        u.searchParams.set('_bs', V);
-        if(history && history.replaceState) history.replaceState(null, document.title, u.toString());
-      }
-    }catch(_e){}
-    var prev = 0;
-    try{ prev = Number(sessionStorage.getItem(guardKey) || 0); }catch(_e){ prev = 0; }
-    if(prev && (now - prev) < 30000) return;
-    try{ sessionStorage.setItem(guardKey, String(now)); }catch(_e){}
-    try{
-      Object.keys(sessionStorage || {}).forEach(function(k){
-        if(/^tasun_(html_once_refresh|buildstamp_check_lock|force_refresh_lock|latest_open_authority_guard|old_build_stamp_memo)/.test(k)) sessionStorage.removeItem(k);
-      });
-    }catch(_e){}
-    try{
-      if('caches' in window) caches.keys().then(function(names){ return Promise.all((names || []).map(function(name){ return caches.delete(name).catch(function(){ return false; }); })); }).catch(function(){});
-    }catch(_e){}
-    try{
-      if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations) navigator.serviceWorker.getRegistrations().then(function(regs){ return Promise.all((regs || []).map(function(r){ return r.unregister().catch(function(){ return false; }); })); }).catch(function(){});
-    }catch(_e){}
-  }catch(_e){}
-})();
-</script>
+  <!-- R819: 移除覆寫網址版號及清除全站快取／Service Worker 的舊刷新器。 -->
 
 <!-- ✅ 額外提醒：若 head 裡使用 no-store/no-cache meta，會讓手機每次都重抓資源、變慢
        已改成最精簡 no-cache；真正的版本一致性請用 ?v=APP_VER -->
@@ -849,14 +793,27 @@
     .panelBody{flex:1; min-height:0; display:flex; flex-direction:column;}
     .tableWrap{
       margin-top:4px;
-      overflow:auto;
+      width:100%; max-width:100%; min-width:0; min-height:0;
+      overflow-x:auto;
+      overflow-y:auto;
+      overscroll-behavior:contain;
+      scrollbar-gutter:stable;
+      scrollbar-width:auto;
+      scrollbar-color:rgba(120,95,52,.86) rgba(255,255,255,.88);
+      touch-action:pan-x pan-y pinch-zoom;
       border-radius:16px;
       border:1px solid var(--border2);
       background: var(--tableWrapBg);
       box-shadow: var(--shadow2);
-      flex:1; min-height:0;
-      -webkit-overflow-scrolling: touch;
+      flex:1 1 auto;
+      -webkit-overflow-scrolling:touch;
     }
+    .tableWrap::-webkit-scrollbar{width:16px;height:16px;}
+    .tableWrap::-webkit-scrollbar-track{background:rgba(255,255,255,.88);border-radius:999px;}
+    .tableWrap::-webkit-scrollbar-thumb{background:rgba(120,95,52,.86);border:2px solid rgba(255,255,255,.88);border-radius:999px;}
+    .tableWrap::-webkit-scrollbar-thumb:hover{background:rgba(120,75,28,.98);}
+    .tableWrap::-webkit-scrollbar-thumb:active{background:rgba(91,62,28,.98);}
+    .tableWrap:focus-visible{outline:3px solid rgba(80,135,220,.82);outline-offset:2px;}
 
     table{width:100%; border-collapse:collapse; min-width:1460px; background: var(--tableBg);}
     thead th{
@@ -1482,8 +1439,8 @@
       border-bottom-right-radius:16px !important;
     }
     body.tasun-r546-mobile-search-options-table-bottom-fix .tableWrap::-webkit-scrollbar{
-      width:10px;
-      height:10px;
+      width:12px;
+      height:12px;
     }
     body.tasun-r546-mobile-search-options-table-bottom-fix .tableWrap::-webkit-scrollbar-track{
       background:rgba(255,255,255,.72);
@@ -1595,7 +1552,7 @@
       <div class="hint" id="hint"><span class="hb"><span class="k">使用者</span><span class="v"><b id="uName">—</b></span></span><span class="hb"><span class="k">權限</span><span class="v"><b id="uRole">—</b></span></span><span class="hb"><span class="k">筆數</span><span class="v">0 / 0</span></span><span class="hb bad"><span class="k">選取</span><span class="v">未選取</span></span><span class="hb bad"><span class="k">雲端</span><span class="v">等待同步</span></span><span class="hb"><span class="k">最後</span><span class="v">—</span></span></div>
 
       <div class="panelBody">
-        <div class="tableWrap">
+        <div class="tableWrap" tabindex="0" role="region" aria-label="工程收發文明細表；可用滑鼠、觸控或鍵盤方向鍵水平及垂直捲動">
           <div id="cards" style="display:none; position:relative; z-index:2;"></div>
 
           <table id="tbl" data-page-key="sxdh-package-detail-list" data-resource-key="sxdh-package-detail-list" data-db-name="tasun_sxdh_package_detail_list_idb_v1" data-table-id="tbl" data-has-individual-id="true">
@@ -2270,6 +2227,8 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
     var SYNC_PERIODIC_MS = 45*1000;    // R818：有界保底同步間隔（另由 focus/pageshow/online/visible 持續承接）
     var SYNC_PERIODIC_MAX_RUNS = 4;    // 最多四次，不建立無限輪詢
     var _sync = { timer:null, inFlight:false, pending:false, lastRun:0, lastReason:"" };
+    var __detailOpenReconcilePromiseR819 = null;
+    var __detailOpenReconcileInFlightR819 = false;
     var _boundedPeriodicSync = { timer:null, runs:0 };
 
     function startBoundedPeriodicSyncR818(){
@@ -2286,8 +2245,14 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
 
     function scheduleSync(reason, immediate){
       if(!AUTO_SYNC) return;
+      var syncReason = reason || _sync.lastReason || "auto";
+      if(__detailOpenReconcileInFlightR819){
+        _sync.lastReason = syncReason;
+        if(syncReason === "dirty" || syncReason === "retry" || syncReason === "online") _sync.pending = true;
+        return;
+      }
       _sync.pending = true;
-      _sync.lastReason = reason || _sync.lastReason || "auto";
+      _sync.lastReason = syncReason;
       if(_sync.timer) clearTimeout(_sync.timer);
       var now = Date.now();
       var gap = Math.max(0, (SYNC_MIN_GAP_MS - (now - (_sync.lastRun||0))));
@@ -2297,6 +2262,7 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
 
     async function runAutoSync(){
       if(!_sync.pending) return;
+      if(__detailOpenReconcileInFlightR819) { _sync.pending = true; return; }
       if(_sync.inFlight) { _sync.pending = true; return; }
       _sync.inFlight = true;
       _sync.pending = false;
@@ -3156,8 +3122,8 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
     }
 
     function startAuthHydrationWatch(){
-      var tries = 0, maxTries = 28;
-      var syncedOnce = false;
+      var tries = 0, maxTries = 12;
+      var syncAttempted = !!window.__TASUN_DETAIL_BOOT_SYNC_ATTEMPTED_R819__;
       var settling = false;
       var queued = false;
       var syncPromise = null;
@@ -3168,17 +3134,16 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
         try{ ensureActionButtonsVisible(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
 
-        if(!syncedOnce){
+        if(!syncAttempted && (hasBridgeSessionReady() || hasWorkerTokenReady())){
+          syncAttempted = true;
+          window.__TASUN_DETAIL_BOOT_SYNC_ATTEMPTED_R819__ = true;
           if(!syncPromise){
             syncPromise = reconcileCloudOnOpen({ silent:true, reason:"r546-auth-hydration-watch" }).catch(function(){ return false; }).then(function(ok){
-              syncedOnce = !!ok;
               if(!ok){
                 try{ scheduleSync("r546-auth-hydration-retry", false); }catch(_e){}
               }
               return ok;
-            }).finally(function(){
-              syncPromise = null;
-            });
+            }).finally(function(){ syncPromise = null; });
           }
           await syncPromise;
         }
@@ -3188,14 +3153,10 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
       async function settle(){
         if(settling){ queued = true; return false; }
         settling = true;
-        try{
-          return await doOneSettle();
-        } finally {
+        try{ return await doOneSettle(); }
+        finally{
           settling = false;
-          if(queued){
-            queued = false;
-            setTimeout(function(){ settle(); }, 0);
-          }
+          if(queued){ queued = false; setTimeout(function(){ settle(); }, 0); }
         }
       }
 
@@ -3268,7 +3229,7 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
 
       // 1) resources.json (best)
       try{
-        var res = await fetchWithTimeoutR818(addV(RESOURCES_URL), { cache:"no-store" }, 10000);
+        var res = await fetchWithTimeoutR818(addV(RESOURCES_URL), { cache:"no-store" }, 5000);
         if(res && res.ok){
           var text = await res.text();
           var json = parseJsonLenient(text);
@@ -6402,7 +6363,18 @@ function getPromptOptions(mode){
     }
 
 
-async function reconcileCloudOnOpen(opts){
+function reconcileCloudOnOpen(opts){
+      if(__detailOpenReconcilePromiseR819) return __detailOpenReconcilePromiseR819;
+      __detailOpenReconcileInFlightR819 = true;
+      __detailOpenReconcilePromiseR819 = Promise.resolve(reconcileCloudOnOpenOnce(opts)).finally(function(){
+        __detailOpenReconcileInFlightR819 = false;
+        __detailOpenReconcilePromiseR819 = null;
+        if(_sync.pending) scheduleSync("after-open-reconcile", false);
+      });
+      return __detailOpenReconcilePromiseR819;
+    }
+
+    async function reconcileCloudOnOpenOnce(opts){
       opts = (opts && typeof opts==="object") ? opts : {};
       var silent = (opts.silent!==false);
       var reason = norm(opts.reason || 'open-cloud-authority-r546');
@@ -7373,9 +7345,7 @@ $("btnSave").addEventListener("click", async function(){
       });
       // R818：保底同步改為最多四次；之後由 online/focus/pageshow/visible 事件承接，不做無限輪詢。
       startBoundedPeriodicSyncR818();
-      setTimeout(function(){ scheduleSync("boot-r452", true); }, 300);
-      setTimeout(function(){ scheduleSync("boot-r452-confirm", true); }, 2200);
-      setTimeout(function(){ scheduleSync("boot-r452-final", true); }, 6500);
+      // 初次權威同步由 boot() 執行一次；事件只負責後續變更與網路恢復。
       ["pageshow","resize","orientationchange","focus"].forEach(function(evt){
         try{ window.addEventListener(evt, function(){ scheduleMobileTableVisibleRepairR546('r546-event-' + evt); }, { passive:true }); }catch(_e){}
       });
@@ -7820,8 +7790,11 @@ $("btnSave").addEventListener("click", async function(){
 
         try{ ensureAuthTable(); }catch(e){}
         try{ hydrateCrossPageAuth(); }catch(e){}
-        try{ cur = await waitForGlobalAuthBridge(2200); }catch(e){ cur = null; }
-        try{ cur = cur || getCurrentUser(); }catch(e){ cur = cur || null; }
+        try{ cur = getCurrentUser(); }catch(e){ cur = null; }
+        if(!cur){
+          try{ cur = await waitForGlobalAuthBridge(900); }catch(e){ cur = null; }
+          try{ cur = cur || getCurrentUser(); }catch(e){ cur = cur || null; }
+        }
         try{
           if(cur) applyUser(cur);
           else applyUser({ user:"—", role:"read", name:"—" });
@@ -7835,7 +7808,6 @@ $("btnSave").addEventListener("click", async function(){
         try{ ensureMobileTableVisibleR546('r546-boot-local-render'); }catch(e){}
         try{ hydrateCrossPageAuth(); }catch(e){}
         try{ await refreshCloudAuthState(); }catch(e){}
-        try{ await cloudHealth(); }catch(e){}
         try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
         // ✅ 開頁同步策略修正：只要雲端設定有效，就主動跑一次 reconcile；
         // 由 reconcile / ensureWorkerAuthorized 自行判斷橋接授權或連線狀態，
@@ -7843,6 +7815,7 @@ $("btnSave").addEventListener("click", async function(){
         try{
           var _c = (typeof state !== "undefined" && state && state.cloud) ? state.cloud : {};
           if(_c && _c.cfgOk){
+            window.__TASUN_DETAIL_BOOT_SYNC_ATTEMPTED_R819__ = true;
             await reconcileCloudOnOpen({ silent:true });
             try{ refreshHintSafe(); }catch(e){ try{ renderHintFallback(); }catch(_e){} }
             try{ ensureMobileTableVisibleR546('r546-boot-cloud-render'); }catch(e){}
