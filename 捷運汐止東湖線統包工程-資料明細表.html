@@ -312,6 +312,14 @@
     function queryV(){ try{ return norm(new URL(location.href).searchParams.get('v')); }catch(_e){ return ''; } }
     function now(){ return Date.now(); }
     function rank(v){ var m = String(v || '').match(/r(\d+)/i); return m ? Number(m[1]) : 0; }
+    function isVersionNewerR820(a,b){
+      a = norm(a); b = norm(b);
+      if(!a) return false;
+      if(!b) return true;
+      var ra = rank(a), rb = rank(b);
+      if(ra || rb) return ra > rb;
+      return a.localeCompare(b, undefined, { numeric:true, sensitivity:"base" }) > 0;
+    }
     function newerThan(a,b){
       a = norm(a); b = norm(b);
       if(!a) return false;
@@ -355,7 +363,7 @@
 
     async function fetchVersionBundle(){
       try{
-        var res = await fetchWithTimeoutR818('tasun-version.json?_=' + now() + '&__page_authority=1', { cache:'no-store', credentials:'same-origin', headers:{'Cache-Control':'no-cache','Pragma':'no-cache'} }, 10000);
+        var res = await fetchWithTimeoutR818('tasun-version.json?_=' + now() + '&__page_authority=1', { cache:'no-store', credentials:'same-origin', headers:{'Cache-Control':'no-cache','Pragma':'no-cache'} }, 5000);
         if(!res.ok) return null;
         var data = await res.json().catch(function(){ return null; });
         if(!data) return null;
@@ -368,54 +376,27 @@
       }catch(_e){ return null; }
     }
 
-    async function fetchRemotePageBuildStampOnce(){
-      try{
-        var pageUrl = new URL(location.pathname, location.origin);
-        pageUrl.searchParams.set('__bs_probe', String(now()));
-        var res = await fetchWithTimeoutR818(pageUrl.toString(), { cache:'no-store', credentials:'same-origin', headers:{'Cache-Control':'no-cache','Pragma':'no-cache'} }, 10000);
-        if(!res.ok) return { htmlBuildStamp:'', htmlRebuildStamp:'' };
-        var html = await res.text().catch(function(){ return ''; });
-        if(!html) return { htmlBuildStamp:'', htmlRebuildStamp:'' };
-        var buildMeta = html.match(/<meta[^>]+name=["']tasun-build-stamp["'][^>]+content=["']([^"']+)["']/i);
-        var buildVar = html.match(/var\s+PAGE_BUILD_STAMP\s*=\s*["']([^"']+)["']/i);
-        var rebuildMeta = html.match(/<meta[^>]+name=["']tasun-rebuild-stamp["'][^>]+content=["']([^"']+)["']/i);
-        var rebuildVar = html.match(/(?:window\.)?TASUN_REBUILD_STAMP\s*=\s*["']([^"']+)["']/i);
-        function pick(){ for(var i=0;i<arguments.length;i++){ var s = norm(arguments[i]); if(s) return s; } return ''; }
-        return {
-          htmlBuildStamp: pick(buildMeta && buildMeta[1], buildVar && buildVar[1]),
-          htmlRebuildStamp: pick(rebuildMeta && rebuildMeta[1], rebuildVar && rebuildVar[1])
-        };
-      }catch(_e){ return { htmlBuildStamp:'', htmlRebuildStamp:'' }; }
-    }
-
-    async function purgeOldLocksCaches(){
-      try{
-        Object.keys(sessionStorage || {}).forEach(function(k){
-          if(/^tasun_(buildstamp_check_lock|force_refresh_lock|html_once_refresh|latest_open_authority_guard|stale_version_lock_clear)/.test(k)) sessionStorage.removeItem(k);
-        });
-      }catch(_e){}
-      try{ if('caches' in window){ var names = await caches.keys().catch(function(){ return []; }); await Promise.all((names || []).map(function(name){ return caches.delete(name).catch(function(){ return false; }); })); } }catch(_e){}
-      try{ if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations){ var regs = await navigator.serviceWorker.getRegistrations().catch(function(){ return []; }); await Promise.all((regs || []).map(function(r){ return r.unregister().catch(function(){ return false; }); })); } }catch(_e){}
-    }
-
+    // tasun-version.json 為唯一版本依據；不重抓整份 HTML，也不清除全站快取或取消 Service Worker。
     async function hardRefreshTo(version, buildStamp){
-      var cur = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || PAGE_BUILD_STAMP || queryV() || '');
+      var requestedV = queryV();
+      var cur = requestedV || norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || PAGE_BUILD_STAMP || '');
       var nextVer = norm(version) || cur;
       var nextBs = norm(buildStamp || nextVer || PAGE_BUILD_STAMP);
-      if(!newerThan(nextVer, cur) && !newerThan(nextBs, PAGE_BUILD_STAMP)) return false;
+      // 已帶同版或更新版網址時不重導，避免舊 HTML 戳記造成刷新循環。
+      if(requestedV && !isVersionNewerR820(nextVer, requestedV)) return false;
+      if(!requestedV && !isVersionNewerR820(nextVer, cur) && !isVersionNewerR820(nextBs, PAGE_BUILD_STAMP)) return false;
       try{
         var prev = JSON.parse(sessionStorage.getItem(REFRESH_LOCK_KEY) || 'null');
         if(prev && prev.v === nextVer && prev.bs === nextBs && (now() - Number(prev.ts || 0)) < 15000) return false;
         sessionStorage.setItem(REFRESH_LOCK_KEY, JSON.stringify({ v: nextVer, bs: nextBs, ts: now() }));
       }catch(_e){}
-      await purgeOldLocksCaches();
+      // 保留刷新鎖，避免頁面再度載入時立即重複導頁。
       var u = new URL(location.href);
       if(nextVer) u.searchParams.set('v', nextVer);
       u.searchParams.set('_', String(now()));
       u.searchParams.set('_rt', String(now()));
       u.searchParams.set('_bs', nextBs);
       u.searchParams.set('_latest_open', '1');
-      try{ sessionStorage.removeItem(CHECK_LOCK_KEY); }catch(_e){}
       location.replace(u.toString());
       return true;
     }
@@ -428,22 +409,24 @@
         ensureWithV();
         var bundle = await fetchVersionBundle();
         if(!bundle || !bundle.hasPageEntry) return false;
-        var curV = norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || PAGE_BUILD_STAMP || queryV() || '');
+        var requestedV = queryV();
+        var curV = requestedV || norm(window.__CACHE_V || window.TASUN_APP_VER || window.APP_VER || PAGE_BUILD_STAMP || '');
         var latestV = norm(bundle.version);
         var latestBS = norm(bundle.buildStamp);
-        var remotePage = await fetchRemotePageBuildStampOnce();
-        var remoteHtmlBS = norm(remotePage && remotePage.htmlBuildStamp);
-        var remoteRebuildStamp = norm(remotePage && remotePage.htmlRebuildStamp);
-        var currentRebuild = norm(window.TASUN_REBUILD_STAMP || window.__TASUN_REBUILD_STAMP__ || PAGE_BUILD_STAMP);
         var targetV = '';
         var targetBS = '';
-        if(newerThan(latestV, curV)){ targetV = latestV; targetBS = latestBS || latestV; }
-        if(newerThan(latestBS, PAGE_BUILD_STAMP)){ targetV = latestV || curV; targetBS = latestBS; }
-        if(newerThan(remoteHtmlBS, PAGE_BUILD_STAMP)){ targetV = latestV || remoteHtmlBS || curV; targetBS = remoteHtmlBS; }
-        if(newerThan(remoteRebuildStamp, currentRebuild)){ targetV = latestV || curV; targetBS = remoteRebuildStamp; }
-        try{ sessionStorage.setItem(CHECK_LOCK_KEY, JSON.stringify({ ts: now(), v: latestV || curV || '', bs: latestBS || remoteHtmlBS || PAGE_BUILD_STAMP })); }catch(_e){}
-        if(targetV || targetBS) return await hardRefreshTo(targetV || curV, targetBS || targetV || PAGE_BUILD_STAMP);
-        if(latestV && !newerThan(curV, latestV)){ window.__CACHE_V = latestV; window.TASUN_APP_VER = latestV; window.APP_VER = latestV; }
+        // 僅在網址未帶版號或落後 manifest 時刷新；避免用嵌在舊 HTML 的戳記重載新版。
+        if(latestV && (!requestedV || isVersionNewerR820(latestV, requestedV))){
+          targetV = latestV;
+          targetBS = latestBS || latestV;
+        }
+        try{ sessionStorage.setItem(CHECK_LOCK_KEY, JSON.stringify({ ts: now(), v: latestV || curV || '', bs: latestBS || PAGE_BUILD_STAMP })); }catch(_e){}
+        if(targetV) return await hardRefreshTo(targetV, targetBS || targetV);
+        if(latestV && (!curV || !isVersionNewerR820(curV, latestV))){
+          window.__CACHE_V = latestV;
+          window.TASUN_APP_VER = latestV;
+          window.APP_VER = latestV;
+        }
         return false;
       } finally { RUNNING = false; }
     }
@@ -822,26 +805,27 @@
 
     .panelBody{flex:1; min-height:0; display:flex; flex-direction:column;}
     .tableWrap{
+      width:100%; max-width:100%; min-width:0; min-height:0;
       margin-top:4px;
-      min-width:0;
       overflow-x:auto;
       overflow-y:auto;
       overscroll-behavior:contain;
       scrollbar-gutter:stable;
       scrollbar-width:auto;
-      scrollbar-color:rgba(120,95,52,.78) rgba(255,255,255,.80);
+      scrollbar-color:rgba(120,95,52,.86) rgba(255,255,255,.88);
       touch-action:pan-x pan-y pinch-zoom;
       border-radius:16px;
       border:1px solid var(--border2);
       background: var(--tableWrapBg);
       box-shadow: var(--shadow2);
-      flex:1 1 auto; min-height:0;
-      -webkit-overflow-scrolling: touch;
+      flex:1 1 auto;
+      -webkit-overflow-scrolling:touch;
     }
-    .tableWrap::-webkit-scrollbar{width:14px;height:14px;}
-    .tableWrap::-webkit-scrollbar-track{background:rgba(255,255,255,.82);border-radius:999px;}
-    .tableWrap::-webkit-scrollbar-thumb{background:rgba(120,95,52,.78);border:2px solid rgba(255,255,255,.82);border-radius:999px;}
-    .tableWrap::-webkit-scrollbar-thumb:hover{background:rgba(120,85,34,.96);}
+    .tableWrap::-webkit-scrollbar{width:16px;height:16px;}
+    .tableWrap::-webkit-scrollbar-track{background:rgba(255,255,255,.88);border-radius:999px;}
+    .tableWrap::-webkit-scrollbar-thumb{background:rgba(120,95,52,.86);border:2px solid rgba(255,255,255,.88);border-radius:999px;}
+    .tableWrap::-webkit-scrollbar-thumb:hover{background:rgba(120,75,28,.98);}
+    .tableWrap::-webkit-scrollbar-thumb:active{background:rgba(91,62,28,.98);}
     .tableWrap:focus-visible{outline:3px solid rgba(80,135,220,.82);outline-offset:2px;}
 
     table{width:100%; border-collapse:collapse; min-width:1460px; background: var(--tableBg);}
@@ -1468,8 +1452,8 @@
       border-bottom-right-radius:16px !important;
     }
     body.tasun-r546-mobile-search-options-table-bottom-fix .tableWrap::-webkit-scrollbar{
-      width:10px;
-      height:10px;
+      width:12px;
+      height:12px;
     }
     body.tasun-r546-mobile-search-options-table-bottom-fix .tableWrap::-webkit-scrollbar-track{
       background:rgba(255,255,255,.72);
@@ -2256,6 +2240,7 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
     var SYNC_PERIODIC_MS = 45*1000;    // R818：有界保底同步間隔（另由 focus/pageshow/online/visible 持續承接）
     var SYNC_PERIODIC_MAX_RUNS = 4;    // 最多四次，不建立無限輪詢
     var _sync = { timer:null, inFlight:false, pending:false, lastRun:0, lastReason:"" };
+    var __detailOpenReconcileInFlightR820 = false;
     var _boundedPeriodicSync = { timer:null, runs:0 };
 
     function startBoundedPeriodicSyncR818(){
@@ -2272,8 +2257,15 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
 
     function scheduleSync(reason, immediate){
       if(!AUTO_SYNC) return;
+      var syncReason = reason || _sync.lastReason || "auto";
+      if(__detailOpenReconcileInFlightR820){
+        _sync.lastReason = syncReason;
+        // Ignore only passive lifecycle/maintenance ticks; preserve all mutation and retry requests.
+        if(!/^(?:bounded-periodic-r818|focus|pageshow|visible)$/.test(syncReason)) _sync.pending = true;
+        return;
+      }
       _sync.pending = true;
-      _sync.lastReason = reason || _sync.lastReason || "auto";
+      _sync.lastReason = syncReason;
       if(_sync.timer) clearTimeout(_sync.timer);
       var now = Date.now();
       var gap = Math.max(0, (SYNC_MIN_GAP_MS - (now - (_sync.lastRun||0))));
@@ -2283,6 +2275,7 @@ window.__TASUN_REBUILD_STAMP__ = pickGlobalValue(window.__TASUN_REBUILD_STAMP__,
 
     async function runAutoSync(){
       if(!_sync.pending) return;
+      if(__detailOpenReconcileInFlightR820) { _sync.pending = true; return; }
       if(_sync.inFlight) { _sync.pending = true; return; }
       _sync.inFlight = true;
       _sync.pending = false;
@@ -6392,8 +6385,15 @@ function getPromptOptions(mode){
 var __detailReconcilePromiseR819 = null;
     function reconcileCloudOnOpen(opts){
       if(__detailReconcilePromiseR819) return __detailReconcilePromiseR819;
-      var next = reconcileCloudOnOpenOnce(opts);
-      __detailReconcilePromiseR819 = Promise.resolve(next).finally(function(){ __detailReconcilePromiseR819 = null; });
+      __detailOpenReconcileInFlightR820 = true;
+      var next;
+      try{ next = reconcileCloudOnOpenOnce(opts); }
+      catch(e){ next = Promise.reject(e); }
+      __detailReconcilePromiseR819 = Promise.resolve(next).finally(function(){
+        __detailOpenReconcileInFlightR820 = false;
+        __detailReconcilePromiseR819 = null;
+        if(_sync.pending) scheduleSync("after-open-reconcile", false);
+      });
       return __detailReconcilePromiseR819;
     }
 
@@ -7813,8 +7813,11 @@ $("btnSave").addEventListener("click", async function(){
 
         try{ ensureAuthTable(); }catch(e){}
         try{ hydrateCrossPageAuth(); }catch(e){}
-        try{ cur = await waitForGlobalAuthBridge(2200); }catch(e){ cur = null; }
-        try{ cur = cur || getCurrentUser(); }catch(e){ cur = cur || null; }
+        try{ cur = getCurrentUser(); }catch(e){ cur = null; }
+        if(!cur){
+          try{ cur = await waitForGlobalAuthBridge(900); }catch(e){ cur = null; }
+          try{ cur = cur || getCurrentUser(); }catch(e){ cur = cur || null; }
+        }
         try{
           if(cur) applyUser(cur);
           else applyUser({ user:"—", role:"read", name:"—" });
