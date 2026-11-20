@@ -69,7 +69,7 @@ function updateHtmlBuild(text,newBuild){
   out=replaceMeta(out,"tasun-build-stamp",newBuild);out=replaceMeta(out,"tasun-rebuild-stamp",newBuild);
   out=out.replace(/(<!--\s*TASUN_REBUILD_STAMP:)[^\s<]+(?=\s*-->)/g,(_,prefix)=>prefix+newBuild);return out;
 }
-function previousHtmlBuild(rel){const raw=git(["show",`HEAD^:${rel}`]);return raw?htmlBuild(raw):"";}
+function previousHtmlBuild(rel){try{const raw=execFileSync("git",["show",`HEAD^:${rel}`],{cwd:ROOT,encoding:"utf8",stdio:["ignore","pipe","ignore"],maxBuffer:128*1024*1024}).trim();return raw?htmlBuild(raw):"";}catch{return "";}}
 function maxKnownRank(current,changedBuilds){let x=rank(current.version);for(const e of Object.values(current.pages||{}))x=Math.max(x,rank(e&&e.version),rank(e&&e.pageBuildStamp),rank(e&&e.buildStamp));for(const b of changedBuilds)x=Math.max(x,rank(b));return x;}
 function releaseBuild(current,htmlInfos,allHash,date){
   const currentRoot=n(current.version);const builds=[...new Set(htmlInfos.map(x=>x.currentBuild).filter(Boolean))];
