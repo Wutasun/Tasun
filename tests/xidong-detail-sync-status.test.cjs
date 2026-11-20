@@ -9,6 +9,15 @@ const start = page.indexOf('function r1134StartupAwaitingCanExpire(');
 const end = page.indexOf('\nfunction setStatus(', start);
 assert.ok(start >= 0 && end > start, 'detail sync status authority must exist');
 const source = page.slice(start, end);
+const adoptionStart = page.indexOf('async function r1092AdoptPrefetchAsVisiblePreview(');
+const adoptionEnd = page.indexOf('\nasync function r1088ConsumeInitialCloudPrefetch(', adoptionStart);
+assert.ok(adoptionStart >= 0 && adoptionEnd > adoptionStart, 'background preview adoption authority must exist');
+const adoptionSource = page.slice(adoptionStart, adoptionEnd);
+const prefetchStart = page.indexOf('r1088InitialCloudPrefetchPromise.then(result=>');
+const prefetchEnd = page.indexOf('.catch(()=>false)', prefetchStart);
+assert.ok(prefetchStart >= 0 && prefetchEnd > prefetchStart, 'open prefetch continuation must exist');
+const prefetchContinuation = page.slice(prefetchStart, prefetchEnd);
+
 
 function evaluate(state, options = {}, internalText = '') {
   const context = vm.createContext({
@@ -71,3 +80,16 @@ test('unverified idle state remains no-sync and verified readback remains synced
   assert.equal(evaluate({ pending: false }), '沒同步');
   assert.equal(evaluate({ verified: true, pending: false }), '已同步');
 });
+test('background cloud preview cannot render concurrently with startup init', async () => {
+  const window = {};
+  const context = vm.createContext({ window, r710InitStarting: true, Date });
+  vm.runInContext(adoptionSource, context);
+  assert.equal(await context.r1092AdoptPrefetchAsVisiblePreview(320, { background: true }), false);
+  assert.equal(window.__TASUN_R1092_BACKGROUND_PREFETCH_ADOPTION_DEFERRED__?.reason, 'formal-init-owns-render');
+});
+
+test('only the background prefetch path opts into the init race guard', () => {
+  assert.ok(prefetchContinuation.includes('r1092AdoptPrefetchAsVisiblePreview(320,{background:true})'));
+  assert.ok(page.includes('await r1092AdoptPrefetchAsVisiblePreview(180)'));
+});
+
