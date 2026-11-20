@@ -86,6 +86,15 @@ test('material form exposes editable distinct-value dropdown inputs and role-bas
   assert.match(page, /renumber\(incoming\.filter\([\s\S]{0,240}\),tombs\)/);
 });
 
+test('request number dropdown keeps existing suggestions and allows direct text editing', () => {
+  assert.match(page, /FORM_EDITABLE_DROPDOWN_FIELDS_R1172\s*=\s*\["抽查申請單編號"\]/);
+  assert.match(page, /else if\(FORM_EDITABLE_DROPDOWN_FIELDS_R1172\.indexOf\(f\)>=0\) input='<div class="line dropdownLine"><input id="'.*type="text" list="'.*<datalist id="'.*可直接修改或輸入編號/);
+  assert.match(page, /var list=qs\("#f"\+cssSelR570\(field\)\+"-options"\), values=uniqueFieldOptionsR570\(field,cur\)/);
+  assert.match(page, /data-options-source","active-table-rows-unique-plus-added-r1172/);
+  assert.match(page, /materialInspectionControlR1172EditableRequestNumber/);
+  assert.match(page, /control\.tagName==="INPUT" && control\.getAttribute\("list"\)/);
+});
+
 test('Worker keeps existing item numbers authoritative for write users', async () => {
   const db = mockDb([storedRow('row-a', 4)], 4);
   const helpers = workerHelpers(db);
