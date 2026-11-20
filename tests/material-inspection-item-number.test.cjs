@@ -95,6 +95,12 @@ test('request number dropdown keeps existing suggestions and allows direct text 
   assert.match(page, /control\.tagName==="INPUT" && control\.getAttribute\("list"\)/);
 });
 
+test('editing other fields does not reject an unchanged existing item number', () => {
+  assert.match(page, /var originalData=parse\(state\.formInitial\|\|"\{\}",\{\}\);/);
+  assert.match(page, /var itemNumberChanged=state\.formMode!=="edit" \|\| validItemNumberR1171\(originalData\["項次"\]\)!==itemNo;/);
+  assert.match(page, /if\(isAdmin\(\) && itemNumberChanged\)\{\s*var duplicate=state\.rows\.concat\(deletedRows\(\)\)\.some/);
+});
+
 test('Worker keeps existing item numbers authoritative for write users', async () => {
   const db = mockDb([storedRow('row-a', 4)], 4);
   const helpers = workerHelpers(db);
