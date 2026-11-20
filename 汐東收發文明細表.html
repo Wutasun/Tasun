@@ -2662,6 +2662,11 @@ html.tasun-r764-table-layout-ready #detailSection>.tableWrap{visibility:visible!
 #officialDocumentTable thead th[data-field-label="收/發文"],#officialDocumentTable thead th[data-field-label="文件階段"],#officialDocumentTable thead th[data-field-label="文件期別"],#officialDocumentTable thead th[data-field-label="備註"]{text-align:center!important}
 #officialDocumentTable tbody td.noteCell,#officialDocumentTable tbody td.noteCell *{text-align:left!important;direction:ltr!important;unicode-bidi:plaintext;writing-mode:horizontal-tb}
 </style>
+<style id="tasun-r1174-detail-heading-and-subject-order">
+#officialDocumentTable thead tr.r706FieldRow th.fixedCol3,#officialDocumentTable thead tr.r706FieldRow th[data-field-key="收/發文"]{text-align:center!important;direction:ltr!important;writing-mode:horizontal-tb!important;unicode-bidi:plaintext!important}
+#officialDocumentTable thead tr.r706FieldRow th[data-field-key="主旨"],#r770MobileSplitStage .r770PaneTable thead th[data-field-key="主旨"]{text-align:center!important;direction:ltr!important;writing-mode:horizontal-tb!important;unicode-bidi:plaintext!important}
+#officialDocumentTable tbody td.subjectCell,#officialDocumentTable tbody td.subjectCell *,#r770MobileSplitStage .r770PaneTable tbody td.subjectCell,#r770MobileSplitStage .r770PaneTable tbody td.subjectCell *{text-align:left!important;direction:ltr!important;writing-mode:horizontal-tb!important;unicode-bidi:plaintext!important}
+</style>
 </head>
 <body>
 <!-- R1144：Authority Convergence。收斂 current SelfHeal 公開 bridge、單一 exact geometry scheduler、Search/Show All semantic terminal、atomic projection、artifact cancellation 與歷史 verifier 自動執行權；不改正式資料欄位、權限、統計公式或 Read→必要 Merge→Readback 契約。 -->
@@ -8425,6 +8430,8 @@ function r914CompatFill(primary,fallback){
  return out;
 }
 function r914CompatDocKey(value){return r706Text(value).replace(/\s+/g,"").toLocaleLowerCase("zh-Hant");}
+/* R1174：舊版單次展延常把母列起始文號映射為統包申請文號；同一文件不得因此生成第二個回覆階段。 */
+function r914LegacyContractorDocNoAllowed(row,docNo){const key=value=>typeof r777DocKey==="function"?r777DocKey(value):r914CompatDocKey(value),candidate=key(docNo),start=key(row&&row["文號"]);return !!candidate&&(!start||candidate!==start);}
 function r914StageCompatKey(record,index){
  const item=record&&typeof record==="object"?record:{},type=r706Text(item["階段類型"]||item.type),doc=r706Text(item["文號"]||item.docNo||item.documentNo),uid=r706Text(item["階段UID"]||item.uid||item.stageUid);
  if(doc)return "doc::"+type+"::"+r914CompatDocKey(doc);
@@ -8439,10 +8446,16 @@ function r914ExtensionCompatKey(record,index){
 }
 function r914MergeHistorySources(row,canonical,aliases,keyFn){
  if(!row||typeof row!=="object")return[];
- const sources=[canonical,...aliases],map=new Map(),order=[];
+ const sourceAliases=Array.isArray(aliases)?aliases:[],canonicalSource=row[canonical];
+ if(Array.isArray(canonicalSource)&&!sourceAliases.some(key=>Object.prototype.hasOwnProperty.call(row,key))){
+  const seen=new Set();let unique=true;
+  for(let index=0;index<canonicalSource.length;index++){const record=canonicalSource[index];if(!record||typeof record!=="object")continue;const key=keyFn(record,index);if(seen.has(key)){unique=false;break;}seen.add(key);}
+  if(unique)return canonicalSource;
+ }
+ const sources=[canonical,...sourceAliases],map=new Map(),order=[];
  sources.forEach((sourceKey,sourceRank)=>{r914ArraySource(row[sourceKey]).forEach((raw,index)=>{if(!raw||typeof raw!=="object")return;const record={...raw},key=keyFn(record,index);if(!map.has(key)){map.set(key,{record,sourceRank});order.push(key);return;}const old=map.get(key);if(sourceRank<old.sourceRank)map.set(key,{record:r914CompatFill(record,old.record),sourceRank});else old.record=r914CompatFill(old.record,record);});});
  const merged=order.map(key=>map.get(key).record);
- row[canonical]=merged;aliases.forEach(key=>{if(key!==canonical&&Object.prototype.hasOwnProperty.call(row,key))delete row[key];});
+ row[canonical]=merged;sourceAliases.forEach(key=>{if(key!==canonical&&Object.prototype.hasOwnProperty.call(row,key))delete row[key];});
  return merged;
 }
 function r914FuseLegacyHistorySources(row){
@@ -8470,12 +8483,12 @@ function r914LegacyCompatibilityRecords(row){
  if(legacyReply)add({"階段類型":R706_STAGE_SUPERVISOR,"文號":legacyReply,"主旨":row["主旨"],[R846_SUPERVISOR_ISSUE_DATE_FIELD]:r706LegacyValue(row,["發文日期\n(監造)","發文日期 (監造)","發文日期(監造)","回覆日期\n(監造)","回覆日期 (監造)","回覆日期(監造)","回覆日期"]),"審查結果":r706LegacyValue(row,["審查結果","處理情形","監造審查結果"])||"已回覆","是否需要\n回覆來文":r706Yes(row["是否展延"])?"是":"否","回覆來文\n處理期限(日)":r706LegacyValue(row,["回覆來文\n處理期限(日)","回覆來文處理期限(日)"]),"備註":row["備註"]||"",updatedAt:Number(row.updatedAt||0)});
  r914ArraySource(row["展延歷程"]).filter(rec=>rec&&!rec.deleted).forEach((rec,index)=>{
    const cno=r706Text(rec["統包申請文號"]||rec["統包實際再送文號"]);
-   if(cno)add({"階段類型":R706_STAGE_CONTRACTOR,"同類次數":Number(rec["展延次數"]||index+1)||index+1,"文號":cno,"主旨":rec["主旨"]||row["主旨"],"回覆日期\n(統包)":rec["統包申請日期"]||rec["統包實際再送日期"]||"","收文日期(監造)":rec["監造收件日期"]||rec["收文日期(監造)"]||"","處理期限(日)\n(監造)":rec["處理期限(日)\n(監造)"]||rec["處理期限(日)(監造)"]||"","展延日期":rec["展延日期"]||rec["申請展延日期"]||rec["統包申請日期"]||"","文件編號\n(來文)":rec["文件編號\n(來文)"]||rec["文件編號\n(回覆)"]||"","文件名稱\n(來文)":rec["文件名稱\n(來文)"]||rec["文件名稱\n(回覆)"]||"","備註":rec["備註"]||"",updatedAt:Number(rec.updatedAt||row.updatedAt||0)});
+   if(cno&&r914LegacyContractorDocNoAllowed(row,cno))add({"階段類型":R706_STAGE_CONTRACTOR,"同類次數":Number(rec["展延次數"]||index+1)||index+1,"文號":cno,"主旨":rec["主旨"]||row["主旨"],"回覆日期\n(統包)":rec["統包申請日期"]||rec["統包實際再送日期"]||"","收文日期(監造)":rec["監造收件日期"]||rec["收文日期(監造)"]||"","處理期限(日)\n(監造)":rec["處理期限(日)\n(監造)"]||rec["處理期限(日)(監造)"]||"","展延日期":rec["展延日期"]||rec["申請展延日期"]||rec["統包申請日期"]||"","文件編號\n(來文)":rec["文件編號\n(來文)"]||rec["文件編號\n(回覆)"]||"","文件名稱\n(來文)":rec["文件名稱\n(來文)"]||rec["文件名稱\n(回覆)"]||"","備註":rec["備註"]||"",updatedAt:Number(rec.updatedAt||row.updatedAt||0)});
    const sno=r706Text(rec["監造回覆文號"]);
    if(sno)add({"階段類型":R706_STAGE_SUPERVISOR,"同類次數":Number(rec["展延次數"]||index+1)+1,"文號":sno,"主旨":rec["主旨"]||row["主旨"],[R846_SUPERVISOR_ISSUE_DATE_FIELD]:rec["監造回覆日期"]||"","審查結果":rec["監造審查狀態"]||rec["核定結果"]||"已回覆","是否需要\n回覆來文":r706Text(rec["統包實際再送文號"])?"是":"否","回覆來文\n處理期限(日)":rec["回覆來文\n處理期限(日)"]||rec["回覆來文處理期限(日)"]||"","備註":rec["監造備註"]||rec["監造審查意見"]||rec["備註"]||"",updatedAt:Number(rec.updatedAt||row.updatedAt||0)});
  });
  const legacySubmit=r706LegacyValue(row,["展延實際提送文號","展延實際提交文號","展延提送文號"]);
- if(legacySubmit)add({"階段類型":R706_STAGE_CONTRACTOR,"文號":legacySubmit,"主旨":row["主旨"],"回覆日期\n(統包)":r706LegacyValue(row,["展延實際提送日","展延實際提送日期","展延實際提交日","展延提送日"]),"收文日期(監造)":r706LegacyValue(row,["展延實際提送日","展延實際提送日期","展延實際提交日","展延提送日"]),"備註":row["備註"]||"",updatedAt:Number(row.updatedAt||0)});
+ if(legacySubmit&&r914LegacyContractorDocNoAllowed(row,legacySubmit))add({"階段類型":R706_STAGE_CONTRACTOR,"文號":legacySubmit,"主旨":row["主旨"],"回覆日期\n(統包)":r706LegacyValue(row,["展延實際提送日","展延實際提送日期","展延實際提交日","展延提送日"]),"收文日期(監造)":r706LegacyValue(row,["展延實際提送日","展延實際提送日期","展延實際提交日","展延提送日"]),"備註":row["備註"]||"",updatedAt:Number(row.updatedAt||0)});
  return out;
 }
 function r706CanonicalBase(row){row=row||{};r799MigrateExtensionFields(row);r914FuseLegacyHistorySources(row);const map={
@@ -8504,7 +8517,7 @@ function r706NormalizeStage(raw,index,parent){const s={...(raw||{})};s["階段UI
 }
 function r706MigrateLegacyStages(row,list){const r860HasHistoricalNonStart=(Array.isArray(list)?list:[]).some(s=>s&&r706Text(s["階段類型"]||s.type)&&r706Text(s["階段類型"]||s.type)!==R706_STAGE_START);let r860ResolutionRaw=row&&row["__tasunDuplicateResolutionV1"];if(typeof r860ResolutionRaw==="string")try{r860ResolutionRaw=JSON.parse(r860ResolutionRaw);}catch(_e){r860ResolutionRaw=[];}const r860HasDurableResolution=Array.isArray(r860ResolutionRaw)&&r860ResolutionRaw.length>0;if(r860HasHistoricalNonStart||r860HasDurableResolution)return list;let prev=r706Text(row["文號"]),seq=list.length;
  const replyNo=r706LegacyValue(row,["回覆文號\n(監造)","回覆文號 (監造)","回覆文號(監造)"]);if(replyNo){const sup=r706NormalizeStage({"階段類型":R706_STAGE_SUPERVISOR,"來源文號":prev,"文號":replyNo,"主旨":row["主旨"],[R846_SUPERVISOR_ISSUE_DATE_FIELD]:r706LegacyValue(row,["發文日期\n(監造)","發文日期 (監造)","發文日期(監造)","回覆日期\n(監造)","回覆日期 (監造)","回覆日期(監造)"]),"審查結果":r706LegacyValue(row,["處理情形"])||"已回覆","是否需要\n回覆來文":r706Yes(row["是否展延"])?"是":"否","文號__url":r706LegacyValue(row,["回覆文號\n(監造)__url","回覆文號 (監造)__url","回覆文號URL"])},seq++,row);list.push(sup);prev=replyNo;}
- let ext=row["展延歷程"];if(typeof ext==="string")try{ext=JSON.parse(ext);}catch(_e){ext=[];}if(Array.isArray(ext))ext.filter(x=>x&&!x.deleted).forEach(rec=>{const cno=r706Text(rec["統包申請文號"]||rec["統包實際再送文號"]),sno=r706Text(rec["監造回覆文號"]);if(cno){list.push(r706NormalizeStage({"階段類型":R706_STAGE_CONTRACTOR,"來源文號":prev,"文號":cno,"主旨":row["主旨"],"回覆日期\n(統包)":rec["統包申請日期"]||rec["統包實際再送日期"]||"","收文日期(監造)":rec["監造收件日期"]||"","展延日期":rec["統包申請日期"]||rec["申請展延日期"]||"","備註":rec["備註"]||"","文號__url":rec["統包申請文號__url"]||rec["統包實際再送文號__url"]||""},seq++,row));prev=cno;}if(sno){list.push(r706NormalizeStage({"階段類型":R706_STAGE_SUPERVISOR,"來源文號":prev,"文號":sno,"主旨":row["主旨"],[R846_SUPERVISOR_ISSUE_DATE_FIELD]:rec["監造回覆日期"]||"","審查結果":r777AgreementValue(rec["核定結果"])||rec["監造審查狀態"]||"已回覆","是否需要\n回覆來文":r706Text(rec["統包實際再送文號"])?"是":"否","備註":rec["監造審查意見"]||rec["備註"]||"","文號__url":rec["監造回覆文號__url"]||""},seq++,row));prev=sno;}});return list;}
+ let ext=row["展延歷程"];if(typeof ext==="string")try{ext=JSON.parse(ext);}catch(_e){ext=[];}if(Array.isArray(ext))ext.filter(x=>x&&!x.deleted).forEach(rec=>{const cno=r706Text(rec["統包申請文號"]||rec["統包實際再送文號"]),sno=r706Text(rec["監造回覆文號"]);if(cno&&r914LegacyContractorDocNoAllowed(row,cno)){list.push(r706NormalizeStage({"階段類型":R706_STAGE_CONTRACTOR,"來源文號":prev,"文號":cno,"主旨":row["主旨"],"回覆日期\n(統包)":rec["統包申請日期"]||rec["統包實際再送日期"]||"","收文日期(監造)":rec["監造收件日期"]||"","展延日期":rec["統包申請日期"]||rec["申請展延日期"]||"","備註":rec["備註"]||"","文號__url":rec["統包申請文號__url"]||rec["統包實際再送文號__url"]||""},seq++,row));prev=cno;}if(sno){list.push(r706NormalizeStage({"階段類型":R706_STAGE_SUPERVISOR,"來源文號":prev,"文號":sno,"主旨":row["主旨"],[R846_SUPERVISOR_ISSUE_DATE_FIELD]:rec["監造回覆日期"]||"","審查結果":r777AgreementValue(rec["核定結果"])||rec["監造審查狀態"]||"已回覆","是否需要\n回覆來文":r706Text(rec["統包實際再送文號"])?"是":"否","備註":rec["監造審查意見"]||rec["備註"]||"","文號__url":rec["監造回覆文號__url"]||""},seq++,row));prev=sno;}});return list;}
 const r711StageHistoryCache=new WeakMap();
 function r711StageCacheSignature(row){const raw=row&&row[R706_STAGE_HISTORY_KEY];return{raw:raw,updatedAt:r772TimeMs(row&&row.updatedAt,0),rev:Number(row&&row.rev||0),docNo:r706Text(row&&row["文號"]),subject:r706Text(row&&row["主旨"]),needReply:r706Text(row&&row["是否需回覆"])};}
 function r711StageCacheMatches(a,b){return !!(a&&b&&a.raw===b.raw&&a.updatedAt===b.updatedAt&&a.rev===b.rev&&a.docNo===b.docNo&&a.subject===b.subject&&a.needReply===b.needReply);}
