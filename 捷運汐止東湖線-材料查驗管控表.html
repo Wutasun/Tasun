@@ -437,6 +437,7 @@
     var DATE_FIELDS = ["檢查日期", "抽查申請單申請日期"];
     var FORM_DROPDOWN_FIELDS_R570 = ["查驗類別", "抽查紀錄表編號", "抽查系統", "抽查申請單編號", "檢查位置", "檢查結果", "缺失改善通知書", "承辦人", "紙本存放位置"];
     var FORM_DROPDOWN_FIELDS_R567 = FORM_DROPDOWN_FIELDS_R570;
+    var FORM_SUGGEST_FIELDS_R1171 = ["進料數量", "單位"];
     window.__TASUN_INSPECTION_CONTROL_R570_FORM_DROPDOWN_FIELDS__ = FORM_DROPDOWN_FIELDS_R570.slice();
     var FORM_DROPDOWN_DEFAULTS_R567 = {
       "查驗類別":["施工","物料"],
@@ -493,7 +494,7 @@
     var DELETED_KEY = "tasun_" + RESOURCE_KEY + "_deleted_rows_v1";
     var LAST_GOOD_KEY = "tasun_" + RESOURCE_KEY + "_last_good_rows_v1";
     var PERM_MATRIX_KEY = "tasunPermMatrix_v1";
-    var state = { rows:[], allRows:[], selectedUid:"", formMode:"add", formUid:"", formInitial:"", readMode:false, editPickMode:false, deletePickMode:false, deleteUids:[], db:null, syncing:false, cloudConfirmed:false, lastSyncAt:0, pollTimer:0, booted:false };
+    var state = { rows:[], allRows:[], selectedUid:"", formMode:"add", formUid:"", formInitial:"", readMode:false, editPickMode:false, deletePickMode:false, deleteUids:[], db:null, syncing:false, cloudConfirmed:false, nextItemNo:0, lastSyncAt:0, pollTimer:0, booted:false };
     window.__TASUN_GLOBALS__ = Object.assign(window.__TASUN_GLOBALS__ || {}, {
       PAGE_KEY:PAGE_KEY, PAGE_FILE:PAGE_FILE, TABLE_ID:TABLE_ID, RESOURCE_KEY:RESOURCE_KEY, DB_NAME:DB_NAME,
       VERSION_JSON:"tasun-version.json", REBUILD_STAMP_FILE:"TASUN_REBUILD_STAMP", PAGE_BUILD_STAMP:BUILD_STAMP,
@@ -648,7 +649,22 @@
       if(keepDeleted) out=out.concat(tombs);
       return out.sort(function(a,b){ return Number(a["項次"]||0)-Number(b["項次"]||0) || Number(a.updatedAt||a.deletedAt||0)-Number(b.updatedAt||b.deletedAt||0); });
     }
-    function renumber(rows){ var i=1; return dedupeRows(rows,false).map(function(r){ var x=Object.assign({},r); x["項次"]=i++; return x; }); }
+    function validItemNumberR1171(value){ var raw=n(value); if(!/^[1-9]\d*$/.test(raw)) return 0; var num=Number(raw); return Number.isSafeInteger(num) ? num : 0; }
+    function nextItemNumberR1171(rows){
+      var max=0;
+      (Array.isArray(rows)?rows:[]).forEach(function(r){ var num=validItemNumberR1171(r && r["項次"]); if(num>max) max=num; });
+      return max+1;
+    }
+    function renumber(rows, reservedRows){
+      var out=dedupeRows(rows,false), used={};
+      [].concat(out,Array.isArray(reservedRows)?reservedRows:[]).forEach(function(r){ var num=validItemNumberR1171(r && r["項次"]); if(num) used[num]=true; });
+      var next=nextItemNumberR1171([].concat(out,Array.isArray(reservedRows)?reservedRows:[]));
+      return out.map(function(r){
+        var x=Object.assign({},r), num=validItemNumberR1171(x["項次"]);
+        if(!num){ while(used[next]) next++; x["項次"]=next; used[next]=true; next++; }
+        return x;
+      });
+    }
     function seedRows(){
       var t=now();
       return SEED_ROWS.map(function(r,i){ return normRow(Object.assign({}, r, { uid:"seed-material-inspection-control-" + (i+1), updatedAt:t+i, rev:t+i, deleted:false })); });
@@ -667,9 +683,10 @@
     function saveLocal(rows){
       var incoming=Array.isArray(rows)?rows:[];
       var tombs=dedupeTombstonesR576(rawDeletedRowsR576().concat(incoming.filter(function(x){ var r=normRow(x); return r && r.deleted; })));
-      var active=renumber(incoming.filter(function(x){ var r=normRow(x); return r && !r.deleted && !isDeletedByTombstoneR576(r,tombs); }));
+      var active=renumber(incoming.filter(function(x){ var r=normRow(x); return r && !r.deleted && !isDeletedByTombstoneR576(r,tombs); }),tombs);
       state.allRows=active.concat(tombs);
       state.rows=active;
+      state.nextItemNo=Math.max(Number(state.nextItemNo)||0,nextItemNumberR1171(active.concat(tombs)));
       try{ localStorage.setItem(STORE_KEY, JSON.stringify(active)); localStorage.setItem(LAST_GOOD_KEY, JSON.stringify(active)); }catch(_e){}
       saveDeletedRows(tombs);
       idbSave(active.concat(tombs)).catch(function(){});
@@ -719,6 +736,7 @@
     function formFieldOrderR572(){
       return qsa("#formFields [data-tasun-form-field]").map(function(el){ return n(el.getAttribute("data-tasun-form-field")); }).filter(Boolean);
     }
+    function formFieldsR1171(){ return FORM_FIELDS_ORDER_R572.concat(["項次"]); }
     function ensureFormFieldMappingR572(){
       ensureFieldOrderR571();
       window.__TASUN_INSPECTION_CONTROL_R572_FIELD_MAPPING_MODE__ = "field-name-based-no-index-based-after-swap";
@@ -789,6 +807,16 @@
       if(current) push(current);
       return out.sort(function(a,b){ return a.localeCompare(b,"zh-Hant"); });
     }
+    function fillFormSuggestionsR1171(field, current){
+      var input=formFieldElR570(field), list=qs("#f"+cssSelR570(field)+"-options");
+      if(!input || !list || FORM_SUGGEST_FIELDS_R1171.indexOf(field)<0) return;
+      var seen={}, values=[];
+      function push(value){ value=cjk(value); if(!value || seen[value]) return; seen[value]=true; values.push(value); }
+      (state.rows||[]).forEach(function(row){ if(row && !row.deleted) push(row[field]); });
+      push(current !== undefined ? current : input.value);
+      list.innerHTML=values.sort(function(a,b){ return a.localeCompare(b,"zh-Hant",{numeric:true}); }).map(function(value){ return '<option value="'+esc(value)+'"></option>'; }).join("");
+      input.setAttribute("data-options-source","active-table-column-unique-r1171");
+    }
     function fillFormSelectR570(field, current){
       var sel=formFieldElR570(field);
       if(!sel) return;
@@ -849,6 +877,7 @@
       fillSelect(qs("#searchSystem"), state.rows.map(function(r){ return r["抽查系統"]; }), true);
       fillSelect(qs("#searchResult"), state.rows.map(function(r){ return r["檢查結果"]; }), true);
       FORM_DROPDOWN_FIELDS_R570.forEach(function(field){ fillFormSelectR570(field); });
+      FORM_SUGGEST_FIELDS_R1171.forEach(function(field){ fillFormSuggestionsR1171(field); });
     }
     function applySearch(){ closeOverlay("#searchOverlay"); renderRows(filteredRows(),"search"); toast("已套用搜尋條件"); }
     function clearFilter(){ ["#searchKw","#searchCategory","#searchSystem","#searchResult"].forEach(function(id){ var el=qs(id); if(el) el.value=""; }); renderRows(state.rows,"clear"); toast("已顯示全部資料"); }
@@ -857,13 +886,15 @@
     function buildForm(){
       ensureFormFieldMappingR572();
       var box=qs("#formFields"); if(!box) return;
-      box.innerHTML=FORM_FIELDS_ORDER_R572.map(function(f){
+      box.innerHTML=formFieldsR1171().map(function(f){
         var id="f"+f, type=DATE_FIELDS.indexOf(f)>=0 ? "date" : (f==="進料數量" ? "number" : "text");
         var cls=(f==="抽查項目" || f==="附件") ? "wide" : "";
         var title=(f==="附件") ? "附件（超連結）" : f;
         var input;
         if(f==="抽查項目") input='<textarea id="'+esc(id)+'"></textarea>';
-        else if(f==="進料數量") input='<input id="'+esc(id)+'" type="number" min="0" step="any" inputmode="decimal">';
+        else if(f==="進料數量") input='<input id="'+esc(id)+'" type="number" min="0" step="any" inputmode="decimal" list="'+esc(id)+'-options" data-options-source="active-table-column-unique-r1171"><datalist id="'+esc(id)+'-options"></datalist><div class="hint dropdownHint">下拉選單來源：本表「進料數量」欄不重複值；也可輸入新數值。</div>';
+        else if(f==="單位") input='<input id="'+esc(id)+'" type="text" list="'+esc(id)+'-options" data-options-source="active-table-column-unique-r1171"><datalist id="'+esc(id)+'-options"></datalist><div class="hint dropdownHint">下拉選單來源：本表「單位」欄不重複值；也可輸入新單位。</div>';
+        else if(f==="項次") input='<input id="'+esc(id)+'" type="number" min="1" step="1"'+(isAdmin()?"":" readonly aria-readonly=\"true\"")+'>';
         else if(f==="附件") input='<div class="line attachLine"><input id="'+esc(id)+'" type="url" inputmode="url" placeholder="貼上連結，例如：https://… / Dropbox 連結 / file:///…"><button type="button" id="openAttachBtn" data-drive-url="'+esc(ATTACH_DRIVE_URL)+'">網路硬碟</button></div><div class="hint attachHint">可先按「網路硬碟」開啟附件共用資料夾，複製附件連結後貼回本欄。</div>';
         else if(isFormDropdownFieldR570(f)) input='<div class="line dropdownLine"><select id="'+esc(id)+'" data-tasun-dropdown-field="r570"></select><button type="button" data-add-form-option="'+esc(f)+'">'+esc(addOptionButtonTextR570(f))+'</button></div><div class="hint dropdownHint">選單來源：資料表有效資料去重＋本頁新增選項。</div>';
         else input='<input id="'+esc(id)+'" type="'+type+'">';
@@ -873,15 +904,17 @@
     }
     function formData(){
       var r={};
-      FORM_FIELDS_ORDER_R572.forEach(function(f){ var el=formFieldElR570(f); r[f]=el?cjk(el.value):""; });
+      formFieldsR1171().forEach(function(f){ var el=formFieldElR570(f); r[f]=el?cjk(el.value):""; });
       return r;
     }
     function setFormData(r){
-      FORM_FIELDS_ORDER_R572.forEach(function(f){
+      formFieldsR1171().forEach(function(f){
         var el=formFieldElR570(f), val=n(r && r[f]);
+        if(f==="項次" && !val && state.formMode==="add") val=String(state.nextItemNo || nextItemNumberR1171(state.rows.concat(deletedRows())));
         if(!el) return;
         if(el.tagName === "SELECT") fillFormSelectR570(f, val);
         else el.value=val;
+        if(FORM_SUGGEST_FIELDS_R1171.indexOf(f)>=0) fillFormSuggestionsR1171(f,val);
       });
       state.formInitial=JSON.stringify(formData());
     }
@@ -905,6 +938,12 @@
       if(!canEdit()) return;
       var data=formData(), t=now(), rows=state.rows.slice();
       if(n(data["進料數量"]) && (!isFinite(Number(data["進料數量"])) || Number(data["進料數量"])<0)){ toast("進料數量請輸入 0 或以上的數值。"); var quantityInput=formFieldElR570("進料數量"); if(quantityInput) quantityInput.focus(); return false; }
+      var itemNo=validItemNumberR1171(data["項次"]);
+      if(!itemNo){ toast("項次必須是大於 0 的整數。"); var itemInput=formFieldElR570("項次"); if(itemInput) itemInput.focus(); return false; }
+      if(isAdmin()){
+        var duplicate=state.rows.concat(deletedRows()).some(function(row){ return row && row.uid!==state.formUid && validItemNumberR1171(row["項次"])===itemNo; });
+        if(duplicate){ toast("此項次已被使用，包含已刪除資料保留的空號；請改用其他編號。"); var itemInput2=formFieldElR570("項次"); if(itemInput2) itemInput2.focus(); return false; }
+      }
       var found=false;
       if(state.formMode==="edit" && state.formUid){
         rows=rows.map(function(r){ if(r.uid===state.formUid){ found=true; return normRow(Object.assign({}, r, data, { updatedAt:t, rev:t, deleted:false })); } return r; });
@@ -973,7 +1012,7 @@
     function mergeIncoming(local, incoming){
       var tombs=dedupeTombstonesR576([].concat(deletedRows(), (local||[]), (incoming||[])));
       var rows=dedupeRows([].concat(local||[], incoming||[], tombs), true);
-      var active=renumber(rows.filter(function(r){ return !r.deleted && !isDeletedByTombstoneR576(r,tombs); }));
+      var active=renumber(rows.filter(function(r){ return !r.deleted && !isDeletedByTombstoneR576(r,tombs); }),tombs);
       var del=dedupeTombstonesR576(rows.filter(function(r){ return r.deleted; }).concat(tombs));
       saveDeletedRows(del);
       saveLocal(active.concat(del));
@@ -983,6 +1022,7 @@
       setBadge("#cloudText","連線中","warn");
       var js=await apiPost("/api/tasun/read",{resourceKey:RESOURCE_KEY,pageKey:PAGE_KEY,pageFile:PAGE_FILE,reason:reason||"pull"});
       if(js && js.ok && Array.isArray(js.rows)){
+        if(Number(js.nextItemNumber)>0) state.nextItemNo=Number(js.nextItemNumber);
         mergeIncoming(state.rows.concat(deletedRows()), js.rows);
         state.cloudConfirmed=true; state.lastSyncAt=now(); refreshOptions(); renderRows(filteredRows(),"cloud-pull");
         setBadge("#cloudText","同步","ok"); return true;
@@ -995,9 +1035,11 @@
       var payloadTombs=dedupeTombstonesR576(deletedRows());
       var js=await apiPost("/api/tasun/merge",{resourceKey:RESOURCE_KEY,pageKey:PAGE_KEY,pageFile:PAGE_FILE,payload:{rows:payloadRows,db:payloadRows,deletedRows:payloadTombs,tombstones:payloadTombs},reason:reason||"merge"});
       if(js && js.ok){
+        if(Number(js.nextItemNumber)>0) state.nextItemNo=Number(js.nextItemNumber);
         if(Array.isArray(js.rows)) mergeIncoming(payloadRows, js.rows);
         state.cloudConfirmed=true; state.lastSyncAt=now(); renderRows(filteredRows(),"cloud-push"); setBadge("#cloudText","同步","ok"); return true;
       }
+      if(js && /^ITEM_NUMBER_/.test(n(js.error))) toast(js.error==="ITEM_NUMBER_REPAIR_ADMIN_REQUIRED" ? "既有項次需要 admin 登入同步一次後，其他使用者才能繼續同步。" : (js.error==="ITEM_NUMBER_DUPLICATE" ? "項次重複或已保留，請改用未使用的新編號。" : (js.error==="ITEM_NUMBER_RETIRED" ? "不可重用已發放過的項次；請改用新的未發放編號。" : "項次格式或編號狀態不符，請檢查後再試。")));
       state.cloudConfirmed=false; setBadge("#cloudText","未確認","warn"); return false;
     }
     async function mutationSync(reason){
@@ -1263,6 +1305,11 @@
       core.register(PAGE_KEY+":inspectionControlR571ExportImportFormOrderSynced",{check:function(){ return Array.isArray(window.__TASUN_INSPECTION_CONTROL_R571_FIELD_ORDER__) && window.__TASUN_INSPECTION_CONTROL_R571_FIELD_ORDER__.indexOf("抽查紀錄表編號")===3 && window.__TASUN_INSPECTION_CONTROL_R571_FIELD_ORDER__.indexOf("抽查申請單編號")===8; },repair:function(){ ensureFieldOrderR571(); return true; },verify:function(){ return FIELD_ORDER_R571.indexOf("抽查紀錄表編號")===3 && FIELD_ORDER_R571.indexOf("抽查申請單編號")===8; },coolDownMs:1600,maxRetry:4});
       core.register(PAGE_KEY+":inspectionControlR572AddEditFormMappingAfterSwap",{check:function(){ if(!ensureFormFieldMappingR572()) return false; if(!qs("#formOverlay.open")) return true; var order=formFieldOrderR572(); return order.indexOf("抽查紀錄表編號")===2 && order.indexOf("抽查申請單編號")===7 && !!formFieldElR570("抽查紀錄表編號") && !!formFieldElR570("抽查申請單編號"); },repair:function(){ ensureFormFieldMappingR572(); if(qs("#formOverlay.open")){ var data=formData(); buildForm(); refreshOptions(); setFormData(data); } return true; },verify:function(){ if(!qs("#formOverlay.open")) return FORM_FIELDS_ORDER_R572.indexOf("抽查紀錄表編號")===2 && FORM_FIELDS_ORDER_R572.indexOf("抽查申請單編號")===7; var order=formFieldOrderR572(); return order.indexOf("抽查紀錄表編號")===2 && order.indexOf("抽查申請單編號")===7; },coolDownMs:1400,maxRetry:5});
       core.register(PAGE_KEY+":inspectionControlR572FieldNameBasedDataMapping",{check:function(){ return window.__TASUN_INSPECTION_CONTROL_R572_FIELD_MAPPING_MODE__==="field-name-based-no-index-based-after-swap" && FORM_FIELDS_ORDER_R572.indexOf("抽查紀錄表編號")===2 && FORM_FIELDS_ORDER_R572.indexOf("抽查申請單編號")===7; },repair:function(){ ensureFormFieldMappingR572(); return true; },verify:function(){ return FORM_FIELDS_ORDER_R572.indexOf("抽查紀錄表編號")===2 && FORM_FIELDS_ORDER_R572.indexOf("抽查申請單編號")===7; },coolDownMs:1600,maxRetry:4});
+      core.register(PAGE_KEY+":materialInspectionControlR1171EditableSuggestionsAndItemNumberPermissions",{check:function(){
+        if(!qs("#formOverlay.open")) return true;
+        var qty=formFieldElR570("進料數量"), unit=formFieldElR570("單位"), item=formFieldElR570("項次");
+        return !!(qty && qty.tagName==="INPUT" && qty.type==="number" && qty.getAttribute("list") && qs("#f進料數量-options") && qty.getAttribute("data-options-source")==="active-table-column-unique-r1171" && unit && unit.tagName==="INPUT" && unit.getAttribute("list") && qs("#f單位-options") && unit.getAttribute("data-options-source")==="active-table-column-unique-r1171" && item && item.readOnly===!isAdmin());
+      },repair:function(){ if(qs("#formOverlay.open")){ var data=formData(); buildForm(); refreshOptions(); setFormData(data); } return true; },verify:function(){ if(!qs("#formOverlay.open")) return true; return !!(formFieldElR570("進料數量") && formFieldElR570("單位") && formFieldElR570("項次") && formFieldOrderR572().indexOf("項次")>=0); },coolDownMs:1600,maxRetry:4});
       core.register(PAGE_KEY+":materialInspectionControlR577QuantityUnitAndExcelContract",{check:function(){ return FIELDS.indexOf("進料數量")===FIELDS.indexOf("抽查項目")+1 && FIELDS.indexOf("單位")===FIELDS.indexOf("進料數量")+1 && FIELDS.indexOf("紙本存放位置")<FIELDS.indexOf("附件") && EXCEL_FIELDS.indexOf("附件")<0 && Array.isArray(window.__TASUN_MATERIAL_INSPECTION_CONTROL_R577_EXCEL_FIELDS__); },repair:function(){ ensureFieldOrderR571(); EXCEL_FIELDS=FIELDS.filter(function(f){ return f!=="附件"; }); window.__TASUN_MATERIAL_INSPECTION_CONTROL_R577_EXCEL_FIELDS__=EXCEL_FIELDS.slice(); return true; },verify:function(){ return FIELDS.indexOf("進料數量")===FIELDS.indexOf("抽查項目")+1 && FIELDS.indexOf("單位")===FIELDS.indexOf("進料數量")+1 && EXCEL_FIELDS.indexOf("附件")<0; },coolDownMs:1600,maxRetry:4});
       core.register(PAGE_KEY+":materialInspectionControlR576DeleteTombstonePersistReload",{check:function(){ return !!window.__TASUN_MATERIAL_INSPECTION_CONTROL_R576_DELETE_PERSISTENCE__ && typeof dedupeTombstonesR576==="function" && typeof isDeletedByTombstoneR576==="function"; },repair:function(){ saveLocal(state.rows.concat(deletedRows())); return true; },verify:function(){ return !!window.__TASUN_MATERIAL_INSPECTION_CONTROL_R576_DELETE_PERSISTENCE__; },coolDownMs:1600,maxRetry:4});
       core.register(PAGE_KEY+":clearOldVersionLockCacheServiceWorkerMemoR560",{check:function(){ return true; },repair:function(){ clearOldVersionLocks(); return true; },verify:function(){ return true; },coolDownMs:20000,maxRetry:1});
