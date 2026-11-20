@@ -68,6 +68,11 @@ test('Chinese Git paths trigger a coherent four-page release',t=>{
   const r=f.run([], '');assert.equal(r.status,0,r.stderr);assert.notEqual(f.read().version,build,r.stdout);assertRelease(f);
   const before=f.git('diff');const verified=f.run(['--verify-only'],'');assert.equal(verified.status,0,verified.stderr);assert.equal(f.git('diff'),before);
 });
+test('large previous detail HTML is read when selecting the next release build',t=>{
+ const f=fixture(t),file=files[0];fs.appendFileSync(path.join(f.dir,file),'<!--'+('x'.repeat(1_100_000))+'-->');f.git('add',file);f.git('commit','-qm','large previous page');
+ fs.appendFileSync(path.join(f.dir,file),'<!-- follow-up change -->');f.git('add',file);f.git('commit','-qm','detail change');
+ const r=f.run([],file);assert.equal(r.status,0,r.stderr);assert.equal(Number(f.read().version.match(/r(\d+)/)?.[1]),1140);assertRelease(f);
+});
 test('legacy quoted changed-file input is decoded, not skipped',t=>{
   const f=fixture(t);fs.appendFileSync(path.join(f.dir,files[0]),'<!-- change -->');f.git('add','.');f.git('commit','-qm','change');
   const quoted=f.git('diff','--name-only','HEAD^','HEAD');assert.ok(quoted.startsWith('"'));
