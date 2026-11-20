@@ -70,12 +70,15 @@ function storedRow(uid, itemNo, options = {}) {
   };
 }
 
-test('material form exposes distinct-value dropdowns and role-based item number', () => {
+test('material form exposes editable distinct-value dropdown inputs and role-based item number', () => {
   assert.doesNotThrow(() => scriptBodies(page).forEach((body, index) => new vm.Script(body, { filename: `material-page-${index}.js` })));
   assert.match(page, /FORM_SUGGEST_FIELDS_R1171\s*=\s*\["進料數量",\s*"單位"\]/);
   assert.match(page, /active-table-column-unique-r1171/);
-  assert.match(page, /else if\(FORM_SUGGEST_FIELDS_R1171\.indexOf\(f\)>=0\) input='<select id=/);
-  assert.match(page, /select\.tagName!=="SELECT"/);
+  assert.match(page, /else if\(f==="進料數量"\) input='<input id=/);
+  assert.match(page, /type="number" min="0" step="any" inputmode="decimal" list=/);
+  assert.match(page, /else if\(f==="單位"\) input='<input id=/);
+  assert.match(page, /type="text" list=/);
+  assert.match(page, /input\.setAttribute\("data-options-source","active-table-column-unique-r1171"\)/);
   assert.match(page, /row\[field\]/);
   assert.match(page, /values\.sort\(function\(a,b\).*localeCompare/);
   assert.match(page, /isAdmin\(\)\?"":" readonly aria-readonly=/);
