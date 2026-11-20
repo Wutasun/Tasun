@@ -20,6 +20,9 @@ const STORE_KEYS = {
   entryRegistry: 'auth-table:entryRegistry',
 };
 
+const MATERIAL_RESOURCE_KEY = 'sxdh-material-inspection-control';
+const MATERIAL_ITEM_SEQUENCE_KEY = 'tasun:sequence:sxdh-material-inspection-control';
+
 let schemaReady = false;
 
 export default {
@@ -239,7 +242,8 @@ export default {
         `).bind(resourceKey).all();
 
         const rows = dedupeHydratedRows((rs.results || []).map(hydrateRow));
-        return json({ ok: true, resourceKey, rows }, 200, cors);
+        const nextItemNumber = resourceKey === MATERIAL_RESOURCE_KEY ? await materialNextItemNumber(env, rows) : undefined;
+        return json({ ok: true, resourceKey, rows, ...(nextItemNumber ? { nextItemNumber } : {}) }, 200, cors);
       }
 
       if (path === '/api/tasun/merge') {
@@ -253,7 +257,10 @@ export default {
 
         let count = 0;
         const now = Date.now();
-        const incomingRows = normalizeIncomingRows(db, resourceKey, now);
+        let incomingRows = normalizeIncomingRows(db, resourceKey, now);
+        if (resourceKey === MATERIAL_RESOURCE_KEY) {
+          incomingRows = await prepareMaterialRowsForMerge(env, incomingRows, me.r, now);
+        }
         for (const item of incomingRows) {
           if (!item || typeof item !== 'object') continue;
           const uid = norm(item.uid || item.pk || item.uuid || item.sourceId || item.key);
@@ -306,12 +313,14 @@ export default {
           LIMIT 5000
         `).bind(resourceKey).all();
         const rows = dedupeHydratedRows((rs.results || []).map(hydrateRow));
-        return json({ ok: true, resourceKey, count, rows }, 200, cors);
+        const nextItemNumber = resourceKey === MATERIAL_RESOURCE_KEY ? await materialNextItemNumber(env, rows) : undefined;
+        return json({ ok: true, resourceKey, count, rows, ...(nextItemNumber ? { nextItemNumber } : {}) }, 200, cors);
       }
 
       return json({ ok: false, error: 'NOT_FOUND', path }, 404, cors);
     } catch (err) {
-      return json({ ok: false, error: 'INTERNAL', detail: String(err && err.message ? err.message : err) }, 500, cors);
+      const status = Number(err && err.status) || 500;
+      return json({ ok: false, error: String(err && err.code ? err.code : 'INTERNAL'), detail: String(err && err.message ? err.message : err) }, status, cors);
     }
   }
 };
@@ -711,6 +720,222 @@ async function storePutJson(env, id, value, now = Date.now()) {
       updatedAt=excluded.updatedAt,
       rev=excluded.rev
   `).bind(id, jsonText, String(now), String(now)).run();
+}
+
+
+function materialItemNumber(value) {
+  const raw = String(value ?? '').trim();
+  if (!/^[1-9]\d*$/.test(raw)) return 0;
+  const number = Number(raw);
+  return Number.isSafeInteger(number) ? number : 0;
+}
+
+function materialVersionWins(incoming, existing) {
+  const incomingAt = Number(incoming && incoming.updatedAt || 0);
+  const existingAt = Number(existing && existing.updatedAt || 0);
+  const incomingRev = Number(incoming && incoming.rev || 0);
+  const existingRev = Number(existing && existing.rev || 0);
+  return incomingAt > existingAt || (incomingAt === existingAt && incomingRev >= existingRev);
+}
+
+async function ensureMaterialSequence(env, floor, now = Date.now()) {
+  const value = Math.max(0, Number(floor) || 0);
+  await env.DB.prepare(`
+    INSERT INTO tasun_store(id, json, updatedAt, rev)
+    VALUES(?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      json=CAST(MAX(CAST(COALESCE(NULLIF(tasun_store.json, ''), '0') AS INTEGER), CAST(excluded.json AS INTEGER)) AS TEXT),
+      updatedAt=excluded.updatedAt,
+      rev=excluded.rev
+  `).bind(MATERIAL_ITEM_SEQUENCE_KEY, String(value), String(now), String(now)).run();
+}
+
+async function reserveMaterialItemNumber(env, now = Date.now()) {
+  const row = await env.DB.prepare(`
+    UPDATE tasun_store
+    SET json=CAST(CAST(COALESCE(NULLIF(json, ''), '0') AS INTEGER) + 1 AS TEXT), updatedAt=?, rev=?
+    WHERE id=?
+    RETURNING json
+  `).bind(String(now), String(now), MATERIAL_ITEM_SEQUENCE_KEY).first();
+  const number = materialItemNumber(row && row.json);
+  if (!number) {
+    const error = new Error('Could not reserve a unique material item number.');
+    error.status = 503;
+    error.code = 'ITEM_NUMBER_SEQUENCE_UNAVAILABLE';
+    throw error;
+  }
+  return number;
+}
+
+async function reserveExplicitMaterialItemNumber(env, number, now = Date.now()) {
+  const row = await env.DB.prepare(`
+    UPDATE tasun_store
+    SET json=?, updatedAt=?, rev=?
+    WHERE id=?
+      AND CAST(COALESCE(NULLIF(json, ''), '0') AS INTEGER) < ?
+    RETURNING json
+  `).bind(String(number), String(now), String(now), MATERIAL_ITEM_SEQUENCE_KEY, number).first();
+  if (materialItemNumber(row && row.json) === number) return number;
+  const error = new Error('項次 has already been issued or reserved.');
+  error.status = 409;
+  error.code = 'ITEM_NUMBER_RETIRED';
+  throw error;
+}
+
+async function materialNextItemNumber(env, rows = []) {
+  const result = await env.DB.prepare('SELECT json FROM tasun_store WHERE id=?').bind(MATERIAL_ITEM_SEQUENCE_KEY).first();
+  const stored = materialItemNumber(result && result.json);
+  const maximum = (Array.isArray(rows) ? rows : []).reduce((max, row) => Math.max(max, materialItemNumber(row && row['項次'])), 0);
+  return Math.max(stored, maximum) + 1;
+}
+
+async function prepareMaterialRowsForMerge(env, incomingRows, role, now = Date.now()) {
+  const rs = await env.DB.prepare(`
+    SELECT resourceKey, uid, data, updatedAt, rev, deleted
+    FROM tasun_rows
+    WHERE resourceKey=?
+  `).bind(MATERIAL_RESOURCE_KEY).all();
+  const storedRows = (rs.results || []).map(hydrateRow);
+  const storedByUid = new Map(storedRows.map(row => [String(row.uid), row]));
+  // Keep merge candidates separate from the D1 snapshot so number repairs can
+  // still compare against the original stored value when deciding what to write.
+  const candidates = new Map(storedRows.map(row => [String(row.uid), { ...row }]));
+  const incomingByUid = new Map();
+  const acceptedIncoming = new Set();
+  const explicitNumbers = new Map();
+
+  for (const source of Array.isArray(incomingRows) ? incomingRows : []) {
+    if (!source || typeof source !== 'object') continue;
+    const uid = norm(source.uid);
+    if (!uid) continue;
+    incomingByUid.set(uid, source);
+    const previous = storedByUid.get(uid);
+    const wins = !previous || materialVersionWins(source, previous);
+    const candidate = wins ? { ...(previous || {}), ...source, uid } : { ...previous };
+    candidate.uid = uid;
+    candidate.deleted = !!candidate.deleted;
+    candidates.set(uid, candidate);
+    if (!wins) continue;
+    acceptedIncoming.add(uid);
+
+    // Deleted rows retain their original number. For live rows only an admin may
+    // request a number change; every other role receives the D1-authoritative value.
+    if (role === 'admin' && !candidate.deleted && Object.prototype.hasOwnProperty.call(source, '項次')) {
+      const requestedRaw = String(source['項次'] ?? '').trim();
+      if (requestedRaw) {
+        const requested = materialItemNumber(requestedRaw);
+        if (!requested) {
+          const error = new Error('項次 must be a positive whole number.');
+          error.status = 400;
+          error.code = 'ITEM_NUMBER_INVALID';
+          throw error;
+        }
+        const previousNumber = materialItemNumber(previous && previous['項次']);
+        if (!previous || requested !== previousNumber) explicitNumbers.set(uid, requested);
+      } else if (previous && materialItemNumber(previous['項次'])) {
+        const error = new Error('項次 cannot be blank.');
+        error.status = 400;
+        error.code = 'ITEM_NUMBER_INVALID';
+        throw error;
+      }
+    }
+  }
+
+  const items = Array.from(candidates.values());
+  const byUid = new Map(items.map(item => [String(item.uid), item]));
+  const explicitOwners = new Map();
+  for (const [uid, number] of explicitNumbers) {
+    const other = explicitOwners.get(number);
+    if (other && other !== uid) {
+      const error = new Error('項次 is already assigned to another row.');
+      error.status = 409;
+      error.code = 'ITEM_NUMBER_DUPLICATE';
+      throw error;
+    }
+    explicitOwners.set(number, uid);
+  }
+  for (const [uid, number] of explicitNumbers) {
+    const holder = items.find(item => String(item.uid) !== uid && materialItemNumber(item['項次']) === number && !explicitNumbers.has(String(item.uid)));
+    if (holder) {
+      const error = new Error('項次 is already assigned to another row, including deleted rows.');
+      error.status = 409;
+      error.code = 'ITEM_NUMBER_DUPLICATE';
+      throw error;
+    }
+  }
+
+  const maxExisting = storedRows.reduce((max, item) => Math.max(max, materialItemNumber(item['項次'])), 0);
+  await ensureMaterialSequence(env, maxExisting, now);
+  const sequenceRow = await env.DB.prepare('SELECT json FROM tasun_store WHERE id=?').bind(MATERIAL_ITEM_SEQUENCE_KEY).first();
+  const knownHighWater = materialItemNumber(sequenceRow && sequenceRow.json);
+  for (const number of explicitNumbers.values()) {
+    if (knownHighWater && number <= knownHighWater) {
+      const error = new Error('項次 numbers already passed by the sequence cannot be reused.');
+      error.status = 409;
+      error.code = 'ITEM_NUMBER_RETIRED';
+      throw error;
+    }
+  }
+  for (const number of Array.from(new Set(explicitNumbers.values())).sort((a, b) => a - b)) {
+    await reserveExplicitMaterialItemNumber(env, number, now);
+  }
+
+  const used = new Map();
+  for (const [uid, number] of explicitNumbers) {
+    used.set(number, uid);
+    byUid.get(uid)['項次'] = number;
+  }
+
+  const stableOrder = items.filter(item => !explicitNumbers.has(String(item.uid))).sort((a, b) => {
+    if (!!a.deleted !== !!b.deleted) return a.deleted ? -1 : 1;
+    const an = materialItemNumber(a['項次']), bn = materialItemNumber(b['項次']);
+    if (an !== bn) return an - bn;
+    const at = Number(a.deletedAt || a.createdAt || a.updatedAt || 0);
+    const bt = Number(b.deletedAt || b.createdAt || b.updatedAt || 0);
+    return at - bt || String(a.uid).localeCompare(String(b.uid));
+  });
+  for (const item of stableOrder) {
+    const uid = String(item.uid);
+    const previous = storedByUid.get(uid);
+    const oldNumber = materialItemNumber(previous && previous['項次']);
+    let number = materialItemNumber(item['項次']);
+    if (previous && role !== 'admin') number = oldNumber;
+    if (!previous && role !== 'admin') number = 0;
+    if (item.deleted && previous) number = oldNumber;
+    const owner = number ? used.get(number) : null;
+    if (!number || (owner && owner !== uid)) {
+      if (previous && role !== 'admin' && oldNumber) {
+        const error = new Error('Existing item numbers require one admin synchronization before other users can sync.');
+        error.status = 409;
+        error.code = 'ITEM_NUMBER_REPAIR_ADMIN_REQUIRED';
+        throw error;
+      }
+      number = await reserveMaterialItemNumber(env, now);
+    }
+    item['項次'] = number;
+    used.set(number, uid);
+  }
+
+  const result = [];
+  for (const item of items) {
+    const uid = String(item.uid);
+    const previous = storedByUid.get(uid);
+    const source = incomingByUid.get(uid);
+    const accepted = acceptedIncoming.has(uid);
+    const sourceNumber = source ? materialItemNumber(source['項次']) : 0;
+    const previousNumber = materialItemNumber(previous && previous['項次']);
+    const assignedNumber = materialItemNumber(item['項次']);
+    const corrected = !!source && role !== 'admin' && sourceNumber !== assignedNumber;
+    const reassigned = previousNumber !== assignedNumber;
+    if (corrected || reassigned) {
+      const currentAt = Number(item.updatedAt || 0);
+      const previousAt = Number(previous && previous.updatedAt || 0);
+      item.updatedAt = Math.max(now, currentAt, previousAt) + 1;
+      item.rev = Math.max(Number(item.rev || 0), Number(previous && previous.rev || 0), item.updatedAt) + 1;
+    }
+    if (!previous || accepted || corrected || reassigned) result.push(item);
+  }
+  return result;
 }
 
 
