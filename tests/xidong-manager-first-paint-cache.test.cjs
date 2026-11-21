@@ -6,11 +6,12 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const read = name => fs.readFileSync(path.join(root, name), 'utf8');
 
-test('document manager paints only a fresh, same-build, cloud-confirmed summary cache before sync', () => {
+test('document manager paints only a fresh, compatible, cloud-confirmed summary cache before sync', () => {
   const html = read('汐東文件管理表.html');
   assert.match(html, /function summaryHydrateCachedStats\(\)/);
-  assert.match(html, /cached\.build!==BUILD/);
   assert.match(html, /cached\.cloudConfirmed!==true/);
+  assert.ok(html.includes('cached.totalRule!=="total = received + sent"'));
+  assert.ok(html.includes('cached.totalDetailMode!=="one-row-per-statistical-event"'));
   assert.match(html, /cached\.supervisorDaysFilter!==SUMMARY_DAYS_ALL/);
   assert.match(html, /now-at>SUMMARY_CACHE_MAX_AGE_MS/);
   assert.match(html, /SUMMARY_CACHE_MAX_AGE_MS=7\*24\*60\*60\*1000/);
