@@ -93,3 +93,23 @@ test('only the background prefetch path opts into the init race guard', () => {
   assert.ok(page.includes('await r1092AdoptPrefetchAsVisiblePreview(180)'));
 });
 
+
+const deleteStart = page.indexOf('async function r1186SyncDeleteWithReadback(');
+const deleteEnd = page.indexOf('\nasync function confirmDeleteR618()', deleteStart);
+assert.ok(deleteStart >= 0 && deleteEnd > deleteStart, 'delete readback authority must exist');
+const deleteSource = page.slice(deleteStart, deleteEnd);
+
+test('delete drains an older sync and reports success only after verified tombstone readback', () => {
+  assert.match(deleteSource, /await flight/);
+  assert.match(deleteSource, /saveLocal\(\);renderAll\(\)/);
+  assert.match(deleteSource, /await authoritySync\(reason\)/);
+  assert.match(deleteSource, /state\.verified===true&&state\.pending!==true&&state\.reason===reason/);
+  assert.match(deleteSource, /finalReadback\.verified===true/);
+  assert.match(deleteSource, /confirmedRow\.deleted===true/);
+  const confirmStart = page.indexOf('async function confirmDeleteR618()');
+  const confirmEnd = page.indexOf('\nfunction bindR618DetailDeleteModal()', confirmStart);
+  const confirmSource = page.slice(confirmStart, confirmEnd);
+  assert.match(confirmSource, /saveLocal\(\)/);
+  assert.match(confirmSource, /const syncReason="detail-delete-r1186"/);
+  assert.match(confirmSource, /if\(confirmed\)toast\("已刪除 1 筆資料，且雲端讀回確認完成。"/);
+});
