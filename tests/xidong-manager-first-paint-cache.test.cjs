@@ -10,8 +10,8 @@ test('document manager paints only a fresh, compatible, cloud-confirmed summary 
   const html = read('汐東文件管理表.html');
   assert.match(html, /function summaryHydrateCachedStats\(\)/);
   assert.match(html, /cached\.cloudConfirmed!==true/);
-  assert.match(html, /cached\.totalRule!==\"total = received \\+ sent\"/);
-  assert.match(html, /cached\.totalDetailMode!==\"one-row-per-statistical-event\"/);
+  assert.ok(html.includes('cached.totalRule!=="total = received + sent"'));
+  assert.ok(html.includes('cached.totalDetailMode!=="one-row-per-statistical-event"'));
   assert.match(html, /cached\.supervisorDaysFilter!==SUMMARY_DAYS_ALL/);
   assert.match(html, /now-at>SUMMARY_CACHE_MAX_AGE_MS/);
   assert.match(html, /SUMMARY_CACHE_MAX_AGE_MS=7\*24\*60\*60\*1000/);
