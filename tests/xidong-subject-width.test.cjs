@@ -59,3 +59,17 @@ test('start subject keeps the 15-grapheme cap when measuring natural content wid
   assert.equal(result.header.dataset.r1127SubjectCapacityMode, 'start-actual-line-px-capped-15');
   assert.equal(result.px, Math.ceil(Math.max(measureWidth('主旨'), measureWidth(value)) + (96 / 2.54) * .1 + 3));
 });
+
+
+test('subject self-heal checks every zone at 0.05cm without forcing layout reads', () => {
+  const start = page.indexOf('add("officialDocsR1012Subject15ExactNoClip"');
+  const end = page.indexOf('},()=>{const t=document.getElementById("officialDocumentTable")', start);
+  assert.ok(start >= 0 && end > start, 'subject no-clip self-heal must exist');
+  const check = page.slice(start, end);
+  assert.match(check, /headers\.every/);
+  assert.match(check, /r990SubjectLimit\(th\)===15\|\|r990SubjectLimit\(th\)===20/);
+  assert.match(check, /r993TargetPaddingEachSideCm==="0\.05"/);
+  assert.match(check, /r933SubjectLeftPaddingCm==="0\.05"/);
+  assert.match(check, /r933SubjectRightPaddingCm==="0\.05"/);
+  assert.doesNotMatch(check, /getComputedStyle|scrollWidth|clientWidth/);
+});
