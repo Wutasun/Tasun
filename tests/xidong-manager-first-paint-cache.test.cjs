@@ -6,7 +6,7 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const read = name => fs.readFileSync(path.join(root, name), 'utf8');
 
-test('document manager paints only a fresh, compatible, cloud-confirmed summary cache before sync', () => {
+test('document manager paints only a fresh, compatible, cloud-confirmed summary cache and avoids false zeros before sync', () => {
   const html = read('汐東文件管理表.html');
   assert.match(html, /function summaryHydrateCachedStats\(\)/);
   assert.match(html, /cached\.cloudConfirmed!==true/);
@@ -22,6 +22,12 @@ test('document manager paints only a fresh, compatible, cloud-confirmed summary 
   const scheduledReadAt = html.indexOf('requestAnimationFrame(()=>setTimeout(()=>{summaryRows=summaryReadLocal();', initAt);
   assert.ok(initAt >= 0 && hydrateAt > initAt, 'cache hydration should run during page initialization');
   assert.ok(scheduledReadAt > hydrateAt && localReadAt > scheduledReadAt, 'local rows should load only in the scheduled post-paint callback');
+  const initEnd = html.indexOf('  if(document.readyState==="loading")document.addEventListener', initAt);
+  assert.doesNotMatch(html.slice(initAt, initEnd), /summaryRender\(\[\],"尚無資料",false\)/);
+  assert.match(html.slice(initAt, initEnd), /summarySetState\("同步確認中",false\)/);
+  assert.match(html, /function summaryShowUnavailable\(text\)/);
+  assert.match(html, /summaryShowUnavailable\("雲端讀取未確認"\)/);
+  assert.match(html, /if\(el\)el\.textContent="—"/);
 });
 
 test('aggregate-only cached figures cannot open detail before source rows load', () => {

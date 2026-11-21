@@ -5084,25 +5084,42 @@ function openDeleteConfirmR618(uid){
   const modal=$("#detailDeleteModal");
   if(modal){modal.classList.add("show");modal.setAttribute("aria-hidden","false");}
 }
+async function r1186SyncDeleteWithReadback(uid,tombstone,initialFlight,reason){
+  const pendingFlights=[];if(initialFlight)pendingFlights.push(initialFlight);let waited=false;
+  for(let round=0;round<4;round++){
+    const live=r710AuthoritySyncPromise;
+    if(live&&!pendingFlights.includes(live))pendingFlights.push(live);
+    const flight=pendingFlights.shift();if(!flight)break;
+    waited=true;try{await flight;}catch(_e){}
+  }
+  if(waited){
+    const index=rows.findIndex(row=>row&&row.uid===uid),current=index>=0?rows[index]:tombstone,now=Date.now();
+    const restored=ensureRow(Object.assign({},current,{
+      deleted:true,pendingDelete:true,deletedAt:now,
+      updatedAt:Math.max(now,Number(current.updatedAt||0)+1),
+      rev:Math.max(Number(current.rev||0)+1,Number(tombstone.rev||0)),
+      tableId:TABLE_ID,dbName:DB_NAME,resourceKey:RESOURCE_KEY
+    }));
+    if(index>=0)rows[index]=restored;else rows.push(restored);
+    rows=dedupe(rows);saveLocal();renderAll();
+  }
+  const syncOk=await authoritySync(reason),state=window.__TASUN_R774_DATASET_ROUNDTRIP_STATE__||{},finalReadback=window.__TASUN_OFFICIAL_DOCS_R863_FINAL_READBACK_VERIFY__||{},confirmedRow=rows.find(row=>row&&row.uid===uid);
+  return syncOk===true&&state.verified===true&&state.pending!==true&&state.reason===reason&&finalReadback.verified===true&&!!(confirmedRow&&confirmedRow.deleted===true);
+}
 async function confirmDeleteR618(){
   const uid=norm(deleteTargetUid);
   if(!uid){closeDeleteConfirmR618();return;}
   if(!canWrite()){toast("目前權限不可刪除資料。");closeDeleteConfirmR618();return;}
   const idx=rows.findIndex(function(r){return r&&r.uid===uid&&!r.deleted;});
   if(idx<0){toast("找不到選取的資料列，請重新同步後再試。");closeDeleteConfirmR618();return;}
-  const now=Date.now();
-  rows[idx]=ensureRow(Object.assign({},rows[idx],{
-    deleted:true,
-    pendingDelete:true,
-    deletedAt:now,
-    updatedAt:now,
-    rev:Number(rows[idx].rev||0)+1||now,
-    tableId:TABLE_ID,
-    dbName:DB_NAME,
-    resourceKey:RESOURCE_KEY
+  const now=Date.now(),priorSync=r710AuthoritySyncPromise;
+  const deletedRow=ensureRow(Object.assign({},rows[idx],{
+    deleted:true,pendingDelete:true,deletedAt:now,
+    updatedAt:Math.max(now,Number(rows[idx].updatedAt||0)+1),
+    rev:Math.max(Number(rows[idx].rev||0)+1,now),
+    tableId:TABLE_ID,dbName:DB_NAME,resourceKey:RESOURCE_KEY
   }));
-  rows=dedupe(rows);
-  saveLocal(false);
+  rows[idx]=deletedRow;rows=dedupe(rows);saveLocal();
   closeDeleteConfirmR618();
   window.__TASUN_OFFICIAL_DOCS_R618_LAST_DELETE__={uid:uid,at:now,duplicateKey:"文號",deleted:true};
   await new Promise(resolve=>{
@@ -5113,8 +5130,9 @@ async function confirmDeleteR618(){
     else setTimeout(finish,0);
   });
   renderAll();
-  await authoritySync("detail-delete-r618");
-  toast("已刪除 1 筆資料並同步。");
+  const syncReason="detail-delete-r1186",confirmed=await r1186SyncDeleteWithReadback(uid,deletedRow,priorSync,syncReason);
+  if(confirmed)toast("已刪除 1 筆資料，且雲端讀回確認完成。");
+  else toast("刪除已保留在本機，雲端尚未確認；請保持連線後重試同步。");
 }
 function bindR618DetailDeleteModal(){
   const closeBtn=$("#btnCloseDeleteDetail"), cancelBtn=$("#btnCancelDeleteDetail"), yesBtn=$("#btnConfirmDeleteDetail");
