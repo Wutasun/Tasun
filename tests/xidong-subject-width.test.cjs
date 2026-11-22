@@ -73,3 +73,21 @@ test('subject self-heal checks every zone at 0.05cm without forcing layout reads
   assert.match(check, /r933SubjectRightPaddingCm==="0\.05"/);
   assert.doesNotMatch(check, /getComputedStyle|scrollWidth|clientWidth/);
 });
+
+test('already formatted subject cells bypass DOM rewrites and layout reads', () => {
+  const fastPath = page.indexOf('function r848SubjectDisplayAlreadyFormatted(');
+  const fastPathEnd = page.indexOf('function r848VerifyBodyMax15Cell(', fastPath);
+  const applyStart = page.indexOf('function r848ApplyBodyMax15Cell(');
+  const applyEnd = page.indexOf('\n  function r1126ApplyDetachedSubjectRules(', applyStart);
+  assert.ok(fastPath >= 0 && applyStart > fastPath && applyEnd > applyStart);
+  const check = page.slice(fastPath, fastPathEnd);
+  const apply = page.slice(applyStart, applyEnd);
+  assert.match(check, /r933SubjectLeftPaddingCm!=="0\.05"/);
+  assert.match(check, /r933SubjectRightPaddingCm!=="0\.05"/);
+  assert.match(check, /r936BodyWrapSignature===signature/);
+  assert.doesNotMatch(check, /getComputedStyle|scrollWidth|clientWidth/);
+  assert.ok(apply.indexOf('r848SubjectDisplayAlreadyFormatted(cell,max,startSubject)') < apply.indexOf('["padding-top"'),
+    'valid subject formatting must be accepted before style writes');
+  assert.match(apply, /if\(!overall&&!isSubject\)r936ClearGeneralBodyBreaks\(cell\)/,
+    'do not remove and recreate explicit subject line breaks on each render');
+});
