@@ -85,9 +85,16 @@ test('already formatted subject cells bypass DOM rewrites and layout reads', () 
   assert.match(check, /r933SubjectLeftPaddingCm!=="0\.05"/);
   assert.match(check, /r933SubjectRightPaddingCm!=="0\.05"/);
   assert.match(check, /r936BodyWrapSignature===signature/);
+  assert.match(check, /subject:ltr-contained-block-r1192/);
   assert.doesNotMatch(check, /getComputedStyle|scrollWidth|clientWidth/);
   assert.ok(apply.indexOf('r848SubjectDisplayAlreadyFormatted(cell,max,startSubject)') < apply.indexOf('["padding-top"'),
     'valid subject formatting must be accepted before style writes');
   assert.match(apply, /if\(!overall&&!isSubject\)r936ClearGeneralBodyBreaks\(cell\)/,
     'do not remove and recreate explicit subject line breaks on each render');
+  const wrapStart = page.indexOf('function r936WrapHost(');
+  const wrapEnd = page.indexOf('\n  function r936BodyHosts(', wrapStart);
+  const wrap = page.slice(wrapStart, wrapEnd);
+  assert.match(wrap, /setProperty\("display","block","important"\)/);
+  assert.match(wrap, /setProperty\("width","100%","important"\)/);
+  assert.match(wrap, /ltr-contained-block-r1192/);
 });
