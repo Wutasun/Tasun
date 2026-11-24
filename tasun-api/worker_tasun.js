@@ -1362,7 +1362,9 @@ function isStagingPreviewCorsOriginAllowed(origin, env) {
     const parsed = new URL(origin);
     const hostname = parsed.hostname.toLowerCase();
     const suffix = '.' + projectDomain;
-    if (parsed.protocol !== 'https:' || parsed.origin !== origin || !hostname.endsWith(suffix)) return false;
+    if (parsed.protocol !== 'https:' || parsed.origin !== origin) return false;
+    if (hostname === projectDomain) return true;
+    if (!hostname.endsWith(suffix)) return false;
     const previewLabel = hostname.slice(0, -suffix.length);
     return Boolean(previewLabel) && !previewLabel.includes('.');
   } catch (_) {
