@@ -49,15 +49,15 @@ test('R576 centers the specified data columns and keeps inspection item text lef
   assert.match(output, /<td class="excel-cell excel-left">檢查內容<\/td>/);
 });
 
-test('R576 provides print controls and A4 landscape settings for the local print dialog', () => {
-  assert.match(html, /data-menu="print">列印 Excel<\/button>/);
-  assert.match(script, /function printExcelR576\(\)[\s\S]*?window\.open\("","_blank"\)/);
-  assert.match(script, /if\(a==="print"\) printExcelR576\(\)/);
+test('R1203 removes local print buttons and configures A4 landscape page footer', () => {
+  assert.doesNotMatch(html, /data-menu="print"|printExcelR576/);
+  assert.doesNotMatch(script, /if\(a==="print"\)/);
   const output = excelBuilder()([], ['項次'], value => String(value ?? ''));
   assert.match(output, /@page\{size:A4 landscape/);
-  assert.match(output, /onclick="window\.print\(\)"[^>]*>列印<\/button>/);
+  assert.doesNotMatch(output, /window\.print|>列印<\/button>/);
   assert.match(output, /x:Orientation="Landscape"/);
   assert.match(output, /<x:PaperSizeIndex>9<\/x:PaperSizeIndex>/);
+  assert.match(output, /<x:Footer x:Data="&amp;P&amp;N" x:Margin="0\.3"\/>/);
 });
 
 test('R576 preserves existing resource identity and application script syntax', () => {
