@@ -33,6 +33,7 @@ function runFloor({ startSubject, text }) {
       for (let i = 0; i < chars.length; i += max) out.push(chars.slice(i, i + max).join(''));
       return out;
     },
+    r1127RenderedLineMaxPx: () => 0,
     r1012MeasureFinalProjectionTextPx: (_cell, value) => {
       measured.push(String(value));
       return measureWidth(value);
