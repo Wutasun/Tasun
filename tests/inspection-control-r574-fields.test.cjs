@@ -43,9 +43,25 @@ test('R574 dropdown suggestions remain editable and copyable text inputs', () =>
 test('R574 keeps R571 headerless Excel files mapped to their original field names', () => {
   const source = appSource();
   assert.match(source, /var LEGACY_FIELDS_ORDER_R571 = \[/);
-  assert.match(source, /cells\.length===LEGACY_FIELDS_ORDER_R571\.length \? LEGACY_FIELDS_ORDER_R571 : FIELDS/);
-  assert.match(source, /arr\.length===LEGACY_FIELDS_ORDER_R571\.length \? LEGACY_FIELDS_ORDER_R571 : FIELDS/);
+  assert.match(source, /function positionalImportFieldsR574\(row\)\{ return \(row \|\| \[\]\)\.length <= LEGACY_FIELDS_ORDER_R571\.length \? LEGACY_FIELDS_ORDER_R571 : FIELDS; \}/);
+  assert.match(source, /!hasHeader \? positionalImportFieldsR574\(cells\) : FIELDS/);
+  assert.match(source, /!hasHeader \? positionalImportFieldsR574\(arr\) : FIELDS/);
   assert.match(source, /positionalFields\.indexOf\(f\)/);
+
+  const helper = source.match(/function positionalImportFieldsR574\(row\)\{[^}]+\}/);
+  assert.ok(helper, 'headerless import schema selector is present');
+  const selectFields = new Function('LEGACY_FIELDS_ORDER_R571', 'FIELDS', `${helper[0]}; return positionalImportFieldsR574;`)(
+    ['項次', '查驗類別', '抽查申請單申請日期', '抽查紀錄表編號', '抽查項目', '抽查系統', '抽查申請單編號', '檢查位置', '檢查日期', '檢查結果', '缺失改善通知書', '承辦人', '附件', '紙本存放位置'],
+    expected
+  );
+  const shortLegacyRow = ['1', '抽查', '2026-11-25', 'record-01', '項目', 'system-A', 'request-01', '位置', '2026-11-24', '合格', '通知-01', '承辦人甲', '附件-01'];
+  const positionalFields = selectFields(shortLegacyRow);
+  const mapped = Object.fromEntries(expected.filter(field => field !== '項次').map(field => [field, shortLegacyRow[positionalFields.indexOf(field)] || '']));
+  assert.equal(mapped['抽查紀錄表編號'], 'record-01');
+  assert.equal(mapped['抽查申請單編號'], 'request-01');
+  assert.equal(mapped['檢查位置'], '位置');
+  assert.equal(mapped['檢查日期'], '2026-11-24');
+  assert.equal(mapped['自主檢查表編號(統包)'], '');
 });
 
 test('R574 preserves additive row data without changing resource or IndexedDB identity', () => {
