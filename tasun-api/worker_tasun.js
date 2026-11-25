@@ -22,6 +22,7 @@ const STORE_KEYS = {
 
 const MATERIAL_RESOURCE_KEY = 'sxdh-material-inspection-control';
 const MATERIAL_ITEM_SEQUENCE_KEY = 'tasun:sequence:sxdh-material-inspection-control';
+const INSPECTION_RESOURCE_KEY = 'sxdh-inspection-control';
 
 let schemaReady = false;
 
@@ -260,6 +261,8 @@ export default {
         let incomingRows = normalizeIncomingRows(db, resourceKey, now);
         if (resourceKey === MATERIAL_RESOURCE_KEY) {
           incomingRows = await prepareMaterialRowsForMerge(env, incomingRows, me.r, now);
+        } else if (resourceKey === INSPECTION_RESOURCE_KEY) {
+          incomingRows = await prepareInspectionRowsForMerge(env, incomingRows, me.r, now);
         }
         for (const item of incomingRows) {
           if (!item || typeof item !== 'object') continue;
@@ -934,6 +937,96 @@ async function prepareMaterialRowsForMerge(env, incomingRows, role, now = Date.n
       item.rev = Math.max(Number(item.rev || 0), Number(previous && previous.rev || 0), item.updatedAt) + 1;
     }
     if (!previous || accepted || corrected || reassigned) result.push(item);
+  }
+  return result;
+}
+
+
+async function prepareInspectionRowsForMerge(env, incomingRows, role, now = Date.now()) {
+  const rs = await env.DB.prepare(`
+    SELECT resourceKey, uid, data, updatedAt, rev, deleted
+    FROM tasun_rows
+    WHERE resourceKey=?
+  `).bind(INSPECTION_RESOURCE_KEY).all();
+  const storedRows = (rs.results || []).map(hydrateRow);
+  const storedByUid = new Map(storedRows.map(row => [String(row.uid), row]));
+  const usedNumbers = new Map();
+  const itemNumber = value => {
+    const n = Number(String(value == null ? '' : value).trim());
+    return Number.isSafeInteger(n) && n > 0 ? n : 0;
+  };
+  let maxNumber = 0;
+  for (const row of storedRows) {
+    const number = itemNumber(row['項次']);
+    if (number) {
+      maxNumber = Math.max(maxNumber, number);
+      if (!usedNumbers.has(number)) usedNumbers.set(number, String(row.uid));
+    }
+  }
+  const result = [];
+  for (const source of Array.isArray(incomingRows) ? incomingRows : []) {
+    if (!source || typeof source !== 'object') continue;
+    const uid = norm(source.uid);
+    if (!uid) continue;
+    const previous = storedByUid.get(uid);
+    if (previous && !materialVersionWins(source, previous)) continue;
+    const item = { ...(previous || {}), ...source, uid };
+    const previousNumber = itemNumber(previous && previous['項次']);
+    const requested = itemNumber(source['項次']);
+    if (previous && role !== 'admin') {
+      item['項次'] = previous['項次'];
+    } else if (previous && item.deleted) {
+      item['項次'] = previous['項次'];
+    } else if (previous && role === 'admin' && Object.prototype.hasOwnProperty.call(source, '項次')) {
+      if (!requested) {
+        const error = new Error('項次 must be a positive whole number.');
+        error.status = 400; error.code = 'ITEM_NUMBER_INVALID'; throw error;
+      }
+      const owner = usedNumbers.get(requested);
+      if (owner && owner !== uid) {
+        const error = new Error('項次 is already assigned to another row.');
+        error.status = 409; error.code = 'ITEM_NUMBER_DUPLICATE'; throw error;
+      }
+      item['項次'] = requested;
+    } else if (!previous) {
+      if (role === 'admin' && requested) {
+        const owner = usedNumbers.get(requested);
+        if (owner) {
+          const error = new Error('項次 is already assigned to another row.');
+          error.status = 409; error.code = 'ITEM_NUMBER_DUPLICATE'; throw error;
+        }
+        item['項次'] = requested;
+      } else {
+        item['項次'] = ++maxNumber;
+      }
+    }
+    const finalNumber = itemNumber(item['項次']);
+    if (!finalNumber) {
+      const error = new Error('項次 must be a positive whole number.');
+      error.status = 400; error.code = 'ITEM_NUMBER_INVALID'; throw error;
+    }
+    if (!previous || finalNumber !== previousNumber) {
+      const owner = usedNumbers.get(finalNumber);
+      if (owner && owner !== uid) {
+        const error = new Error('項次 is already assigned to another row.');
+        error.status = 409; error.code = 'ITEM_NUMBER_DUPLICATE'; throw error;
+      }
+    }
+    usedNumbers.set(finalNumber, uid);
+    maxNumber = Math.max(maxNumber, finalNumber);
+    if (previous) {
+      const uidTime = /^(?:ic|excel)-([0-9a-z]+)-/i.exec(uid);
+      const parsed = uidTime ? parseInt(uidTime[1], 36) : 0;
+      item.createdAt = Number(previous.createdAt || previous.created_at || previous.registeredAt || previous.registered_at || source.createdAt || source.created_at || source.registeredAt || source.registered_at || (Number.isFinite(parsed) && parsed > 0 ? parsed : previous.updatedAt || now)) || now;
+    } else {
+      item.createdAt = now;
+    }
+    if (Number(source['項次']) !== Number(item['項次'])) {
+      item.updatedAt = Math.max(Number(item.updatedAt || 0), Number(previous && previous.updatedAt || 0), now) + 1;
+      item.rev = Math.max(Number(item.rev || 0), Number(previous && previous.rev || 0), item.updatedAt) + 1;
+    }
+    delete item.resourceKey;
+    result.push(item);
   }
   return result;
 }
