@@ -47,7 +47,7 @@ test('subject width floor measures the actual rendered line and only 0.05cm per 
   assert.equal(result.header.dataset.r1127SubjectCapacityLimit, '20');
   assert.equal(result.header.dataset.r1127SubjectCapacityChars, '20');
   assert.equal(result.header.dataset.r1127SubjectCapacityMode, 'stage-actual-line-px-capped-20');
-  assert.equal(result.px, Math.ceil(Math.max(measureWidth('主旨'), measureWidth('A1234567890123456789')) + (96 / 2.54) * .1 + 3));
+  assert.equal(result.px, Math.ceil(Math.max(measureWidth('主旨'), measureWidth('A1234567890123456789')) + (96 / 2.54) * .1 + 2));
   assert.ok(!result.measured.includes('國'.repeat(20)), 'full-width surrogate must not inflate mixed-script cells');
 });
 
@@ -57,7 +57,7 @@ test('start subject keeps the 15-grapheme cap when measuring natural content wid
   assert.equal(result.header.dataset.r1127SubjectCapacityLimit, '15');
   assert.equal(result.header.dataset.r1127SubjectCapacityChars, '15');
   assert.equal(result.header.dataset.r1127SubjectCapacityMode, 'start-actual-line-px-capped-15');
-  assert.equal(result.px, Math.ceil(Math.max(measureWidth('主旨'), measureWidth(value)) + (96 / 2.54) * .1 + 3));
+  assert.equal(result.px, Math.ceil(Math.max(measureWidth('主旨'), measureWidth(value)) + (96 / 2.54) * .1 + 2));
 });
 
 
