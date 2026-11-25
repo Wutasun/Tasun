@@ -4,12 +4,12 @@ const vm=require('node:vm');
 const {source,declaration}=require('./helpers/embedded.cjs');
 const html=source('汐東收發文明細表.html');
 function fixture(){
- const pending=new Map();let next=0;
+ const pending=new Map(),idleOptions=new Map();let next=0;
  const window={__TASUN_MANAGER_SESSION__:{user:'tester',role:'write'}};
- const c=vm.createContext({window,document:{visibilityState:'visible'},performance,console,requestAnimationFrame:fn=>{pending.set(++next,fn);return next;},cancelAnimationFrame:id=>pending.delete(id),requestIdleCallback:fn=>{pending.set(++next,fn);return next;},cancelIdleCallback:id=>pending.delete(id)});
+ const c=vm.createContext({window,document:{visibilityState:'visible'},performance,console,requestAnimationFrame:fn=>{pending.set(++next,fn);return next;},cancelAnimationFrame:id=>pending.delete(id),requestIdleCallback:(fn,options)=>{pending.set(++next,fn);idleOptions.set(next,options);return next;},cancelIdleCallback:id=>{pending.delete(id);idleOptions.delete(id);}});
  // Execute the actual isolated lifecycle/HeavyLane/revision core, with browser scheduling as the only boundary fake.
  vm.runInContext('const rows=[];'+html.slice(html.indexOf('const R1113_RENDER_BUDGET_MS='),html.indexOf('const R1113_SAME_DIGEST_NO_RENDER=')),c);
- return {c,pending,window};
+ return {c,pending,idleOptions,window};
 }
 test('fresh ticket commits; older generation cannot overwrite it',()=>{
  const {c}=fixture(),old=c.r1113BeginRenderTicket('old'),fresh=c.r1113BeginRenderTicket('fresh');assert.equal(c.r1113CommitRenderTicket(old),false);assert.equal(c.r1113CommitRenderTicket(fresh),true);
@@ -28,6 +28,15 @@ for(const change of ['user','role'])test('auth '+change+' change rejects pending
 });
 test('hidden DOM prevents scheduling even before lifecycle listener fires',()=>{
  const {c,pending}=fixture();c.document.visibilityState='hidden';assert.equal(c.r1113HeavyLaneSchedule('geometry',5,'test',4,()=>assert.fail('hidden work')),0);assert.equal(pending.size,0);
+});
+test('heavy idle work waits for a real idle window and does not time out into the interaction window',()=>{
+ const {c,pending,idleOptions}=fixture();let ran=0;
+ c.r1113HeavyLaneSchedule('geometry',5,'test',4,()=>{ran++;return true;});
+ let [[id,queued]]=[...pending.entries()];assert.equal(idleOptions.get(id),undefined,'background work must not force itself after a timeout');
+ pending.delete(id);queued({didTimeout:true,timeRemaining:()=>0});assert.equal(ran,0,'timed-out idle callbacks must not run geometry');
+ assert.equal(pending.size,1,'the existing obligation should wait on one coalesced idle callback');
+ [[id,queued]]=[...pending.entries()];pending.delete(id);queued({didTimeout:false,timeRemaining:()=>12});assert.equal(ran,1,'geometry may run when the browser grants sufficient idle time');
+ assert.equal(pending.size,0);
 });
 test('new projection and data revisions reject previous render tickets',()=>{
  const {c}=fixture();let ticket=c.r1113BeginRenderTicket('before');c.r1113BumpProjectionRevision('search');assert.equal(c.r1113CommitRenderTicket(ticket),false);
