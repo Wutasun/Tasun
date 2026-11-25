@@ -584,6 +584,9 @@
       r.uid=n(r.uid || r.pk || r.uuid) || uuid();
       r.resourceKey=RESOURCE_KEY; r.pageKey=PAGE_KEY; r.pageFile=PAGE_FILE;
       r.updatedAt=Number(r.updatedAt || r.updated_at || r.modifiedAt || now()) || now();
+      var registrationId=/^(?:ic|excel)-([0-9a-z]+)-/i.exec(String(r.uid||""));
+      var registrationFromUid=registrationId ? parseInt(registrationId[1],36) : 0;
+      r.createdAt=Number(r.createdAt || r.created_at || r.registeredAt || r.registered_at || (Number.isFinite(registrationFromUid)&&registrationFromUid>0?registrationFromUid:r.updatedAt)) || r.updatedAt;
       r.rev=Number(r.rev || r.updatedAt) || r.updatedAt;
       r.deleted=!!(r.deleted || r._deleted);
       FIELDS.forEach(function(f){ if(r[f] === undefined || r[f] === null) r[f] = ""; });
@@ -622,10 +625,14 @@
       });
       return registrationOrderR1202(Object.keys(bySig).map(function(k){ return bySig[k]; }));
     }
-    function renumber(rows){ var i=1; return dedupeRows(rows,false).map(function(r){ var x=Object.assign({},r); x["項次"]=i++; return x; }); }
+    function renumber(rows){
+      var ordered=dedupeRows(rows,false), max=ordered.reduce(function(value,row){ var n=Number(row && row["項次"]); return Number.isInteger(n)&&n>0?Math.max(value,n):value; },0);
+      ordered.forEach(function(row){ var n=Number(row && row["項次"]); if(!Number.isInteger(n)||n<=0){ row["項次"]=++max; } });
+      return registrationOrderR1202(ordered);
+    }
     function seedRows(){
       var t=now();
-      return SEED_ROWS.map(function(r,i){ return normRow(Object.assign({}, r, { uid:"seed-inspection-control-" + (i+1), updatedAt:t+i, rev:t+i, deleted:false })); });
+      return SEED_ROWS.map(function(r,i){ return normRow(Object.assign({}, r, { uid:"seed-inspection-control-" + (i+1), createdAt:t+i, updatedAt:t+i, rev:t+i, deleted:false })); });
     }
     function storageRows(){
       var rows=parse(localStorage.getItem(STORE_KEY)||"[]",[]);
@@ -843,12 +850,15 @@
     function buildForm(){
       ensureFormFieldMappingR572();
       var box=qs("#formFields"); if(!box) return;
-      box.innerHTML=FORM_FIELDS_ORDER_R572.map(function(f){
+      var fields=FORM_FIELDS_ORDER_R572.slice();
+      if(isAdmin() && state.formMode==="edit") fields.unshift("項次");
+      box.innerHTML=fields.map(function(f){
         var id="f"+f, type=DATE_FIELDS.indexOf(f)>=0 ? "date" : "text";
         var cls=(f==="抽查項目" || f==="附件") ? "wide" : "";
         var title=(f==="附件") ? "附件（超連結）" : f;
         var input;
-        if(f==="抽查項目") input='<div class="column-suggestion-wrap"><textarea id="'+esc(id)+'" aria-autocomplete="list" aria-controls="'+esc(id)+'-suggestions" data-options-source="active-table-column-unique-r1201"></textarea><button class="column-suggestion-toggle" type="button" data-column-suggestion-toggle="'+esc(f)+'" aria-label="顯示抽查項目下拉選項" aria-expanded="false">▼</button><div class="column-suggestion-list" id="'+esc(id)+'-suggestions" role="listbox" aria-label="抽查項目建議" hidden></div></div><div class="hint dropdownHint">建議來源：抽查項目欄有效資料去重；可直接輸入、編輯及複製文字。</div>';
+        if(f==="項次") input='<input id="'+esc(id)+'" type="number" min="1" step="1" inputmode="numeric" aria-label="管理員變更項次">';
+        else if(f==="抽查項目") input='<div class="column-suggestion-wrap"><textarea id="'+esc(id)+'" aria-autocomplete="list" aria-controls="'+esc(id)+'-suggestions" data-options-source="active-table-column-unique-r1201"></textarea><button class="column-suggestion-toggle" type="button" data-column-suggestion-toggle="'+esc(f)+'" aria-label="顯示抽查項目下拉選項" aria-expanded="false">▼</button><div class="column-suggestion-list" id="'+esc(id)+'-suggestions" role="listbox" aria-label="抽查項目建議" hidden></div></div><div class="hint dropdownHint">建議來源：抽查項目欄有效資料去重；可直接輸入、編輯及複製文字。</div>';
         else if(f==="附件") input='<div class="line attachLine"><input id="'+esc(id)+'" type="url" inputmode="url" placeholder="貼上連結，例如：https://… / Dropbox 連結 / file:///…"><button type="button" id="openAttachBtn" data-drive-url="'+esc(ATTACH_DRIVE_URL)+'">網路硬碟</button></div><div class="hint attachHint">可先按「網路硬碟」開啟附件共用資料夾，複製附件連結後貼回本欄。</div>';
         else if(isFormDropdownFieldR570(f)){
           var sourceOnly=FORM_DATA_DATALIST_FIELDS_R575.indexOf(f)>=0;
@@ -862,9 +872,11 @@
     function formData(){
       var r={};
       FORM_FIELDS_ORDER_R572.forEach(function(f){ var el=formFieldElR570(f); r[f]=el?cjk(el.value):""; });
+      if(isAdmin() && state.formMode==="edit"){ var itemNumber=qs("#f項次"); if(itemNumber) r["項次"]=cjk(itemNumber.value); }
       return r;
     }
     function setFormData(r){
+      if(isAdmin() && state.formMode==="edit"){ var itemNumber=qs("#f項次"); if(itemNumber) itemNumber.value=n(r && r["項次"]); }
       FORM_FIELDS_ORDER_R572.forEach(function(f){
         var el=formFieldElR570(f), val=n(r && r[f]);
         if(!el) return;
@@ -875,8 +887,8 @@
     }
     function openForm(row){
       if(!canEdit()){ toast("目前權限不可新增／編輯。"); return; }
-      buildForm(); refreshOptions();
       state.formMode=row ? "edit" : "add"; state.formUid=row ? row.uid : "";
+      buildForm(); refreshOptions();
       qs("#formTitle").textContent=row ? "編輯查驗管控資料" : "新增查驗管控資料";
       setFormData(row || {});
       openOverlay("#formOverlay");
@@ -892,11 +904,16 @@
     function saveForm(){
       if(!canEdit()) return;
       var data=formData(), t=now(), rows=state.rows.slice();
+      if(state.formMode==="edit" && isAdmin() && Object.prototype.hasOwnProperty.call(data,"項次")){
+        var requested=Number(data["項次"]), duplicate=rows.some(function(r){ return r.uid!==state.formUid && !r.deleted && Number(r["項次"])===requested; });
+        if(!Number.isInteger(requested)||requested<=0){ toast("項次須為正整數。"); return; }
+        if(duplicate){ toast("項次已由其他資料列使用。"); return; }
+      }
       var found=false;
       if(state.formMode==="edit" && state.formUid){
         rows=rows.map(function(r){ if(r.uid===state.formUid){ found=true; return normRow(Object.assign({}, r, data, { updatedAt:t, rev:t, deleted:false })); } return r; });
       }
-      if(!found) rows.push(normRow(Object.assign({}, data, { uid:uuid(), updatedAt:t, rev:t, deleted:false })));
+      if(!found) rows.push(normRow(Object.assign({}, data, { uid:uuid(), createdAt:t, updatedAt:t, rev:t, deleted:false })));
       saveLocal(rows.concat(deletedRows()));
       refreshOptions(); renderRows(state.rows,"save");
       closeOverlay("#formOverlay");
@@ -1090,7 +1107,7 @@
           var pos=hasHeader ? first.indexOf(normalizeHeader(f)) : positionalFields.indexOf(f);
           obj[f]=normalizeExcelCell(f, cells[pos] || "");
         });
-        if(FIELDS.some(function(f){ return f!=="項次" && n(obj[f]); })) rows.push(normRow(Object.assign(obj,{uid:"excel-"+now().toString(36)+"-"+Math.random().toString(36).slice(2,9),updatedAt:now()+i,rev:now()+i,deleted:false})));
+        if(FIELDS.some(function(f){ return f!=="項次" && n(obj[f]); })) rows.push(normRow(Object.assign(obj,{uid:"excel-"+now().toString(36)+"-"+Math.random().toString(36).slice(2,9),createdAt:now()+i,updatedAt:now()+i,rev:now()+i,deleted:false})));
       }
       return rows;
     }
@@ -1122,7 +1139,7 @@
           obj[f]=normalizeExcelCell(f, arr[pos] || "");
         });
         if(FIELDS.some(function(f){ return f!=="項次" && n(obj[f]); })){
-          rows.push(normRow(Object.assign(obj,{uid:"excel-"+now().toString(36)+"-"+Math.random().toString(36).slice(2,9),updatedAt:now()+r,rev:now()+r,deleted:false})));
+          rows.push(normRow(Object.assign(obj,{uid:"excel-"+now().toString(36)+"-"+Math.random().toString(36).slice(2,9),createdAt:now()+r,updatedAt:now()+r,rev:now()+r,deleted:false})));
         }
       }
       return rows;
