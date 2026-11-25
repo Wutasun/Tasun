@@ -25,6 +25,9 @@ const MATERIAL_ITEM_SEQUENCE_KEY = 'tasun:sequence:sxdh-material-inspection-cont
 const INSPECTION_RESOURCE_KEY = 'sxdh-inspection-control';
 
 let schemaReady = false;
+// Keep the bridge's per-request D1 authorization read available to the
+// protected-route recheck. This is request-scoped (not a cross-request cache).
+const browserSessionAuthSnapshot = new WeakMap();
 
 export default {
   async fetch(request, env) {
@@ -1131,11 +1134,12 @@ async function requireSession(request, env, opts = {}) {
   if (me.source !== 'access') {
     const username = norm(me.u);
     if (!username) return { ok: false, error: 'UNAUTH' };
-    const user = await getUser(env, username);
+    const bridgeSnapshot = browserSessionAuthSnapshot.get(me);
+    const user = bridgeSnapshot ? bridgeSnapshot.user : await getUser(env, username);
     if (!user || Number(user.enabled || 0) !== 1) {
       return { ok: false, error: 'UNAUTH' };
     }
-    const auth = await getAuth(env, username);
+    const auth = bridgeSnapshot ? bridgeSnapshot.auth : await getAuth(env, username);
     authorizedMe = { ...me, u: username, r: normalizeRole(auth?.role || user.role || 'read') };
   }
 
@@ -1331,13 +1335,17 @@ async function parseBrowserSessionBridge(request, env) {
     }
 
     const role = normalizeRole(auth?.role || user?.role || hintedRole || 'read');
-    return {
+    const session = {
       u: username,
       r: role,
       exp: Date.now() + 60 * 60 * 1000,
       source: 'browser-session-bridge-r146',
       bridge,
     };
+    // requireSession still checks enabled status and resolves the D1 role on
+    // every request; it reuses only the rows fetched moments earlier here.
+    browserSessionAuthSnapshot.set(session, { user, auth });
+    return session;
   } catch (_) {
     return null;
   }
@@ -1447,7 +1455,9 @@ function isStagingPreviewCorsOriginAllowed(origin, env) {
     const parsed = new URL(origin);
     const hostname = parsed.hostname.toLowerCase();
     const suffix = '.' + projectDomain;
-    if (parsed.protocol !== 'https:' || parsed.origin !== origin || !hostname.endsWith(suffix)) return false;
+    if (parsed.protocol !== 'https:' || parsed.origin !== origin) return false;
+    if (hostname === projectDomain) return true;
+    if (!hostname.endsWith(suffix)) return false;
     const previewLabel = hostname.slice(0, -suffix.length);
     return Boolean(previewLabel) && !previewLabel.includes('.');
   } catch (_) {
