@@ -41,6 +41,13 @@ export default {
         return json({ ok: true, service: 'tasun-worker', version: SERVICE_VERSION, autoVersionRelease: true, releaseEndpoint: '/api/tasun/release-version', workflow: String(env.GITHUB_WORKFLOW_FILE || 'release-version.yml'), repo: String((env.GITHUB_OWNER || 'Wutasun') + '/' + (env.GITHUB_REPO || 'Tasun')), ts: Date.now() }, 200, cors);
       }
 
+      // Public auth snapshot (no secrets); this GET must remain read-only and must not run D1 schema setup or account seeding.
+      if (path === '/api/auth/public') {
+        if (request.method !== 'GET') return json({ ok: false, error: 'METHOD' }, 405, cors);
+        const data = await buildAuthTableData(env);
+        return json({ ok: true, data }, 200, cors);
+      }
+
       // r86：正式同步端點先自動確認 D1 基本表存在，避免 GitHub Pages 前端正常但雲端 read/merge 失敗。
       await ensureSchema(env);
 
@@ -77,13 +84,6 @@ export default {
           status: 200,
           headers: Object.assign({ 'content-type': 'application/json; charset=utf-8', 'set-cookie': cookieValue('tasun_session_v4', '', { maxAge: 0 }) }, cors)
         });
-      }
-
-      // Public auth snapshot (no secrets)
-      if (path === '/api/auth/public') {
-        if (request.method !== 'GET') return json({ ok: false, error: 'METHOD' }, 405, cors);
-        const data = await buildAuthTableData(env);
-        return json({ ok: true, data }, 200, cors);
       }
 
       // Full auth snapshot: Access session OR bearer token
