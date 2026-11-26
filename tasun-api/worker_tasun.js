@@ -259,6 +259,31 @@ export default {
         let count = 0;
         const now = Date.now();
         let incomingRows = normalizeIncomingRows(db, resourceKey, now);
+        // Only admins may create or remove tombstones for the official documents resource.
+        // Existing tombstones are allowed to round-trip unchanged from a read snapshot.
+        if (resourceKey === 'official-documents' && me.r !== 'admin') {
+          const currentRows = await env.DB.prepare(`
+            SELECT uid, updatedAt, rev, deleted
+            FROM tasun_rows
+            WHERE resourceKey=?
+          `).bind(resourceKey).all();
+          const currentByUid = new Map((currentRows.results || []).map(row => [
+            norm(row.uid),
+            { updatedAt: Number(row.updatedAt || 0), rev: Number(row.rev || 0), deleted: Number(row.deleted || 0) === 1 }
+          ]));
+          const unauthorizedDelete = incomingRows.some(item => {
+            const uid = norm(item.uid || item.pk || item.uuid || item.sourceId || item.key);
+            if (!uid) return false;
+            const current = currentByUid.get(uid);
+            const incomingDeleted = !!item.deleted;
+            if (!current) return incomingDeleted;
+            if (incomingDeleted === current.deleted) return false;
+            const updatedAt = Number(item.updatedAt || now) || now;
+            const rev = Number(item.rev || updatedAt) || updatedAt;
+            return updatedAt > current.updatedAt || (updatedAt === current.updatedAt && rev >= current.rev);
+          });
+          if (unauthorizedDelete) return json({ ok: false, error: 'DELETE_ADMIN_REQUIRED' }, 403, cors);
+        }
         if (resourceKey === MATERIAL_RESOURCE_KEY) {
           incomingRows = await prepareMaterialRowsForMerge(env, incomingRows, me.r, now);
         } else if (resourceKey === INSPECTION_RESOURCE_KEY) {
