@@ -22,6 +22,7 @@ test('homepage hydrates entry config and permission matrix from the D1 authority
   for (const key of ['NAV_KEY', 'ROUTE_KEY', 'PERM_MATRIX_KEY', 'entrySelected', 'entryRegistry']) {
     assert.ok(applySnapshot.includes(key), 'missing D1 snapshot field: ' + key);
   }
+  assert.doesNotMatch(applySnapshot, /LEGACY_ROUTE_KEY/);
   const sync = functionBody(indexSource, 'syncAuthTableFromAuthority', 'loadScriptOnce');
   assert.match(sync, /applyAuthoritySnapshotToLocal\(snapshot\)/);
   assert.match(sync, /onIndexConfigApplied()/);
