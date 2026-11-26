@@ -1270,11 +1270,22 @@ html.tasun-auth-pending body,html.tasun-auth-blocked body{visibility:hidden!impo
   const D1_AUTH_TABLE_ENDPOINT_FULL  = "/api/auth/table";
   const D1_AUTH_TABLE_ENDPOINT_PUB   = "/api/auth/public";
 
+  function isStagingPagesHost(hostname){
+    const host = String(hostname || location.hostname || '').trim().toLowerCase();
+    return [
+      'tasun-g3-pr104-preview.pages.dev',
+      'tasun-g3-pr104-v2-qa.pages.dev'
+    ].some(domain => host === domain || host.endsWith('.' + domain));
+  }
   function getApiBaseLocked(){
-    // ✅ 不提供任何可修改 apiBase 的 UI；僅程式自動偵測/讀取既有設定
+    // Staging Pages always targets the isolated Staging Worker, even if this browser has a Production API base cached.
+    if(isStagingPagesHost(location.hostname)) return 'https://tasun-worker-staging.wutasun.workers.dev';
     const v = (localStorage.getItem("tasunApiBase_v1") || "").trim();
     const base = v || "https://tasun-worker.wutasun.workers.dev";
     return String(base).replace(/\/+$/,"");
+  }
+  function getD1TargetLabel(){
+    return isStagingPagesHost(location.hostname) ? 'Staging D1' : '正式 D1';
   }
   function getSharedWorkerToken(){
     const keys = [
@@ -1290,6 +1301,8 @@ html.tasun-auth-pending body,html.tasun-auth-blocked body{visibility:hidden!impo
   }
   function buildWorkerAuthHeaders(extra){
     const headers = Object.assign({}, extra || {});
+    // A browser may still hold a Production token; never send it to the isolated Staging Worker.
+    if(isStagingPagesHost(location.hostname)) return headers;
     const bearer = getSharedWorkerToken();
     if(bearer && !headers.Authorization){
       headers.Authorization = 'Bearer ' + bearer;
@@ -1368,23 +1381,31 @@ html.tasun-auth-pending body,html.tasun-auth-blocked body{visibility:hidden!impo
         localStorage.setItem(AUTH_KEY, JSON.stringify(d.auth));
       }else{
         const local = safeJsonParse(localStorage.getItem(AUTH_KEY) || "[]", []);
-        const map = new Map(Array.isArray(local) ? local.map(x => {
+        const localByUser = new Map(Array.isArray(local) ? local.map(x => {
           const key = String(x.user || x.username || x.name || "").trim();
           return [key, x];
         }).filter(x => x[0]) : []);
+        const authoritative = [];
+        const seen = new Set();
         for(const u of d.auth){
           if(!u || typeof u!=="object") continue;
           const key = String(u.user || u.username || u.name || "").trim();
-          if(!key) continue;
-          const cur = map.get(key) || { user:key, pass:"", passHash:"", role:"read", name:key };
-          cur.user = key;
+          if(!key || seen.has(key)) continue;
+          seen.add(key);
+          const cur = { ...(localByUser.get(key) || {}), user:key, pass:"", passHash:"", role:"read", name:key };
+          const localRow = localByUser.get(key) || {};
           cur.role = String(u.role || u.level || cur.role || "read");
           cur.name = String(u.name || cur.name || key);
-          if(String(u.passHash || u.passwordHash || u.hash || '').trim()) cur.passHash = String(u.passHash || u.passwordHash || u.hash || '').trim();
-          if(String(u.pass || u.password || '').trim()) cur.pass = String(u.pass || u.password || '').trim();
-          map.set(key, cur);
+          if(String(localRow.passHash || localRow.passwordHash || localRow.hash || '').trim()) cur.passHash = String(localRow.passHash || localRow.passwordHash || localRow.hash || '').trim();
+          if(String(localRow.pass || localRow.password || '').trim()) cur.pass = String(localRow.pass || localRow.password || '').trim();
+          if(u.enabled != null) cur.enabled = Number(u.enabled);
+          for(let i=1;i<=5;i++){
+            const field = 'btn' + i;
+            if(Object.prototype.hasOwnProperty.call(u, field)) cur[field] = u[field];
+          }
+          authoritative.push(cur);
         }
-        localStorage.setItem(AUTH_KEY, JSON.stringify(Array.from(map.values())));
+        localStorage.setItem(AUTH_KEY, JSON.stringify(authoritative));
       }
     }
 
@@ -1405,9 +1426,9 @@ html.tasun-auth-pending body,html.tasun-auth-blocked body{visibility:hidden!impo
   }
 
   function workerLooksReady(){
+    // Public roster reads need no bearer token; admin writes are authorized by the Worker session.
     const base = getApiBaseLocked();
-    const tk = getSharedWorkerToken();
-    return !!(base && /^https?:\/\//i.test(base) && tk);
+    return !!(base && /^https?:\/\//i.test(base));
   }
 
   async function d1PullAuthTable(reason){
@@ -1557,6 +1578,7 @@ function safeJsonParse(s, fallback){
   }
 
   function scheduleCloudPull(reason){
+    if(isStagingPagesHost(location.hostname)) return;
     const ctrl = getCloudCtrl();
     if(!ctrl || !ctrl.pullNow) return;
     if(!canAutoCloud()) return;
@@ -1604,6 +1626,7 @@ function safeJsonParse(s, fallback){
 
   function scheduleCloudPush(reason){
     scheduleD1Push(reason);
+    if(isStagingPagesHost(location.hostname)) return;
 
     const ctrl = getCloudCtrl();
     if(!ctrl || !ctrl.saveMerged) return;
@@ -2013,8 +2036,11 @@ function safeJsonParse(s, fallback){
   }
 
   function normalizeAuth(){
-    auth = (Array.isArray(auth) ? auth : []).map(raw => {
+    const source = Array.isArray(auth) ? auth : [];
+    const byUser = new Map();
+    source.forEach(raw => {
       const user = String(raw?.user ?? raw?.username ?? raw?.name ?? raw?.account ?? '').trim();
+      if(!user) return;
       const role = String(raw?.role ?? raw?.level ?? 'read').toLowerCase().trim();
       const passHash = String(raw?.passHash ?? raw?.passwordHash ?? raw?.hash ?? '').trim();
       const pass = String(raw?.pass ?? raw?.password ?? raw?.pw ?? '').trim();
@@ -2025,11 +2051,39 @@ function safeJsonParse(s, fallback){
         pass,
         name: String(raw?.name ?? user).trim()
       };
+      if(raw?.enabled != null) normalized.enabled = Number(raw.enabled);
+      for(let i=1;i<=5;i++){
+        const key = 'btn' + i;
+        if(Object.prototype.hasOwnProperty.call(raw || {}, key)) normalized[key] = raw[key];
+      }
       const pendingPass = String(raw?.__pendingPass ?? '');
       if(pendingPass.trim()) normalized.__pendingPass = pendingPass;
       if(raw?.passwordChanged === true) normalized.passwordChanged = true;
-      return normalized;
-    }).filter(u => u.user);
+
+      const previous = byUser.get(user);
+      if(previous){
+        const merged = { ...previous, ...normalized };
+        if(!normalized.passHash) merged.passHash = previous.passHash;
+        if(!normalized.pass) merged.pass = previous.pass;
+        if(!normalized.__pendingPass && previous.__pendingPass) merged.__pendingPass = previous.__pendingPass;
+        if(!normalized.passwordChanged && previous.passwordChanged) merged.passwordChanged = true;
+        byUser.set(user, merged);
+      }else{
+        byUser.set(user, normalized);
+      }
+    });
+    auth = Array.from(byUser.values());
+    if(source.length > auth.length){
+      try{
+        const sanitized = auth.map(row => {
+          const saved = { ...row };
+          delete saved.__pendingPass;
+          return saved;
+        });
+        localStorage.setItem(AUTH_KEY, JSON.stringify(sanitized));
+      }catch(_e){}
+    }
+    return source.length - auth.length;
   }
 
   function getEffectiveRole(){
@@ -2884,16 +2938,16 @@ function safeJsonParse(s, fallback){
     normalizeAuth();
     await saveLocal();
     document.querySelectorAll('input[data-k="pass"]').forEach(input => { input.value = ''; });
-    updateStates('已儲存本機（localStorage）。\n正在確認正式 D1 寫入。');
+    updateStates('已儲存本機（localStorage）。\n正在確認 ' + getD1TargetLabel() + ' 寫入。');
     // ✅ 一鍵寫入 D1（以權限表為主，需 admin + Session Cookie）
     const result = await d1PushAuthTable('save-btn');
     if(result && result.ok){
       setCloudState('雲端：已寫入 D1');
-      setMsg('本機已儲存，帳號資料已寫入 D1。', false);
+      setMsg('本機已儲存，帳號資料已寫入 ' + getD1TargetLabel() + '。', false);
     }else{
       const detail = result?.json?.error || (result?.status ? 'HTTP ' + result.status : (result?.reason || '未收到成功回覆'));
       setCloudState('雲端：D1 寫入未確認', true);
-      setMsg('本機已儲存，但正式 D1 寫入未確認（' + detail + '）。請保持登入，不要登出測試。', true);
+      setMsg('本機已儲存，但 ' + getD1TargetLabel() + ' 寫入未確認（' + detail + '）。請保持登入，不要登出測試。', true);
     }
     scheduleCloudPush('save-btn');
   });
@@ -3615,6 +3669,9 @@ function safeJsonParse(s, fallback){
 -->
 <script>
 (function(){
+  var host = String(location.hostname || '').trim().toLowerCase();
+  var stagingDomains = ['tasun-g3-pr104-preview.pages.dev','tasun-g3-pr104-v2-qa.pages.dev'];
+  if(stagingDomains.some(function(domain){ return host === domain || host.endsWith('.' + domain); })) return;
   var APP_VER = (window.__CACHE_V || (new URL(location.href)).searchParams.get('v') || '').trim();
   var KEYS = [
     'tasunAuthTable_v1',

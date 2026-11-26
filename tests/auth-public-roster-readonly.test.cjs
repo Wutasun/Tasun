@@ -27,10 +27,16 @@ test('public auth roster GET only reads D1 and returns CORS-safe, secret-free ro
         },
         async all() {
           if (normalized.includes('FROM tasun_users')) {
-            return { results: [{ username: 'qa-viewer', pass_hash: 'must-not-leak', role: 'read', enabled: 1, createdAt: 1, updatedAt: 1 }] };
+            return { results: [
+            { username: 'qa-viewer', pass_hash: 'must-not-leak', role: 'read', enabled: 0, createdAt: 1, updatedAt: 1 },
+            { username: ' qa-viewer ', pass_hash: 'alias-secret-must-not-leak', role: 'read', enabled: 1, createdAt: 2, updatedAt: 2 },
+          ] };
           }
           if (normalized.includes('FROM tasun_auth')) {
-            return { results: [{ username: 'qa-viewer', role: 'read', btn1: 1, btn2: 0, btn3: 0, btn4: 0, btn5: 0, updatedAt: 1 }] };
+            return { results: [
+            { username: 'qa-viewer', role: 'read', btn1: 1, btn2: 0, btn3: 0, btn4: 0, btn5: 0, updatedAt: 1 },
+            { username: ' qa-viewer ', role: 'read', btn1: 0, btn2: 1, btn3: 0, btn4: 0, btn5: 0, updatedAt: 2 },
+          ] };
           }
           throw new Error('Unexpected D1 all query: ' + normalized);
         },
@@ -58,7 +64,11 @@ test('public auth roster GET only reads D1 and returns CORS-safe, secret-free ro
   assert.equal(response.headers.get('access-control-allow-origin'), 'https://wutasun.github.io');
   const body = await response.json();
   assert.equal(body.ok, true);
+  assert.equal(body.data.auth.length, 1, 'whitespace variants collapse to one login identity');
   assert.equal(body.data.auth[0].user, 'qa-viewer');
+  assert.equal(body.data.auth[0].enabled, 1, 'the enabled identity is selected for the canonical account');
+  assert.equal(body.data.auth[0].btn1, 1, 'all existing checked legacy flags are retained');
+  assert.equal(body.data.auth[0].btn2, 1, 'all existing checked legacy flags are retained');
   assert.equal(Object.hasOwn(body.data.auth[0], 'pass_hash'), false);
   assert.ok(statements.length > 0);
   assert.ok(statements.every(sql => /^SELECT\b/i.test(sql)), statements.join('\n'));

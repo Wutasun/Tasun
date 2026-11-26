@@ -2629,6 +2629,24 @@ body:not(.locked) #loginOverlay{display:none!important;}
           if(timeout) clearTimeout(timeout);
         }
       }
+      function applyAuthoritySnapshotToLocal(snapshot){
+        if(!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return false;
+        if(Array.isArray(snapshot.navButtons)) localStorage.setItem(NAV_KEY, JSON.stringify(snapshot.navButtons));
+        if(snapshot.routes && typeof snapshot.routes === 'object' && !Array.isArray(snapshot.routes)){
+          const routesJson = JSON.stringify(snapshot.routes);
+          localStorage.setItem(ROUTE_KEY, routesJson);
+          localStorage.setItem(LEGACY_ROUTE_KEY, routesJson);
+        }
+        if(Array.isArray(snapshot.btnMeta)) localStorage.setItem('tasunButtonMeta_v1', JSON.stringify(snapshot.btnMeta));
+        if(snapshot.permMatrix && typeof snapshot.permMatrix === 'object' && !Array.isArray(snapshot.permMatrix)){
+          const matrix = snapshot.permMatrix;
+          const users = matrix.users && typeof matrix.users === 'object' && !Array.isArray(matrix.users) ? matrix.users : {};
+          localStorage.setItem(PERM_MATRIX_KEY, JSON.stringify({ ...matrix, users }));
+        }
+        if(typeof snapshot.entrySelected === 'string') localStorage.setItem('tasunEntrySelected_v1', JSON.stringify(snapshot.entrySelected));
+        if(Array.isArray(snapshot.entryRegistry)) localStorage.setItem('tasunEntryRegistry_v1', JSON.stringify(snapshot.entryRegistry));
+        return true;
+      }
       function mergeAuthorityAuthToLocal(rows){
         if(!Array.isArray(rows)) return false;
         const map = new Map();
@@ -2686,13 +2704,16 @@ body:not(.locked) #loginOverlay{display:none!important;}
             }
             const json = result && result.json;
             if(!result || !result.ok) throw new Error('權責表讀取失敗：HTTP ' + String(result && result.status || '無回應'));
-            const rows = json && json.ok === true && json.data && Array.isArray(json.data.auth) ? json.data.auth : null;
+            const snapshot = json && json.ok === true && json.data && typeof json.data === 'object' ? json.data : null;
+            const rows = snapshot && Array.isArray(snapshot.auth) ? snapshot.auth : null;
             if(!rows) throw new Error('權責表回應格式無效');
+            if(!applyAuthoritySnapshotToLocal(snapshot)) throw new Error('入口與權限設定無法套用');
             if(!mergeAuthorityAuthToLocal(rows)) throw new Error('權責表資料無法套用');
             AUTH_TABLE = loadAuthTable(LEGACY_BUTTON_KEYS.length);
             authTableAuthorityReady = true;
             authTableSyncedAt = Date.now();
             authTableSyncError = '';
+            onIndexConfigApplied();
             if(loginOverlay && loginOverlay.style.display === 'flex') populateUserSelect();
             return true;
           }catch(e){
@@ -2784,6 +2805,8 @@ body:not(.locked) #loginOverlay{display:none!important;}
       }
             async function ensureCloudMounted(user){
         try{
+          // Staging uses only its isolated Worker/D1 authority; do not pull or push browser cloud backups.
+          if(isStagingPagesHost(location.hostname)) return null;
           if(cloudCtrl && typeof cloudCtrl.pullNow === 'function' && typeof cloudCtrl.saveMerged === 'function') return cloudCtrl;
           const wrap = window.TasunCloudWrapV4 || null;
           if(!wrap) return null;
@@ -2860,12 +2883,18 @@ body:not(.locked) #loginOverlay{display:none!important;}
       function updateReleaseButtonVisibility(){
         try{
           if(!btnRelease) return;
+          if(isStagingPagesHost(location.hostname)){
+            btnRelease.style.display = 'none';
+            btnRelease.disabled = true;
+            return;
+          }
           btnRelease.style.display = isAdminUser(CURRENT_USER) ? '' : 'none';
           btnRelease.disabled = false;
           btnRelease.textContent = '發布新版';
         }catch(e){}
       }
       async function getReleaseApiBase(){
+        if(isStagingPagesHost(location.hostname)) return 'https://tasun-worker-staging.wutasun.workers.dev';
         try{
           if(window.TasunCloudWrapV4 && typeof window.TasunCloudWrapV4.load === 'function'){
             const base = await window.TasunCloudWrapV4.load();
@@ -2879,6 +2908,7 @@ body:not(.locked) #loginOverlay{display:none!important;}
         return 'https://tasun-worker.wutasun.workers.dev';
       }
       async function triggerAdminRelease(){
+        if(isStagingPagesHost(location.hostname)){ toast('Staging 預覽不提供發布新版'); return; }
         if(!isAdminUser(CURRENT_USER)) { toast('只有 admin 可發布新版'); return; }
         if(!btnRelease) return;
         const ok = confirm('確定要發布新版？\n\n系統將自動觸發 GitHub Actions 發版程序。');

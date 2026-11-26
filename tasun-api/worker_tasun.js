@@ -489,6 +489,42 @@ function isAuthorizedLoginAccount(user, authRow) {
   return Boolean(user && authRow && Number(user.enabled ?? 0) === 1);
 }
 
+function rowsByNormalizedUsername(rows, { mergeButtonFlags = false } = {}) {
+  const map = new Map();
+  for (const row of rows || []) {
+    if (!row || typeof row !== 'object') continue;
+    const username = norm(row.username);
+    if (!username) continue;
+    const previous = map.get(username);
+    if (!previous) {
+      map.set(username, row);
+      continue;
+    }
+    const previousRaw = String(previous.username ?? '');
+    const candidateRaw = String(row.username ?? '');
+    const previousEnabled = Number(previous.enabled ?? 1) === 1;
+    const candidateEnabled = Number(row.enabled ?? 1) === 1;
+    const preferCandidate =
+      (candidateEnabled && !previousEnabled) ||
+      (candidateEnabled === previousEnabled &&
+        ((candidateRaw === username && previousRaw !== username) ||
+          (candidateRaw === previousRaw && Number(row.updatedAt || 0) > Number(previous.updatedAt || 0))));
+    const preferred = preferCandidate ? row : previous;
+    if (mergeButtonFlags) {
+      const merged = { ...preferred };
+      for (let index = 1; index <= 5; index++) {
+        const key = 'btn' + index;
+        merged[key] = Number(previous[key] || 0) === 1 || previous[key] === true ||
+          Number(row[key] || 0) === 1 || row[key] === true ? 1 : 0;
+      }
+      map.set(username, merged);
+    } else {
+      map.set(username, preferred);
+    }
+  }
+  return map;
+}
+
 async function buildAuthTableData(env) {
   const usersRs = await env.DB.prepare(`
     SELECT username, pass_hash, role, enabled, createdAt, updatedAt
@@ -501,8 +537,8 @@ async function buildAuthTableData(env) {
     ORDER BY username
   `).all();
 
-  const authMap = new Map((authRs.results || []).map(r => [String(r.username), r]));
-  const userMap = new Map((usersRs.results || []).map(r => [String(r.username), r]));
+  const authMap = rowsByNormalizedUsername(authRs.results, { mergeButtonFlags: true });
+  const userMap = rowsByNormalizedUsername(usersRs.results);
   const names = Array.from(new Set([...authMap.keys(), ...userMap.keys()]))
     // Revoked users stay in D1 for audit and reseed protection, but do not re-enter
     // the editable snapshot unless an administrator explicitly re-adds them.
@@ -556,8 +592,8 @@ async function saveAuthTableData(env, payload) {
     SELECT username, role, btn1, btn2, btn3, btn4, btn5, updatedAt
     FROM tasun_auth
   `).all();
-  const userMap = new Map((currentUsers.results || []).map(r => [String(r.username), r]));
-  const authMap = new Map((currentAuth.results || []).map(r => [String(r.username), r]));
+  const userMap = rowsByNormalizedUsername(currentUsers.results);
+  const authMap = rowsByNormalizedUsername(currentAuth.results, { mergeButtonFlags: true });
   const submittedUsernames = new Set();
   const records = [];
 
@@ -634,19 +670,19 @@ async function saveAuthTableData(env, payload) {
   let usersRevoked = 0;
   let authRevoked = 0;
   for (const row of currentUsers.results || []) {
-    const username = norm(row.username);
-    if (!username || submittedUsernames.has(username) || Number(row.enabled ?? 1) === 0) continue;
+    const storedUsername = String(row.username ?? '');
+    if (!norm(storedUsername) || submittedUsernames.has(storedUsername) || Number(row.enabled ?? 1) === 0) continue;
     statements.push(env.DB.prepare(
       'UPDATE tasun_users SET enabled=0, updatedAt=? WHERE username=?'
-    ).bind(now, username));
+    ).bind(now, storedUsername));
     usersRevoked++;
   }
   for (const row of currentAuth.results || []) {
-    const username = norm(row.username);
-    if (!username || submittedUsernames.has(username)) continue;
+    const storedUsername = String(row.username ?? '');
+    if (!norm(storedUsername) || submittedUsernames.has(storedUsername)) continue;
     statements.push(env.DB.prepare(
       'DELETE FROM tasun_auth WHERE username=?'
-    ).bind(username));
+    ).bind(storedUsername));
     authRevoked++;
   }
 
@@ -1105,19 +1141,21 @@ function hydrateRow(r) {
 }
 
 async function getUser(env, username) {
-  return await env.DB.prepare(`
+  const result = await env.DB.prepare(`
     SELECT username, pass_hash, role, enabled, createdAt, updatedAt
     FROM tasun_users
-    WHERE username=?
-  `).bind(username).first();
+    WHERE TRIM(username)=?
+  `).bind(norm(username)).all();
+  return rowsByNormalizedUsername(result.results).get(norm(username)) || null;
 }
 
 async function getAuth(env, username) {
-  return await env.DB.prepare(`
+  const result = await env.DB.prepare(`
     SELECT username, role, btn1, btn2, btn3, btn4, btn5, updatedAt
     FROM tasun_auth
-    WHERE username=?
-  `).bind(username).first();
+    WHERE TRIM(username)=?
+  `).bind(norm(username)).all();
+  return rowsByNormalizedUsername(result.results, { mergeButtonFlags: true }).get(norm(username)) || null;
 }
 
 async function requireSession(request, env, opts = {}) {

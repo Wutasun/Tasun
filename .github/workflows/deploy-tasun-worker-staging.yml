@@ -1,6 +1,9 @@
 name: Deploy Tasun Worker to Staging
 
 on:
+  push:
+    branches:
+      - fix/auth-public-roster-staging-20261126
   workflow_dispatch:
     inputs:
       confirm_staging:
@@ -19,7 +22,7 @@ concurrency:
 jobs:
   deploy-staging:
     name: Deploy tasun-worker-staging
-    if: ${{ (github.ref == 'refs/heads/fix/auth-authoritative-login-main-20261116' || github.ref == 'refs/heads/fix/auth-public-roster-staging-20261126') && inputs.confirm_staging }}
+    if: ${{ github.ref == 'refs/heads/fix/auth-public-roster-staging-20261126' && (github.event_name == 'push' || inputs.confirm_staging) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -49,3 +52,17 @@ jobs:
           workingDirectory: "tasun-api"
           command: deploy --config wrangler.staging.toml
           wranglerVersion: "4"
+
+      - name: Verify isolated Staging Worker health
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 8); do
+            if curl --fail --silent --show-error https://tasun-worker-staging.wutasun.workers.dev/api/tasun/health -o "$RUNNER_TEMP/staging-health.json"; then
+              node -e 'const fs=require("node:fs"); const data=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(data.ok!==true || !String(data.service||"").includes("tasun-worker")) process.exit(1);' "$RUNNER_TEMP/staging-health.json"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Staging Worker health endpoint did not pass after deployment."
+          exit 1
