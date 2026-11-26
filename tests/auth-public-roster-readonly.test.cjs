@@ -9,16 +9,16 @@ const workerSource = fs.readFileSync(path.join(__dirname, '..', 'tasun-api', 'wo
 
 function loadWorker(source) {
   const module = { exports: {} };
-  const executable = source.replace(/^export default\\s*\\{/m, 'module.exports = {');
+  const executable = source.replace(/^export default\s*\{/m, 'module.exports = {');
   assert.notEqual(executable, source, 'expected a default Worker export');
-  return new Function('module', executable + '\\n; return module.exports;')(module);
+  return new Function('module', executable + '\n; return module.exports;')(module);
 }
 
 test('public auth roster GET only reads D1 and returns CORS-safe, secret-free rows', async () => {
   const statements = [];
   const db = {
     prepare(sql) {
-      const normalized = String(sql).replace(/\\s+/g, ' ').trim();
+      const normalized = String(sql).replace(/\s+/g, ' ').trim();
       statements.push(normalized);
       const statement = {
         bind(...values) {
@@ -61,5 +61,5 @@ test('public auth roster GET only reads D1 and returns CORS-safe, secret-free ro
   assert.equal(body.data.auth[0].user, 'qa-viewer');
   assert.equal(Object.hasOwn(body.data.auth[0], 'pass_hash'), false);
   assert.ok(statements.length > 0);
-  assert.ok(statements.every(sql => /^SELECT\\b/i.test(sql)), statements.join('\\n'));
+  assert.ok(statements.every(sql => /^SELECT\b/i.test(sql)), statements.join('\n'));
 });
