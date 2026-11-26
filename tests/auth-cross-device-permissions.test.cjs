@@ -23,7 +23,7 @@ test('homepage hydrates entry config and permission matrix from the D1 authority
     assert.ok(applySnapshot.includes(key), 'missing D1 snapshot field: ' + key);
   }
   const sync = functionBody(indexSource, 'syncAuthTableFromAuthority', 'loadScriptOnce');
-  assert.match(sync, /applyAuthoritySnapshotToLocal(snapshot)/);
+  assert.match(sync, /applyAuthoritySnapshotToLocal\(snapshot\)/);
   assert.match(sync, /onIndexConfigApplied()/);
   const buttons = functionBody(indexSource, 'refreshButtonsForCurrentUser', 'onIndexConfigApplied');
   assert.match(buttons, /level === 'admin' \|\| \(hasExplicitIndexPermissions && matrixPermission === true\)/);
@@ -59,6 +59,6 @@ test('Staging pages do not fall back to external cloud sync or release actions',
   assert.match(release, /Staging 預覽不提供發布新版/);
   const cloudPull = functionBody(permissionSource, 'scheduleCloudPull', 'scheduleD1Push');
   const cloudPush = functionBody(permissionSource, 'scheduleCloudPush', 'loadResourcesForAuthTable');
-  assert.match(cloudPull, /isStagingPagesHost\(location\.hostname\) return/);
+  assert.match(cloudPull, /if\(isStagingPagesHost\(location\.hostname\)\) return/);
   assert.match(cloudPush, /scheduleD1Push\(reason\);\s*if\(isStagingPagesHost\(location\.hostname\)\) return/);
 });
