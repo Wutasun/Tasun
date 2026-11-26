@@ -26,7 +26,11 @@ test('homepage hydrates entry config and permission matrix from the D1 authority
   assert.match(sync, /applyAuthoritySnapshotToLocal\(snapshot\)/);
   assert.match(sync, /onIndexConfigApplied()/);
   const buttons = functionBody(indexSource, 'refreshButtonsForCurrentUser', 'onIndexConfigApplied');
-  assert.match(buttons, /level === 'admin' \|\| \(hasExplicitIndexPermissions && matrixPermission === true\)/);
+  assert.match(buttons, /Array\.isArray\(CURRENT_USER\.buttons\)/);
+  assert.match(buttons, /matrixPermission === null\s*\?\s*accountPermission\s*:\s*matrixPermission === true/);
+  assert.match(buttons, /level === 'admin' \|\| permissionGranted/);
+  assert.match(indexSource, /AUTH_TABLE_SYNC_TIMEOUT_MS = 8000/);
+  assert.match(sync, /權責表清單讀取逾時\|AbortError\|timeout/);
 });
 
 test('permission table routes Staging to its isolated Worker without a cached bearer token', () => {

@@ -2548,7 +2548,7 @@ body:not(.locked) #loginOverlay{display:none!important;}
 
       const D1_AUTH_TABLE_ENDPOINT_FULL  = '/api/auth/table';
       const D1_AUTH_TABLE_ENDPOINT_PUB   = '/api/auth/public';
-      const AUTH_TABLE_SYNC_TIMEOUT_MS = 3500;
+      const AUTH_TABLE_SYNC_TIMEOUT_MS = 8000;
       const AUTH_TABLE_SYNC_TTL_MS = 30000;
       let authTableAuthorityReady = false;
       let authTableSyncedAt = 0;
@@ -2695,7 +2695,10 @@ body:not(.locked) #loginOverlay{display:none!important;}
                 result = await d1GetPublicJson(D1_AUTH_TABLE_ENDPOINT_PUB);
                 break;
               }catch(fetchError){
-                if(attempt === 0 && fetchError instanceof TypeError){
+                if(attempt === 0 && (
+                  fetchError instanceof TypeError ||
+                  /權責表清單讀取逾時|AbortError|timeout/i.test(String(fetchError && fetchError.message || fetchError))
+                )){
                   await new Promise(resolve=>setTimeout(resolve, 250));
                   continue;
                 }
@@ -3576,13 +3579,7 @@ body:not(.locked) #loginOverlay{display:none!important;}
         const showAuth = (level === 'admin');
         const pm = loadPermMatrixSafe();
         const username = userKey(CURRENT_USER.username || CURRENT_USER.user || CURRENT_USER.name);
-        const userPermissions = pm && pm.users && pm.users[username];
-        const indexPermissions = userPermissions && userPermissions[PAGE_FILE];
-        const hasExplicitIndexPermissions = !!(
-          indexPermissions &&
-          typeof indexPermissions === 'object' &&
-          Object.keys(indexPermissions).some(key => /^btn\d+$/i.test(key))
-        );
+        const accountButtons = Array.isArray(CURRENT_USER.buttons) ? CURRENT_USER.buttons : [];
         const permissionNav = (Array.isArray(NAV_ARR) ? NAV_ARR : [])
           .filter(item => !isAuthLikeButtonCfg(item));
         mainNavBtns.forEach((btn, index) => {
@@ -3594,9 +3591,16 @@ body:not(.locked) #loginOverlay{display:none!important;}
           const matrixPermission = permissionIndex >= 0
             ? getPermFromMatrix(pm, username, PAGE_FILE, `btn${permissionIndex+1}`)
             : null;
+          const accountPermission = permissionIndex >= 0
+            ? (accountButtons[permissionIndex] === true ||
+              Number(CURRENT_USER['btn' + (permissionIndex + 1)] || 0) === 1)
+            : false;
+          const permissionGranted = matrixPermission === null
+            ? accountPermission
+            : matrixPermission === true;
           const shouldShow = isAuth
             ? showAuth
-            : (level === 'admin' || (hasExplicitIndexPermissions && matrixPermission === true));
+            : (level === 'admin' || permissionGranted);
           btn.hidden = !shouldShow;
           btn.style.display = shouldShow ? 'flex' : 'none';
           btn.style.visibility = shouldShow ? 'visible' : 'hidden';
