@@ -1,0 +1,100 @@
+name: Deploy homepage navigation Pages-only preview
+
+on:
+  push:
+    branches:
+      - fix/homepage-desktop-nav-position-20261128
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tasun-homepage-navigation-pages-preview
+  cancel-in-progress: false
+
+jobs:
+  deploy-pages-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_PREVIEW_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      PAGES_PROJECT: tasun-g3-pr104-preview
+      PREVIEW_BRANCH: tasun-auth-roster-preview
+      PRODUCTION_WORKER_HOST: tasun-worker.wutasun.workers.dev
+      STAGING_WORKER_HOST: tasun-worker-staging.wutasun.workers.dev
+    steps:
+      - name: Check out this homepage fix branch
+        uses: actions/checkout@v4
+
+      - name: Prepare Staging-only static site copy
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/fix/homepage-desktop-nav-position-20261128"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test "$PAGES_PROJECT" = "tasun-g3-pr104-preview"
+          test "$PREVIEW_BRANCH" = "tasun-auth-roster-preview"
+          mkdir -p dist
+          git ls-files -z | grep -zEv '^(\.github/|docs/|tests/|tasun-api/)' | tar --null -T - -cf - | tar -xf - -C dist
+          python3 - <<'PY'
+          from pathlib import Path
+          production = 'tasun-worker.wutasun.workers.dev'
+          staging = 'tasun-worker-staging.wutasun.workers.dev'
+          changed = 0
+          remaining = []
+          for path in Path('dist').rglob('*'):
+              if not path.is_file():
+                  continue
+              try:
+                  text = path.read_text(encoding='utf-8')
+              except UnicodeDecodeError:
+                  continue
+              if production in text:
+                  text = text.replace(production, staging)
+                  path.write_text(text, encoding='utf-8')
+                  changed += 1
+              if production in text:
+                  remaining.append(str(path))
+          if changed == 0:
+              raise SystemExit('No production Worker references found to redirect in the Staging copy')
+          if remaining:
+              raise SystemExit('Production Worker references remain in Staging copy: ' + ', '.join(remaining))
+          if 'tasun-g3-pr104-preview.pages.dev' not in Path('dist/index.html').read_text(encoding='utf-8'):
+              raise SystemExit('Staging Pages host detection is missing from index.html')
+          if staging not in Path('dist/tasun-resources.json').read_text(encoding='utf-8'):
+              raise SystemExit('Staging resource API base was not applied')
+          print(f'Redirected production Worker references in {changed} static files; no production Worker host remains.')
+          PY
+
+      - name: Verify Pages target is the dedicated preview project
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PAGES_PROJECT" = "tasun-g3-pr104-preview"
+          test "$PREVIEW_BRANCH" != "main"
+          echo "Verified deployment target is the isolated Staging Pages preview."
+
+      - name: Deploy only the Staging Pages preview branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          preview_url="https://${PREVIEW_BRANCH}.${PAGES_PROJECT}.pages.dev"
+          npx --yes wrangler@4 pages deploy dist \
+            --project-name "$PAGES_PROJECT" \
+            --branch "$PREVIEW_BRANCH" \
+            --commit-hash "$GITHUB_SHA" \
+            --commit-message "Staging desktop homepage navigation preview" \
+            --skip-caching
+          printf '\nStaging preview URL: %s\n' "$preview_url" | tee -a "$GITHUB_STEP_SUMMARY"
+          ready=0
+          for attempt in $(seq 1 12); do
+            if curl --fail --silent --show-error --max-time 15 "$preview_url/" -o /dev/null; then
+              ready=1
+              break
+            fi
+            sleep 5
+          done
+          test "$ready" = 1
+          echo 'Staging Pages preview returned HTTP 200.'
