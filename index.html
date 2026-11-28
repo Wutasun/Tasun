@@ -470,9 +470,16 @@
   filter: drop-shadow(0 1px 0 rgba(255,255,255,0.18)) drop-shadow(0 10px 18px rgba(74,42,8,0.16)) !important;
 }
 #navArea{
-  z-index: 88 !important;
+  position:absolute !important;
+  inset:0 !important;
+  width:100% !important;
+  height:100% !important;
+  min-height:0 !important;
+  box-sizing:border-box !important;
+  z-index:88 !important;
   display:block !important;
   overflow:visible !important;
+  pointer-events:none !important;
 }
 #navArea .nav-btn{
   position:absolute;
@@ -3632,13 +3639,36 @@ body:not(.locked) #loginOverlay{display:none!important;}
         refreshButtonsForCurrentUser();
         updateReleaseButtonVisibility();
         scheduleExport('login:applyUser');
-        ensureCloudMounted(user).catch(()=>{});
+        const __tasunAppliedUsername = userKey(user.username || user.user || user.name);
+        const __tasunAppliedLevel = String(user.level || user.role || '').trim().toLowerCase();
+        let __tasunDeferredReady = Promise.resolve();
         try{
           if(window.__TASUN_DEFERRED_BOOT__ && typeof window.__TASUN_DEFERRED_BOOT__.startNow === 'function'){
             const p = window.__TASUN_DEFERRED_BOOT__.startNow();
-            if(p && typeof p.catch === 'function') p.catch(()=>{});
+            if(p && typeof p.then === 'function') __tasunDeferredReady = p.catch(()=>false);
+          }else if(typeof window.__TASUN_DEFERRED_CORE_LOAD__ === 'function'){
+            __tasunDeferredReady = Promise.resolve(window.__TASUN_DEFERRED_CORE_LOAD__()).catch(()=>false);
           }
         }catch(e){}
+        __tasunDeferredReady.then(async()=>{
+          // The cloud wrapper is loaded lazily by deferred boot. Wait for it before
+          // mounting index permissions, otherwise a cold session can leave every
+          // permitted entry hidden until a later focus or viewport event.
+          for(let attempt=0; attempt<40 && !window.TasunCloudWrapV4; attempt++){
+            await new Promise(resolve=>setTimeout(resolve,100));
+          }
+          const current = CURRENT_USER;
+          if(!current ||
+             userKey(current.username || current.user || current.name) !== __tasunAppliedUsername ||
+             String(current.level || current.role || '').trim().toLowerCase() !== __tasunAppliedLevel) return;
+          await ensureCloudMounted(current);
+          const latest = CURRENT_USER;
+          if(!latest ||
+             userKey(latest.username || latest.user || latest.name) !== __tasunAppliedUsername ||
+             String(latest.level || latest.role || '').trim().toLowerCase() !== __tasunAppliedLevel) return;
+          refreshButtonsForCurrentUser();
+          runStableCalibrator('cloud-ready-after-login');
+        }).catch(()=>{});
         scheduleAll();
         if(!o.skipBroadcast){ broadcastAuthState('state', { user: user.username, role: String(user.level||'').toLowerCase() }); }
       }
@@ -4022,28 +4052,19 @@ body:not(.locked) #loginOverlay{display:none!important;}
 
         navArea.classList.add('sides');
 
-        const leftZen = document.getElementById('zwLeft');
-        const rightZen = document.getElementById('zwRight');
-        const leftZenRect = leftZen ? leftZen.getBoundingClientRect() : null;
-        const rightZenRect = rightZen ? rightZen.getBoundingClientRect() : null;
-
         const cx = W * 0.50;
         const lotusW = Math.min(W * 0.52, H * 0.82);
         const lotusLeft = cx - lotusW * 0.50;
         const lotusRight = cx + lotusW * 0.50;
 
         const edgePad = clamp(Math.round(W * Number(navCfg.EDGE_PAD_RATIO || 0.006)), 8, 18);
-        const zenGap = clamp(Math.round(W * Number(navCfg.ZEN_GAP_RATIO || 0.006)), 10, 18);
         const lotusGap = clamp(Math.round(W * Number(navCfg.LOTUS_GAP_RATIO || 0.012)), 14, 26);
 
-        const leftInnerByLotus = lotusLeft - lotusGap;
-        const rightInnerByLotus = lotusRight + lotusGap;
-        const leftInnerByZen = leftZenRect ? ((leftZenRect.left - rect.left) - zenGap) : leftInnerByLotus;
-        const rightInnerByZen = rightZenRect ? ((rightZenRect.right - rect.left) + zenGap) : rightInnerByLotus;
-
-        const leftInner = Math.min(leftInnerByLotus, leftInnerByZen);
-        const rightInner = Math.max(rightInnerByLotus, rightInnerByZen);
-
+        // Anchor desktop columns to the lotus bounds. Zen text boxes can be
+        // displaced by font loading or viewport scaling, which pulled the
+        // right-hand buttons back over the lotus on the production homepage.
+        const leftInner = lotusLeft - lotusGap;
+        const rightInner = lotusRight + lotusGap;
         const availableLeft = Math.max(220, leftInner - edgePad);
         const availableRight = Math.max(220, (W - edgePad) - rightInner);
 
@@ -4516,13 +4537,15 @@ body:not(.locked) #loginOverlay{display:none!important;}
           const topSafe = Math.max(130, userBar ? (userBar.getBoundingClientRect().bottom - rect.top) + 24 : 130);
           const bottomSafe = Math.max(topSafe + 140, zwBottomLine ? (zwBottomLine.getBoundingClientRect().top - rect.top) - 28 : H - 120);
           const avail = Math.max(1, bottomSafe - topSafe);
-          const leftZenRect = document.getElementById('zwLeft') ? document.getElementById('zwLeft').getBoundingClientRect() : null;
-          const rightZenRect = document.getElementById('zwRight') ? document.getElementById('zwRight').getBoundingClientRect() : null;
           const gap = clamp(Math.round(W * 0.020), 24, 44);
+          const lotusGap = clamp(Math.round(W * 0.012), 14, 26);
           const btnW = clamp(Math.round(W * 0.17), 250, 340);
           const btnH = clamp(Math.round(H * 0.10), 70, 92);
-          const leftX = leftZenRect ? Math.max(24, Math.round(leftZenRect.left - rect.left - btnW - gap)) : 24;
-          const rightX = rightZenRect ? Math.min(W - btnW - 24, Math.round(rightZenRect.right - rect.left + gap)) : (W - btnW - 24);
+          const lotusW = Math.min(W * 0.52, H * 0.82);
+          const lotusLeft = (W - lotusW) / 2;
+          const lotusRight = lotusLeft + lotusW;
+          const leftX = Math.max(24, Math.round(lotusLeft - btnW - gap - lotusGap));
+          const rightX = Math.min(W - btnW - 24, Math.round(lotusRight + gap + lotusGap));
           const leftBtns = [], rightBtns = [];
           btns.forEach((btn, i) => (i % 2 === 0 ? leftBtns : rightBtns).push(btn));
           function place(list, x){
@@ -4551,14 +4574,47 @@ body:not(.locked) #loginOverlay{display:none!important;}
           place(rightBtns, rightX);
         }catch(e){}
       }
+      let navVisibilityRetryTimer = 0;
+      let navVisibilityRetryCount = 0;
+      let navVisibilityRetryActive = false;
+      function cancelNavVisibilityRetry(resetCount){
+        if(navVisibilityRetryTimer){
+          clearTimeout(navVisibilityRetryTimer);
+          navVisibilityRetryTimer = 0;
+        }
+        if(resetCount !== false) navVisibilityRetryCount = 0;
+      }
+      function scheduleNavVisibilityRetry(){
+        if(!CURRENT_USER || navVisibilityRetryTimer || navVisibilityRetryActive || navVisibilityRetryCount >= 24) return;
+        navVisibilityRetryTimer = setTimeout(()=>{
+          navVisibilityRetryTimer = 0;
+          if(!CURRENT_USER || (document.body && document.body.classList.contains('locked'))){
+            cancelNavVisibilityRetry(true);
+            return;
+          }
+          navVisibilityRetryCount++;
+          navVisibilityRetryActive = true;
+          try{ refreshButtonsForCurrentUser(); }catch(_e){}
+          finally{ navVisibilityRetryActive = false; }
+          if(getVisibleButtons().length){
+            cancelNavVisibilityRetry(true);
+            requestAnimationFrame(()=>{
+              try{ syncZenWordScale(); layoutButtons(); guardNavButtonsVisible(); }catch(_e){}
+            });
+            return;
+          }
+          if(navVisibilityRetryCount < 24) scheduleNavVisibilityRetry();
+        }, 300);
+      }
       function guardNavButtonsVisible(){
         try{
           if(document.body && document.body.classList.contains('locked')) return;
           const visible = getVisibleButtons();
           if(!visible.length){
-            if(CURRENT_USER) refreshButtonsForCurrentUser();
+            if(CURRENT_USER) scheduleNavVisibilityRetry();
             return;
           }
+          cancelNavVisibilityRetry(true);
           let offscreen = false;
           visible.forEach((btn)=>{
             const r = btn.getBoundingClientRect();
@@ -4775,8 +4831,17 @@ body:not(.locked) #loginOverlay{display:none!important;}
       if(btnLogout) btnLogout.addEventListener('click', () => { clearSession(); try{ localStorage.removeItem(CURRENT_KEY); }catch(e){} CURRENT_USER = null; showLogin(); try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){} scheduleExport('logout'); scheduleAll(); });
       btnExport.addEventListener('click', () => { exportBackupNow('manual:button', { download:true }); });
       if(btnRelease) btnRelease.addEventListener('click', triggerAdminRelease);
-      window.addEventListener('resize', () => scheduleAll(), { passive:true });
-      if(window.visualViewport) window.visualViewport.addEventListener('resize', () => scheduleAll(), { passive:true });
+      function recalibrateNavOnViewportChange(){
+        if(CURRENT_USER && !getVisibleButtons().length) cancelNavVisibilityRetry(true);
+        scheduleAll();
+      }
+      window.addEventListener('resize', recalibrateNavOnViewportChange, { passive:true });
+      window.addEventListener('scroll', recalibrateNavOnViewportChange, { passive:true });
+      document.addEventListener('scroll', recalibrateNavOnViewportChange, { passive:true, capture:true });
+      if(window.visualViewport){
+        window.visualViewport.addEventListener('resize', recalibrateNavOnViewportChange, { passive:true });
+        window.visualViewport.addEventListener('scroll', recalibrateNavOnViewportChange, { passive:true });
+      }
       let __visibleRefreshBusy = false;
       let __visibleRefreshTs = 0;
       function isLoginStageActive(){
