@@ -4544,14 +4544,47 @@ body:not(.locked) #loginOverlay{display:none!important;}
           place(rightBtns, rightX);
         }catch(e){}
       }
+      let navVisibilityRetryTimer = 0;
+      let navVisibilityRetryCount = 0;
+      let navVisibilityRetryActive = false;
+      function cancelNavVisibilityRetry(resetCount){
+        if(navVisibilityRetryTimer){
+          clearTimeout(navVisibilityRetryTimer);
+          navVisibilityRetryTimer = 0;
+        }
+        if(resetCount !== false) navVisibilityRetryCount = 0;
+      }
+      function scheduleNavVisibilityRetry(){
+        if(!CURRENT_USER || navVisibilityRetryTimer || navVisibilityRetryActive || navVisibilityRetryCount >= 24) return;
+        navVisibilityRetryTimer = setTimeout(()=>{
+          navVisibilityRetryTimer = 0;
+          if(!CURRENT_USER || (document.body && document.body.classList.contains('locked'))){
+            cancelNavVisibilityRetry(true);
+            return;
+          }
+          navVisibilityRetryCount++;
+          navVisibilityRetryActive = true;
+          try{ refreshButtonsForCurrentUser(); }catch(_e){}
+          finally{ navVisibilityRetryActive = false; }
+          if(getVisibleButtons().length){
+            cancelNavVisibilityRetry(true);
+            requestAnimationFrame(()=>{
+              try{ syncZenWordScale(); layoutButtons(); guardNavButtonsVisible(); }catch(_e){}
+            });
+            return;
+          }
+          if(navVisibilityRetryCount < 24) scheduleNavVisibilityRetry();
+        }, 300);
+      }
       function guardNavButtonsVisible(){
         try{
           if(document.body && document.body.classList.contains('locked')) return;
           const visible = getVisibleButtons();
           if(!visible.length){
-            if(CURRENT_USER) refreshButtonsForCurrentUser();
+            if(CURRENT_USER) scheduleNavVisibilityRetry();
             return;
           }
+          cancelNavVisibilityRetry(true);
           let offscreen = false;
           visible.forEach((btn)=>{
             const r = btn.getBoundingClientRect();
@@ -4768,8 +4801,17 @@ body:not(.locked) #loginOverlay{display:none!important;}
       if(btnLogout) btnLogout.addEventListener('click', () => { clearSession(); try{ localStorage.removeItem(CURRENT_KEY); }catch(e){} CURRENT_USER = null; showLogin(); try{ if(loginBootInline) loginBootInline.hidden = true; }catch(e){} scheduleExport('logout'); scheduleAll(); });
       btnExport.addEventListener('click', () => { exportBackupNow('manual:button', { download:true }); });
       if(btnRelease) btnRelease.addEventListener('click', triggerAdminRelease);
-      window.addEventListener('resize', () => scheduleAll(), { passive:true });
-      if(window.visualViewport) window.visualViewport.addEventListener('resize', () => scheduleAll(), { passive:true });
+      function recalibrateNavOnViewportChange(){
+        if(CURRENT_USER && !getVisibleButtons().length) cancelNavVisibilityRetry(true);
+        scheduleAll();
+      }
+      window.addEventListener('resize', recalibrateNavOnViewportChange, { passive:true });
+      window.addEventListener('scroll', recalibrateNavOnViewportChange, { passive:true });
+      document.addEventListener('scroll', recalibrateNavOnViewportChange, { passive:true, capture:true });
+      if(window.visualViewport){
+        window.visualViewport.addEventListener('resize', recalibrateNavOnViewportChange, { passive:true });
+        window.visualViewport.addEventListener('scroll', recalibrateNavOnViewportChange, { passive:true });
+      }
       let __visibleRefreshBusy = false;
       let __visibleRefreshTs = 0;
       function isLoginStageActive(){
