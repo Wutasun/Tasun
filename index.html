@@ -3632,13 +3632,36 @@ body:not(.locked) #loginOverlay{display:none!important;}
         refreshButtonsForCurrentUser();
         updateReleaseButtonVisibility();
         scheduleExport('login:applyUser');
-        ensureCloudMounted(user).catch(()=>{});
+        const __tasunAppliedUsername = userKey(user.username || user.user || user.name);
+        const __tasunAppliedLevel = String(user.level || user.role || '').trim().toLowerCase();
+        let __tasunDeferredReady = Promise.resolve();
         try{
           if(window.__TASUN_DEFERRED_BOOT__ && typeof window.__TASUN_DEFERRED_BOOT__.startNow === 'function'){
             const p = window.__TASUN_DEFERRED_BOOT__.startNow();
-            if(p && typeof p.catch === 'function') p.catch(()=>{});
+            if(p && typeof p.then === 'function') __tasunDeferredReady = p.catch(()=>false);
+          }else if(typeof window.__TASUN_DEFERRED_CORE_LOAD__ === 'function'){
+            __tasunDeferredReady = Promise.resolve(window.__TASUN_DEFERRED_CORE_LOAD__()).catch(()=>false);
           }
         }catch(e){}
+        __tasunDeferredReady.then(async()=>{
+          // The cloud wrapper is loaded lazily by deferred boot. Wait for it before
+          // mounting index permissions, otherwise a cold session can leave every
+          // permitted entry hidden until a later focus or viewport event.
+          for(let attempt=0; attempt<40 && !window.TasunCloudWrapV4; attempt++){
+            await new Promise(resolve=>setTimeout(resolve,100));
+          }
+          const current = CURRENT_USER;
+          if(!current ||
+             userKey(current.username || current.user || current.name) !== __tasunAppliedUsername ||
+             String(current.level || current.role || '').trim().toLowerCase() !== __tasunAppliedLevel) return;
+          await ensureCloudMounted(current);
+          const latest = CURRENT_USER;
+          if(!latest ||
+             userKey(latest.username || latest.user || latest.name) !== __tasunAppliedUsername ||
+             String(latest.level || latest.role || '').trim().toLowerCase() !== __tasunAppliedLevel) return;
+          refreshButtonsForCurrentUser();
+          runStableCalibrator('cloud-ready-after-login');
+        }).catch(()=>{});
         scheduleAll();
         if(!o.skipBroadcast){ broadcastAuthState('state', { user: user.username, role: String(user.level||'').toLowerCase() }); }
       }
